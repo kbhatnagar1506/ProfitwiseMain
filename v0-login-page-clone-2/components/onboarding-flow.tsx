@@ -158,10 +158,14 @@ export function OnboardingFlow({
     normalized_name: string
     tag: string
     transaction_type: string
+    confidence: number
   }
   const [accountingTransactions, setAccountingTransactions] = useState<AccountingTx[]>([])
   const [accountingTransactionsLoading, setAccountingTransactionsLoading] = useState(false)
   const [selectedAccountingTransaction, setSelectedAccountingTransaction] = useState<AccountingTx | null>(null)
+  const [accountFilter, setAccountFilter] = useState<string | null>(null)
+  const [aiSuggestMessage, setAiSuggestMessage] = useState("")
+  const [aiSuggestLoading, setAiSuggestLoading] = useState(false)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -1301,12 +1305,12 @@ export function OnboardingFlow({
             .then((res) => (res.ok ? undefined : Promise.reject(new Error("Save failed"))))
             .then(() => {
               setSelectedAccountingTransaction((prev) =>
-                prev ? { ...prev, normalized_name: norm, tag, transaction_type: txType } : null
+                prev ? { ...prev, normalized_name: norm, tag, transaction_type: txType, confidence: 1 } : null
               )
               setAccountingTransactions((prev) =>
                 prev.map((tx) =>
                   tx.account_id === selectedAccountingTransaction.account_id && tx.raw_name === selectedAccountingTransaction.raw_name
-                    ? { ...tx, normalized_name: norm, tag, transaction_type: txType }
+                    ? { ...tx, normalized_name: norm, tag, transaction_type: txType, confidence: 1 }
                     : tx
                 )
               )
@@ -1334,15 +1338,96 @@ export function OnboardingFlow({
               : "bg-zinc-500/60 text-white border-zinc-400/50"
         const formatTxDate = (d: string) => (d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—")
         const formatTxTime = (created: string) => (created ? new Date(created).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }) : "—")
+        const confidenceColor = (c: number) =>
+          c >= 0.7 ? "text-emerald-400" : c >= 0.4 ? "text-amber-400" : "text-rose-400"
+        const formatConfidence = (c: number) => `${Math.round((c ?? 0) * 100)}%`
+        const filteredByAccount = accountFilter
+          ? accountingTransactions.filter((tx) => tx.account_name === accountFilter)
+          : accountingTransactions
+        const recurringTxs = filteredByAccount.filter(
+          (tx) => tx.transaction_type === "Recurring subscription" || tx.transaction_type === "Recurring (other)"
+        )
+        const otherTxs = filteredByAccount.filter(
+          (tx) => tx.transaction_type !== "Recurring subscription" && tx.transaction_type !== "Recurring (other)"
+        )
+        const uniqueAccounts = Array.from(
+          new Map(accountingTransactions.map((tx) => [tx.account_name, tx.account_name])).values()
+        ).sort()
+        const renderTxRow = (tx: AccountingTx) => {
+          const isSelected = selectedAccountingTransaction?.transaction_id === tx.transaction_id
+          return (
+            <TableRow
+              key={tx.transaction_id}
+              className={`border-white/20 cursor-pointer hover:bg-white/10 ${isSelected ? "bg-white/15" : "hover:bg-white/5"}`}
+              onClick={() => {
+                setSelectedAccountingTransaction(tx)
+                setMerchantEditDraft({
+                  normalized_name: tx.normalized_name,
+                  tag: tx.tag,
+                  transaction_type: tx.transaction_type,
+                })
+                setAiSuggestMessage("")
+              }}
+            >
+              <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxDate(tx.date)}</TableCell>
+              <TableCell className="text-gray-400 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxTime(tx.created_at)}</TableCell>
+              <TableCell
+                className={`border-white/20 px-3 py-2 whitespace-nowrap text-right font-medium text-sm ${
+                  tx.amount < 0 ? "text-emerald-400" : "text-rose-400"
+                }`}
+              >
+                {formatBalance(tx.amount)}
+              </TableCell>
+              <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.account_name}</TableCell>
+              <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.normalized_name}</TableCell>
+              <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
+                <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${tagColor(tx.tag)}`}>{tx.tag}</span>
+              </TableCell>
+              <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
+                <span className="text-gray-200 text-sm">{tx.transaction_type}</span>
+                <span className={`ml-2 inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${typeColor(tx.transaction_type)}`}>
+                  {tx.transaction_type}
+                </span>
+              </TableCell>
+              <TableCell className={`border-white/20 px-3 py-2 whitespace-nowrap text-sm font-medium ${confidenceColor(tx.confidence ?? 0)}`} title="AI confidence">
+                {formatConfidence(tx.confidence ?? 0)}
+              </TableCell>
+            </TableRow>
+          )
+        }
+        const suggestWithAi = () => {
+          if (!selectedAccountingTransaction || !aiSuggestMessage.trim()) return
+          setAiSuggestLoading(true)
+          fetch("/api/onboarding/merchants/suggest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              raw_name: selectedAccountingTransaction.raw_name,
+              normalized_name: merchantEditDraft.normalized_name,
+              tag: merchantEditDraft.tag,
+              transaction_type: merchantEditDraft.transaction_type,
+              user_message: aiSuggestMessage.trim(),
+            }),
+          })
+            .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Suggest failed"))))
+            .then((data: { normalized_name?: string; tag?: string; transaction_type?: string }) => {
+              setMerchantEditDraft((d) => ({
+                normalized_name: data.normalized_name ?? d.normalized_name,
+                tag: data.tag ?? d.tag,
+                transaction_type:
+                  (data.transaction_type as "Recurring subscription" | "Recurring (other)" | "One-time") ?? d.transaction_type,
+              }))
+              setAiSuggestMessage("")
+            })
+            .catch(() => setMerchantsNormalizeError("AI suggest failed. Try again."))
+            .finally(() => setAiSuggestLoading(false))
+        }
         return (
-          <div className="pt-0 pb-2 max-w-5xl mx-auto">
+          <div className="pt-0 pb-2 w-full">
             <h2 className="text-3xl font-bold tracking-tight text-white mb-2">{steps[7].title}</h2>
             <p className="text-gray-400 text-lg mb-5">{steps[7].description}</p>
             <p className="text-gray-300 text-sm mb-4">
-              Normalized merchant names, tags, and transaction types are generated by AI using your company context and Supermemory. You can edit any row below; changes are saved to memory for future runs.
-            </p>
-            <p className="text-gray-400 text-sm mb-6">
-              Click a transaction row to edit normalized name, tag, and transaction type. Save to memory updates Supermemory; Finished reloads from DB.
+              Normalized merchant names, tags, and transaction types are generated by AI using your company context and Supermemory. Filter by account, edit any row, or type in the chat to let AI update fields.
             </p>
             {merchantsNormalizeError && (
               <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
@@ -1363,8 +1448,33 @@ export function OnboardingFlow({
                 </Button>
               </div>
             )}
+            {accountingTransactions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 mb-4">
+                <span className="text-gray-400 text-sm">Account:</span>
+                <button
+                  type="button"
+                  onClick={() => setAccountFilter(null)}
+                  className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
+                    accountFilter === null ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
+                  }`}
+                >
+                  All
+                </button>
+                {uniqueAccounts.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => setAccountFilter(name)}
+                    className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
+                      accountFilter === name ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
+                    }`}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="mb-6">
-              <h3 className="text-xl font-semibold text-white mb-3">Accounting — Transactions (AI-tagged with company context + Supermemory)</h3>
               {accountingTransactionsLoading ? (
                 <div className="flex items-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -1374,65 +1484,63 @@ export function OnboardingFlow({
                 <p className="text-gray-400 py-4">No transactions in the last 2 months. Connect bank accounts and sync.</p>
               ) : (
                 <>
-                  <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[50vh] mb-2">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="border-white/20 hover:bg-transparent">
-                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
-                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
-                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
-                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
-                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
-                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
-                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {accountingTransactions.map((tx) => {
-                          const isSelected =
-                            selectedAccountingTransaction?.transaction_id === tx.transaction_id
-                          return (
-                            <TableRow
-                              key={tx.transaction_id}
-                              className={`border-white/20 cursor-pointer hover:bg-white/10 ${isSelected ? "bg-white/15" : "hover:bg-white/5"}`}
-                              onClick={() => {
-                                setSelectedAccountingTransaction(tx)
-                                setMerchantEditDraft({
-                                  normalized_name: tx.normalized_name,
-                                  tag: tx.tag,
-                                  transaction_type: tx.transaction_type,
-                                })
-                              }}
-                            >
-                              <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxDate(tx.date)}</TableCell>
-                              <TableCell className="text-gray-400 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxTime(tx.created_at)}</TableCell>
-                              <TableCell
-                                className={`border-white/20 px-3 py-2 whitespace-nowrap text-right font-medium text-sm ${
-                                  tx.amount < 0 ? "text-emerald-400" : "text-rose-400"
-                                }`}
-                              >
-                                {formatBalance(tx.amount)}
-                              </TableCell>
-                              <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.account_name}</TableCell>
-                              <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.normalized_name}</TableCell>
-                              <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                                <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${tagColor(tx.tag)}`}>{tx.tag}</span>
-                              </TableCell>
-                              <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                                <span className="text-gray-200 text-sm">{tx.transaction_type}</span>
-                                <span className={`ml-2 inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${typeColor(tx.transaction_type)}`}>
-                                  {tx.transaction_type}
-                                </span>
+                  {recurringTxs.length > 0 && (
+                    <div className="mb-6">
+                      <h3 className="text-lg font-semibold text-white mb-2">Recurring & Subscriptions</h3>
+                      <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[40vh] mb-2">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="border-white/20 hover:bg-transparent">
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>{recurringTxs.map((tx) => renderTxRow(tx))}</TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  )}
+                  <div className="mb-4">
+                    <h3 className="text-lg font-semibold text-white mb-2">
+                      {recurringTxs.length > 0 ? "Other transactions" : "All transactions"}
+                    </h3>
+                    <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[40vh] mb-2">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-white/20 hover:bg-transparent">
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {otherTxs.length === 0 ? (
+                            <TableRow className="border-white/20">
+                              <TableCell colSpan={8} className="text-gray-400 text-center py-6 border-white/20">
+                                No other transactions in this view.
                               </TableCell>
                             </TableRow>
-                          )
-                        })}
-                      </TableBody>
-                    </Table>
+                          ) : (
+                            otherTxs.map((tx) => renderTxRow(tx))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </div>
                   {selectedAccountingTransaction && (
                     <div className="rounded-lg border border-white/20 bg-white/10 p-4 space-y-3">
-                      <p className="text-gray-400 text-sm font-medium">Recommend edits for: {selectedAccountingTransaction.raw_name}</p>
+                      <p className="text-gray-400 text-sm font-medium">Editing: {selectedAccountingTransaction.raw_name}</p>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
                           <label className="text-gray-400 text-xs block mb-1">Normalized name</label>
@@ -1467,6 +1575,27 @@ export function OnboardingFlow({
                               </option>
                             ))}
                           </select>
+                        </div>
+                      </div>
+                      <div className="border-t border-white/20 pt-3">
+                        <label className="text-gray-400 text-xs block mb-1">Ask AI to update (e.g. &quot;Make it Software, Recurring subscription&quot;)</label>
+                        <div className="flex gap-2 flex-wrap">
+                          <textarea
+                            className="min-h-[80px] w-full max-w-md rounded-md border border-white/20 bg-white/10 text-white px-3 py-2 text-sm placeholder:text-gray-500 resize-y"
+                            value={aiSuggestMessage}
+                            onChange={(e) => setAiSuggestMessage(e.target.value)}
+                            placeholder="Type what you want and AI will update the fields above..."
+                            rows={2}
+                          />
+                          <Button
+                            type="button"
+                            onClick={suggestWithAi}
+                            disabled={aiSuggestLoading || !aiSuggestMessage.trim()}
+                            variant="outline"
+                            className="border-white/30 text-white hover:bg-white/10 self-end"
+                          >
+                            {aiSuggestLoading ? "…" : "Suggest with AI"}
+                          </Button>
                         </div>
                       </div>
                       <div className="flex gap-2">
@@ -1506,12 +1635,15 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
+  const isStep8 = currentStep === 8
   return (
     <div
       className={
         isStep6
           ? "w-full max-w-[96rem] mx-auto px-4 pt-6 pb-8"
-          : "w-full max-w-5xl mx-auto px-4 pt-10 pb-8 md:pt-16 md:pb-10"
+          : isStep8
+            ? "w-full max-w-[90vw] mx-auto px-4 pt-10 pb-8 md:pt-16 md:pb-10"
+            : "w-full max-w-5xl mx-auto px-4 pt-10 pb-8 md:pt-16 md:pb-10"
       }
     >
       {showQboError && qboError && (

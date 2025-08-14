@@ -9,7 +9,7 @@ import { log } from "@/lib/logger"
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 const DAYS_LAST_2_MONTHS = 60
 
-type MerchantResult = { raw_name: string; normalized_name: string; tag: string; transaction_type: string }
+type MerchantResult = { raw_name: string; normalized_name: string; tag: string; transaction_type: string; confidence?: number }
 
 function getSupermemoryClient(): Supermemory | null {
   const apiKey = process.env.SUPERMEMORY_API_KEY
@@ -83,7 +83,9 @@ Tasks:
 
 Account being processed: ${accountLabel || "Default"}
 
-Return a JSON array only, no other text: [{"raw_name": "exact raw string", "normalized_name": "Canonical Name", "tag": "Tag", "transaction_type": "Recurring subscription"|"Recurring (other)"|"One-time"}]`
+4. CONFIDENCE: For each item give a confidence score from 0 to 1 (1 = very sure, 0.5 = uncertain, 0.3 = guess). Consider clarity of the raw name and how well it matches known categories.
+
+Return a JSON array only, no other text: [{"raw_name": "exact raw string", "normalized_name": "Canonical Name", "tag": "Tag", "transaction_type": "Recurring subscription"|"Recurring (other)"|"One-time", "confidence": 0.0-1.0}]`
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -108,12 +110,16 @@ Return a JSON array only, no other text: [{"raw_name": "exact raw string", "norm
   try {
     const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, "").trim()) as MerchantResult[]
     return Array.isArray(parsed)
-      ? parsed.map((p) => ({
-          ...p,
-          transaction_type: p.transaction_type && ["Recurring subscription", "Recurring (other)", "One-time"].includes(p.transaction_type)
-            ? p.transaction_type
-            : "One-time",
-        }))
+      ? parsed.map((p) => {
+          const conf = typeof p.confidence === "number" && p.confidence >= 0 && p.confidence <= 1 ? p.confidence : 0.5
+          return {
+            ...p,
+            transaction_type: p.transaction_type && ["Recurring subscription", "Recurring (other)", "One-time"].includes(p.transaction_type)
+              ? p.transaction_type
+              : "One-time",
+            confidence: conf,
+          }
+        })
       : []
   } catch {
     return []
@@ -227,15 +233,19 @@ export async function POST(_req: NextRequest) {
     )
     for (const r of results) {
       try {
+        const confidence = typeof (r as { confidence?: number }).confidence === "number"
+          ? Math.max(0, Math.min(1, (r as { confidence: number }).confidence))
+          : 0.5
         await query(
-          `INSERT INTO merchant_tags (user_id, account_id, raw_name, normalized_name, tag, transaction_type, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          `INSERT INTO merchant_tags (user_id, account_id, raw_name, normalized_name, tag, transaction_type, confidence, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
            ON CONFLICT (user_id, account_id, raw_name) DO UPDATE SET
              normalized_name = EXCLUDED.normalized_name,
              tag = EXCLUDED.tag,
              transaction_type = EXCLUDED.transaction_type,
+             confidence = EXCLUDED.confidence,
              updated_at = NOW()`,
-          [user.id, accountId, r.raw_name, r.normalized_name, r.tag, r.transaction_type ?? "One-time"]
+          [user.id, accountId, r.raw_name, r.normalized_name, r.tag, r.transaction_type ?? "One-time", confidence]
         )
         totalNormalized += 1
       } catch {

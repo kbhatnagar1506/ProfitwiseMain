@@ -13,6 +13,7 @@ export type AccountingTransactionRow = {
   normalized_name: string
   tag: string
   transaction_type: string
+  confidence: number
 }
 
 /**
@@ -49,6 +50,7 @@ export async function GET(req: NextRequest) {
     normalized_name: string | null
     tag: string | null
     transaction_type: string | null
+    confidence: number | null
   }>(
     `SELECT
        pt.transaction_id,
@@ -60,7 +62,8 @@ export async function GET(req: NextRequest) {
        COALESCE(pt.merchant_name, pt.name, '') AS raw_name,
        mt.normalized_name,
        mt.tag,
-       COALESCE(mt.transaction_type, 'One-time') AS transaction_type
+       COALESCE(mt.transaction_type, 'One-time') AS transaction_type,
+       COALESCE(mt.confidence, 0)::float AS confidence
      FROM plaid_transactions pt
      JOIN plaid_items pi ON pi.item_id = pt.item_id
      LEFT JOIN plaid_accounts pa ON pa.item_id = pt.item_id AND pa.account_id = pt.account_id
@@ -84,6 +87,7 @@ export async function GET(req: NextRequest) {
     normalized_name: r.normalized_name ?? r.raw_name,
     tag: r.tag ?? "Uncategorized",
     transaction_type: r.transaction_type ?? "One-time",
+    confidence: Number(r.confidence) >= 0 && Number(r.confidence) <= 1 ? Number(r.confidence) : 0,
   }))
   return NextResponse.json({ transactions })
 }
