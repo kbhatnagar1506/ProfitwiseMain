@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Next.js
+.next/
+**/.next/
+out/
+build/
+
+# Env
+.env*
+!.env.example
+
+# Debug
+*.log
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# GCP keys (use env var instead)
+*-mainapp-*.json
