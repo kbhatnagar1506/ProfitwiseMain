@@ -140,18 +140,6 @@ export function OnboardingFlow({
   const [companyFormSaveLoading, setCompanyFormSaveLoading] = useState(false)
   const [companyFormAutofillLoading, setCompanyFormAutofillLoading] = useState(false)
   const [step7BankAccounts, setStep7BankAccounts] = useState<{ name: string; mask: string | null }[]>([])
-  const [merchantsTableLoading, setMerchantsTableLoading] = useState(true)
-  const [merchantsTableRows, setMerchantsTableRows] = useState<
-    { account_id: string; account_name: string; raw_name: string; normalized_name: string; tag: string; transaction_type: string }[]
-  >([])
-  const [selectedMerchantRow, setSelectedMerchantRow] = useState<{
-    account_id: string
-    account_name: string
-    raw_name: string
-    normalized_name: string
-    tag: string
-    transaction_type: string
-  } | null>(null)
   const [merchantEditDraft, setMerchantEditDraft] = useState<{ normalized_name: string; tag: string; transaction_type: string }>({
     normalized_name: "",
     tag: "",
@@ -161,6 +149,7 @@ export function OnboardingFlow({
   const [merchantsNormalizeError, setMerchantsNormalizeError] = useState<string | null>(null)
   type AccountingTx = {
     transaction_id: string
+    account_id: string
     date: string
     created_at: string
     amount: number
@@ -172,6 +161,7 @@ export function OnboardingFlow({
   }
   const [accountingTransactions, setAccountingTransactions] = useState<AccountingTx[]>([])
   const [accountingTransactionsLoading, setAccountingTransactionsLoading] = useState(false)
+  const [selectedAccountingTransaction, setSelectedAccountingTransaction] = useState<AccountingTx | null>(null)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -461,16 +451,7 @@ export function OnboardingFlow({
   useEffect(() => {
     if (currentStep !== 8) return
     setMerchantsNormalizeError(null)
-    setMerchantsTableLoading(true)
     setAccountingTransactionsLoading(true)
-    const loadTable = () =>
-      fetch("/api/onboarding/merchants/normalize-and-tag")
-        .then((res) => (res.ok ? res.json() : { rows: [] }))
-        .then((data: { rows?: { account_id: string; account_name: string; raw_name: string; normalized_name: string; tag: string; transaction_type: string }[] }) => {
-          const rows = data.rows ?? []
-          setMerchantsTableRows(rows)
-          return rows
-        })
     const loadAccounting = () =>
       fetch("/api/onboarding/merchants/transactions?limit=200")
         .then((res) => (res.ok ? res.json() : { transactions: [] }))
@@ -478,19 +459,16 @@ export function OnboardingFlow({
         .catch(() => setAccountingTransactions([]))
         .finally(() => setAccountingTransactionsLoading(false))
     loadAccounting()
-    loadTable()
-      .then((rows) => {
+    fetch("/api/onboarding/merchants/normalize-and-tag")
+      .then((res) => (res.ok ? res.json() : { rows: [] }))
+      .then((data: { rows?: unknown[] }) => {
+        const rows = data.rows ?? []
         if (rows.length === 0) {
           return fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" })
-            .then((r) => (r.ok ? loadTable() : Promise.reject(new Error(r.statusText))))
+            .then((r) => (r.ok ? loadAccounting() : Promise.reject(new Error(r.statusText))))
         }
-        return rows
       })
-      .then((rows) => {
-        if (Array.isArray(rows)) setMerchantsTableRows(rows)
-      })
-      .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Failed to load"))
-      .finally(() => setMerchantsTableLoading(false))
+      .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Failed to generate tags"))
   }, [currentStep])
 
   const onPlaidSuccess = useCallback(
@@ -1294,68 +1272,42 @@ export function OnboardingFlow({
       }
 
       case 8: {
-        const runNormalizeAndTag = () => {
-          setMerchantsTableLoading(true)
-          setMerchantsNormalizeError(null)
-          fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" })
-            .then((res) => (res.ok ? fetch("/api/onboarding/merchants/normalize-and-tag") : Promise.reject(new Error(res.statusText))))
-            .then((r) => (r.ok ? r.json() : { rows: [] }))
-            .then((data: { rows?: { account_id: string; account_name: string; raw_name: string; normalized_name: string; tag: string; transaction_type: string }[] }) => {
-              setMerchantsTableRows(data.rows ?? [])
-            })
-            .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Request failed"))
-            .finally(() => setMerchantsTableLoading(false))
-        }
         const reloadTableFromDb = () => {
-          setSelectedMerchantRow(null)
+          setSelectedAccountingTransaction(null)
           setMerchantsNormalizeError(null)
-          fetch("/api/onboarding/merchants/normalize-and-tag")
-            .then((res) => (res.ok ? res.json() : { rows: [] }))
-            .then((data: { rows?: { account_id: string; account_name: string; raw_name: string; normalized_name: string; tag: string; transaction_type: string }[] }) => {
-              setMerchantsTableRows(data.rows ?? [])
-            })
           fetch("/api/onboarding/merchants/transactions?limit=200")
             .then((res) => (res.ok ? res.json() : { transactions: [] }))
             .then((data: { transactions?: AccountingTx[] }) => setAccountingTransactions(data.transactions ?? []))
             .catch(() => {})
         }
         const saveMerchantToMemory = () => {
-          if (!selectedMerchantRow) return
+          if (!selectedAccountingTransaction) return
           setMerchantSaveLoading(true)
           setMerchantsNormalizeError(null)
+          const norm = merchantEditDraft.normalized_name.trim() || selectedAccountingTransaction.normalized_name
+          const tag = merchantEditDraft.tag.trim() || selectedAccountingTransaction.tag
+          const txType = merchantEditDraft.transaction_type
           fetch("/api/onboarding/merchants/update", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              account_id: selectedMerchantRow.account_id,
-              raw_name: selectedMerchantRow.raw_name,
-              normalized_name: merchantEditDraft.normalized_name.trim() || selectedMerchantRow.normalized_name,
-              tag: merchantEditDraft.tag.trim() || selectedMerchantRow.tag,
-              transaction_type: merchantEditDraft.transaction_type,
+              account_id: selectedAccountingTransaction.account_id,
+              raw_name: selectedAccountingTransaction.raw_name,
+              normalized_name: norm,
+              tag,
+              transaction_type: txType,
             }),
           })
             .then((res) => (res.ok ? undefined : Promise.reject(new Error("Save failed"))))
             .then(() => {
-              setSelectedMerchantRow((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      normalized_name: merchantEditDraft.normalized_name.trim() || prev.normalized_name,
-                      tag: merchantEditDraft.tag.trim() || prev.tag,
-                      transaction_type: merchantEditDraft.transaction_type,
-                    }
-                  : null
+              setSelectedAccountingTransaction((prev) =>
+                prev ? { ...prev, normalized_name: norm, tag, transaction_type: txType } : null
               )
-              setMerchantsTableRows((prev) =>
-                prev.map((r) =>
-                  r.account_id === selectedMerchantRow.account_id && r.raw_name === selectedMerchantRow.raw_name
-                    ? {
-                        ...r,
-                        normalized_name: merchantEditDraft.normalized_name.trim() || r.normalized_name,
-                        tag: merchantEditDraft.tag.trim() || r.tag,
-                        transaction_type: merchantEditDraft.transaction_type,
-                      }
-                    : r
+              setAccountingTransactions((prev) =>
+                prev.map((tx) =>
+                  tx.account_id === selectedAccountingTransaction.account_id && tx.raw_name === selectedAccountingTransaction.raw_name
+                    ? { ...tx, normalized_name: norm, tag, transaction_type: txType }
+                    : tx
                 )
               )
             })
@@ -1390,10 +1342,28 @@ export function OnboardingFlow({
               Normalized merchant names, tags, and transaction types are generated by AI using your company context and Supermemory. You can edit any row below; changes are saved to memory for future runs.
             </p>
             <p className="text-gray-400 text-sm mb-6">
-              Accounting view shows every transaction with date, time, amount, and color-coded tags. Click a merchant row below to edit.
+              Click a transaction row to edit normalized name, tag, and transaction type. Save to memory updates Supermemory; Finished reloads from DB.
             </p>
-            {/* Accounting section: transactions with amount, date, time, tags in colors */}
-            <div className="mb-8">
+            {merchantsNormalizeError && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
+                <p className="text-red-300 text-sm">{merchantsNormalizeError}</p>
+                <Button
+                  onClick={() => {
+                    setMerchantsNormalizeError(null)
+                    fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" })
+                      .then((r) => (r.ok ? fetch("/api/onboarding/merchants/transactions?limit=200") : Promise.reject(new Error(r.statusText))))
+                      .then((r) => (r.ok ? r.json() : { transactions: [] }))
+                      .then((data: { transactions?: AccountingTx[] }) => setAccountingTransactions(data.transactions ?? []))
+                      .catch(() => setMerchantsNormalizeError("Request failed"))
+                  }}
+                  variant="outline"
+                  className="mt-3 border-white/30 text-white hover:bg-white/10"
+                >
+                  Try again
+                </Button>
+              </div>
+            )}
+            <div className="mb-6">
               <h3 className="text-xl font-semibold text-white mb-3">Accounting — Transactions (AI-tagged with company context + Supermemory)</h3>
               {accountingTransactionsLoading ? (
                 <div className="flex items-center gap-2 py-6 text-gray-400">
@@ -1403,182 +1373,119 @@ export function OnboardingFlow({
               ) : accountingTransactions.length === 0 ? (
                 <p className="text-gray-400 py-4">No transactions in the last 2 months. Connect bank accounts and sync.</p>
               ) : (
-                <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[50vh] mb-2">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-white/20 hover:bg-transparent">
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {accountingTransactions.map((tx) => (
-                        <TableRow key={tx.transaction_id} className="border-white/20 hover:bg-white/5">
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxDate(tx.date)}</TableCell>
-                          <TableCell className="text-gray-400 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxTime(tx.created_at)}</TableCell>
-                          <TableCell
-                            className={`border-white/20 px-3 py-2 whitespace-nowrap text-right font-medium text-sm ${
-                              tx.amount < 0 ? "text-emerald-400" : "text-rose-400"
-                            }`}
-                          >
-                            {formatBalance(tx.amount)}
-                          </TableCell>
-                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.account_name}</TableCell>
-                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.normalized_name}</TableCell>
-                          <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                            <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${tagColor(tx.tag)}`}>{tx.tag}</span>
-                          </TableCell>
-                          <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                            <span className="text-gray-200 text-sm">{tx.transaction_type}</span>
-                            <span className={`ml-2 inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${typeColor(tx.transaction_type)}`}>
-                              {tx.transaction_type}
-                            </span>
-                          </TableCell>
+                <>
+                  <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[50vh] mb-2">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-white/20 hover:bg-transparent">
+                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
+                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
+                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
+                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
+                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
+                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
+                          <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </div>
-            <h3 className="text-xl font-semibold text-white mb-3">Merchant mapping — AI-generated with company context + Supermemory (click to edit)</h3>
-            {merchantsTableLoading && (
-              <div className="flex flex-col items-center py-12 gap-3">
-                <div className="h-10 w-10 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                <p className="text-white font-medium">Loading merchants…</p>
-                <p className="text-gray-400 text-sm">Normalizing and tagging if needed. This may take a moment.</p>
-              </div>
-            )}
-            {!merchantsTableLoading && merchantsNormalizeError && (
-              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-6">
-                <p className="text-red-300 text-sm">{merchantsNormalizeError}</p>
-                <Button onClick={runNormalizeAndTag} variant="outline" className="mt-3 border-white/30 text-white hover:bg-white/10">
-                  Try again
-                </Button>
-              </div>
-            )}
-            {!merchantsTableLoading && !merchantsNormalizeError && (
-              <>
-                <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[60vh] mb-4">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-white/20 hover:bg-transparent">
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3 whitespace-nowrap">
-                          Account
-                        </TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3 whitespace-nowrap">
-                          Raw name
-                        </TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3 whitespace-nowrap">
-                          Normalized name
-                        </TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3 whitespace-nowrap">
-                          Tag
-                        </TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3 whitespace-nowrap">
-                          Transaction type
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {merchantsTableRows.length === 0 ? (
-                        <TableRow className="border-white/20">
-                          <TableCell colSpan={5} className="text-gray-400 text-center py-8 border-white/20">
-                            No merchant data yet. Connect bank accounts and run normalize & tag below.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        merchantsTableRows.map((row, i) => {
+                      </TableHeader>
+                      <TableBody>
+                        {accountingTransactions.map((tx) => {
                           const isSelected =
-                            selectedMerchantRow?.account_id === row.account_id && selectedMerchantRow?.raw_name === row.raw_name
+                            selectedAccountingTransaction?.transaction_id === tx.transaction_id
                           return (
                             <TableRow
-                              key={`${row.account_id}-${row.raw_name}-${i}`}
+                              key={tx.transaction_id}
                               className={`border-white/20 cursor-pointer hover:bg-white/10 ${isSelected ? "bg-white/15" : "hover:bg-white/5"}`}
                               onClick={() => {
-                                setSelectedMerchantRow(row)
+                                setSelectedAccountingTransaction(tx)
                                 setMerchantEditDraft({
-                                  normalized_name: row.normalized_name,
-                                  tag: row.tag,
-                                  transaction_type: row.transaction_type,
+                                  normalized_name: tx.normalized_name,
+                                  tag: tx.tag,
+                                  transaction_type: tx.transaction_type,
                                 })
                               }}
                             >
-                              <TableCell className="text-white border-white/20 px-4 py-2 font-medium whitespace-nowrap">{row.account_name}</TableCell>
-                              <TableCell className="text-gray-300 border-white/20 px-4 py-2 whitespace-nowrap">{row.raw_name}</TableCell>
-                              <TableCell className="text-white border-white/20 px-4 py-2 whitespace-nowrap">{row.normalized_name}</TableCell>
-                              <TableCell className="text-gray-300 border-white/20 px-4 py-2 whitespace-nowrap">{row.tag}</TableCell>
-                              <TableCell className="text-gray-300 border-white/20 px-4 py-2 whitespace-nowrap">{row.transaction_type}</TableCell>
+                              <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxDate(tx.date)}</TableCell>
+                              <TableCell className="text-gray-400 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxTime(tx.created_at)}</TableCell>
+                              <TableCell
+                                className={`border-white/20 px-3 py-2 whitespace-nowrap text-right font-medium text-sm ${
+                                  tx.amount < 0 ? "text-emerald-400" : "text-rose-400"
+                                }`}
+                              >
+                                {formatBalance(tx.amount)}
+                              </TableCell>
+                              <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.account_name}</TableCell>
+                              <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.normalized_name}</TableCell>
+                              <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
+                                <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${tagColor(tx.tag)}`}>{tx.tag}</span>
+                              </TableCell>
+                              <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
+                                <span className="text-gray-200 text-sm">{tx.transaction_type}</span>
+                                <span className={`ml-2 inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${typeColor(tx.transaction_type)}`}>
+                                  {tx.transaction_type}
+                                </span>
+                              </TableCell>
                             </TableRow>
                           )
-                        })
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-                {selectedMerchantRow && (
-                  <div className="rounded-lg border border-white/20 bg-white/10 p-4 mb-6 space-y-3">
-                    <p className="text-gray-400 text-sm font-medium">Recommend edits for: {selectedMerchantRow.raw_name}</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="text-gray-400 text-xs block mb-1">Normalized name</label>
-                        <Input
-                          className="bg-white/10 border-white/20 text-white"
-                          value={merchantEditDraft.normalized_name}
-                          onChange={(e) => setMerchantEditDraft((d) => ({ ...d, normalized_name: e.target.value }))}
-                          placeholder="Canonical name"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-gray-400 text-xs block mb-1">Tag</label>
-                        <Input
-                          className="bg-white/10 border-white/20 text-white"
-                          value={merchantEditDraft.tag}
-                          onChange={(e) => setMerchantEditDraft((d) => ({ ...d, tag: e.target.value }))}
-                          placeholder="e.g. Software, Subscriptions"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-gray-400 text-xs block mb-1">Transaction type</label>
-                        <select
-                          className="w-full rounded-md border border-white/20 bg-white/10 text-white px-3 py-2 text-sm"
-                          value={merchantEditDraft.transaction_type}
-                          onChange={(e) =>
-                            setMerchantEditDraft((d) => ({ ...d, transaction_type: e.target.value as "Recurring subscription" | "Recurring (other)" | "One-time" }))
-                          }
-                        >
-                          {TRANSACTION_TYPE_OPTIONS.map((opt) => (
-                            <option key={opt} value={opt} className="bg-gray-900 text-white">
-                              {opt}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        onClick={saveMerchantToMemory}
-                        disabled={merchantSaveLoading}
-                        className="bg-white text-black hover:bg-gray-200"
-                      >
-                        {merchantSaveLoading ? "Saving…" : "Save to memory"}
-                      </Button>
-                      <Button onClick={reloadTableFromDb} variant="outline" className="border-white/30 text-white hover:bg-white/10">
-                        Finished (reload from DB)
-                      </Button>
-                    </div>
+                        })}
+                      </TableBody>
+                    </Table>
                   </div>
-                )}
-                <Button onClick={runNormalizeAndTag} className="bg-white text-black hover:bg-gray-200">
-                  Re-run normalize & tag (last 2 months)
-                </Button>
-              </>
-            )}
+                  {selectedAccountingTransaction && (
+                    <div className="rounded-lg border border-white/20 bg-white/10 p-4 space-y-3">
+                      <p className="text-gray-400 text-sm font-medium">Recommend edits for: {selectedAccountingTransaction.raw_name}</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-gray-400 text-xs block mb-1">Normalized name</label>
+                          <Input
+                            className="bg-white/10 border-white/20 text-white"
+                            value={merchantEditDraft.normalized_name}
+                            onChange={(e) => setMerchantEditDraft((d) => ({ ...d, normalized_name: e.target.value }))}
+                            placeholder="Canonical name"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-gray-400 text-xs block mb-1">Tag</label>
+                          <Input
+                            className="bg-white/10 border-white/20 text-white"
+                            value={merchantEditDraft.tag}
+                            onChange={(e) => setMerchantEditDraft((d) => ({ ...d, tag: e.target.value }))}
+                            placeholder="e.g. Software, Subscriptions"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-gray-400 text-xs block mb-1">Transaction type</label>
+                          <select
+                            className="w-full rounded-md border border-white/20 bg-white/10 text-white px-3 py-2 text-sm"
+                            value={merchantEditDraft.transaction_type}
+                            onChange={(e) =>
+                              setMerchantEditDraft((d) => ({ ...d, transaction_type: e.target.value as "Recurring subscription" | "Recurring (other)" | "One-time" }))
+                            }
+                          >
+                            {TRANSACTION_TYPE_OPTIONS.map((opt) => (
+                              <option key={opt} value={opt} className="bg-gray-900 text-white">
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={saveMerchantToMemory}
+                          disabled={merchantSaveLoading}
+                          className="bg-white text-black hover:bg-gray-200"
+                        >
+                          {merchantSaveLoading ? "Saving…" : "Save to memory"}
+                        </Button>
+                        <Button onClick={reloadTableFromDb} variant="outline" className="border-white/30 text-white hover:bg-white/10">
+                          Finished (reload from DB)
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         )
       }
