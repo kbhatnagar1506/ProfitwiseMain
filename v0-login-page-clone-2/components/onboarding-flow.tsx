@@ -1484,32 +1484,8 @@ export function OnboardingFlow({
                 <p className="text-gray-400 py-4">No transactions in the last 2 months. Connect bank accounts and sync.</p>
               ) : (
                 <>
-                  {recurringTxs.length > 0 && (
-                    <div className="mb-6">
-                      <h3 className="text-lg font-semibold text-white mb-2">Recurring & Subscriptions</h3>
-                      <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[40vh] mb-2">
-                        <Table>
-                          <TableHeader>
-                            <TableRow className="border-white/20 hover:bg-transparent">
-                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
-                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
-                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
-                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
-                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
-                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>{recurringTxs.map((tx) => renderTxRow(tx))}</TableBody>
-                        </Table>
-                      </div>
-                    </div>
-                  )}
-                  <div className="mb-4">
-                    <h3 className="text-lg font-semibold text-white mb-2">
-                      {recurringTxs.length > 0 ? "Other transactions" : "All transactions"}
-                    </h3>
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-white mb-2">All transactions</h3>
                     <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[40vh] mb-2">
                       <Table>
                         <TableHeader>
@@ -1525,14 +1501,44 @@ export function OnboardingFlow({
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {otherTxs.length === 0 ? (
+                          {filteredByAccount.length === 0 ? (
                             <TableRow className="border-white/20">
                               <TableCell colSpan={8} className="text-gray-400 text-center py-6 border-white/20">
-                                No other transactions in this view.
+                                No transactions in this view.
                               </TableCell>
                             </TableRow>
                           ) : (
-                            otherTxs.map((tx) => renderTxRow(tx))
+                            filteredByAccount.map((tx) => renderTxRow(tx))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                  <div className="mb-4">
+                    <h3 className="text-lg font-semibold text-white mb-2">Recurring & Subscriptions</h3>
+                    <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[40vh] mb-2">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-white/20 hover:bg-transparent">
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
+                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {recurringTxs.length === 0 ? (
+                            <TableRow className="border-white/20">
+                              <TableCell colSpan={8} className="text-gray-400 text-center py-6 border-white/20">
+                                No recurring or subscription transactions in this view.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            recurringTxs.map((tx) => renderTxRow(tx))
                           )}
                         </TableBody>
                       </Table>
