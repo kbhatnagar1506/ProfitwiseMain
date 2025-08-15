@@ -166,6 +166,7 @@ export function OnboardingFlow({
   const [accountFilter, setAccountFilter] = useState<string | null>(null)
   const [aiSuggestMessage, setAiSuggestMessage] = useState("")
   const [aiSuggestLoading, setAiSuggestLoading] = useState(false)
+  const [clearAndReloadLoading, setClearAndReloadLoading] = useState(false)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -1384,8 +1385,7 @@ export function OnboardingFlow({
                 <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${tagColor(tx.tag)}`}>{tx.tag}</span>
               </TableCell>
               <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                <span className="text-gray-200 text-sm">{tx.transaction_type}</span>
-                <span className={`ml-2 inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${typeColor(tx.transaction_type)}`}>
+                <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${typeColor(tx.transaction_type)}`}>
                   {tx.transaction_type}
                 </span>
               </TableCell>
@@ -1472,6 +1472,31 @@ export function OnboardingFlow({
                     {name}
                   </button>
                 ))}
+              </div>
+            )}
+            {accountingTransactions.length > 0 && (
+              <div className="mb-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-amber-500/50 text-amber-200 hover:bg-amber-500/20"
+                  disabled={clearAndReloadLoading}
+                  onClick={() => {
+                    setClearAndReloadLoading(true)
+                    setMerchantsNormalizeError(null)
+                    fetch("/api/onboarding/merchants/tags", { method: "DELETE" })
+                      .then((r) => (r.ok ? r : Promise.reject(new Error("Clear failed"))))
+                      .then(() => fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" }))
+                      .then((r) => (r.ok ? r : Promise.reject(new Error("Re-run failed"))))
+                      .then(() => fetch("/api/onboarding/merchants/transactions?limit=200"))
+                      .then((r) => (r.ok ? r.json() : { transactions: [] }))
+                      .then((data: { transactions?: AccountingTx[] }) => setAccountingTransactions(data.transactions ?? []))
+                      .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Clear or re-run failed"))
+                      .finally(() => setClearAndReloadLoading(false))
+                  }}
+                >
+                  {clearAndReloadLoading ? "Clearing & re-running AI…" : "Clear tags & re-run AI"}
+                </Button>
               </div>
             )}
             <div className="mb-6">
