@@ -166,7 +166,7 @@ export function OnboardingFlow({
   const [accountFilter, setAccountFilter] = useState<string | null>(null)
   const [aiSuggestMessage, setAiSuggestMessage] = useState("")
   const [aiSuggestLoading, setAiSuggestLoading] = useState(false)
-  const [clearAndReloadLoading, setClearAndReloadLoading] = useState(false)
+  const [rerunAiLoading, setRerunAiLoading] = useState(false)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -1472,30 +1472,23 @@ export function OnboardingFlow({
                     {name}
                   </button>
                 ))}
-              </div>
-            )}
-            {accountingTransactions.length > 0 && (
-              <div className="mb-4">
                 <Button
                   type="button"
-                  variant="outline"
-                  className="border-amber-500/50 text-amber-200 hover:bg-amber-500/20"
-                  disabled={clearAndReloadLoading}
                   onClick={() => {
-                    setClearAndReloadLoading(true)
+                    setRerunAiLoading(true)
                     setMerchantsNormalizeError(null)
-                    fetch("/api/onboarding/merchants/tags", { method: "DELETE" })
-                      .then((r) => (r.ok ? r : Promise.reject(new Error("Clear failed"))))
-                      .then(() => fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" }))
-                      .then((r) => (r.ok ? r : Promise.reject(new Error("Re-run failed"))))
-                      .then(() => fetch("/api/onboarding/merchants/transactions?limit=200"))
+                    fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" })
+                      .then((r) => (r.ok ? fetch("/api/onboarding/merchants/transactions?limit=200") : Promise.reject(new Error(r.statusText))))
                       .then((r) => (r.ok ? r.json() : { transactions: [] }))
                       .then((data: { transactions?: AccountingTx[] }) => setAccountingTransactions(data.transactions ?? []))
-                      .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Clear or re-run failed"))
-                      .finally(() => setClearAndReloadLoading(false))
+                      .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Re-run failed"))
+                      .finally(() => setRerunAiLoading(false))
                   }}
+                  disabled={rerunAiLoading}
+                  variant="outline"
+                  className="ml-auto border-white/30 text-white hover:bg-white/10"
                 >
-                  {clearAndReloadLoading ? "Clearing & re-running AI…" : "Clear tags & re-run AI"}
+                  {rerunAiLoading ? "Re-running AI…" : "Reload — Re-run AI (last 2 months)"}
                 </Button>
               </div>
             )}
