@@ -310,6 +310,30 @@ export async function ensureMerchantTagsSchema(): Promise<void> {
   log("db.merchant_tags.schema.ensured", undefined, "db")
 }
 
+const USER_WHATSAPP_SQL = `
+  CREATE TABLE IF NOT EXISTS user_whatsapp (
+    user_id       UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    phone_e164    TEXT NOT NULL UNIQUE,
+    verified_at   TIMESTAMPTZ,
+    otp_code      TEXT,
+    otp_expires_at TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
+let whatsappSchemaEnsured = false
+
+export async function ensureWhatsAppSchema(): Promise<void> {
+  if (whatsappSchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(USER_WHATSAPP_SQL)
+  whatsappSchemaEnsured = true
+  log("db.whatsapp.schema.ensured", undefined, "db")
+}
+
 export async function query<T = unknown>(
   text: string,
   params?: unknown[]
