@@ -51,7 +51,7 @@ export async function PATCH(req: NextRequest) {
 
   const { rows } = await query<{ id: string }>(
     `UPDATE merchant_tags
-     SET normalized_name = $1, tag = $2, transaction_type = $3, updated_at = NOW()
+     SET normalized_name = $1, tag = $2, transaction_type = $3, confidence = 1, updated_at = NOW()
      WHERE user_id = $4 AND account_id = $5 AND raw_name = $6
      RETURNING id`,
     [normalized_name, tag, transaction_type, user.id, account_id, raw_name]

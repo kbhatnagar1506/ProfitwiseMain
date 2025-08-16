@@ -305,6 +305,7 @@ export async function ensureMerchantTagsSchema(): Promise<void> {
   await ensureAuthSchema()
   await p.query(MERCHANT_TAGS_SQL)
   await p.query("ALTER TABLE merchant_tags ADD COLUMN IF NOT EXISTS transaction_type TEXT NOT NULL DEFAULT 'One-time'")
+  await p.query("ALTER TABLE merchant_tags ADD COLUMN IF NOT EXISTS confidence REAL DEFAULT 0.5")
   merchantTagsSchemaEnsured = true
   log("db.merchant_tags.schema.ensured", undefined, "db")
 }
