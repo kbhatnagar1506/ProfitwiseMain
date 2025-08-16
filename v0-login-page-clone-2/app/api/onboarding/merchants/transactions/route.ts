@@ -4,6 +4,7 @@ import { ensureAuthSchema, ensureMerchantTagsSchema, ensurePlaidSchema, query } 
 
 export type AccountingTransactionRow = {
   transaction_id: string
+  account_id: string
   date: string
   created_at: string
   amount: number
@@ -39,6 +40,7 @@ export async function GET(req: NextRequest) {
 
   const { rows } = await query<{
     transaction_id: string
+    account_id: string
     date: string
     created_at: string
     amount: number
@@ -50,6 +52,7 @@ export async function GET(req: NextRequest) {
   }>(
     `SELECT
        pt.transaction_id,
+       pt.account_id,
        pt.date::text AS date,
        pt.created_at::text AS created_at,
        pt.amount::float AS amount,
@@ -72,6 +75,7 @@ export async function GET(req: NextRequest) {
 
   const transactions: AccountingTransactionRow[] = (rows ?? []).map((r) => ({
     transaction_id: r.transaction_id,
+    account_id: r.account_id,
     date: r.date,
     created_at: r.created_at,
     amount: Number(r.amount),
