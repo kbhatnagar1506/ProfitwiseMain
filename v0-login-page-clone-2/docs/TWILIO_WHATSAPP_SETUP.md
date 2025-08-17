@@ -2,7 +2,9 @@
 
 ## Heroku / env vars
 
-Set these in Heroku (or `.env`); **never commit secrets**.
+Set these in Heroku (Dashboard → App → Settings → Config Vars); **never commit secrets**.
+
+**Required (all four):** `TWILIO_ACCOUNT_SID` (starts with `AC`), `TWILIO_API_KEY_SID` (starts with `SK`), `TWILIO_API_KEY_SECRET`, `TWILIO_WHATSAPP_FROM` (e.g. `whatsapp:+12345678901`). Or use `TWILIO_AUTH_TOKEN` instead of the two API Key vars.
 
 | Variable | Description |
 |----------|-------------|
