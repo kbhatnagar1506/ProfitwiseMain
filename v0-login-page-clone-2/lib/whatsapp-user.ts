@@ -79,3 +79,9 @@ export async function getWhatsAppStatusByUserId(
   if (!row) return { phoneE164: null, verified: false }
   return { phoneE164: row.phone_e164, verified: !!row.verified_at }
 }
+
+/** Remove the user's linked WhatsApp number so they can link a different one. */
+export async function disconnectWhatsApp(userId: string): Promise<void> {
+  await ensureWhatsAppSchema()
+  await query("DELETE FROM user_whatsapp WHERE user_id = $1", [userId])
+}
