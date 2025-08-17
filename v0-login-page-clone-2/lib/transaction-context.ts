@@ -4,6 +4,9 @@ import {
   ensureMerchantTagsSchema,
   query,
 } from "./db"
+import { getAccountsWithBalancesByUserId } from "./plaid-persistence"
+import { listRealmIdsByUserId } from "./quickbooks-token-store"
+import { listTenantIdsByUserId } from "./xero-token-store"
 
 const DEFAULT_DAYS = 60
 const MAX_TRANSACTIONS = 150
@@ -65,4 +68,35 @@ export async function getTransactionContextForUser(userId: string): Promise<stri
     return `${date} | ${account} | ${merchant} | ${amount < 0 ? "" : "+"}${amount.toFixed(2)} | ${tag} | ${type}`
   })
   return `Recent transactions (date | account | merchant | amount | category | type):\n${lines.join("\n")}`
+}
+
+/**
+ * Balances and connected accounts/integrations for a user, formatted for LLM context.
+ */
+export async function getBalancesAndConnectionsContextForUser(userId: string): Promise<string> {
+  const parts: string[] = []
+  try {
+    const accounts = await getAccountsWithBalancesByUserId(userId)
+    if (accounts.length > 0) {
+      const lines = accounts.map((a) => {
+        const cur = a.current_balance != null ? Number(a.current_balance).toFixed(2) : "—"
+        const avail = a.available_balance != null ? Number(a.available_balance).toFixed(2) : "—"
+        return `${a.name ?? a.account_id} (${a.type ?? "account"}): current ${cur}, available ${avail}${a.currency_code ? ` ${a.currency_code}` : ""}`
+      })
+      parts.push("Bank accounts and balances:\n" + lines.join("\n"))
+    }
+    const [tenantIds, realmIds] = await Promise.all([
+      listTenantIdsByUserId(userId),
+      listRealmIdsByUserId(userId),
+    ])
+    const connections: string[] = []
+    if (tenantIds.length > 0) connections.push("Xero")
+    if (realmIds.length > 0) connections.push("QuickBooks Online")
+    if (connections.length > 0) {
+      parts.push("Connected integrations: " + connections.join(", "))
+    }
+  } catch {
+    // optional
+  }
+  return parts.join("\n\n")
 }
