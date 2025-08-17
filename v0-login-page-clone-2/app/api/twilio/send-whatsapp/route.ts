@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { getTwilio, getWhatsAppFrom } from "@/lib/twilio"
+import { getTwilio, getWhatsAppFrom, getTwilioConfigHint } from "@/lib/twilio"
 
 /**
  * POST /api/twilio/send-whatsapp
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   const from = getWhatsAppFrom()
   if (!client || !from) {
     return NextResponse.json(
-      { error: "Twilio WhatsApp not configured" },
+      { error: "Twilio WhatsApp not configured", hint: getTwilioConfigHint() },
       { status: 503 }
     )
   }
