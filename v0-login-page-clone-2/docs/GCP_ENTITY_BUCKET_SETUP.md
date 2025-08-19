@@ -53,10 +53,17 @@ After setting these and redeploying, QBO and Xero sync will read/write entity da
 
 ## Paths in the bucket
 
-- **QBO:** `accounting/qbo/{realmId}/{entityType}.json` (e.g. `accounting/qbo/9341456553171256/Invoice.json`).
-- **Xero:** `accounting/xero/{tenantId}/{entityType}.json` (e.g. `accounting/xero/4fa0c9b6-.../Contact.json`).
+With **user filter** (recommended):
 
-Each file is a JSON array of entities for that type. If `GCP_ENTITY_BUCKET` is not set, the app falls back to Postgres (or in-memory in dev).
+- **QBO:** `accounting/user/{userId}/qbo/{realmId}/{entityType}.json`
+- **Xero:** `accounting/user/{userId}/xero/{tenantId}/{entityType}.json`
+
+Legacy (no user segment):
+
+- **QBO:** `accounting/qbo/{realmId}/{entityType}.json`
+- **Xero:** `accounting/xero/{tenantId}/{entityType}.json`
+
+Each file is a JSON array of entities for that type. Sync and entity stores use the user-scoped path when `userId` is available so you can list/filter by user. If `GCP_ENTITY_BUCKET` is not set, the app falls back to Postgres (or in-memory in dev).
 
 ---
 
