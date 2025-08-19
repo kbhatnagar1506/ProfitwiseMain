@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureWhatsAppSchema, query } from "@/lib/db"
-import { getTwilio, getWhatsAppFrom } from "@/lib/twilio"
+import { getTwilio, getWhatsAppFrom, getTwilioConfigHint } from "@/lib/twilio"
 import { normalizePhoneE164, setPendingOtp } from "@/lib/whatsapp-user"
 
 const OTP_EXPIRY_MINUTES = 10
@@ -53,7 +53,10 @@ export async function POST(req: NextRequest) {
   const client = getTwilio()
   const from = getWhatsAppFrom()
   if (!client || !from) {
-    return NextResponse.json({ error: "WhatsApp not configured" }, { status: 503 })
+    return NextResponse.json(
+      { error: "WhatsApp not configured", hint: getTwilioConfigHint() },
+      { status: 503 }
+    )
   }
 
   const to = phoneE164.startsWith("+") ? `whatsapp:${phoneE164}` : `whatsapp:+${phoneE164}`

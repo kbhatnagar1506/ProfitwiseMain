@@ -1047,7 +1047,7 @@ export function OnboardingFlow({
                               })
                               const data = await res.json().catch(() => ({}))
                               if (res.ok) setWhatsappOtpSent(true)
-                              else alert(data.error || "Could not send code")
+                              else alert([data.error || "Could not send code", data.hint].filter(Boolean).join("\n"))
                             } finally {
                               setWhatsappSendLoading(false)
                             }

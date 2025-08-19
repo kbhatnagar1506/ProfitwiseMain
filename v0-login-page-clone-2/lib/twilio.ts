@@ -47,6 +47,18 @@ export function getWhatsAppFrom(): string | null {
   return trimmed.startsWith("whatsapp:") ? trimmed : `whatsapp:${trimmed}`
 }
 
+/** Returns a short hint for "WhatsApp not configured" (no secrets). */
+export function getTwilioConfigHint(): string {
+  const hasAccount = !!process.env.TWILIO_ACCOUNT_SID
+  const hasAuth = !!(process.env.TWILIO_AUTH_TOKEN || (process.env.TWILIO_API_KEY_SID && process.env.TWILIO_API_KEY_SECRET))
+  const hasFrom = !!process.env.TWILIO_WHATSAPP_FROM
+  const missing: string[] = []
+  if (!hasAccount) missing.push("TWILIO_ACCOUNT_SID")
+  if (!hasAuth) missing.push("TWILIO_AUTH_TOKEN or TWILIO_API_KEY_SID+TWILIO_API_KEY_SECRET")
+  if (!hasFrom) missing.push("TWILIO_WHATSAPP_FROM")
+  return missing.length ? `Set on Heroku: ${missing.join(", ")}` : "Twilio env vars present; check values."
+}
+
 export function getTwilioAuthToken(): string | null {
   return process.env.TWILIO_AUTH_TOKEN ?? null
 }
