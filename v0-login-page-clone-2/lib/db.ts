@@ -334,6 +334,31 @@ export async function ensureWhatsAppSchema(): Promise<void> {
   log("db.whatsapp.schema.ensured", undefined, "db")
 }
 
+const SHOPIFY_CONNECTIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_connections (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop          TEXT NOT NULL,
+    access_token  TEXT NOT NULL,
+    scope         TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop)
+  )
+`
+
+let shopifySchemaEnsured = false
+
+export async function ensureShopifySchema(): Promise<void> {
+  if (shopifySchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(SHOPIFY_CONNECTIONS_SQL)
+  shopifySchemaEnsured = true
+  log("db.shopify.schema.ensured", undefined, "db")
+}
+
 export async function query<T = unknown>(
   text: string,
   params?: unknown[]
