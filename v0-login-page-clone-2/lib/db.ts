@@ -334,29 +334,28 @@ export async function ensureWhatsAppSchema(): Promise<void> {
   log("db.whatsapp.schema.ensured", undefined, "db")
 }
 
-const SHOPIFY_CONNECTIONS_SQL = `
-  CREATE TABLE IF NOT EXISTS shopify_connections (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    shop          TEXT NOT NULL,
-    access_token  TEXT NOT NULL,
-    scope         TEXT,
-    created_at    TIMESTAMPTZ DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, shop)
+const USER_SLACK_SQL = `
+  CREATE TABLE IF NOT EXISTS user_slack (
+    user_id         UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    slack_user_id   TEXT NOT NULL,
+    slack_team_id   TEXT NOT NULL,
+    bot_token       TEXT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(slack_team_id, slack_user_id)
   )
 `
 
-let shopifySchemaEnsured = false
+let slackSchemaEnsured = false
 
-export async function ensureShopifySchema(): Promise<void> {
-  if (shopifySchemaEnsured) return
+export async function ensureSlackSchema(): Promise<void> {
+  if (slackSchemaEnsured) return
   const p = await getPoolAsync()
   if (!p) return
   await ensureAuthSchema()
-  await p.query(SHOPIFY_CONNECTIONS_SQL)
-  shopifySchemaEnsured = true
-  log("db.shopify.schema.ensured", undefined, "db")
+  await p.query(USER_SLACK_SQL)
+  slackSchemaEnsured = true
+  log("db.slack.schema.ensured", undefined, "db")
 }
 
 export async function query<T = unknown>(
