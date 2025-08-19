@@ -5,10 +5,28 @@ import { getAiReplyForUser } from "@/lib/ai-context-reply"
 
 const SLACK_SCOPE = "chat:write,im:read,im:write,im:history"
 
+/** Dedupe by event_id so Slack retries don't cause multiple replies. Prune when large. */
+const seenEventIds = new Map<string, number>()
+const SEEN_TTL_MS = 5 * 60 * 1000
+const SEEN_MAX = 2000
+
+function alreadyProcessed(eventId: string): boolean {
+  const now = Date.now()
+  if (seenEventIds.has(eventId)) return true
+  seenEventIds.set(eventId, now)
+  if (seenEventIds.size > SEEN_MAX) {
+    for (const [id, t] of seenEventIds) {
+      if (now - t > SEEN_TTL_MS) seenEventIds.delete(id)
+    }
+  }
+  return false
+}
+
 type SlackEventPayload = {
   type?: string
   challenge?: string
   team_id?: string
+  event_id?: string
   event?: {
     type?: string
     user?: string
@@ -43,6 +61,11 @@ export async function POST(req: NextRequest) {
   }
 
   if (body.type !== "event_callback" || !body.event) {
+    return NextResponse.json({ ok: true })
+  }
+
+  const eventId = body.event_id ?? ""
+  if (eventId && alreadyProcessed(eventId)) {
     return NextResponse.json({ ok: true })
   }
 
