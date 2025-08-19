@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { listRealmIdsByUserId } from "@/lib/quickbooks-token-store"
 import { listTenantIdsByUserId } from "@/lib/xero-token-store"
+import { listShopsByUserId } from "@/lib/shopify"
 
 /** GET /api/connections — returns which accounting integrations are connected and their IDs (for triggering sync). */
 
@@ -15,18 +16,22 @@ export async function GET(request: NextRequest) {
   const connected: string[] = []
   let realmIds: string[] = []
   let tenantIds: string[] = []
+  let shopifyShops: string[] = []
   try {
-    const [xeroTenants, qboRealms] = await Promise.all([
+    const [xeroTenants, qboRealms, shops] = await Promise.all([
       listTenantIdsByUserId(user.id),
       listRealmIdsByUserId(user.id),
+      listShopsByUserId(user.id),
     ])
     tenantIds = xeroTenants
     realmIds = qboRealms
+    shopifyShops = shops
     if (xeroTenants.length > 0) connected.push("Xero")
     if (qboRealms.length > 0) connected.push("QuickBooks Online")
+    if (shops.length > 0) connected.push("Shopify")
   } catch {
     // return whatever we have
   }
 
-  return NextResponse.json({ connected, realmIds, tenantIds })
+  return NextResponse.json({ connected, realmIds, tenantIds, shopifyShops })
 }

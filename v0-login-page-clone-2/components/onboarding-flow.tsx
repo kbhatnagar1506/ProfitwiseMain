@@ -36,6 +36,12 @@ const integrations: Integration[] = [
     logo: "/xero-logo.png",
   },
   {
+    name: "Shopify",
+    description: "Connect your store for orders and products",
+    category: "Accounting",
+    logo: "/shopify-logo.png",
+  },
+  {
     name: "FreshBooks",
     description: "Simple accounting for small businesses",
     category: "Accounting",
@@ -101,6 +107,17 @@ const QBO_ERROR_MESSAGES: Record<string, string> = {
   state_mismatch: "QuickBooks security check failed. Please try again.",
   config: "QuickBooks isn't configured yet. Please try again later.",
   token_exchange: "QuickBooks connection failed. Please try again.",
+}
+
+const SHOPIFY_ERROR_MESSAGES: Record<string, string> = {
+  shopify_invalid_shop: "Please enter a valid Shopify store (e.g. mystore.myshopify.com).",
+  shopify_config: "Shopify isn't configured yet. Please try again later.",
+  shopify_hmac: "Shopify security check failed. Please try again.",
+  shopify_state_mismatch: "Session expired. Please try connecting Shopify again.",
+  shopify_session: "Session expired. Please log in and try again.",
+  shopify_missing_params: "Connection didn't complete. Please try again.",
+  shopify_token_exchange: "Could not connect to Shopify. Please try again.",
+  shopify_access_denied: "Shopify connection was cancelled. You can try again when you're ready.",
 }
 
 export function OnboardingFlow({
@@ -200,6 +217,8 @@ export function OnboardingFlow({
   ]
 
   const showQboError = qboError && QBO_ERROR_MESSAGES[qboError] && !dismissedError
+  const shopifyError = typeof qboError === "string" && qboError.startsWith("shopify_") ? qboError : null
+  const showShopifyError = shopifyError && !dismissedError
 
   useEffect(() => {
     if (qboError) setDismissedError(false)
@@ -955,10 +974,10 @@ export function OnboardingFlow({
               ].map((integration) => {
                 const isConnected = connectedContextIntegrations.includes(integration.name)
                 return (
-                  <button
-                    key={integration.name}
-                    type="button"
-                    onClick={() => toggleIntegration(integration.name)}
+                <button
+                  key={integration.name}
+                  type="button"
+                  onClick={() => toggleIntegration(integration.name)}
                     className={`relative rounded-lg p-5 text-center transition-all flex flex-col items-center justify-center hover:border-white/30 hover:bg-white/10 ${
                       isConnected
                         ? "bg-emerald-500/10 border-2 border-emerald-500/50 hover:border-emerald-500/70 hover:bg-emerald-500/15"
@@ -976,20 +995,20 @@ export function OnboardingFlow({
                         </svg>
                       </span>
                     )}
-                    <div className="w-28 h-28 mb-4 flex items-center justify-center">
-                      <Image
-                        src={integration.logo || "/placeholder.svg"}
-                        alt={`${integration.name} logo`}
-                        width={120}
-                        height={120}
-                        className="object-contain max-w-full max-h-full"
-                      />
-                    </div>
-                    <h3 className="text-white font-semibold text-sm leading-tight">{integration.name}</h3>
+                  <div className="w-28 h-28 mb-4 flex items-center justify-center">
+                    <Image
+                      src={integration.logo || "/placeholder.svg"}
+                      alt={`${integration.name} logo`}
+                      width={120}
+                      height={120}
+                      className="object-contain max-w-full max-h-full"
+                    />
+                  </div>
+                  <h3 className="text-white font-semibold text-sm leading-tight">{integration.name}</h3>
                     {isConnected && (
                       <span className="text-xs font-medium text-emerald-400 mt-1">Connected</span>
                     )}
-                  </button>
+                </button>
                 )
               })}
             </div>
@@ -1811,6 +1830,19 @@ export function OnboardingFlow({
           </button>
         </div>
       )}
+      {showShopifyError && shopifyError && (
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-amber-200">
+          <p className="text-sm">{SHOPIFY_ERROR_MESSAGES[shopifyError] ?? "Shopify connection failed. Please try again."}</p>
+          <button
+            type="button"
+            onClick={() => setDismissedError(true)}
+            className="shrink-0 rounded p-1 text-amber-300 hover:bg-amber-500/20"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className={isStep6 ? "mb-2" : "mb-8"}>
         <div className="flex items-center flex-col justify-start mb-0">
           <Image
@@ -1822,22 +1854,22 @@ export function OnboardingFlow({
           />
         </div>
         {!isStep6 && (
-          <div className="w-full max-w-2xl mx-auto py-[13px] pt-0">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-white">
-                Step {currentStep} of {steps.length}
-              </span>
-              <span className="text-sm font-medium text-white">
-                {Math.round((currentStep / steps.length) * 100)}% Complete
-              </span>
-            </div>
-            <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-              <div
-                className="bg-white h-2 rounded-full transition-all duration-500 ease-out"
-                style={{ width: `${(currentStep / steps.length) * 100}%` }}
-              />
-            </div>
+        <div className="w-full max-w-2xl mx-auto py-[13px] pt-0">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-white">
+              Step {currentStep} of {steps.length}
+            </span>
+            <span className="text-sm font-medium text-white">
+              {Math.round((currentStep / steps.length) * 100)}% Complete
+            </span>
           </div>
+          <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-white h-2 rounded-full transition-all duration-500 ease-out"
+              style={{ width: `${(currentStep / steps.length) * 100}%` }}
+            />
+          </div>
+        </div>
         )}
       </div>
       {/* Main step content without extra dark card background */}
