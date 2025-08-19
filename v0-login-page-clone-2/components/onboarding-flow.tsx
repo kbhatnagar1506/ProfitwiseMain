@@ -167,6 +167,12 @@ export function OnboardingFlow({
   const [aiSuggestMessage, setAiSuggestMessage] = useState("")
   const [aiSuggestLoading, setAiSuggestLoading] = useState(false)
   const [rerunAiLoading, setRerunAiLoading] = useState(false)
+  const [whatsappStatus, setWhatsappStatus] = useState<{ phone: string | null; verified: boolean } | null>(null)
+  const [whatsappPhoneInput, setWhatsappPhoneInput] = useState("")
+  const [whatsappOtpSent, setWhatsappOtpSent] = useState(false)
+  const [whatsappCodeInput, setWhatsappCodeInput] = useState("")
+  const [whatsappSendLoading, setWhatsappSendLoading] = useState(false)
+  const [whatsappVerifyLoading, setWhatsappVerifyLoading] = useState(false)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -362,6 +368,18 @@ export function OnboardingFlow({
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisibility)
     }
+  }, [currentStep])
+
+  useEffect(() => {
+    if (currentStep !== 5) return
+    setWhatsappStatus(null)
+    fetch("/api/whatsapp/status")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { phone: string | null; verified: boolean } | null) => {
+        if (data) setWhatsappStatus({ phone: data.phone ?? null, verified: data.verified })
+        else setWhatsappStatus({ phone: null, verified: false })
+      })
+      .catch(() => setWhatsappStatus({ phone: null, verified: false }))
   }, [currentStep])
 
   useEffect(() => {
@@ -984,13 +1002,102 @@ export function OnboardingFlow({
             <div className="text-center mb-6">
               <h2 className="text-2xl font-semibold text-white mb-3">Choose your communication channels</h2>
               <p className="text-gray-400 text-base">
-                Select where you want to chat with ProfitWise and receive updates from your AI finance teammate.
+                Add your WhatsApp number to chat with ProfitWise and get answers using your company context. We’ll send a code to verify it.
               </p>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 gap-10 max-w-2xl mx-auto">
+              {/* WhatsApp: phone + OTP connect */}
+              <div className="bg-white/5 border border-white/10 rounded-lg p-5 flex flex-col items-center justify-center min-h-[200px]">
+                <div className="w-20 h-20 mb-3 flex items-center justify-center">
+                  <Image
+                    src="/whatsapp-logo.png"
+                    alt="WhatsApp"
+                    width={80}
+                    height={80}
+                    className="object-contain max-w-full max-h-full"
+                  />
+                </div>
+                <h3 className="text-white font-semibold text-sm leading-tight mb-3">WhatsApp</h3>
+                {whatsappStatus === null ? (
+                  <p className="text-gray-500 text-xs">Loading…</p>
+                ) : whatsappStatus.verified && whatsappStatus.phone ? (
+                  <p className="text-emerald-400 text-xs font-medium">Connected as {whatsappStatus.phone}</p>
+                ) : (
+                  <div className="w-full space-y-2 mt-1">
+                    {!whatsappOtpSent ? (
+                      <>
+                        <Input
+                          placeholder="+1 555 123 4567"
+                          value={whatsappPhoneInput}
+                          onChange={(e) => setWhatsappPhoneInput(e.target.value)}
+                          className="bg-white/5 border-white/20 text-white text-sm h-9"
+                        />
+                        <Button
+                          size="sm"
+                          className="w-full"
+                          disabled={whatsappSendLoading || !whatsappPhoneInput.trim()}
+                          onClick={async () => {
+                            setWhatsappSendLoading(true)
+                            try {
+                              const res = await fetch("/api/whatsapp/request-otp", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ phone: whatsappPhoneInput.trim() }),
+                              })
+                              const data = await res.json().catch(() => ({}))
+                              if (res.ok) setWhatsappOtpSent(true)
+                              else alert(data.error || "Could not send code")
+                            } finally {
+                              setWhatsappSendLoading(false)
+                            }
+                          }}
+                        >
+                          {whatsappSendLoading ? "Sending…" : "Send code"}
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Input
+                          placeholder="6-digit code"
+                          value={whatsappCodeInput}
+                          onChange={(e) => setWhatsappCodeInput(e.target.value)}
+                          className="bg-white/5 border-white/20 text-white text-sm h-9"
+                          maxLength={6}
+                        />
+                        <Button
+                          size="sm"
+                          className="w-full"
+                          disabled={whatsappVerifyLoading || whatsappCodeInput.replace(/\D/g, "").length !== 6}
+                          onClick={async () => {
+                            setWhatsappVerifyLoading(true)
+                            try {
+                              const res = await fetch("/api/whatsapp/verify", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ code: whatsappCodeInput.replace(/\D/g, "") }),
+                              })
+                              const data = await res.json().catch(() => ({}))
+                              if (res.ok) {
+                                setWhatsappStatus({ phone: data.phone ?? null, verified: true })
+                                setWhatsappOtpSent(false)
+                                setWhatsappCodeInput("")
+                                setWhatsappPhoneInput("")
+                              } else alert(data.error || "Invalid code")
+                            } finally {
+                              setWhatsappVerifyLoading(false)
+                            }
+                          }}
+                        >
+                          {whatsappVerifyLoading ? "Verifying…" : "Verify"}
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {[
-                { name: "WhatsApp", logo: "/whatsapp-logo.png" },
                 { name: "Slack", logo: "/slack-logo.png" },
                 { name: "Gmail", logo: "/gmail-logo.png" },
               ].map((channel) => (
@@ -998,7 +1105,7 @@ export function OnboardingFlow({
                   key={channel.name}
                   type="button"
                   onClick={() => toggleIntegration(channel.name)}
-                  className="bg-white/5 border border-white/10 rounded-lg p-5 text-center transition-all flex flex-col items-center justify-center hover:border-white/30 hover:bg-white/10"
+                  className="bg-white/5 border border-white/10 rounded-lg p-5 text-center transition-all flex flex-col items-center justify-center hover:border-white/30 hover:bg-white/10 min-h-[200px]"
                 >
                   <div className="w-20 h-20 mb-3 flex items-center justify-center">
                     <Image
