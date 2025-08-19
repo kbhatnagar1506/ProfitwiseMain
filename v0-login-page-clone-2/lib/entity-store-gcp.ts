@@ -189,3 +189,28 @@ export async function gcpDeleteEntity(
   log("entity_store_gcp.delete.succeeded", { provider, scopeId, entityType, entityId }, "gcp")
   return true
 }
+
+/**
+ * Delete all entity files in the bucket for a given scope (realm or tenant).
+ * Call this when a user disconnects QBO or Xero so their bucket data is removed.
+ */
+export async function gcpDeleteScope(
+  provider: "qbo" | "xero",
+  scopeId: string
+): Promise<number> {
+  const client = getStorage()
+  if (!client) return 0
+
+  const prefix = listPrefix(provider, scopeId)
+  const bucket = client.bucket(BUCKET_NAME)
+  const [files] = await bucket.getFiles({ prefix })
+  let deleted = 0
+  for (const file of files) {
+    await file.delete()
+    deleted++
+  }
+  if (deleted > 0) {
+    log("entity_store_gcp.delete_scope.succeeded", { provider, scopeId, deleted }, "gcp")
+  }
+  return deleted
+}
