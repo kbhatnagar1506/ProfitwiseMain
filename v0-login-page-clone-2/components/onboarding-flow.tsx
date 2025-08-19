@@ -1022,7 +1022,28 @@ export function OnboardingFlow({
                 {whatsappStatus === null ? (
                   <p className="text-gray-500 text-xs">Loading…</p>
                 ) : whatsappStatus.verified && whatsappStatus.phone ? (
-                  <p className="text-emerald-400 text-xs font-medium">Connected as {whatsappStatus.phone}</p>
+                  <div className="flex flex-col items-center gap-1">
+                    <p className="text-emerald-400 text-xs font-medium">Connected as {whatsappStatus.phone}</p>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/whatsapp/disconnect", { method: "POST" })
+                          if (res.ok) {
+                            setWhatsappStatus({ phone: null, verified: false })
+                            setWhatsappOtpSent(false)
+                            setWhatsappCodeInput("")
+                            setWhatsappPhoneInput("")
+                          }
+                        } catch {
+                          // ignore
+                        }
+                      }}
+                      className="text-xs text-gray-400 hover:text-red-400 underline"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
                 ) : (
                   <div className="w-full space-y-2 mt-1">
                     {!whatsappOtpSent ? (
