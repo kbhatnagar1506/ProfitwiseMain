@@ -89,18 +89,45 @@ export async function POST(request: NextRequest) {
   try {
     const parsed = body ? JSON.parse(body) : null
     if (Array.isArray(parsed) && parsed.length > 0) {
-      for (const item of parsed as Array<{ intuitaccountid?: string; eventNotifications?: Array<{ realmId?: string; dataChangeEvent?: { entities?: Array<{ name?: string; id?: string; operation?: string }> } }> }>) {
-        const realmId = item?.intuitaccountid
+      for (const item of parsed as Array<{
+        intuitaccountid?: string
+        eventNotifications?: Array<{
+          realmId?: string
+          dataChangeEvent?: { entities?: Array<{ name?: string; id?: string; operation?: string }> }
+        }>
+        // CloudEvents-style payload
+        specversion?: string
+        id?: string
+        source?: string
+        type?: string
+        time?: string
+        intuitentityid?: string
+      }>) {
+        // Legacy/QBO v3 style with eventNotifications
+        const legacyRealmId = item?.intuitaccountid
         const notifications = item?.eventNotifications
-        if (realmId && Array.isArray(notifications)) {
-          realmsTouched.add(realmId)
+        if (legacyRealmId && Array.isArray(notifications)) {
+          realmsTouched.add(legacyRealmId)
           for (const n of notifications) {
             const entities = n?.dataChangeEvent?.entities ?? []
             for (const e of entities) {
               if (e?.name && e?.id && e?.operation) {
-                changes.push({ realmId, name: e.name, id: String(e.id), operation: e.operation })
+                changes.push({ realmId: legacyRealmId, name: e.name, id: String(e.id), operation: e.operation })
               }
             }
+          }
+          continue
+        }
+
+        // New CloudEvents-style: array of events with intuitaccountid + intuitentityid + type "qbo.invoice.*.v1"
+        if (item.specversion && item.intuitaccountid && item.intuitentityid) {
+          const realmId = item.intuitaccountid
+          const entityId = String(item.intuitentityid)
+          const eventType = item.type ?? ""
+          realmsTouched.add(realmId)
+          // Treat all qbo.invoice.* events as an upsert for that Invoice id.
+          if (eventType.startsWith("qbo.invoice.")) {
+            changes.push({ realmId, name: "Invoice", id: entityId, operation: "Update" })
           }
         }
       }
