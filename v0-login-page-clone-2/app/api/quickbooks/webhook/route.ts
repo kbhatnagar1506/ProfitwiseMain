@@ -145,10 +145,12 @@ export async function POST(request: NextRequest) {
         }
       }
     })()
-  } else if (realmsTouched.size > 0) {
-    // No per-entity change payloads parsed, but we know which realms were touched.
-    // As a fallback, resync all invoices for those realms so new invoices (like 1003) are up to date.
+  }
+
+  if (realmsTouched.size > 0) {
+    // Always resync invoices for any realm touched by this webhook so GCP bucket stays fresh.
     const invoiceType = "Invoice" as QBOEntityType
+    log("webhook.invoice_resync.start", { realms: [...realmsTouched] }, "qbo")
     void (async () => {
       for (const realmId of realmsTouched) {
         try {
