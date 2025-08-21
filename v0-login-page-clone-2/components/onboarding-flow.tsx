@@ -62,25 +62,29 @@ const integrations: Integration[] = [
 ]
 
 const steps = [
-  { id: 1, title: "Connect Your Bank Account", description: "Securely link your first bank account" },
-  { id: 2, title: "Your Bank Accounts", description: "View balances and add more accounts" },
-  { id: 3, title: "Connect Your Accounting Stack", description: "Link the tools you already use" },
+  { id: 1, title: "Connect your bank", description: "Securely link your first bank account." },
+  { id: 2, title: "Review bank accounts", description: "See balances and add more accounts." },
+  { id: 3, title: "Connect accounting tools", description: "Link the accounting and spend tools you already use." },
   {
     id: 4,
-    title: "Connect Your Context Layer",
-    description: "Share documents and knowledge so we understand your business",
+    title: "Connect documents & drives",
+    description: "Link where your invoices and financial documents live.",
   },
   {
     id: 5,
-    title: "Choose Communication Channels",
-    description: "Pick where you want to talk to ProfitWise and receive updates",
+    title: "Choose communication channels",
+    description: "Pick where you want to talk to ProfitWise and receive updates.",
   },
-  { id: 6, title: "Company and financial context", description: "Review and refine your business context" },
-  { id: 7, title: "Revenue Details", description: "Help us understand your financials" },
-  { id: 8, title: "Reporting Preferences", description: "Customize your dashboard" },
-  { id: 9, title: "Notification Settings", description: "Stay updated with alerts" },
-  { id: 10, title: "Security Setup", description: "Enable two-factor authentication" },
-  { id: 11, title: "Review & Launch", description: "You're almost ready!" },
+  { id: 6, title: "Company & financial context", description: "Review and refine how we describe your business." },
+  { id: 7, title: "Company profile", description: "Fill in key details about how your business is set up." },
+  {
+    id: 8,
+    title: "Review transaction tagging",
+    description: "Verify merchants, tags, and subscription types on your recent transactions.",
+  },
+  { id: 9, title: "Invoice preview", description: "Confirm we’re seeing the invoices you expect." },
+  { id: 10, title: "Security setup", description: "Enable additional security for your account." },
+  { id: 11, title: "Review & launch", description: "Do a quick pass and finish onboarding." },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -387,9 +391,12 @@ export function OnboardingFlow({
     setCompanyContextLoading(true)
     // Prefer saved context when coming back from next step; only run AI merge when we have no saved context
     fetch("/api/context/save")
-      .then((res) => {
-        if (!res.ok) return { ok: false as const }
-        return res.json().then((data: { finalContext?: string | null }) => ({ ok: true as const, data }))
+      .then(async (res) => {
+        if (!res.ok) {
+          return { ok: false as const, data: { finalContext: null as string | null } }
+        }
+        const data = (await res.json()) as { finalContext?: string | null }
+        return { ok: true as const, data }
       })
       .then((result) => {
         if (result.ok && result.data.finalContext && String(result.data.finalContext).trim()) {
@@ -953,7 +960,12 @@ export function OnboardingFlow({
                     setAccountingSyncLoading(true)
                     try {
                       const res = await fetch("/api/connections")
-                      const data = await (res.ok ? res.json() : { realmIds: [] as string[], tenantIds: [] as string[] }) as { realmIds?: string[]; tenantIds?: string[] }
+                      const data = (await (res.ok
+                        ? res.json()
+                        : Promise.resolve({ realmIds: [] as string[], tenantIds: [] as string[] }))) as {
+                        realmIds?: string[]
+                        tenantIds?: string[]
+                      }
                       const realmIds = data.realmIds ?? []
                       const tenantIds = data.tenantIds ?? []
                       await triggerAccountingSyncIfNeeded(realmIds, tenantIds, true)
@@ -965,26 +977,6 @@ export function OnboardingFlow({
                 >
                   {accountingSyncLoading ? "Syncing…" : "Sync QuickBooks & Xero now"}
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={disconnectAccountingLoading}
-                  onClick={async () => {
-                    if (!confirm("Remove all QuickBooks and Xero connections and delete their data from storage?")) return
-                    setDisconnectAccountingLoading(true)
-                    try {
-                      const res = await fetch("/api/connections/disconnect-accounting", { method: "POST" })
-                      if (res.ok) {
-                        setConnectedIntegrations((prev) => prev.filter((n) => n !== "QuickBooks Online" && n !== "Xero"))
-                      }
-                    } finally {
-                      setDisconnectAccountingLoading(false)
-                    }
-                  }}
-                  className="w-full h-11 rounded-xl bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20 font-medium"
-                >
-                  {disconnectAccountingLoading ? "Removing…" : "Disconnect all accounting (QBO & Xero) and delete stored data"}
-                </Button>
               </div>
             )}
           </div>
@@ -994,9 +986,9 @@ export function OnboardingFlow({
         return (
           <div>
             <div className="text-center mb-8">
-              <h2 className="text-2xl font-semibold text-white mb-3">Connect your context layer</h2>
+              <h2 className="text-2xl font-semibold text-white mb-3">Connect documents & drives</h2>
               <p className="text-gray-400 text-base">
-                Link where your contracts, invoices, and docs live so we can understand your business context.
+                Link where your contracts, invoices, and docs live so we can better understand your business.
               </p>
             </div>
 
@@ -1355,7 +1347,7 @@ export function OnboardingFlow({
             <div className="py-12 flex flex-col items-center justify-center text-center max-w-md mx-auto">
               <div className="h-10 w-10 rounded-full border-2 border-white/30 border-t-white animate-spin" />
               <p className="text-white font-medium mt-4">Preparing your company form</p>
-              <p className="text-gray-400 text-sm mt-1">Using Supermemory and OpenAI to prefill the form…</p>
+              <p className="text-gray-400 text-sm mt-1">Using your connected data to prefill the form…</p>
             </div>
           )
         }
@@ -1451,7 +1443,8 @@ export function OnboardingFlow({
               })}
             </div>
             <p className="text-base text-gray-500 mt-4">
-              Form is prefilled from your connected docs (Supermemory) via OpenAI. Edit any field; click Finish to save the final form.
+              Form is prefilled from your connected data and recent activity. Edit any field; click Finish to save the final
+              version.
             </p>
           </div>
         )
@@ -1608,7 +1601,8 @@ export function OnboardingFlow({
             <h2 className="text-3xl font-bold tracking-tight text-white mb-2">{steps[7].title}</h2>
             <p className="text-gray-400 text-lg mb-5">{steps[7].description}</p>
             <p className="text-gray-300 text-sm mb-4">
-              Normalized merchant names, tags, and transaction types are generated by AI using your company context and Supermemory. Filter by account, edit any row, or type in the chat to let AI update fields.
+              This page is for reviewing and verifying transaction tagging. Merchant names, tags, and transaction types are
+              suggested from your data—filter by account, spot-check rows, and adjust anything that doesn’t look right.
             </p>
             {merchantsNormalizeError && (
               <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
@@ -1830,7 +1824,9 @@ export function OnboardingFlow({
           <div>
             <div className="text-center mb-8">
               <h2 className="text-2xl font-semibold text-white mb-3">{steps[8].title}</h2>
-              <p className="text-gray-400 text-base">{steps[8].description}</p>
+              <p className="text-gray-400 text-base">
+                Confirm the invoices we’ve pulled in from your accounting tools match what you expect to see.
+              </p>
             </div>
             <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden">
               <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Invoices from your accounting (GCP)</h3>
