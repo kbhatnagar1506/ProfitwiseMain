@@ -1738,7 +1738,7 @@ export function OnboardingFlow({
                     </div>
                   </div>
                   {selectedAccountingTransaction && (
-                    <div className="rounded-lg border border-white/20 bg-white/10 p-4 space-y-3">
+                    <div className="rounded-2xl border border-white/25 bg-black/70 p-5 space-y-4">
                       <p className="text-gray-400 text-sm font-medium">Editing: {selectedAccountingTransaction.raw_name}</p>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
@@ -1777,36 +1777,38 @@ export function OnboardingFlow({
                         </div>
                       </div>
                       <div className="border-t border-white/20 pt-3">
-                        <label className="text-gray-400 text-xs block mb-1">Ask AI to update (e.g. &quot;Make it Software, Recurring subscription&quot;)</label>
-                        <div className="flex gap-2 flex-wrap">
-                          <textarea
-                            className="min-h-[80px] w-full max-w-md rounded-md border border-white/20 bg-white/10 text-white px-3 py-2 text-sm placeholder:text-gray-500 resize-y"
-                            value={aiSuggestMessage}
-                            onChange={(e) => setAiSuggestMessage(e.target.value)}
-                            placeholder="Type what you want and AI will update the fields above..."
-                            rows={2}
-                          />
+                        <label className="text-gray-400 text-xs block mb-2">
+                          Ask AI to adjust these fields (chat-style)
+                        </label>
+                        <div className="flex items-end gap-3">
+                          <div className="flex-1">
+                            <div className="rounded-2xl border border-white/20 bg-zinc-950/90 px-3 py-2">
+                              <textarea
+                                className="w-full bg-transparent text-white text-sm placeholder:text-gray-500 resize-none focus:outline-none"
+                                value={aiSuggestMessage}
+                                onChange={(e) => setAiSuggestMessage(e.target.value)}
+                                placeholder='e.g. "Make this Software, Recurring subscription"'
+                                rows={2}
+                              />
+                            </div>
+                          </div>
                           <Button
                             type="button"
                             onClick={suggestWithAi}
                             disabled={aiSuggestLoading || !aiSuggestMessage.trim()}
-                            variant="outline"
-                            className="border-white/30 text-white hover:bg-white/10 self-end"
+                            className="rounded-full bg-white text-black hover:bg-gray-200 px-4 h-9 text-sm font-medium"
                           >
-                            {aiSuggestLoading ? "…" : "Suggest with AI"}
+                            {aiSuggestLoading ? "Thinking…" : "Ask AI"}
                           </Button>
                         </div>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex justify-end">
                         <Button
                           onClick={saveMerchantToMemory}
                           disabled={merchantSaveLoading}
-                          className="bg-white text-black hover:bg-gray-200"
+                          className="bg-white text-black hover:bg-gray-200 min-w-[140px]"
                         >
                           {merchantSaveLoading ? "Saving…" : "Save to memory"}
-                        </Button>
-                        <Button onClick={reloadTableFromDb} variant="outline" className="border-white/30 text-white hover:bg-white/10">
-                          Finished (reload from DB)
                         </Button>
                       </div>
                     </div>
