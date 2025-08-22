@@ -73,11 +73,13 @@ async function loadUserScopesFromDb() {
   }
 }
 
-/** Parse path like accounting/qbo/123/Invoice.json -> { provider, scopeId, entityType } */
+/** Parse path: accounting/user/{userId}/qbo/{scope}/X.json or accounting/qbo/{scope}/X.json -> { userId?, provider, scopeId, entityType } */
 function parsePath(name) {
-  const m = name.match(/^accounting\/(qbo|xero)\/([^/]+)\/([^/]+)\.json$/);
-  if (!m) return null;
-  return { provider: m[1], scopeId: m[2], entityType: m[3] };
+  const userMatch = name.match(/^accounting\/user\/([^/]+)\/(qbo|xero)\/([^/]+)\/([^/]+)\.json$/);
+  if (userMatch) return { userId: userMatch[1], provider: userMatch[2], scopeId: userMatch[3], entityType: userMatch[4] };
+  const legacyMatch = name.match(/^accounting\/(qbo|xero)\/([^/]+)\/([^/]+)\.json$/);
+  if (legacyMatch) return { userId: null, provider: legacyMatch[1], scopeId: legacyMatch[2], entityType: legacyMatch[3] };
+  return null;
 }
 
 async function main() {
@@ -101,7 +103,7 @@ async function main() {
     const p = parsePath(file.name);
     if (!p) continue;
     const key = `${p.provider}:${p.scopeId}`;
-    const userId = scopeToUser.get(key);
+    const userId = p.userId ?? scopeToUser.get(key);
     if (userId) {
       let arr = byUser.get(userId);
       if (!arr) {

@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
       for (const { type, path } of XERO_ENTITY_PATHS) {
         try {
           const items = await fetchXeroList<unknown>(accessToken, tenantId, path)
-          const count = await upsertEntities(tenantId, type, items)
+          const count = await upsertEntities(tenantId, type, items, { userId: user.id })
           byType[type] = (byType[type] ?? 0) + count
           totalSynced += count
         } catch (err) {

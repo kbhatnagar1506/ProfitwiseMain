@@ -18,10 +18,10 @@ export async function POST(req: NextRequest) {
 
   let bucketDeleted = 0
   for (const realmId of realmIds) {
-    bucketDeleted += await gcpDeleteScope("qbo", realmId)
+    bucketDeleted += await gcpDeleteScope("qbo", realmId, user.id)
   }
   for (const tenantId of tenantIds) {
-    bucketDeleted += await gcpDeleteScope("xero", tenantId)
+    bucketDeleted += await gcpDeleteScope("xero", tenantId, user.id)
   }
 
   await ensureQBOSchema()

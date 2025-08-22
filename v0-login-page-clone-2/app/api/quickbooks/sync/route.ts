@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     const synced: Record<string, number> = {}
     for (const type of ENTITY_TYPES) {
       const items = await getAllForEntity(realmId, type as QBOEntityType)
-      const count = await upsertEntities(realmId, type, items)
+      const count = await upsertEntities(realmId, type, items, { userId: user.id })
       synced[type] = count
     }
     const total = Object.values(synced).reduce((s, n) => s + n, 0)

@@ -3,7 +3,11 @@
  * When GCP_ENTITY_BUCKET is set, entity payloads are stored as JSON files in the bucket
  * instead of Postgres, avoiding schema mismatches (e.g. user_id, payload columns).
  *
- * Paths: accounting/qbo/{realmId}/{entityType}.json, accounting/xero/{tenantId}/{entityType}.json
+ * Paths (with userId for filtering by user):
+ *   accounting/user/{userId}/qbo/{realmId}/{entityType}.json
+ *   accounting/user/{userId}/xero/{tenantId}/{entityType}.json
+ * Legacy (no userId): accounting/qbo/{realmId}/{entityType}.json, accounting/xero/{tenantId}/{entityType}.json
+ *
  * Env: GCP_ENTITY_BUCKET (required), GCP_SERVICE_KEY_JSON (optional, for Heroku) or GOOGLE_APPLICATION_CREDENTIALS
  */
 
@@ -11,6 +15,7 @@ import { Storage } from "@google-cloud/storage"
 import { log } from "./logger"
 
 const BUCKET_NAME = process.env.GCP_ENTITY_BUCKET ?? ""
+const PREFIX_USER = "accounting/user"
 const PREFIX_QBO = "accounting/qbo"
 const PREFIX_XERO = "accounting/xero"
 
@@ -41,12 +46,18 @@ export function isGcpEntityStoreEnabled(): boolean {
   return Boolean(BUCKET_NAME && getStorage())
 }
 
-function objectPath(provider: "qbo" | "xero", scopeId: string, entityType: string): string {
+function objectPath(provider: "qbo" | "xero", scopeId: string, entityType: string, userId?: string): string {
+  if (userId) {
+    return `${PREFIX_USER}/${userId}/${provider}/${scopeId}/${entityType}.json`
+  }
   const prefix = provider === "qbo" ? PREFIX_QBO : PREFIX_XERO
   return `${prefix}/${scopeId}/${entityType}.json`
 }
 
-function listPrefix(provider: "qbo" | "xero", scopeId: string): string {
+function listPrefix(provider: "qbo" | "xero", scopeId: string, userId?: string): string {
+  if (userId) {
+    return `${PREFIX_USER}/${userId}/${provider}/${scopeId}/`
+  }
   const prefix = provider === "qbo" ? PREFIX_QBO : PREFIX_XERO
   return `${prefix}/${scopeId}/`
 }
@@ -55,20 +66,22 @@ export type GetEntityIdFn = (item: unknown) => string | null
 
 /**
  * Merge items into existing JSON file for (provider, scopeId, entityType), then upload.
+ * When userId is set, path is accounting/user/{userId}/{provider}/{scopeId}/{entityType}.json for filtering by user.
  */
 export async function gcpUpsertEntities(
   provider: "qbo" | "xero",
   scopeId: string,
   entityType: string,
   items: unknown[],
-  getEntityId: GetEntityIdFn
+  getEntityId: GetEntityIdFn,
+  userId?: string
 ): Promise<number> {
   const client = getStorage()
   if (!client) return 0
   if (items.length === 0) return 0
 
   const bucket = client.bucket(BUCKET_NAME)
-  const path = objectPath(provider, scopeId, entityType)
+  const path = objectPath(provider, scopeId, entityType, userId)
   const file = bucket.file(path)
 
   let existing: unknown[] = []
@@ -105,11 +118,13 @@ export async function gcpUpsertEntities(
 
 /**
  * Read entities from GCP. If entityType is set, return only that type; otherwise all types under scope.
+ * When userId is set, reads from accounting/user/{userId}/{provider}/{scopeId}/.
  */
 export async function gcpGetEntities(
   provider: "qbo" | "xero",
   scopeId: string,
-  entityType?: string
+  entityType?: string,
+  userId?: string
 ): Promise<Record<string, unknown[]>> {
   const client = getStorage()
   if (!client) return {}
@@ -117,22 +132,29 @@ export async function gcpGetEntities(
   const bucket = client.bucket(BUCKET_NAME)
 
   if (entityType) {
-    const path = objectPath(provider, scopeId, entityType)
-    const file = bucket.file(path)
-    try {
-      const [buf] = await file.download()
-      const parsed = JSON.parse(buf.toString("utf8"))
-      const arr = Array.isArray(parsed) ? parsed : []
-      log("entity_store_gcp.read.succeeded", { provider, scopeId, entityType, count: arr.length }, "gcp")
-      return { [entityType]: arr }
-    } catch {
-      log("entity_store_gcp.read.miss", { provider, scopeId, entityType }, "gcp")
-      return { [entityType]: [] }
+    for (const tryUserId of [userId, undefined]) {
+      const path = objectPath(provider, scopeId, entityType, tryUserId)
+      const file = bucket.file(path)
+      try {
+        const [buf] = await file.download()
+        const parsed = JSON.parse(buf.toString("utf8"))
+        const arr = Array.isArray(parsed) ? parsed : []
+        log("entity_store_gcp.read.succeeded", { provider, scopeId, entityType, count: arr.length }, "gcp")
+        return { [entityType]: arr }
+      } catch {
+        // try legacy path (no userId) if user path missed
+      }
     }
+    log("entity_store_gcp.read.miss", { provider, scopeId, entityType }, "gcp")
+    return { [entityType]: [] }
   }
 
-  const prefix = listPrefix(provider, scopeId)
-  const [files] = await bucket.getFiles({ prefix })
+  let prefix = listPrefix(provider, scopeId, userId)
+  let [files] = await bucket.getFiles({ prefix })
+  if (userId && files.length === 0) {
+    prefix = listPrefix(provider, scopeId)
+    ;[files] = await bucket.getFiles({ prefix })
+  }
   const out: Record<string, unknown[]> = {}
   for (const f of files) {
     const name = f.name
@@ -161,13 +183,14 @@ export async function gcpDeleteEntity(
   scopeId: string,
   entityType: string,
   entityId: string,
-  getEntityId: GetEntityIdFn
+  getEntityId: GetEntityIdFn,
+  userId?: string
 ): Promise<boolean> {
   const client = getStorage()
   if (!client) return false
 
   const bucket = client.bucket(BUCKET_NAME)
-  const path = objectPath(provider, scopeId, entityType)
+  const path = objectPath(provider, scopeId, entityType, userId)
   const file = bucket.file(path)
 
   let existing: unknown[] = []
@@ -192,25 +215,36 @@ export async function gcpDeleteEntity(
 
 /**
  * Delete all entity files in the bucket for a given scope (realm or tenant).
+ * When userId is set, deletes under accounting/user/{userId}/{provider}/{scopeId}/; also deletes legacy path accounting/{provider}/{scopeId}/ so both are cleared.
  * Call this when a user disconnects QBO or Xero so their bucket data is removed.
  */
 export async function gcpDeleteScope(
   provider: "qbo" | "xero",
-  scopeId: string
+  scopeId: string,
+  userId?: string
 ): Promise<number> {
   const client = getStorage()
   if (!client) return 0
 
-  const prefix = listPrefix(provider, scopeId)
   const bucket = client.bucket(BUCKET_NAME)
-  const [files] = await bucket.getFiles({ prefix })
   let deleted = 0
-  for (const file of files) {
-    await file.delete()
-    deleted++
+
+  const prefixesToDelete: string[] = [listPrefix(provider, scopeId)]
+  if (userId) {
+    prefixesToDelete.push(listPrefix(provider, scopeId, userId))
+  }
+  const seen = new Set<string>()
+  for (const prefix of prefixesToDelete) {
+    const [files] = await bucket.getFiles({ prefix })
+    for (const file of files) {
+      if (seen.has(file.name)) continue
+      seen.add(file.name)
+      await file.delete()
+      deleted++
+    }
   }
   if (deleted > 0) {
-    log("entity_store_gcp.delete_scope.succeeded", { provider, scopeId, deleted }, "gcp")
+    log("entity_store_gcp.delete_scope.succeeded", { provider, scopeId, userId, deleted }, "gcp")
   }
   return deleted
 }

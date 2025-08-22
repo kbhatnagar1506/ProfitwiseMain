@@ -38,15 +38,27 @@ function isProduction(): boolean {
   return process.env.NODE_ENV === "production"
 }
 
+async function getUserIdByRealmId(realmId: string): Promise<string | undefined> {
+  try {
+    await ensureQBOSchema()
+    const { rows } = await query<{ user_id: string }>("SELECT user_id FROM qbo_connections WHERE realm_id = $1", [realmId])
+    return rows[0]?.user_id
+  } catch {
+    return undefined
+  }
+}
+
 export async function upsertEntities(
   realmId: string,
   entityType: string,
-  items: unknown[]
+  items: unknown[],
+  options?: { userId?: string }
 ): Promise<number> {
   if (items.length === 0) return 0
   if (isGcpEntityStoreEnabled()) {
     try {
-      return await gcpUpsertEntities("qbo", realmId, entityType, items, getEntityId)
+      const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
+      return await gcpUpsertEntities("qbo", realmId, entityType, items, getEntityId, userId)
     } catch (err) {
       log("entity_store.upsert.failed", { realmId, entityType, error: err instanceof Error ? err.message : String(err) }, "qbo")
       throw err
@@ -95,11 +107,13 @@ export async function upsertEntities(
 export async function deleteEntity(
   realmId: string,
   entityType: string,
-  entityId: string
+  entityId: string,
+  options?: { userId?: string }
 ): Promise<boolean> {
   if (isGcpEntityStoreEnabled()) {
     try {
-      return await gcpDeleteEntity("qbo", realmId, entityType, entityId, getEntityId)
+      const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
+      return await gcpDeleteEntity("qbo", realmId, entityType, entityId, getEntityId, userId)
     } catch (err) {
       log("entity_store.delete.failed", { realmId, entityType, entityId, error: String(err) }, "qbo")
       return false
@@ -129,11 +143,13 @@ export async function deleteEntity(
 
 export async function getEntitiesFromDb(
   realmId: string,
-  entityType?: string
+  entityType?: string,
+  options?: { userId?: string }
 ): Promise<Record<string, unknown[]>> {
   if (isGcpEntityStoreEnabled()) {
     try {
-      return await gcpGetEntities("qbo", realmId, entityType)
+      const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
+      return await gcpGetEntities("qbo", realmId, entityType, userId)
     } catch (err) {
       log("entity_store.read.failed", { realmId, error: err instanceof Error ? err.message : String(err) }, "qbo")
       return {}

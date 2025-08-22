@@ -10,6 +10,16 @@ import {
   gcpGetEntities,
 } from "./entity-store-gcp"
 
+async function getUserIdByTenantId(tenantId: string): Promise<string | undefined> {
+  try {
+    await ensureXeroSchema()
+    const { rows } = await query<{ user_id: string }>("SELECT user_id FROM xero_connections WHERE tenant_id = $1", [tenantId])
+    return rows[0]?.user_id
+  } catch {
+    return undefined
+  }
+}
+
 function getEntityId(item: unknown): string | null {
   if (item == null || typeof item !== "object") return null
   const o = item as Record<string, unknown>
@@ -41,12 +51,14 @@ function getTenantTypeMap(tenantId: string, entityType: string): Map<string, unk
 export async function upsertEntities(
   tenantId: string,
   entityType: string,
-  items: unknown[]
+  items: unknown[],
+  options?: { userId?: string }
 ): Promise<number> {
   if (items.length === 0) return 0
   if (isGcpEntityStoreEnabled()) {
     try {
-      return await gcpUpsertEntities("xero", tenantId, entityType, items, getEntityId)
+      const userId = options?.userId ?? (await getUserIdByTenantId(tenantId))
+      return await gcpUpsertEntities("xero", tenantId, entityType, items, getEntityId, userId)
     } catch (err) {
       log("entity_store.upsert.failed", { tenantId, entityType, error: err instanceof Error ? err.message : String(err) }, "xero")
       throw err
@@ -94,11 +106,13 @@ export async function upsertEntities(
 
 export async function getEntitiesFromDb(
   tenantId: string,
-  entityType?: string
+  entityType?: string,
+  options?: { userId?: string }
 ): Promise<Record<string, unknown[]>> {
   if (isGcpEntityStoreEnabled()) {
     try {
-      return await gcpGetEntities("xero", tenantId, entityType)
+      const userId = options?.userId ?? (await getUserIdByTenantId(tenantId))
+      return await gcpGetEntities("xero", tenantId, entityType, userId)
     } catch (err) {
       log("entity_store.read.failed", { tenantId, error: err instanceof Error ? err.message : String(err) }, "xero")
       return {}

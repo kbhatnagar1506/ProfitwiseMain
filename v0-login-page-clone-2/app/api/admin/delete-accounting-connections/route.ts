@@ -23,14 +23,14 @@ export async function DELETE(req: NextRequest) {
     await ensureQBOSchema()
     await ensureXeroSchema()
 
-    const qboScopes = await query<{ realm_id: string }>("SELECT realm_id FROM qbo_connections")
-    const xeroScopes = await query<{ tenant_id: string }>("SELECT tenant_id FROM xero_connections")
+    const qboScopes = await query<{ realm_id: string; user_id: string }>("SELECT realm_id, user_id FROM qbo_connections")
+    const xeroScopes = await query<{ tenant_id: string; user_id: string }>("SELECT tenant_id, user_id FROM xero_connections")
     let bucketDeleted = 0
     for (const r of qboScopes.rows) {
-      bucketDeleted += await gcpDeleteScope("qbo", r.realm_id)
+      bucketDeleted += await gcpDeleteScope("qbo", r.realm_id, r.user_id)
     }
     for (const r of xeroScopes.rows) {
-      bucketDeleted += await gcpDeleteScope("xero", r.tenant_id)
+      bucketDeleted += await gcpDeleteScope("xero", r.tenant_id, r.user_id)
     }
 
     const qboResult = await query<{ id: string }>("DELETE FROM qbo_connections RETURNING id")
