@@ -1,5 +1,23 @@
 import { ensureSlackSchema, query } from "./db"
 
+/** Claim an event_id so only one dyno/retry processes it. Returns true if we claimed it (first time), false if already seen. */
+export async function claimSlackEventId(eventId: string): Promise<boolean> {
+  if (!eventId) return true
+  await ensureSlackSchema()
+  const { rows } = await query<{ event_id: string }>(
+    `INSERT INTO slack_events_seen (event_id) VALUES ($1)
+     ON CONFLICT (event_id) DO NOTHING
+     RETURNING event_id`,
+    [eventId]
+  )
+  if (rows.length > 0) {
+    await query(
+      "DELETE FROM slack_events_seen WHERE seen_at < NOW() - INTERVAL '24 hours'"
+    ).catch(() => {})
+  }
+  return rows.length > 0
+}
+
 /** Get ProfitWise user id and bot token for a Slack user (for replying). */
 export async function getSlackConnectionBySlackUser(
   slackUserId: string,

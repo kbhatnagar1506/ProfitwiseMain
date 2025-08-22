@@ -346,6 +346,13 @@ const USER_SLACK_SQL = `
   )
 `
 
+const SLACK_EVENTS_SEEN_SQL = `
+  CREATE TABLE IF NOT EXISTS slack_events_seen (
+    event_id   TEXT PRIMARY KEY,
+    seen_at    TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
 let slackSchemaEnsured = false
 
 export async function ensureSlackSchema(): Promise<void> {
@@ -354,6 +361,7 @@ export async function ensureSlackSchema(): Promise<void> {
   if (!p) return
   await ensureAuthSchema()
   await p.query(USER_SLACK_SQL)
+  await p.query(SLACK_EVENTS_SEEN_SQL)
   slackSchemaEnsured = true
   log("db.slack.schema.ensured", undefined, "db")
 }
