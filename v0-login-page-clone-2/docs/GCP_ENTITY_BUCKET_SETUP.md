@@ -57,3 +57,27 @@ After setting these and redeploying, QBO and Xero sync will read/write entity da
 - **Xero:** `accounting/xero/{tenantId}/{entityType}.json` (e.g. `accounting/xero/4fa0c9b6-.../Contact.json`).
 
 Each file is a JSON array of entities for that type. If `GCP_ENTITY_BUCKET` is not set, the app falls back to Postgres (or in-memory in dev).
+
+---
+
+## List bucket by user and extract invoices
+
+Use the script `scripts/bucket-by-user-and-extract-invoices.mjs` to:
+
+- **Group bucket contents by user** (when `DATABASE_URL` is set): the script reads `qbo_connections` and `xero_connections` to map each realm/tenant to a user, then groups files by user.
+- **Extract all Invoice.json files** from the bucket into a local directory (`by-user/{user_id}/{provider}/{scope}/Invoice.json` when DB is used, or `by-scope/{provider}/{scope}/Invoice.json` when not).
+
+**Without DB (group by scope only):**
+
+```bash
+cd v0-login-page-clone-2
+GCP_ENTITY_BUCKET=profitwise-storage2026 node scripts/bucket-by-user-and-extract-invoices.mjs ../path/to/key.json [--out=./invoices]
+```
+
+**With DB (group by user):** set `DATABASE_URL` so the script can map scopes to users:
+
+```bash
+DATABASE_URL="postgres://..." GCP_ENTITY_BUCKET=profitwise-storage2026 node scripts/bucket-by-user-and-extract-invoices.mjs ../path/to/key.json --out=./invoices
+```
+
+Output goes to `--out` (default `out-invoices`). Only paths that contain `Invoice.json` in the bucket are downloaded; other entity types are listed in the summary only.

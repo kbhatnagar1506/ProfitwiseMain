@@ -36,12 +36,6 @@ const integrations: Integration[] = [
     logo: "/xero-logo.png",
   },
   {
-    name: "Shopify",
-    description: "Connect your store for orders and products",
-    category: "Accounting",
-    logo: "/shopify-logo.png",
-  },
-  {
     name: "FreshBooks",
     description: "Simple accounting for small businesses",
     category: "Accounting",
@@ -109,17 +103,6 @@ const QBO_ERROR_MESSAGES: Record<string, string> = {
   token_exchange: "QuickBooks connection failed. Please try again.",
 }
 
-const SHOPIFY_ERROR_MESSAGES: Record<string, string> = {
-  shopify_invalid_shop: "Please enter a valid Shopify store (e.g. mystore.myshopify.com).",
-  shopify_config: "Shopify isn't configured yet. Please try again later.",
-  shopify_hmac: "Shopify security check failed. Please try again.",
-  shopify_state_mismatch: "Session expired. Please try connecting Shopify again.",
-  shopify_session: "Session expired. Please log in and try again.",
-  shopify_missing_params: "Connection didn't complete. Please try again.",
-  shopify_token_exchange: "Could not connect to Shopify. Please try again.",
-  shopify_access_denied: "Shopify connection was cancelled. You can try again when you're ready.",
-}
-
 export function OnboardingFlow({
   qboError,
   initialStep = 1,
@@ -144,6 +127,7 @@ export function OnboardingFlow({
   const [accountingStepLinkToken, setAccountingStepLinkToken] = useState<string | null>(null)
   const [accountingStepLinkLoading, setAccountingStepLinkLoading] = useState(false)
   const [connectedIntegrations, setConnectedIntegrations] = useState<string[]>([])
+  const [disconnectAccountingLoading, setDisconnectAccountingLoading] = useState(false)
   const [connectedContextIntegrations, setConnectedContextIntegrations] = useState<string[]>([])
   const [companyContextLoading, setCompanyContextLoading] = useState(false)
   const [companyContext, setCompanyContext] = useState<string | null>(null)
@@ -217,8 +201,6 @@ export function OnboardingFlow({
   ]
 
   const showQboError = qboError && QBO_ERROR_MESSAGES[qboError] && !dismissedError
-  const shopifyError = typeof qboError === "string" && qboError.startsWith("shopify_") ? qboError : null
-  const showShopifyError = shopifyError && !dismissedError
 
   useEffect(() => {
     if (qboError) setDismissedError(false)
@@ -953,6 +935,31 @@ export function OnboardingFlow({
                 )
               })}
             </div>
+            {(connectedIntegrations.includes("QuickBooks Online") || connectedIntegrations.includes("Xero")) && (
+              <div className="mt-6 max-w-2xl mx-auto">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={disconnectAccountingLoading}
+                  onClick={async () => {
+                    if (!confirm("Remove all QuickBooks and Xero connections and delete their data from storage?")) return
+                    setDisconnectAccountingLoading(true)
+                    try {
+                      const res = await fetch("/api/connections/disconnect-accounting", { method: "POST" })
+                      const data = await res.json().catch(() => ({}))
+                      if (res.ok) {
+                        setConnectedIntegrations((prev) => prev.filter((n) => n !== "QuickBooks Online" && n !== "Xero"))
+                      }
+                    } finally {
+                      setDisconnectAccountingLoading(false)
+                    }
+                  }}
+                  className="w-full h-11 rounded-xl bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20 font-medium"
+                >
+                  {disconnectAccountingLoading ? "Removing…" : "Disconnect all accounting (QBO & Xero) and delete stored data"}
+                </Button>
+              </div>
+            )}
           </div>
         )
 
@@ -1820,19 +1827,6 @@ export function OnboardingFlow({
       {showQboError && qboError && (
         <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-amber-200">
           <p className="text-sm">{QBO_ERROR_MESSAGES[qboError]}</p>
-          <button
-            type="button"
-            onClick={() => setDismissedError(true)}
-            className="shrink-0 rounded p-1 text-amber-300 hover:bg-amber-500/20"
-            aria-label="Dismiss"
-          >
-            ×
-          </button>
-        </div>
-      )}
-      {showShopifyError && shopifyError && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-amber-200">
-          <p className="text-sm">{SHOPIFY_ERROR_MESSAGES[shopifyError] ?? "Shopify connection failed. Please try again."}</p>
           <button
             type="button"
             onClick={() => setDismissedError(true)}
