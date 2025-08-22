@@ -234,9 +234,9 @@ export default function OAuthConnectorPage() {
       <Image
         src="/profitwise-logo.png"
         alt="ProfitWise"
-        width={200}
-        height={55}
-        className="object-contain mb-8"
+        width={320}
+        height={88}
+        className="object-contain mb-10"
       />
       <div className="w-16 h-16 rounded-full border-2 border-white/30 border-t-white animate-spin" />
     </div>

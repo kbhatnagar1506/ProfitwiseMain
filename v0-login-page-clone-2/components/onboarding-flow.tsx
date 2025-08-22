@@ -951,35 +951,6 @@ export function OnboardingFlow({
                 )
               })}
             </div>
-            {(connectedIntegrations.includes("QuickBooks Online") || connectedIntegrations.includes("Xero")) && (
-              <div className="mt-6 max-w-2xl mx-auto space-y-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={accountingSyncLoading}
-                  onClick={async () => {
-                    setAccountingSyncLoading(true)
-                    try {
-                      const res = await fetch("/api/connections")
-                      const data = (await (res.ok
-                        ? res.json()
-                        : Promise.resolve({ realmIds: [] as string[], tenantIds: [] as string[] }))) as {
-                        realmIds?: string[]
-                        tenantIds?: string[]
-                      }
-                      const realmIds = data.realmIds ?? []
-                      const tenantIds = data.tenantIds ?? []
-                      await triggerAccountingSyncIfNeeded(realmIds, tenantIds, true)
-                    } finally {
-                      setAccountingSyncLoading(false)
-                    }
-                  }}
-                  className="w-full h-11 rounded-xl bg-white/10 border-white/20 text-white hover:bg-white/15 font-medium"
-                >
-                  {accountingSyncLoading ? "Syncing…" : "Sync QuickBooks & Xero now"}
-                </Button>
-              </div>
-            )}
           </div>
         )
 
