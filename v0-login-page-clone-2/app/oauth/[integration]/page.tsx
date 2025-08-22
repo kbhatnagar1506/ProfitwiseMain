@@ -67,9 +67,9 @@ export default function OAuthConnectorPage() {
 
   if (integration === "whatsapp") {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-6">
+      <div className="min-h-screen bg-black flex items-center justify-center px-6 py-10">
         <div className="w-full max-w-4xl">
-          <div className="text-center mb-8">
+          <div className="text-center mb-12">
             <Image
               src="/profitwise-logo.png"
               alt="ProfitWise"
@@ -77,29 +77,29 @@ export default function OAuthConnectorPage() {
               height={60}
               className="object-contain mx-auto mb-4"
             />
-            <h1 className="text-2xl font-semibold text-white">Set up WhatsApp</h1>
-            <p className="text-gray-400 text-sm mt-1">
+            <h1 className="text-3xl font-semibold text-white mb-1">Set up WhatsApp</h1>
+            <p className="text-gray-400 text-sm mt-2">
               Scan the QR on the left to open WhatsApp, then verify your number on the right.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-12 items-start">
             <div className="flex flex-col items-center justify-center">
-              <div className="w-44 h-44 mb-4 flex items-center justify-center">
+              <div className="w-48 h-48 mb-5 flex items-center justify-center">
                 <Image
                   src={whatsappQr}
                   alt="Scan to open WhatsApp"
                   className="object-contain max-w-full max-h-full rounded-lg"
                 />
               </div>
-              <p className="text-xs text-gray-300 text-center max-w-xs">
+              <p className="text-xs text-gray-300 text-center max-w-sm leading-relaxed">
                 Open the camera on your phone, scan this QR, and tap the WhatsApp banner. Then enter your phone and code on
                 the right.
               </p>
             </div>
 
-            <div className="flex flex-col items-center justify-center">
-              <div className="w-16 h-16 mb-3 flex items-center justify-center">
+            <div className="flex flex-col items-center justify-center space-y-4">
+              <div className="w-16 h-16 flex items-center justify-center">
                 <Image
                   src="/whatsapp-logo.png"
                   alt="WhatsApp"
@@ -108,9 +108,11 @@ export default function OAuthConnectorPage() {
                   className="object-contain max-w-full max-h-full"
                 />
               </div>
-              <h2 className="text-white font-semibold text-sm leading-tight mb-3">Verify your WhatsApp number</h2>
+              <h2 className="text-white font-semibold text-base leading-tight">
+                Verify your WhatsApp number
+              </h2>
               {whatsappStatus === null ? (
-                <p className="text-gray-500 text-xs">Checking status…</p>
+                <p className="text-gray-500 text-xs mt-1">Checking status…</p>
               ) : whatsappStatus.verified && whatsappStatus.phone ? (
                 <div className="flex flex-col items-center gap-1">
                   <p className="text-emerald-400 text-xs font-medium">Connected as {whatsappStatus.phone}</p>
@@ -135,7 +137,7 @@ export default function OAuthConnectorPage() {
                   </button>
                 </div>
               ) : (
-                <div className="w-full max-w-sm space-y-3 mt-1">
+                <div className="w-full max-w-sm space-y-4 mt-2">
                   {!whatsappOtpSent ? (
                     <>
                       <Input
@@ -204,7 +206,7 @@ export default function OAuthConnectorPage() {
                       </Button>
                     </>
                   )}
-                  <p className="text-[11px] text-gray-500 leading-relaxed text-center">
+                    <p className="text-[11px] text-gray-500 leading-relaxed text-center mt-1">
                     We use your number only to send messages related to ProfitWise. You can disconnect at any time.
                   </p>
                 </div>
@@ -212,7 +214,7 @@ export default function OAuthConnectorPage() {
             </div>
           </div>
 
-          <div className="mt-8 flex justify-center">
+          <div className="mt-10 flex justify-center">
             <button
               type="button"
               onClick={() => router.back()}
@@ -228,58 +230,15 @@ export default function OAuthConnectorPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-black via-emerald-950/60 via-30% via-emerald-900/40 via-70% to-black flex items-center justify-center p-6">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <Image
-            src="/profitwise-logo.png"
-            alt="ProfitWise"
-            width={180}
-            height={45}
-            className="object-contain mx-auto mb-12"
-          />
-        </div>
-
-        <div className="bg-white/5 border border-white/10 rounded-lg p-8 backdrop-blur-sm">
-          <div className="text-center space-y-6">
-            <div className="w-20 h-20 bg-white/10 rounded-2xl flex items-center justify-center mx-auto border border-white/20">
-              <Loader2 className="w-10 h-10 text-white animate-spin" />
-            </div>
-
-            <div>
-              <h1 className="text-2xl font-semibold text-white mb-3">
-                Connecting your {integrationName}
-              </h1>
-              <p className="text-gray-300 text-sm">
-                We&apos;re opening a secure window so you can approve access. This only takes a few seconds.
-              </p>
-            </div>
-
-            <div className="bg-white/5 border border-white/10 rounded-lg p-4 text-left space-y-2">
-              <p className="text-xs text-gray-300 leading-relaxed">
-                1. You&apos;ll be redirected to {integrationName} to sign in and confirm the connection.
-              </p>
-              <p className="text-xs text-gray-300 leading-relaxed">
-                2. When you&apos;re done, you&apos;ll come back here and we&apos;ll finish syncing data into ProfitWise.
-              </p>
-              <p className="text-[11px] text-gray-500 leading-relaxed">
-                We never see your password. All traffic is encrypted and follows {integrationName}&apos;s official
-                OAuth flow.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 text-center">
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="text-sm text-gray-400 hover:text-white transition-colors"
-          >
-            ← Back to onboarding
-          </button>
-        </div>
-      </div>
+    <div className="min-h-screen bg-black flex flex-col items-center justify-center px-6 py-10">
+      <Image
+        src="/profitwise-logo.png"
+        alt="ProfitWise"
+        width={200}
+        height={55}
+        className="object-contain mb-8"
+      />
+      <div className="w-16 h-16 rounded-full border-2 border-white/30 border-t-white animate-spin" />
     </div>
   )
 }
