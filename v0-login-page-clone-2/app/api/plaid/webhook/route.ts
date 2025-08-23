@@ -5,6 +5,7 @@ import { log } from "@/lib/logger"
 import { getPlaidClient } from "@/lib/plaid"
 import { mapAndDelete, mapAndUpsert } from "@/lib/plaid-persistence"
 import { getPlaidItem, updatePlaidItemCursor } from "@/lib/plaid-item-store"
+import { updatePlaidWebhookLast } from "@/lib/db"
 
 type PlaidWebhookPayload = {
   webhook_type?: string
@@ -123,6 +124,16 @@ export async function POST(request: NextRequest) {
   const itemId = payload.item_id
 
   log("webhook.received", { webhookType, webhookCode, itemId }, "plaid")
+  try {
+    await updatePlaidWebhookLast(
+      new Date(),
+      typeof webhookType === "string" ? webhookType : null,
+      typeof webhookCode === "string" ? webhookCode : null,
+      typeof itemId === "string" ? itemId : null
+    )
+  } catch {
+    // ignore if DB unavailable (e.g. dev)
+  }
 
   if (
     webhookType === "TRANSACTIONS" &&

@@ -127,6 +127,7 @@ export function OnboardingFlow({
   const [accountingStepLinkToken, setAccountingStepLinkToken] = useState<string | null>(null)
   const [accountingStepLinkLoading, setAccountingStepLinkLoading] = useState(false)
   const [connectedIntegrations, setConnectedIntegrations] = useState<string[]>([])
+  const [accountingSyncLoading, setAccountingSyncLoading] = useState(false)
   const [disconnectAccountingLoading, setDisconnectAccountingLoading] = useState(false)
   const [connectedContextIntegrations, setConnectedContextIntegrations] = useState<string[]>([])
   const [companyContextLoading, setCompanyContextLoading] = useState(false)
@@ -148,6 +149,9 @@ export function OnboardingFlow({
   })
   const [merchantSaveLoading, setMerchantSaveLoading] = useState(false)
   const [merchantsNormalizeError, setMerchantsNormalizeError] = useState<string | null>(null)
+  type InvoiceRow = { id: string; number: string; date: string | null; total: number | null; customer: string | null; source: "qbo" | "xero" }
+  const [step9Invoices, setStep9Invoices] = useState<InvoiceRow[]>([])
+  const [step9InvoicesLoading, setStep9InvoicesLoading] = useState(false)
   type AccountingTx = {
     transaction_id: string
     account_id: string
@@ -313,12 +317,9 @@ export function OnboardingFlow({
       .then((res) => (res.ok ? res.json() : { connected: [], realmIds: [], tenantIds: [] }))
       .then((data: { connected?: string[]; realmIds?: string[]; tenantIds?: string[] }) => {
         setConnectedIntegrations(data.connected ?? [])
-        const realmIds = data.realmIds ?? []
-        const tenantIds = data.tenantIds ?? []
-        triggerAccountingSyncIfNeeded(realmIds, tenantIds, false)
       })
       .catch(() => setConnectedIntegrations([]))
-  }, [currentStep, triggerAccountingSyncIfNeeded])
+  }, [currentStep])
 
   useEffect(() => {
     if (currentStep !== 3) return
@@ -327,9 +328,6 @@ export function OnboardingFlow({
         .then((res) => (res.ok ? res.json() : { connected: [], realmIds: [], tenantIds: [] }))
         .then((data: { connected?: string[]; realmIds?: string[]; tenantIds?: string[] }) => {
           setConnectedIntegrations(data.connected ?? [])
-          const realmIds = data.realmIds ?? []
-          const tenantIds = data.tenantIds ?? []
-          triggerAccountingSyncIfNeeded(realmIds, tenantIds, true)
         })
         .catch(() => {})
     }
@@ -342,7 +340,7 @@ export function OnboardingFlow({
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisibility)
     }
-  }, [currentStep, triggerAccountingSyncIfNeeded])
+  }, [currentStep])
 
   useEffect(() => {
     if (currentStep !== 4) return
@@ -493,6 +491,16 @@ export function OnboardingFlow({
         }
       })
       .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Failed to generate tags"))
+  }, [currentStep])
+
+  useEffect(() => {
+    if (currentStep !== 9) return
+    setStep9InvoicesLoading(true)
+    fetch("/api/onboarding/invoices")
+      .then((res) => (res.ok ? res.json() : { invoices: [] }))
+      .then((data: { invoices?: InvoiceRow[] }) => setStep9Invoices(data.invoices ?? []))
+      .catch(() => setStep9Invoices([]))
+      .finally(() => setStep9InvoicesLoading(false))
   }, [currentStep])
 
   const onPlaidSuccess = useCallback(
@@ -936,7 +944,27 @@ export function OnboardingFlow({
               })}
             </div>
             {(connectedIntegrations.includes("QuickBooks Online") || connectedIntegrations.includes("Xero")) && (
-              <div className="mt-6 max-w-2xl mx-auto">
+              <div className="mt-6 max-w-2xl mx-auto space-y-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={accountingSyncLoading}
+                  onClick={async () => {
+                    setAccountingSyncLoading(true)
+                    try {
+                      const res = await fetch("/api/connections")
+                      const data = await (res.ok ? res.json() : { realmIds: [] as string[], tenantIds: [] as string[] }) as { realmIds?: string[]; tenantIds?: string[] }
+                      const realmIds = data.realmIds ?? []
+                      const tenantIds = data.tenantIds ?? []
+                      await triggerAccountingSyncIfNeeded(realmIds, tenantIds, true)
+                    } finally {
+                      setAccountingSyncLoading(false)
+                    }
+                  }}
+                  className="w-full h-11 rounded-xl bg-white/10 border-white/20 text-white hover:bg-white/15 font-medium"
+                >
+                  {accountingSyncLoading ? "Syncing…" : "Sync QuickBooks & Xero now"}
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
@@ -946,7 +974,6 @@ export function OnboardingFlow({
                     setDisconnectAccountingLoading(true)
                     try {
                       const res = await fetch("/api/connections/disconnect-accounting", { method: "POST" })
-                      const data = await res.json().catch(() => ({}))
                       if (res.ok) {
                         setConnectedIntegrations((prev) => prev.filter((n) => n !== "QuickBooks Online" && n !== "Xero"))
                       }
@@ -1791,6 +1818,55 @@ export function OnboardingFlow({
                     </div>
                   )}
                 </>
+              )}
+            </div>
+          </div>
+        )
+      }
+
+      case 9: {
+        const formatInvDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—")
+        return (
+          <div>
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-semibold text-white mb-3">{steps[8].title}</h2>
+              <p className="text-gray-400 text-base">{steps[8].description}</p>
+            </div>
+            <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden">
+              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Invoices from your accounting (GCP)</h3>
+              {step9InvoicesLoading ? (
+                <p className="text-gray-400 text-center py-8">Loading invoices…</p>
+              ) : step9Invoices.length === 0 ? (
+                <p className="text-gray-400 text-center py-8">No invoices yet. Connect QuickBooks or Xero and run a sync to see invoices here.</p>
+              ) : (
+                <div className="overflow-x-auto max-h-[50vh] overflow-y-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-white/20 hover:bg-transparent">
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Number</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Customer</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Source</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {step9Invoices.map((inv) => (
+                        <TableRow key={`${inv.source}-${inv.id}`} className="border-white/20 hover:bg-white/5">
+                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{inv.number || "—"}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(inv.date)}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{inv.total != null ? formatBalance(inv.total) : "—"}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{inv.customer || "—"}</TableCell>
+                          <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
+                            <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${inv.source === "qbo" ? "bg-blue-500/80 text-white border-blue-400/50" : "bg-emerald-500/80 text-white border-emerald-400/50"}`}>
+                              {inv.source === "qbo" ? "QuickBooks" : "Xero"}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               )}
             </div>
           </div>

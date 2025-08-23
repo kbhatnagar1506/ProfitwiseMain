@@ -176,6 +176,15 @@ const PLAID_TRANSACTIONS_SQL = `
     UNIQUE(item_id, transaction_id)
   )
 `
+const PLAID_WEBHOOK_LAST_SQL = `
+  CREATE TABLE IF NOT EXISTS plaid_webhook_last (
+    id              INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    received_at     TIMESTAMPTZ NOT NULL,
+    webhook_type    TEXT,
+    webhook_code    TEXT,
+    item_id         TEXT
+  )
+`
 
 let plaidSchemaEnsured = false
 
@@ -187,8 +196,35 @@ export async function ensurePlaidSchema(): Promise<void> {
   await p.query(PLAID_ITEMS_SQL)
   await p.query(PLAID_ACCOUNTS_SQL)
   await p.query(PLAID_TRANSACTIONS_SQL)
+  await p.query(PLAID_WEBHOOK_LAST_SQL)
   plaidSchemaEnsured = true
   log("plaid.schema.ensured", undefined, "db")
+}
+
+export type PlaidWebhookLast = { received_at: Date; webhook_type: string | null; webhook_code: string | null; item_id: string | null }
+
+export async function updatePlaidWebhookLast(
+  receivedAt: Date,
+  webhookType: string | null,
+  webhookCode: string | null,
+  itemId: string | null
+): Promise<void> {
+  await ensurePlaidSchema()
+  const p = await getPoolAsync()
+  if (!p) return
+  await p.query(
+    `INSERT INTO plaid_webhook_last (id, received_at, webhook_type, webhook_code, item_id) VALUES (1, $1, $2, $3, $4)
+     ON CONFLICT (id) DO UPDATE SET received_at = $1, webhook_type = $2, webhook_code = $3, item_id = $4`,
+    [receivedAt, webhookType, webhookCode, itemId]
+  )
+}
+
+export async function getPlaidWebhookLast(): Promise<PlaidWebhookLast | null> {
+  await ensurePlaidSchema()
+  const { rows } = await query<{ received_at: Date; webhook_type: string | null; webhook_code: string | null; item_id: string | null }>(
+    "SELECT received_at, webhook_type, webhook_code, item_id FROM plaid_webhook_last WHERE id = 1"
+  )
+  return rows[0] ?? null
 }
 
 const XERO_CONNECTIONS_SQL = `
