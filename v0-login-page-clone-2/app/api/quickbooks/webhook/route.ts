@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { log } from "@/lib/logger"
-import { getEntityById } from "@/lib/quickbooks"
+import { getEntityById, getAllForEntity, type QBOEntityType } from "@/lib/quickbooks"
 import { upsertEntities, deleteEntity } from "@/lib/qbo-entity-store"
 
 export async function GET(request: NextRequest) {
@@ -84,6 +84,7 @@ export async function POST(request: NextRequest) {
 
   type EntityChange = { realmId: string; name: string; id: string; operation: string }
   const changes: EntityChange[] = []
+  const realmsTouched = new Set<string>()
 
   try {
     const parsed = body ? JSON.parse(body) : null
@@ -92,6 +93,7 @@ export async function POST(request: NextRequest) {
         const realmId = item?.intuitaccountid
         const notifications = item?.eventNotifications
         if (realmId && Array.isArray(notifications)) {
+          realmsTouched.add(realmId)
           for (const n of notifications) {
             const entities = n?.dataChangeEvent?.entities ?? []
             for (const e of entities) {
@@ -111,6 +113,7 @@ export async function POST(request: NextRequest) {
         const realmId = n?.realmId
         const entities = n?.dataChangeEvent?.entities ?? []
         if (realmId) {
+          realmsTouched.add(realmId)
           for (const e of entities) {
             if (e?.name && e?.id && e?.operation) {
               changes.push({ realmId, name: e.name, id: String(e.id), operation: e.operation })
@@ -139,6 +142,25 @@ export async function POST(request: NextRequest) {
           }
         } catch (err) {
           log("webhook.entity_update.failed", { realmId, name, id, operation, error: String(err) }, "qbo")
+        }
+      }
+    })()
+  } else if (realmsTouched.size > 0) {
+    // No per-entity change payloads parsed, but we know which realms were touched.
+    // As a fallback, resync all invoices for those realms so new invoices (like 1003) are up to date.
+    const invoiceType = "Invoice" as QBOEntityType
+    void (async () => {
+      for (const realmId of realmsTouched) {
+        try {
+          const items = await getAllForEntity(realmId, invoiceType)
+          const count = await upsertEntities(realmId, invoiceType, items)
+          log("webhook.invoice_resync.succeeded", { realmId, count }, "qbo")
+        } catch (err) {
+          log(
+            "webhook.invoice_resync.failed",
+            { realmId, error: err instanceof Error ? err.message : String(err) },
+            "qbo"
+          )
         }
       }
     })()
