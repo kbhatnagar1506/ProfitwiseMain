@@ -50,7 +50,7 @@ export async function getTransactionContextForUser(userId: string): Promise<stri
      LEFT JOIN merchant_tags mt ON mt.user_id = pi.user_id
        AND mt.account_id = pt.account_id
        AND mt.raw_name = COALESCE(pt.merchant_name, pt.name, '')
-     WHERE pi.user_id = $1 AND pt.date >= $2 AND pt.date <= $3 AND pt.pending = false
+     WHERE pi.user_id = $1 AND pt.date >= $2 AND pt.date <= $3
      ORDER BY pt.date DESC, pt.amount DESC
      LIMIT $4`,
     [userId, startDate, endDate, MAX_TRANSACTIONS]
