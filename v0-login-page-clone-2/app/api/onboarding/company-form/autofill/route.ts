@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { getOrgFinanceTag } from "@/lib/supermemory"
+import { getUserFinanceTag } from "@/lib/supermemory"
 import Supermemory from "supermemory"
 import type { CompanyFormData } from "../route"
 
@@ -73,7 +73,7 @@ export async function POST(_req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
   try {
-    const containerTag = getOrgFinanceTag()
+    const containerTag = getUserFinanceTag(user.id)
     const client = getSupermemoryClient()
     const snippets: string[] = []
     const seen = new Set<string>()

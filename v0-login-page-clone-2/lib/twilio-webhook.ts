@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import Twilio from "twilio"
 import Supermemory from "supermemory"
 import { getTwilio, getWhatsAppFrom, getTwilioAuthToken } from "@/lib/twilio"
-import { getOrgFinanceTag } from "@/lib/supermemory"
+import { getUserFinanceTag } from "@/lib/supermemory"
 import { query } from "@/lib/db"
 import {
   normalizePhoneE164,
@@ -26,11 +26,11 @@ function parseFormBody(body: string): Record<string, string> {
   return params
 }
 
-async function fetchSupermemoryContext(): Promise<string> {
+async function fetchSupermemoryContext(userId: string): Promise<string> {
   const apiKey = process.env.SUPERMEMORY_API_KEY
   if (!apiKey) return ""
   const client = new Supermemory({ apiKey })
-  const tag = getOrgFinanceTag()
+  const tag = getUserFinanceTag(userId)
   const snippets: string[] = []
   const seen = new Set<string>()
   const queries = [
@@ -74,7 +74,7 @@ async function getAiReply(userMessage: string, userId?: string): Promise<string>
   if (userId) {
     const [userRows, supermemoryContext, transactionContext, balancesContext] = await Promise.all([
       query<{ final_context: string | null }>("SELECT final_context FROM users WHERE id = $1", [userId]),
-      fetchSupermemoryContext(),
+      fetchSupermemoryContext(userId),
       getTransactionContextForUser(userId),
       getBalancesAndConnectionsContextForUser(userId),
     ])

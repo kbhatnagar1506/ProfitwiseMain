@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await addFinalContextToSupermemory(finalContext.trim(), `final_context_${user.id}`)
+    await addFinalContextToSupermemory(finalContext.trim(), `final_context_${user.id}`, user.id)
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     log("context.save.supermemory_failed", { userId: user.id, error: message }, "supermemory")
