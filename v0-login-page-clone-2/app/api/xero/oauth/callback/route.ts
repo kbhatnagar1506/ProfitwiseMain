@@ -52,6 +52,11 @@ async function handleCallback(request: NextRequest) {
     }
   }
 
+  if (!userId) {
+    logError("oauth.callback.failed", new Error("session_expired_no_user"), "xero")
+    return NextResponse.redirect(new URL("/onboarding?error=session_expired", base), 302)
+  }
+
   try {
     await exchangeCodeAndStore(code, userId)
     log("oauth.callback.succeeded", { hasState: !!state, hasUserId: !!userId }, "xero")

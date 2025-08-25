@@ -3,7 +3,7 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { log } from "@/lib/logger"
 import { getPlaidClient } from "@/lib/plaid"
 import { mapAndDelete, mapAndUpsert } from "@/lib/plaid-persistence"
-import { getPlaidItem, updatePlaidItemCursor } from "@/lib/plaid-item-store"
+import { getPlaidItem, listPlaidItemIds, updatePlaidItemCursor } from "@/lib/plaid-item-store"
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(getSessionCookieName())?.value
@@ -21,6 +21,12 @@ export async function POST(request: NextRequest) {
   const itemId = body?.item_id
   if (!itemId || typeof itemId !== "string") {
     return NextResponse.json({ error: "item_id required" }, { status: 400 })
+  }
+
+  const userItemIds = await listPlaidItemIds(user.id)
+  if (!userItemIds.includes(itemId)) {
+    log("plaid.transactions_sync.forbidden", { itemId, userId: user.id }, "plaid")
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
   const client = getPlaidClient()

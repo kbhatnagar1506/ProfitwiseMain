@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { createHash, timingSafeEqual } from "crypto"
 import * as jose from "jose"
 import { log } from "@/lib/logger"
-import { getPlaidClient } from "@/lib/plaid"
-import { mapAndDelete, mapAndUpsert } from "@/lib/plaid-persistence"
+import { getPlaidClient, getAccounts } from "@/lib/plaid"
+import { mapAndDelete, mapAndUpsert, saveAccounts } from "@/lib/plaid-persistence"
 import { getPlaidItem, updatePlaidItemCursor } from "@/lib/plaid-item-store"
 import { updatePlaidWebhookLast } from "@/lib/db"
 
@@ -84,6 +84,17 @@ async function runTransactionsSync(itemId: string): Promise<void> {
       await mapAndDelete(itemId, removed)
       log("webhook.sync.page", { itemId, added: added.length, modified: modified.length, removed: removed.length, hasMore: response.data.has_more }, "plaid")
       hasMore = response.data.has_more ?? false
+    }
+    // Refresh balances for this item so plaid_accounts stay in sync after new transactions
+    const item = await getPlaidItem(itemId)
+    if (item) {
+      try {
+        const accounts = await getAccounts(item.access_token)
+        await saveAccounts(itemId, accounts)
+        log("webhook.balances.refreshed", { itemId, count: accounts.length }, "plaid")
+      } catch (balanceErr) {
+        log("webhook.balances.failed", { itemId, error: balanceErr instanceof Error ? balanceErr.message : String(balanceErr) }, "plaid")
+      }
     }
   } catch (err) {
     log("webhook.sync.failed", { itemId, error: err instanceof Error ? err.message : String(err) }, "plaid")
