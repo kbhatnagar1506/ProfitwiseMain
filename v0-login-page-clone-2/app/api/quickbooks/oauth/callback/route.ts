@@ -3,6 +3,9 @@ import IntuitOAuth from "intuit-oauth"
 import { getToken, setToken } from "@/lib/quickbooks-token-store"
 import { log, error as logError } from "@/lib/logger"
 import { cookies } from "next/headers"
+import { ensureQBOSchema, query } from "@/lib/db"
+import { getAllForEntity, ENTITY_TYPES, type QBOEntityType } from "@/lib/quickbooks"
+import { upsertEntities } from "@/lib/qbo-entity-store"
 
 const STATE_COOKIE = "qbo_oauth_state"
 
@@ -85,6 +88,46 @@ export async function GET(request: NextRequest) {
       userId ? { userId } : undefined
     )
     log("oauth.callback.succeeded", { realmId })
+
+    // Kick off a full QBO sync for this realm in the background so the user has data immediately.
+    void (async () => {
+      try {
+        await ensureQBOSchema()
+        await query(
+          `INSERT INTO qbo_sync_status (realm_id, status, updated_at) VALUES ($1, 'syncing', NOW())
+           ON CONFLICT (realm_id) DO UPDATE SET status = 'syncing', updated_at = NOW()`,
+          [realmId]
+        )
+        log("qbo.sync.started", { realmId, source: "oauth_callback" }, "qbo")
+        const synced: Record<string, number> = {}
+        for (const type of ENTITY_TYPES) {
+          const items = await getAllForEntity(realmId, type as QBOEntityType)
+          const count = await upsertEntities(realmId, type, items, { userId })
+          synced[type] = count
+        }
+        const total = Object.values(synced).reduce((s, n) => s + n, 0)
+        await query(
+          `INSERT INTO qbo_sync_status (realm_id, last_full_sync_at, status, error_message, updated_at)
+           VALUES ($1, NOW(), 'success', NULL, NOW())
+           ON CONFLICT (realm_id) DO UPDATE SET last_full_sync_at = NOW(), status = 'success', error_message = NULL, updated_at = NOW()`,
+          [realmId]
+        )
+        log("qbo.sync.succeeded", { realmId, total, source: "oauth_callback" }, "qbo")
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        log("qbo.sync.failed", { realmId, error: message, source: "oauth_callback" }, "qbo")
+        try {
+          await ensureQBOSchema()
+          await query(
+            `INSERT INTO qbo_sync_status (realm_id, status, error_message, updated_at) VALUES ($1, 'error', $2, NOW())
+             ON CONFLICT (realm_id) DO UPDATE SET status = 'error', error_message = $2, updated_at = NOW()`,
+            [realmId, message]
+          )
+        } catch {
+          // ignore status update failure
+        }
+      }
+    })()
   } catch (err) {
     logError("oauth.callback.failed", err)
     return NextResponse.redirect(new URL("/onboarding?error=token_exchange", base), 302)
