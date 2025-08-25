@@ -313,7 +313,9 @@ export async function ensureQBOSchema(): Promise<void> {
   await p.query(QBO_CONNECTIONS_SQL)
   await p.query(QBO_ENTITIES_SQL)
   await p.query(QBO_SYNC_STATUS_SQL)
+  // Ensure columns exist even if table was created before schema updates
   await p.query("ALTER TABLE qbo_entities ADD COLUMN IF NOT EXISTS data JSONB NOT NULL DEFAULT '{}'::jsonb")
+  await p.query("ALTER TABLE qbo_entities ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb")
   await p.query("ALTER TABLE qbo_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()")
   qboSchemaEnsured = true
   log("qbo.schema.ensured", undefined, "qbo")
