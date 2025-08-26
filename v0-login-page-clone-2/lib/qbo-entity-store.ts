@@ -55,10 +55,13 @@ export async function upsertEntities(
   options?: { userId?: string }
 ): Promise<number> {
   if (items.length === 0) return 0
+  let totalInserted = 0
+
   if (isGcpEntityStoreEnabled()) {
     try {
       const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
-      return await gcpUpsertEntities("qbo", realmId, entityType, items, getEntityId, userId)
+      const insertedGcp = await gcpUpsertEntities("qbo", realmId, entityType, items, getEntityId, userId)
+      totalInserted = Math.max(totalInserted, insertedGcp)
     } catch (err) {
       log("entity_store.upsert.failed", { realmId, entityType, error: err instanceof Error ? err.message : String(err) }, "qbo")
       throw err
@@ -84,7 +87,8 @@ export async function upsertEntities(
       if (inserted > 0) {
         log("entity_store.upsert.succeeded", { realmId, entityType, count: inserted }, "qbo")
       }
-      return inserted
+      totalInserted = Math.max(totalInserted, inserted)
+      return totalInserted
     } catch (err) {
       log("entity_store.upsert.failed", { realmId, entityType, error: err instanceof Error ? err.message : String(err) }, "qbo")
       throw err
