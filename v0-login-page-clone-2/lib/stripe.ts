@@ -34,7 +34,9 @@ export function getStripeAuthorizeUrl(state: string): string {
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
-    scope: "read_only",
+    // Stripe requires read_write for standard OAuth platforms; read_only is reserved for extensions.
+    // We still only use the connection in a read-only way (analytics), but must request read_write here.
+    scope: "read_write",
     redirect_uri: redirectUri,
     state,
   })
