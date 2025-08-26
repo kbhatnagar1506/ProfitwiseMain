@@ -298,6 +298,19 @@ const STRIPE_CONNECTIONS_SQL = `
   )
 `
 
+const STRIPE_ENTITIES_SQL = `
+  CREATE TABLE IF NOT EXISTS stripe_entities (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stripe_account_id TEXT NOT NULL,
+    entity_type       TEXT NOT NULL,
+    entity_id         TEXT NOT NULL,
+    data              JSONB NOT NULL,
+    updated_at        TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(stripe_account_id, entity_type, entity_id)
+  )
+`
+
 let xeroSchemaEnsured = false
 let qboSchemaEnsured = false
 let stripeSchemaEnsured = false
@@ -341,6 +354,14 @@ export async function ensureStripeSchema(): Promise<void> {
   if (!p) return
   await ensureAuthSchema()
   await p.query(STRIPE_CONNECTIONS_SQL)
+  await p.query(STRIPE_ENTITIES_SQL)
+  // Ensure columns exist even if table was created before schema updates
+  await p.query(
+    "ALTER TABLE stripe_entities ADD COLUMN IF NOT EXISTS data JSONB NOT NULL DEFAULT '{}'::jsonb"
+  )
+  await p.query(
+    "ALTER TABLE stripe_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()"
+  )
   stripeSchemaEnsured = true
   log("stripe.schema.ensured", undefined, "stripe")
 }
