@@ -37,6 +37,12 @@ const integrations: Integration[] = [
     logo: "/xero-logo.png",
   },
   {
+    name: "Stripe",
+    description: "Revenue, invoices, and subscriptions",
+    category: "Revenue",
+    logo: "/stripe-logo.png",
+  },
+  {
     name: "FreshBooks",
     description: "Simple accounting for small businesses",
     category: "Accounting",
@@ -893,15 +899,22 @@ export function OnboardingFlow({
             <div className="grid grid-cols-2 md:grid-cols-3 gap-8 max-w-2xl mx-auto">
               {integrations.map((integration) => {
                 const usePlaid = PLAID_INTEGRATIONS.includes(integration.name)
+                const isStripe = integration.name === "Stripe"
                 const plaidDisabled = usePlaid && (accountingStepLinkLoading || !plaidReady)
                 const isConnected = connectedIntegrations.includes(integration.name)
                 return (
                   <button
                     key={integration.name}
                     type="button"
-                    onClick={() =>
-                      usePlaid ? openPlaidLink() : toggleIntegration(integration.name)
-                    }
+                    onClick={() => {
+                      if (usePlaid) {
+                        openPlaidLink()
+                      } else if (isStripe) {
+                        window.location.href = "/oauth/stripe"
+                      } else {
+                        toggleIntegration(integration.name)
+                      }
+                    }}
                     disabled={plaidDisabled}
                     className={`relative rounded-lg p-5 text-center transition-all flex flex-col items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${
                       isConnected
@@ -932,6 +945,9 @@ export function OnboardingFlow({
                     <h3 className="text-white font-semibold text-sm leading-tight">
                       {integration.name}
                     </h3>
+                    {integration.description && (
+                      <p className="text-[11px] text-gray-400 mt-1">{integration.description}</p>
+                    )}
                     {isConnected ? (
                       <span className="text-xs font-medium text-emerald-400 mt-1">Connected</span>
                     ) : usePlaid && accountingStepLinkLoading ? (
