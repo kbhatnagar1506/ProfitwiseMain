@@ -126,6 +126,19 @@ export async function POST(request: NextRequest) {
     // ignore parse for changes
   }
 
+  // Debug logging to understand what QBO is sending and what we parsed.
+  log(
+    "webhook.parsed_debug",
+    {
+      payloadSize,
+      eventCount,
+      realmsTouched: [...realmsTouched],
+      changeCount: changes.length,
+      bodyPreview: body.slice(0, 800),
+    },
+    "qbo"
+  )
+
   if (changes.length > 0) {
     log("webhook.entity_changes", { count: changes.length, realmIds: [...new Set(changes.map((c) => c.realmId))] }, "qbo")
     void (async () => {
