@@ -4,6 +4,7 @@ import {
   ensurePlaidSchema,
   ensureQBOSchema,
   ensureXeroSchema,
+  ensureStripeSchema,
   query,
 } from "@/lib/db"
 import { log } from "@/lib/logger"
@@ -38,6 +39,7 @@ export async function GET(req: NextRequest) {
     await ensurePlaidSchema()
     await ensureXeroSchema()
     await ensureQBOSchema()
+    await ensureStripeSchema()
   } catch (err) {
     log("admin.db-data.schema_failed", { error: err instanceof Error ? err.message : String(err) }, "db")
     return NextResponse.json({ error: "Schema failed" }, { status: 500 })
@@ -124,6 +126,19 @@ export async function GET(req: NextRequest) {
     out.qbo_entities = { count: qboEnt.rows.length, rows: qboEnt.rows }
   } catch (e) {
     out.qbo_entities = { error: String(e) }
+  }
+
+  try {
+    const stripeConn = await query<{
+      id: string
+      user_id: string
+      stripe_user_id: string
+      scope: string | null
+      created_at: Date
+    }>("SELECT id, user_id, stripe_user_id, scope, created_at FROM stripe_connections ORDER BY created_at DESC")
+    out.stripe_connections = { count: stripeConn.rows.length, rows: stripeConn.rows }
+  } catch (e) {
+    out.stripe_connections = { error: String(e) }
   }
 
   return NextResponse.json(out)
