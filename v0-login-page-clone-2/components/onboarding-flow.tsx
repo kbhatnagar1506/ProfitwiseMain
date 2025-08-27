@@ -1600,10 +1600,6 @@ export function OnboardingFlow({
           <div className="pt-0 pb-2 w-full">
             <h2 className="text-3xl font-bold tracking-tight text-white mb-2">{steps[7].title}</h2>
             <p className="text-gray-400 text-lg mb-5">{steps[7].description}</p>
-            <p className="text-gray-300 text-sm mb-4">
-              This page is for reviewing and verifying transaction tagging. Merchant names, tags, and transaction types are
-              suggested from your data—filter by account, spot-check rows, and adjust anything that doesn’t look right.
-            </p>
             {merchantsNormalizeError && (
               <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
                 <p className="text-red-300 text-sm">{merchantsNormalizeError}</p>
