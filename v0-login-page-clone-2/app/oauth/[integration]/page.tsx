@@ -61,16 +61,24 @@ export default function OAuthConnectorPage() {
             </div>
 
             <div>
-              <h1 className="text-2xl font-semibold text-white mb-3">Connecting to {integrationName}</h1>
-              <p className="text-gray-400 text-sm">
-                Please wait while we securely connect your {integrationName} account to ProfitWise...
+              <h1 className="text-2xl font-semibold text-white mb-3">
+                Connecting your {integrationName}
+              </h1>
+              <p className="text-gray-300 text-sm">
+                We&apos;re opening a secure window so you can approve access. This only takes a few seconds.
               </p>
             </div>
 
-            <div className="bg-white/5 border border-white/10 rounded-lg p-4">
-              <p className="text-xs text-gray-400 leading-relaxed">
-                You will be redirected to {integrationName} to authorize the connection. Your data is encrypted and
-                secured with industry-standard protocols.
+            <div className="bg-white/5 border border-white/10 rounded-lg p-4 text-left space-y-2">
+              <p className="text-xs text-gray-300 leading-relaxed">
+                1. You&apos;ll be redirected to {integrationName} to sign in and confirm the connection.
+              </p>
+              <p className="text-xs text-gray-300 leading-relaxed">
+                2. When you&apos;re done, you&apos;ll come back here and we&apos;ll finish syncing data into ProfitWise.
+              </p>
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                We never see your password. All traffic is encrypted and follows {integrationName}&apos;s official
+                OAuth flow.
               </p>
             </div>
           </div>
