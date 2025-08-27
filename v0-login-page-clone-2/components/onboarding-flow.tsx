@@ -1808,7 +1808,7 @@ export function OnboardingFlow({
                           disabled={merchantSaveLoading}
                           className="bg-white text-black hover:bg-gray-200 min-w-[140px]"
                         >
-                          {merchantSaveLoading ? "Saving…" : "Save to memory"}
+                          {merchantSaveLoading ? "Saving…" : "Save"}
                         </Button>
                       </div>
                     </div>
