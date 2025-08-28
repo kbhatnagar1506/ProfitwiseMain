@@ -6,7 +6,7 @@ import Image from "next/image"
 import { Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
+import whatsappQr from "../../../Screenshot 2026-03-08 at 03.57.15.png"
 
 export default function OAuthConnectorPage() {
   const params = useParams()
