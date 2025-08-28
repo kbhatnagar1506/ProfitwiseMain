@@ -366,6 +366,39 @@ export async function ensureStripeSchema(): Promise<void> {
   log("stripe.schema.ensured", undefined, "stripe")
 }
 
+const UNIFIED_INVOICES_SQL = `
+  CREATE TABLE IF NOT EXISTS unified_invoices (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source           TEXT NOT NULL,
+    source_scope     TEXT NOT NULL,
+    external_id      TEXT NOT NULL,
+    data             JSONB NOT NULL,
+    invoice_number   TEXT,
+    invoice_date    TEXT,
+    total            NUMERIC,
+    customer_name    TEXT,
+    updated_at       TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, source, source_scope, external_id)
+  )
+`
+
+let unifiedInvoicesSchemaEnsured = false
+
+export async function ensureUnifiedInvoicesSchema(): Promise<void> {
+  if (unifiedInvoicesSchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(UNIFIED_INVOICES_SQL)
+  await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS amount_paid NUMERIC")
+  await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS amount_due NUMERIC")
+  await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS status TEXT")
+  await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS customer_email TEXT")
+  unifiedInvoicesSchemaEnsured = true
+  log("db.unified_invoices.schema.ensured", undefined, "db")
+}
+
 const MERCHANT_TAGS_SQL = `
   CREATE TABLE IF NOT EXISTS merchant_tags (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
