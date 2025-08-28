@@ -1,6 +1,35 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createHmac, timingSafeEqual } from "crypto"
 import { log, warn, error } from "@/lib/logger"
+import { upsertStripeEntities, deleteStripeEntity } from "@/lib/stripe-entity-store"
+
+const STRIPE_ENTITY_TYPES = new Set([
+  "customer",
+  "invoice",
+  "subscription",
+  "payment_intent",
+  "payout",
+  "balance_transaction",
+])
+
+function getEntityTypeAndAction(
+  eventType: string
+): { entityType: string; isDelete: boolean } | null {
+  const parts = typeof eventType === "string" ? eventType.split(".") : []
+  const resource = parts[0]
+  const action = parts[1] ?? ""
+  if (!resource || !STRIPE_ENTITY_TYPES.has(resource)) return null
+  return { entityType: resource, isDelete: action === "deleted" }
+}
+
+function getStripeAccountId(event: { account?: string; data?: { object?: { account?: string } } }): string | null {
+  if (event.account && typeof event.account === "string") return event.account
+  const obj = event.data?.object
+  if (obj && typeof obj === "object" && typeof (obj as Record<string, unknown>).account === "string") {
+    return (obj as Record<string, unknown>).account as string
+  }
+  return null
+}
 
 function verifyStripeSignature(rawBody: Buffer, signatureHeader: string, secret: string): boolean {
   const parts = signatureHeader.split(",")
@@ -80,9 +109,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     "stripe"
   )
 
-  // TODO: In a follow-up step, route specific event types (invoices, payouts,
-  // customers, subscriptions, balance transactions, etc.) into dedicated
-  // upsert functions and tables so we can keep Stripe data in sync.
+  const accountId = getStripeAccountId(event)
+  const parsed = getEntityTypeAndAction(event.type ?? "")
+  const obj = event.data?.object
+
+  if (accountId && parsed && obj && typeof obj === "object") {
+    const entityId = (obj as Record<string, unknown>).id
+    if (typeof entityId === "string") {
+      try {
+        if (parsed.isDelete) {
+          await deleteStripeEntity(accountId, parsed.entityType, entityId)
+          log("stripe.webhook.entity.deleted", { accountId, entityType: parsed.entityType, entityId }, "stripe")
+        } else {
+          const count = await upsertStripeEntities(accountId, parsed.entityType, [obj])
+          log("stripe.webhook.entity.upserted", { accountId, entityType: parsed.entityType, entityId, count }, "stripe")
+        }
+      } catch (err) {
+        error("stripe.webhook.persist.failed", { eventType: event.type, accountId, error: err }, "stripe")
+      }
+    }
+  }
 
   return NextResponse.json({ received: true }, { status: 200 })
 }

@@ -122,6 +122,43 @@ export async function upsertStripeEntities(
   return inserted
 }
 
+export async function deleteStripeEntity(
+  stripeAccountId: string,
+  entityType: string,
+  entityId: string
+): Promise<boolean> {
+  if (isProduction()) {
+    try {
+      await ensureStripeSchema()
+      const { rows } = await query<{ entity_id: string }>(
+        "DELETE FROM stripe_entities WHERE stripe_account_id = $1 AND entity_type = $2 AND entity_id = $3 RETURNING entity_id",
+        [stripeAccountId, entityType, entityId]
+      )
+      const deleted = rows.length > 0
+      if (deleted) {
+        log("stripe.entity_store.delete.succeeded", { stripeAccountId, entityType, entityId }, "stripe")
+      }
+      return deleted
+    } catch (err) {
+      log(
+        "stripe.entity_store.delete.failed",
+        { stripeAccountId, entityType, entityId, error: err instanceof Error ? err.message : String(err) },
+        "stripe"
+      )
+      return false
+    }
+  }
+  const byAccount = memoryStore.get(stripeAccountId)
+  if (!byAccount) return false
+  const typeMap = byAccount.get(entityType) as Map<string, unknown> | undefined
+  if (!typeMap) return false
+  const had = typeMap.delete(entityId)
+  if (had) {
+    log("stripe.entity_store.delete.succeeded", { stripeAccountId, entityType, entityId }, "stripe")
+  }
+  return had
+}
+
 export async function getStripeEntitiesFromDb(
   stripeAccountId: string,
   entityType?: string,
