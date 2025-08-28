@@ -1069,11 +1069,7 @@ export function OnboardingFlow({
                   />
                 </div>
                 <h3 className="text-white font-semibold text-sm leading-tight mb-1">WhatsApp</h3>
-                {whatsappStatus?.verified && whatsappStatus.phone ? (
-                  <p className="text-xs text-emerald-400">Connected as {whatsappStatus.phone}</p>
-                ) : (
-                  <p className="text-xs text-gray-400">Click to open setup with QR & code</p>
-                )}
+                {whatsappStatus?.verified && whatsappStatus.phone ? null : null}
               </button>
 
               {[
