@@ -172,13 +172,18 @@ export async function GET(_req: NextRequest) {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     if (message === "openai_timeout") {
-      return NextResponse.json(
-        {
-          error: "Timed out generating company summary",
-          details: "OpenAI took too long to respond. Please try again.",
-        },
-        { status: 504 }
-      )
+      // Fallback: return a raw, concatenated context instead of an error so the
+      // UI still shows something useful even when OpenAI is slow.
+      const fallbackContext =
+        snippets
+          .slice(0, 20)
+          .join("\n\n---\n\n")
+          .slice(0, 8000) ||
+        "No company context found yet. Connect Google Drive, OneDrive, or Notion in the previous step so we can read your docs and show a summary here."
+      return NextResponse.json({
+        context: fallbackContext,
+        warning: "openai_timeout",
+      })
     }
     return NextResponse.json(
       { error: "Failed to generate company summary", details: message },
