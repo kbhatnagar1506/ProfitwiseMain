@@ -154,6 +154,7 @@ export async function POST(req: NextRequest) {
 
   // Fire-and-forget background task; this request returns immediately.
   void (async () => {
+    let buildSucceeded = false
     try {
       const { finalContext } = await buildFinalContextForUser(user.id, cookieHeader)
       if (finalContext && finalContext.trim()) {
@@ -164,60 +165,67 @@ export async function POST(req: NextRequest) {
             user.id,
           ])
           log("context.build_async.saved", { userId: user.id }, "db")
+          buildSucceeded = true
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
           log("context.build_async.save_failed", { userId: user.id, error: msg }, "db")
         }
-        try {
-          await addFinalContextToSupermemory(
-            finalContext.trim(),
-            `final_context_${user.id}`,
-            user.id
-          )
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
-          log("context.build_async.supermemory_failed", { userId: user.id, error: msg }, "supermemory")
+        if (buildSucceeded) {
+          try {
+            await addFinalContextToSupermemory(
+              finalContext.trim(),
+              `final_context_${user.id}`,
+              user.id
+            )
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            log("context.build_async.supermemory_failed", { userId: user.id, error: msg }, "supermemory")
+          }
         }
-      }
-
-      // WhatsApp notification
-      try {
-        const { phoneE164, verified } = await getWhatsAppStatusByUserId(user.id)
-        if (!phoneE164 || !verified) {
-          log(
-            "context.build_async.whatsapp_skipped",
-            { userId: user.id, hasPhone: !!phoneE164, verified },
-            "system"
-          )
-          return
-        }
-        const client = getTwilio()
-        const from = getWhatsAppFrom()
-        if (!client || !from) {
-          log(
-            "context.build_async.whatsapp_not_configured",
-            { userId: user.id, hint: getTwilioConfigHint() },
-            "system"
-          )
-          return
-        }
-        const toFormatted = phoneE164.startsWith("whatsapp:")
-          ? phoneE164
-          : `whatsapp:${phoneE164}`
-        await client.messages.create({
-          from,
-          to: toFormatted,
-          body:
-            "Your ProfitWise company context is ready. You can review and refine it in the onboarding flow.",
-        })
-        log("context.build_async.whatsapp_sent", { userId: user.id, to: phoneE164 }, "system")
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        log("context.build_async.whatsapp_failed", { userId: user.id, error: msg }, "system")
+      } else {
+        buildSucceeded = true // we still "finished" (e.g. no docs case)
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       log("context.build_async.failed", { userId: user.id, error: msg }, "system")
+    }
+
+    // Always try to send WhatsApp when the job is done (success or no-context)
+    try {
+      const { phoneE164, verified } = await getWhatsAppStatusByUserId(user.id)
+      if (!phoneE164 || !verified) {
+        log(
+          "context.build_async.whatsapp_skipped",
+          { userId: user.id, hasPhone: !!phoneE164, verified },
+          "system"
+        )
+        return
+      }
+      const client = getTwilio()
+      const from = getWhatsAppFrom()
+      if (!client || !from) {
+        log(
+          "context.build_async.whatsapp_not_configured",
+          { userId: user.id, hint: getTwilioConfigHint() },
+          "system"
+        )
+        return
+      }
+      const toFormatted = phoneE164.startsWith("whatsapp:")
+        ? phoneE164
+        : `whatsapp:${phoneE164}`
+      const body = buildSucceeded
+        ? "Your ProfitWise company context is ready. You can review and refine it in the onboarding flow."
+        : "ProfitWise context build had an issue. Please try again from the Company & financial context step."
+      await client.messages.create({
+        from,
+        to: toFormatted,
+        body,
+      })
+      log("context.build_async.whatsapp_sent", { userId: user.id, to: phoneE164 }, "system")
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      log("context.build_async.whatsapp_failed", { userId: user.id, error: msg }, "system")
     }
   })()
 
