@@ -791,71 +791,70 @@ export function OnboardingFlow({
                 View balances in the table below. Add more accounts or continue when you’re ready.
               </p>
             </div>
-            <div className="max-w-3xl mx-auto space-y-4">
+            <div className="max-w-4xl mx-auto space-y-4">
               {hasAccounts ? (
-                <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-white/20 hover:bg-transparent">
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3">
-                          Account name
-                        </TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3">
-                          Last 4
-                        </TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3">
-                          Type
-                        </TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3 text-right">
-                          Current balance
-                        </TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-4 py-3 text-right">
-                          Available balance
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {connectedAccounts.map((acc, i) => (
-                        <TableRow
-                          key={`${acc.name}-${acc.mask ?? i}`}
-                          className="border-white/20 hover:bg-white/5"
-                        >
-                          <TableCell className="text-white border-white/20 px-4 py-3 font-medium">
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {connectedAccounts.map((acc, i) => (
+                      <div
+                        key={`${acc.name}-${acc.mask ?? i}`}
+                        className="rounded-2xl border border-white/15 bg-white/5 p-4 flex flex-col justify-between h-40"
+                      >
+                        <div>
+                          <p className="text-xs uppercase tracking-wide text-gray-400 mb-1">
+                            Bank account
+                          </p>
+                          <p className="text-white font-semibold text-base truncate">
                             {acc.name}
-                          </TableCell>
-                          <TableCell className="text-gray-400 border-white/20 px-4 py-3 tabular-nums">
-                            {acc.mask ?? "—"}
-                          </TableCell>
-                          <TableCell className="text-gray-400 border-white/20 px-4 py-3 capitalize">
-                            {acc.type || "—"}
-                          </TableCell>
-                          <TableCell className="text-white border-white/20 px-4 py-3 text-right tabular-nums font-medium">
-                            {formatBalance(acc.current_balance)}
-                          </TableCell>
-                          <TableCell className="text-gray-400 border-white/20 px-4 py-3 text-right tabular-nums">
-                            {formatBalance(acc.available_balance)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                    {hasAccounts && (
-                      <TableFooter>
-                        <TableRow className="border-white/20 bg-white/10 hover:bg-white/10">
-                          <TableCell
-                            colSpan={3}
-                            className="text-white font-semibold border-white/20 px-4 py-3"
-                          >
-                            Total
-                          </TableCell>
-                          <TableCell className="text-white font-semibold border-white/20 px-4 py-3 text-right tabular-nums">
-                            {formatBalance(totalBalance)}
-                          </TableCell>
-                          <TableCell className="border-white/20 px-4 py-3" />
-                        </TableRow>
-                      </TableFooter>
-                    )}
-                  </Table>
-                </div>
+                          </p>
+                          <p className="text-gray-400 text-xs mt-1">
+                            {acc.type || "—"} {acc.mask ? `•••• ${acc.mask}` : ""}
+                          </p>
+                        </div>
+                        <div className="mt-3 flex items-end justify-between">
+                          <div>
+                            <p className="text-xs text-gray-400">Current balance</p>
+                            <p className="text-white font-semibold text-lg">
+                              {formatBalance(acc.current_balance)}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">Available</p>
+                            <p className="text-gray-300 text-sm">
+                              {formatBalance(acc.available_balance)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={handleAddAnotherAccount}
+                      disabled={addAccountLinkLoading || !plaidReady}
+                      className="rounded-2xl border border-dashed border-white/25 text-gray-300 hover:border-white/60 hover:bg-white/5 transition-colors flex flex-col items-center justify-center h-40"
+                    >
+                      <div className="w-12 h-12 rounded-2xl border border-white/40 flex items-center justify-center text-2xl font-semibold mb-2">
+                        +
+                      </div>
+                      <span className="text-sm font-medium text-white">
+                        Add another bank account
+                      </span>
+                      <span className="text-xs text-gray-400 mt-1">
+                        Link a new account with Plaid
+                      </span>
+                    </button>
+                  </div>
+                  {hasAccounts && (
+                    <div className="mt-2 flex justify-end">
+                      <p className="text-sm text-gray-300">
+                        Total across connected accounts:{" "}
+                        <span className="font-semibold text-white">
+                          {formatBalance(totalBalance)}
+                        </span>
+                      </p>
+                    </div>
+                  )}
+                </>
               ) : hasItemsOnly ? (
                 <div className="rounded-lg border border-white/20 bg-white/5 p-4">
                   <p className="text-sm font-medium text-white mb-2">Connected</p>
@@ -871,15 +870,6 @@ export function OnboardingFlow({
                   {plaidLinkError}
                 </p>
               )}
-              <Button
-                type="button"
-                onClick={handleAddAnotherAccount}
-                disabled={addAccountLinkLoading || !plaidReady}
-                variant="outline"
-                className="w-full h-12 rounded-xl bg-white/5 border-white/20 text-white hover:bg-white/10 font-medium"
-              >
-                {addAccountLinkLoading ? "Loading..." : "Add another bank account"}
-              </Button>
             </div>
           </div>
         )
