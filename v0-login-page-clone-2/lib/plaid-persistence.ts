@@ -206,7 +206,7 @@ export async function getTransactionsByUserId(
       `SELECT pt.transaction_id, pt.item_id, pt.account_id, pt.amount, pt.date, pt.name, pt.merchant_name, pt.category
        FROM plaid_transactions pt
        JOIN plaid_items pi ON pi.item_id = pt.item_id
-       WHERE pi.user_id = $1 AND pt.date >= $2 AND pt.date <= $3 AND pt.pending = false
+       WHERE pi.user_id = $1 AND pt.date >= $2 AND pt.date <= $3
        ORDER BY pt.date DESC, pt.amount DESC
        LIMIT $4`,
       [userId, start, end, limit]

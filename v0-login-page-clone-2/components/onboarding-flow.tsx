@@ -245,7 +245,7 @@ export function OnboardingFlow({
       .then((res) => (res.ok ? res.json() : { item_ids: [] }))
       .then((data: { item_ids?: string[] }) => setConnectedItemIds(data.item_ids ?? []))
       .catch(() => setConnectedItemIds([]))
-    fetch("/api/plaid/balances")
+    fetch("/api/plaid/balances?refresh=1")
       .then((res) => (res.ok ? res.json() : { accounts: [] }))
       .then(
         (data: {
@@ -447,7 +447,7 @@ export function OnboardingFlow({
   useEffect(() => {
     if (currentStep !== 7) return
     setCompanyFormLoading(true)
-    fetch("/api/plaid/balances")
+    fetch("/api/plaid/balances?refresh=1")
       .then((res) => (res.ok ? res.json() : { accounts: [] }))
       .then((data: { accounts?: { name?: string; mask?: string | null }[] }) => {
         const list = (data.accounts ?? []).map((a) => ({
