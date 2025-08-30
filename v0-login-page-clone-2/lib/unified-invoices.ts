@@ -223,7 +223,7 @@ export async function getUnifiedInvoices(userId: string): Promise<UnifiedInvoice
       `SELECT id, source, source_scope, external_id, data, invoice_number, invoice_date, total, customer_name, customer_email, amount_paid, amount_due, status, updated_at
        FROM unified_invoices
        WHERE user_id = $1
-       ORDER BY invoice_date DESC NULLS LAST, updated_at DESC`,
+       ORDER BY updated_at DESC NULLS LAST, invoice_date DESC NULLS LAST`,
       [userId]
     )
     return rows.map((r) => {
