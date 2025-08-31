@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import Supermemory from "supermemory"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { getOrgFinanceTag } from "@/lib/supermemory"
+import { getUserFinanceTag } from "@/lib/supermemory"
 
 // Use gpt-5 for best quality (set OPENAI_COMPANY_CONTEXT_MODEL=gpt-5); gpt-4o default for compatibility
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
@@ -93,7 +93,7 @@ export async function GET(_req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const containerTag = getOrgFinanceTag()
+  const containerTag = getUserFinanceTag(user.id)
   const client = getSupermemoryClient()
   const snippets: string[] = []
   const seen = new Set<string>()

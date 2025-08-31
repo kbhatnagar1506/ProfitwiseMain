@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import Supermemory from "supermemory"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { getOrgFinanceTag, type SupermemoryProvider } from "@/lib/supermemory"
+import { getUserFinanceTag, type SupermemoryProvider } from "@/lib/supermemory"
 import { log } from "@/lib/logger"
 
 const PROVIDERS: { provider: SupermemoryProvider; name: string }[] = [
@@ -24,7 +24,7 @@ export async function GET(_req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const containerTag = getOrgFinanceTag()
+  const containerTag = getUserFinanceTag(user.id)
   const client = getClient()
   const connected: string[] = []
 

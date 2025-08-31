@@ -4,7 +4,7 @@
  */
 
 import Supermemory from "supermemory"
-import { getOrgFinanceTag } from "@/lib/supermemory"
+import { getUserFinanceTag } from "@/lib/supermemory"
 import { query } from "@/lib/db"
 import {
   getTransactionContextForUser,
@@ -13,11 +13,11 @@ import {
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
-async function fetchSupermemoryContext(): Promise<string> {
+async function fetchSupermemoryContext(userId: string): Promise<string> {
   const apiKey = process.env.SUPERMEMORY_API_KEY
   if (!apiKey) return ""
   const client = new Supermemory({ apiKey })
-  const tag = getOrgFinanceTag()
+  const tag = getUserFinanceTag(userId)
   const snippets: string[] = []
   const seen = new Set<string>()
   const queries = [
@@ -61,7 +61,7 @@ export async function getAiReplyForUser(userId: string, userMessage: string): Pr
 
   const [userRows, supermemoryContext, transactionContext, balancesContext] = await Promise.all([
     query<{ final_context: string | null }>("SELECT final_context FROM users WHERE id = $1", [userId]),
-    fetchSupermemoryContext(),
+    fetchSupermemoryContext(userId),
     getTransactionContextForUser(userId),
     getBalancesAndConnectionsContextForUser(userId),
   ])

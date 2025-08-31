@@ -3,7 +3,7 @@ import Supermemory from "supermemory"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureAuthSchema, ensureMerchantTagsSchema, ensurePlaidSchema, query } from "@/lib/db"
 import { getTransactionsByUserId } from "@/lib/plaid-persistence"
-import { getOrgFinanceTag } from "@/lib/supermemory"
+import { getUserFinanceTag } from "@/lib/supermemory"
 import { log } from "@/lib/logger"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
@@ -20,7 +20,7 @@ function getSupermemoryClient(): Supermemory | null {
 async function fetchCompanyContextFromSupermemory(): Promise<string> {
   const client = getSupermemoryClient()
   if (!client) return ""
-  const tag = getOrgFinanceTag()
+  const tag = getUserFinanceTag(user.id)
   const snippets: string[] = []
   const seen = new Set<string>()
   const searchQueries = [

@@ -5,16 +5,23 @@ import {
   type SupermemoryProvider,
 } from "@/lib/supermemory"
 import { log } from "@/lib/logger"
+import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 
 const SUPPORTED_PROVIDERS: SupermemoryProvider[] = ["google-drive", "onedrive", "notion"]
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ provider: string }> }
 ) {
   const { provider: rawProvider } = await context.params
   const provider = rawProvider as SupermemoryProvider
   const base = getAppBaseUrl()
+
+  const token = request.cookies.get(getSessionCookieName())?.value
+  const user = await getUserBySessionToken(token ?? "")
+  if (!user) {
+    return NextResponse.redirect(new URL("/onboarding?error=supermemory_unauthorized", base), 302)
+  }
 
   if (!SUPPORTED_PROVIDERS.includes(provider)) {
     log("connection.create.rejected", {
@@ -25,7 +32,7 @@ export async function GET(
   }
 
   try {
-    const connection = await createSupermemoryConnection(provider)
+    const connection = await createSupermemoryConnection(provider, user.id)
     log("connection.create.redirecting", {
       provider,
       redirectsTo: connection.redirectsTo ?? null,

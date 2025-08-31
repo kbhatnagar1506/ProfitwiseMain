@@ -28,6 +28,17 @@ export function getOrgFinanceTag(): string {
   return process.env.SUPERMEMORY_DEFAULT_FINANCE_TAG ?? "org_profitwise_finance"
 }
 
+function getFinanceTagPrefix(): string {
+  return process.env.SUPERMEMORY_DEFAULT_FINANCE_TAG ?? "org_profitwise_finance"
+}
+
+/** Per-user container tag so each user's connections and context are isolated. */
+export function getUserFinanceTag(userId: string): string {
+  const prefix = getFinanceTagPrefix()
+  const safe = String(userId).replace(/-/g, "_").replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 80)
+  return `${prefix}_user_${safe}`
+}
+
 export type SupermemoryProvider = "google-drive" | "onedrive" | "notion"
 
 let supermemoryClient: Supermemory | null = null
@@ -96,11 +107,12 @@ async function ensureLLMFilterSettings(): Promise<void> {
 }
 
 export async function createSupermemoryConnection(
-  provider: SupermemoryProvider
+  provider: SupermemoryProvider,
+  userId: string
 ): Promise<{ authLink: string; id: string; redirectsTo?: string; expiresIn?: string }> {
   const client = getClient()
   const baseUrl = getAppBaseUrl()
-  const containerTag = getOrgFinanceTag()
+  const containerTag = getUserFinanceTag(userId)
 
   await ensureLLMFilterSettings()
 
@@ -159,9 +171,9 @@ export async function createSupermemoryConnection(
 }
 
 /** Ingest final context (company + financial merged) into Supermemory so it is searchable. Uses customId so repeated saves update the same document. */
-export async function addFinalContextToSupermemory(content: string, customId: string): Promise<void> {
+export async function addFinalContextToSupermemory(content: string, customId: string, userId: string): Promise<void> {
   const client = getClient()
-  const containerTag = getOrgFinanceTag()
+  const containerTag = getUserFinanceTag(userId)
   const id = customId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 100)
   await client.add({
     content,
@@ -182,7 +194,7 @@ export async function addMerchantOverrideToSupermemory(
   transactionType: string
 ): Promise<void> {
   const client = getClient()
-  const containerTag = getOrgFinanceTag()
+  const containerTag = getUserFinanceTag(userId)
   const safeRaw = rawName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80)
   const customId = `merchant_${userId}_${accountId}_${safeRaw}`.replace(/\s+/g, "_")
   const content = `Merchant override (user-confirmed): Raw name "${rawName}" should be normalized as "${normalizedName}", category tag "${tag}", transaction type "${transactionType}". Use this for future categorization.`
