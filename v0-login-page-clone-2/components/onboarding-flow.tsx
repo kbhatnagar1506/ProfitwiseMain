@@ -84,8 +84,6 @@ const steps = [
     description: "Verify merchants, tags, and subscription types on your recent transactions.",
   },
   { id: 9, title: "Invoice preview", description: "Confirm we’re seeing the invoices you expect." },
-  { id: 10, title: "Security setup", description: "Enable additional security for your account." },
-  { id: 11, title: "Review & launch", description: "Do a quick pass and finish onboarding." },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -588,6 +586,8 @@ export function OnboardingFlow({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ form: companyForm }),
       }).finally(() => handleNext())
+    } else if (currentStep >= steps.length) {
+      router.push("/dashboard")
     } else {
       handleNext()
     }
