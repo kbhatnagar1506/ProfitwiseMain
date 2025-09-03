@@ -248,3 +248,43 @@ export async function gcpDeleteScope(
   }
   return deleted
 }
+
+const GMAIL_SENDERS_FILE = "gmail-invoice-senders.json"
+
+function gmailSendersPath(userId: string): string {
+  return `${PREFIX_USER}/${userId}/${GMAIL_SENDERS_FILE}`
+}
+
+/**
+ * Read the list of email addresses we'll receive invoice emails from (Gmail forwarding allowlist). Stored in GCP at accounting/user/{userId}/gmail-invoice-senders.json.
+ */
+export async function gcpReadGmailInvoiceSenders(userId: string): Promise<string[]> {
+  const client = getStorage()
+  if (!client) return []
+  const bucket = client.bucket(BUCKET_NAME)
+  const file = bucket.file(gmailSendersPath(userId))
+  try {
+    const [buf] = await file.download()
+    const parsed = JSON.parse(buf.toString("utf8")) as { emails?: unknown }
+    const emails = parsed?.emails
+    return Array.isArray(emails) ? emails.filter((e): e is string => typeof e === "string") : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Save the list of email addresses we'll receive invoice emails from to GCP.
+ */
+export async function gcpWriteGmailInvoiceSenders(userId: string, emails: string[]): Promise<void> {
+  const client = getStorage()
+  if (!client) throw new Error("GCP storage not configured")
+  const bucket = client.bucket(BUCKET_NAME)
+  const file = bucket.file(gmailSendersPath(userId))
+  const payload = JSON.stringify({ emails })
+  await file.save(payload, {
+    contentType: "application/json",
+    metadata: { cacheControl: "private, max-age=0" },
+  })
+  log("entity_store_gcp.gmail_senders.saved", { userId, count: emails.length }, "gcp")
+}
