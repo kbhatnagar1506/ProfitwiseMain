@@ -149,101 +149,101 @@ export default function OAuthConnectorPage() {
           </div>
 
           <div className="mb-10 pb-10 border-b border-white/10">
-            <h2 className="text-lg font-semibold text-white mb-1">Emails we&apos;ll be receiving your invoices from</h2>
-            <p className="text-sm text-gray-400 mb-2">
-              List the sender addresses. Click Save to store in your account.
-            </p>
-            <p className="text-sm text-gray-500 mb-4 italic">
-              Note: We recommend adding all addresses that might receive invoices, bills, or payments.
-            </p>
-            <div className="flex flex-wrap gap-2 mb-4">
-              {gmailInvoiceSenders.map((email) => (
-                <div
-                  key={email}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white"
-                >
-                  <span className="font-mono">{email}</span>
-                  <button
-                    type="button"
-                    onClick={() => setGmailInvoiceSenders((prev) => prev.filter((e) => e !== email))}
-                    className="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-red-400"
-                    title="Remove"
+            <h2 className="text-lg font-semibold text-white mb-3">Emails we&apos;ll be receiving your invoices from</h2>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p className="text-sm text-gray-400 mb-1">
+                List the sender addresses. Click Save to store in your account.
+              </p>
+              <p className="text-sm text-gray-500 mb-3 italic">
+                Note: We recommend adding all addresses that might receive invoices, bills, or payments.
+              </p>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {gmailInvoiceSenders.map((email) => (
+                  <div
+                    key={email}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white"
                   >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-2 items-center mb-4">
-              <Input
-                type="email"
-                placeholder="billing@example.com or @vendor.com"
-                value={gmailNewEmail}
-                onChange={(e) => setGmailNewEmail(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
+                    <span className="font-mono">{email}</span>
+                    <button
+                      type="button"
+                      onClick={() => setGmailInvoiceSenders((prev) => prev.filter((e) => e !== email))}
+                      className="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-red-400"
+                      title="Remove"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <Input
+                  type="email"
+                  placeholder="billing@example.com or @vendor.com"
+                  value={gmailNewEmail}
+                  onChange={(e) => setGmailNewEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      const v = gmailNewEmail.trim().toLowerCase()
+                      if (v && !gmailInvoiceSenders.includes(v)) {
+                        setGmailInvoiceSenders((prev) => [...prev, v])
+                        setGmailNewEmail("")
+                      }
+                    }
+                  }}
+                  className="bg-white/5 border-white/20 text-white placeholder:text-gray-500 max-w-xs"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
                     const v = gmailNewEmail.trim().toLowerCase()
                     if (v && !gmailInvoiceSenders.includes(v)) {
                       setGmailInvoiceSenders((prev) => [...prev, v])
                       setGmailNewEmail("")
                     }
-                  }
-                }}
-                className="bg-white/5 border-white/20 text-white placeholder:text-gray-500 max-w-xs"
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => {
-                  const v = gmailNewEmail.trim().toLowerCase()
-                  if (v && !gmailInvoiceSenders.includes(v)) {
-                    setGmailInvoiceSenders((prev) => [...prev, v])
-                    setGmailNewEmail("")
-                  }
-                }}
-                className="bg-white/10 text-white hover:bg-white/20 border border-white/20"
-              >
-                <Plus className="w-4 h-4 mr-1 inline" />
-                Add
-              </Button>
-            </div>
-            <div className="flex items-center gap-3">
-              <Button
-                type="button"
-                disabled={gmailSaveLoading}
-                onClick={async () => {
-                  setGmailSaveMessage(null)
-                  setGmailSaveLoading(true)
-                  try {
-                    const res = await fetch("/api/gmail/invoice-senders", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ emails: gmailInvoiceSenders }),
-                    })
-                    const data = await res.json().catch(() => ({}))
-                    if (res.ok) {
-                      setGmailSaveMessage("Saved to your account.")
-                      setTimeout(() => setGmailSaveMessage(null), 4000)
-                    } else {
-                      setGmailSaveMessage(data.error || "Failed to save")
+                  }}
+                  className="bg-white/10 text-white hover:bg-white/20 border border-white/20"
+                >
+                  <Plus className="w-4 h-4 mr-1 inline" />
+                  Add
+                </Button>
+                <Button
+                  type="button"
+                  disabled={gmailSaveLoading}
+                  onClick={async () => {
+                    setGmailSaveMessage(null)
+                    setGmailSaveLoading(true)
+                    try {
+                      const res = await fetch("/api/gmail/invoice-senders", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ emails: gmailInvoiceSenders }),
+                      })
+                      const data = await res.json().catch(() => ({}))
+                      if (res.ok) {
+                        setGmailSaveMessage("Saved to your account.")
+                        setTimeout(() => setGmailSaveMessage(null), 4000)
+                      } else {
+                        setGmailSaveMessage(data.error || "Failed to save")
+                      }
+                    } catch {
+                      setGmailSaveMessage("Failed to save")
+                    } finally {
+                      setGmailSaveLoading(false)
                     }
-                  } catch {
-                    setGmailSaveMessage("Failed to save")
-                  } finally {
-                    setGmailSaveLoading(false)
-                  }
-                }}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white"
-              >
-                {gmailSaveLoading ? "Saving…" : "Save"}
-              </Button>
-              {gmailSaveMessage && (
-                <span className={gmailSaveMessage.startsWith("Saved") ? "text-emerald-400 text-sm" : "text-amber-400 text-sm"}>
-                  {gmailSaveMessage}
-                </span>
-              )}
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white"
+                >
+                  {gmailSaveLoading ? "Saving…" : "Save"}
+                </Button>
+                {gmailSaveMessage && (
+                  <span className={gmailSaveMessage.startsWith("Saved") ? "text-emerald-400 text-sm" : "text-amber-400 text-sm"}>
+                    {gmailSaveMessage}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
