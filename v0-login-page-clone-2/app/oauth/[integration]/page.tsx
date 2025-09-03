@@ -8,7 +8,17 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import whatsappQr from "../../../Screenshot 2026-03-08 at 03.57.15.png"
 
-function CopyableRow({ label, value }: { label: string; value: string }) {
+function CopyableRow({
+  label,
+  value,
+  instruction,
+  size = "default",
+}: {
+  label: string
+  value: string
+  instruction?: string
+  size?: "default" | "large"
+}) {
   const [copied, setCopied] = useState(false)
   const copy = () => {
     navigator.clipboard.writeText(value).then(() => {
@@ -16,19 +26,25 @@ function CopyableRow({ label, value }: { label: string; value: string }) {
       setTimeout(() => setCopied(false), 2000)
     })
   }
+  const isLarge = size === "large"
   return (
-    <div className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/10">
+    <div
+      className={`flex items-center gap-3 rounded-xl bg-white/5 border border-white/10 ${isLarge ? "p-4" : "p-3"}`}
+    >
       <div className="flex-1 min-w-0">
-        <p className="text-xs text-gray-500 mb-0.5">{label}</p>
-        <p className="text-sm text-white font-mono truncate">{value}</p>
+        {instruction && (
+          <p className={`text-gray-400 mb-2 ${isLarge ? "text-sm" : "text-xs"}`}>{instruction}</p>
+        )}
+        <p className={`text-gray-500 mb-1 ${isLarge ? "text-sm" : "text-xs"}`}>{label}</p>
+        <p className={`text-white font-mono break-all ${isLarge ? "text-base" : "text-sm"}`}>{value}</p>
       </div>
       <button
         type="button"
         onClick={copy}
-        className="shrink-0 p-2 rounded-md hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+        className={`shrink-0 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors ${isLarge ? "p-3" : "p-2"}`}
         title="Copy"
       >
-        {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+        {copied ? <Check className={isLarge ? "w-5 h-5 text-emerald-400" : "w-4 h-4 text-emerald-400"} /> : <Copy className={isLarge ? "w-5 h-5" : "w-4 h-4"} />}
       </button>
     </div>
   )
@@ -145,6 +161,16 @@ export default function OAuthConnectorPage() {
                   Your browser does not support the video tag.
                 </video>
               </div>
+              <div className="border-t border-white/10 pt-4 mt-4">
+                <p className="text-sm text-gray-400 mb-3">
+                  In the filter, set &quot;Subject&quot; to the text below so only invoice, payment, and bill emails are forwarded.
+                </p>
+                <CopyableRow
+                  label="Subject contains (for filter)"
+                  value={SUBJECT_FILTER}
+                  size="large"
+                />
+              </div>
             </div>
 
             <div className="space-y-4">
@@ -170,13 +196,17 @@ export default function OAuthConnectorPage() {
                   Your browser does not support the video tag.
                 </video>
               </div>
+              <div className="border-t border-white/10 pt-4 mt-4">
+                <p className="text-sm text-gray-400 mb-3">
+                  Add this address as the forwarding destination in Gmail. We’ll receive only the emails that match your filter.
+                </p>
+                <CopyableRow
+                  label="Forward to"
+                  value={FORWARD_EMAIL}
+                  size="large"
+                />
+              </div>
             </div>
-          </div>
-
-          <div className="mt-10 space-y-4 max-w-xl">
-            <p className="text-sm font-medium text-white">Use these when setting up:</p>
-            <CopyableRow label="Forward to" value={FORWARD_EMAIL} />
-            <CopyableRow label="Subject contains (for filter)" value={SUBJECT_FILTER} />
           </div>
 
           <div className="mt-10 flex justify-center">
