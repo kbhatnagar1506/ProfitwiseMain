@@ -47,6 +47,11 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  if (!userId) {
+    logError("oauth.callback.failed", new Error("session_expired_no_user"))
+    return NextResponse.redirect(new URL("/onboarding?error=session_expired", base), 302)
+  }
+
   const clientId = process.env.QUICKBOOKS_CLIENT_ID
   const clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET
   const appUrl = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL

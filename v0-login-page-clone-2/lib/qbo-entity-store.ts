@@ -75,11 +75,10 @@ export async function upsertEntities(
         const entityId = getEntityId(item)
         if (!entityId) continue
         await query(
-          `INSERT INTO qbo_entities (realm_id, entity_type, entity_id, data, payload, updated_at)
-           VALUES ($1, $2, $3, $4::jsonb, $4::jsonb, NOW())
+          `INSERT INTO qbo_entities (realm_id, entity_type, entity_id, data, updated_at)
+           VALUES ($1, $2, $3, $4::jsonb, NOW())
            ON CONFLICT (realm_id, entity_type, entity_id) DO UPDATE SET
              data = EXCLUDED.data,
-             payload = EXCLUDED.payload,
              updated_at = NOW()`,
           [realmId, entityType, entityId, JSON.stringify(item)]
         )
