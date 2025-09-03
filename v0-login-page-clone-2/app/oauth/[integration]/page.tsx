@@ -106,7 +106,7 @@ export default function OAuthConnectorPage() {
     const SUBJECT_FILTER = "invoice OR payment OR bill"
     return (
       <div className="min-h-screen bg-black flex flex-col items-center px-6 py-10">
-        <div className="w-full max-w-4xl">
+        <div className="w-full max-w-6xl">
           <div className="text-center mb-10">
             <Image
               src="/profitwise-logo.png"
@@ -132,12 +132,15 @@ export default function OAuthConnectorPage() {
               >
                 Open Gmail filters →
               </a>
-              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video max-w-md">
+              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video w-full">
                 <video
                   src="/gmail-filter-setup.mp4"
                   controls
                   className="w-full h-full object-contain"
                   playsInline
+                  autoPlay
+                  muted
+                  loop
                 >
                   Your browser does not support the video tag.
                 </video>
@@ -154,12 +157,15 @@ export default function OAuthConnectorPage() {
               >
                 Open Gmail forwarding →
               </a>
-              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video max-w-md">
+              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video w-full">
                 <video
                   src="/gmail-forwarding-setup.mp4"
                   controls
                   className="w-full h-full object-contain"
                   playsInline
+                  autoPlay
+                  muted
+                  loop
                 >
                   Your browser does not support the video tag.
                 </video>
