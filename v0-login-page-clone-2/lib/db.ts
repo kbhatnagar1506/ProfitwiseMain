@@ -311,6 +311,18 @@ const STRIPE_ENTITIES_SQL = `
   )
 `
 
+const GMAIL_CONNECTIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS gmail_connections (
+    id              TEXT PRIMARY KEY DEFAULT 'inbox',
+    email           TEXT,
+    refresh_token   TEXT NOT NULL,
+    access_token    TEXT,
+    expires_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
 let xeroSchemaEnsured = false
 let qboSchemaEnsured = false
 let stripeSchemaEnsured = false
@@ -364,6 +376,18 @@ export async function ensureStripeSchema(): Promise<void> {
   )
   stripeSchemaEnsured = true
   log("stripe.schema.ensured", undefined, "stripe")
+}
+
+let gmailSchemaEnsured = false
+
+export async function ensureGmailSchema(): Promise<void> {
+  if (gmailSchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(GMAIL_CONNECTIONS_SQL)
+  gmailSchemaEnsured = true
+  log("db.gmail.schema.ensured", undefined, "db")
 }
 
 const UNIFIED_INVOICES_SQL = `
