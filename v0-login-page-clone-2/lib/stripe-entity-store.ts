@@ -4,6 +4,8 @@
 
 import { ensureStripeSchema, query } from "./db"
 import { log } from "./logger"
+import { upsertApArFromInvoice } from "./ap-ar"
+import { normalizeStripeInvoice } from "./invoice-adapters"
 import { upsertUnifiedInvoices, deleteUnifiedInvoice } from "./unified-invoices"
 
 function getEntityId(item: unknown): string | null {
@@ -90,6 +92,18 @@ export async function upsertStripeEntities(
         }, "stripe")
         if (entityType === "invoice") {
           await upsertUnifiedInvoices(userId, "stripe", stripeAccountId, items)
+          for (const item of items) {
+            const obj = item as Record<string, unknown>
+            const id = obj.id != null ? String(obj.id) : null
+            if (id) {
+              try {
+                const normalized = normalizeStripeInvoice(obj, userId)
+                await upsertApArFromInvoice(normalized, "stripe", id, item)
+              } catch (e) {
+                log("stripe.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "stripe")
+              }
+            }
+          }
         }
       }
       totalInserted = Math.max(totalInserted, inserted)

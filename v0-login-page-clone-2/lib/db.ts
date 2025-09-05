@@ -402,6 +402,8 @@ export async function ensureGmailSchema(): Promise<void> {
   await ensureAuthSchema()
   await p.query(GMAIL_CONNECTIONS_SQL)
   await p.query(GMAIL_SYNCED_MESSAGES_SQL)
+  await p.query("ALTER TABLE gmail_synced_messages ADD COLUMN IF NOT EXISTS processed_for_ap_ar BOOLEAN DEFAULT FALSE")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_gmail_synced_unprocessed ON gmail_synced_messages (processed_for_ap_ar) WHERE processed_for_ap_ar = FALSE")
   gmailSchemaEnsured = true
   log("db.gmail.schema.ensured", undefined, "db")
 }
@@ -435,8 +437,76 @@ export async function ensureUnifiedInvoicesSchema(): Promise<void> {
   await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS amount_due NUMERIC")
   await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS status TEXT")
   await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS customer_email TEXT")
+  await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS side TEXT")
+  await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS counterparty_type TEXT")
+  await p.query("ALTER TABLE unified_invoices ADD COLUMN IF NOT EXISTS source_summary JSONB")
   unifiedInvoicesSchemaEnsured = true
   log("db.unified_invoices.schema.ensured", undefined, "db")
+}
+
+const AP_AR_SQL = `
+  CREATE TABLE IF NOT EXISTS ap_ar (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    side                TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    invoice_number      TEXT,
+    issue_date          DATE,
+    due_date            DATE,
+    currency            TEXT,
+    amount_total        NUMERIC NOT NULL DEFAULT 0,
+    amount_outstanding  NUMERIC NOT NULL DEFAULT 0,
+    counterparty_type   TEXT,
+    counterparty_name   TEXT,
+    counterparty_email  TEXT,
+    description         TEXT,
+    source_summary      JSONB DEFAULT '{}'::jsonb,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
+const INVOICE_DOCUMENTS_SQL = `
+  CREATE TABLE IF NOT EXISTS invoice_documents (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider            TEXT NOT NULL,
+    provider_invoice_id TEXT NOT NULL,
+    ap_ar_id            UUID REFERENCES ap_ar(id) ON DELETE SET NULL,
+    normalized          JSONB NOT NULL,
+    raw                 JSONB,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, provider, provider_invoice_id)
+  )
+`
+
+let apArSchemaEnsured = false
+let invoiceDocumentsSchemaEnsured = false
+
+export async function ensureApArSchema(): Promise<void> {
+  if (apArSchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(AP_AR_SQL)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_ap_ar_user_side ON ap_ar (user_id, side)")
+  await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_ap_ar_unique_invnum ON ap_ar (user_id, side, invoice_number) WHERE invoice_number IS NOT NULL")
+  apArSchemaEnsured = true
+  log("db.ap_ar.schema.ensured", undefined, "db")
+}
+
+export async function ensureInvoiceDocumentsSchema(): Promise<void> {
+  if (invoiceDocumentsSchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await ensureApArSchema()
+  await p.query(INVOICE_DOCUMENTS_SQL)
+  await p.query("ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS ap_ar_id UUID REFERENCES ap_ar(id) ON DELETE SET NULL")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_documents_ap_ar_id ON invoice_documents (ap_ar_id) WHERE ap_ar_id IS NOT NULL")
+  invoiceDocumentsSchemaEnsured = true
+  log("db.invoice_documents.schema.ensured", undefined, "db")
 }
 
 const MERCHANT_TAGS_SQL = `

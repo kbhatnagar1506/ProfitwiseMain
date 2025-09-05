@@ -161,6 +161,10 @@ export function OnboardingFlow({
   type InvoiceRow = { unique_id: string; id: string; number: string; date: string | null; total: number | null; customer: string | null; email: string | null; source: "qbo" | "xero" | "stripe"; amount_paid?: number | null; amount_due?: number | null; status?: string | null; paid?: boolean; updated_at?: string | null }
   const [step9Invoices, setStep9Invoices] = useState<InvoiceRow[]>([])
   const [step9InvoicesLoading, setStep9InvoicesLoading] = useState(false)
+  type ApArRow = { id: string; side: string; status: string; invoice_number: string | null; issue_date: string | null; due_date: string | null; currency: string | null; amount_total: number; amount_outstanding: number; counterparty_name: string | null; counterparty_email: string | null; source_summary: Record<string, unknown>; created_at: string; updated_at: string }
+  const [step9ArItems, setStep9ArItems] = useState<ApArRow[]>([])
+  const [step9ApItems, setStep9ApItems] = useState<ApArRow[]>([])
+  const [step9ApArLoading, setStep9ApArLoading] = useState(false)
   type AccountingTx = {
     transaction_id: string
     account_id: string
@@ -525,6 +529,18 @@ export function OnboardingFlow({
       .then((data: { invoices?: InvoiceRow[] }) => setStep9Invoices(data.invoices ?? []))
       .catch(() => setStep9Invoices([]))
       .finally(() => setStep9InvoicesLoading(false))
+
+    setStep9ApArLoading(true)
+    Promise.all([
+      fetch("/api/ap-ar?side=AR").then((r) => (r.ok ? r.json() : { items: [] })),
+      fetch("/api/ap-ar?side=AP").then((r) => (r.ok ? r.json() : { items: [] })),
+    ])
+      .then(([arData, apData]) => {
+        setStep9ArItems((arData as { items?: ApArRow[] }).items ?? [])
+        setStep9ApItems((apData as { items?: ApArRow[] }).items ?? [])
+      })
+      .catch(() => { setStep9ArItems([]); setStep9ApItems([]) })
+      .finally(() => setStep9ApArLoading(false))
   }, [currentStep])
 
   const onPlaidSuccess = useCallback(
@@ -952,8 +968,8 @@ export function OnboardingFlow({
                         width={120}
                         height={120}
                         className="object-contain max-w-full max-h-full"
-                      />
-                    </div>
+              />
+            </div>
                     <h3 className="text-white font-semibold text-sm leading-tight">
                       {integration.name}
                     </h3>
@@ -990,10 +1006,10 @@ export function OnboardingFlow({
               ].map((integration) => {
                 const isConnected = connectedContextIntegrations.includes(integration.name)
                 return (
-                <button
-                  key={integration.name}
-                  type="button"
-                  onClick={() => toggleIntegration(integration.name)}
+                  <button
+                    key={integration.name}
+                    type="button"
+                    onClick={() => toggleIntegration(integration.name)}
                     className={`relative rounded-lg p-5 text-center transition-all flex flex-col items-center justify-center hover:border-white/30 hover:bg-white/10 ${
                       isConnected
                         ? "bg-emerald-500/10 border-2 border-emerald-500/50 hover:border-emerald-500/70 hover:bg-emerald-500/15"
@@ -1012,19 +1028,19 @@ export function OnboardingFlow({
                       </span>
                     )}
                   <div className="w-28 h-28 mb-4 flex items-center justify-center">
-                    <Image
-                      src={integration.logo || "/placeholder.svg"}
-                      alt={`${integration.name} logo`}
+                      <Image
+                        src={integration.logo || "/placeholder.svg"}
+                        alt={`${integration.name} logo`}
                       width={120}
                       height={120}
-                      className="object-contain max-w-full max-h-full"
-                    />
-                  </div>
-                  <h3 className="text-white font-semibold text-sm leading-tight">{integration.name}</h3>
+                        className="object-contain max-w-full max-h-full"
+                      />
+                    </div>
+                    <h3 className="text-white font-semibold text-sm leading-tight">{integration.name}</h3>
                     {isConnected && (
                       <span className="text-xs font-medium text-emerald-400 mt-1">Connected</span>
                     )}
-                </button>
+                  </button>
                 )
               })}
             </div>
@@ -1163,7 +1179,7 @@ export function OnboardingFlow({
               </div>
               <div className="flex flex-col rounded-2xl border border-white/15 bg-white/[0.07] overflow-hidden shadow-xl min-h-0">
                 <div className="px-5 py-3 border-b border-white/15 flex items-center justify-between gap-3 shrink-0">
-                  <div>
+              <div>
                     <h3 className="text-base font-semibold text-white">Edited context</h3>
                     <p className="text-gray-400 text-sm mt-0.5">Appears here after you refine</p>
                   </div>
@@ -1330,13 +1346,13 @@ export function OnboardingFlow({
                 return (
                   <div key={key}>
                     <label className="block text-base font-semibold text-gray-200 mb-2">{label}</label>
-                    <Input
+                <Input
                       value={companyForm[key] ?? ""}
                       onChange={(e) => setCompanyForm((prev) => ({ ...prev, [key]: e.target.value }))}
                       placeholder={placeholder}
                       className="bg-white/5 border-white/20 text-white placeholder:text-gray-500 text-base h-11 px-4"
-                    />
-                  </div>
+                />
+              </div>
                 )
               })}
             </div>
@@ -1635,24 +1651,24 @@ export function OnboardingFlow({
                     <div className="rounded-2xl border border-white/25 bg-black/70 p-5 space-y-4">
                       <p className="text-gray-400 text-sm font-medium">Editing: {selectedAccountingTransaction.raw_name}</p>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
+              <div>
                           <label className="text-gray-400 text-xs block mb-1">Normalized name</label>
-                          <Input
+                <Input
                             className="bg-white/10 border-white/20 text-white"
                             value={merchantEditDraft.normalized_name}
                             onChange={(e) => setMerchantEditDraft((d) => ({ ...d, normalized_name: e.target.value }))}
                             placeholder="Canonical name"
-                          />
-                        </div>
-                        <div>
+                />
+              </div>
+              <div>
                           <label className="text-gray-400 text-xs block mb-1">Tag</label>
-                          <Input
+                <Input
                             className="bg-white/10 border-white/20 text-white"
                             value={merchantEditDraft.tag}
                             onChange={(e) => setMerchantEditDraft((d) => ({ ...d, tag: e.target.value }))}
                             placeholder="e.g. Software, Subscriptions"
-                          />
-                        </div>
+                />
+              </div>
                         <div>
                           <label className="text-gray-400 text-xs block mb-1">Transaction type</label>
                           <select
@@ -1761,6 +1777,96 @@ export function OnboardingFlow({
                               {inv.source === "qbo" ? "QuickBooks" : inv.source === "xero" ? "Xero" : "Stripe"}
                             </span>
                           </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            {/* AR – Receivables (Invoices) */}
+            <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden mt-6">
+              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Accounts Receivable — Invoices</h3>
+              {step9ApArLoading ? (
+                <p className="text-gray-400 text-center py-8">Loading AR…</p>
+              ) : step9ArItems.length === 0 ? (
+                <p className="text-gray-400 text-center py-8">No receivables yet. Invoices from Stripe, QuickBooks, and Gmail will appear here.</p>
+              ) : (
+                <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-white/20 hover:bg-transparent">
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Invoice #</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Customer</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Issue Date</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Due Date</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Outstanding</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Status</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Sources</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {step9ArItems.map((row) => (
+                        <TableRow key={row.id} className="border-white/20 hover:bg-white/5">
+                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{row.invoice_number || "—"}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{row.counterparty_name || "—"}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(row.issue_date)}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(row.due_date)}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{formatBalance(row.amount_total)}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{formatBalance(row.amount_outstanding)}</TableCell>
+                          <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
+                            <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${row.status === "paid" ? "bg-emerald-500/80 text-white border-emerald-400/50" : row.status === "open" ? "bg-blue-500/80 text-white border-blue-400/50" : "bg-zinc-500/80 text-white border-zinc-400/50"}`}>
+                              {row.status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-xs">{Object.keys(row.source_summary || {}).join(", ") || "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            {/* AP – Payables (Bills) */}
+            <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden mt-6">
+              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Accounts Payable — Bills</h3>
+              {step9ApArLoading ? (
+                <p className="text-gray-400 text-center py-8">Loading AP…</p>
+              ) : step9ApItems.length === 0 ? (
+                <p className="text-gray-400 text-center py-8">No payables yet. Bills from Gmail and other sources will appear here.</p>
+              ) : (
+                <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-white/20 hover:bg-transparent">
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Invoice #</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Vendor</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Issue Date</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Due Date</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Outstanding</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Status</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Sources</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {step9ApItems.map((row) => (
+                        <TableRow key={row.id} className="border-white/20 hover:bg-white/5">
+                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{row.invoice_number || "—"}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{row.counterparty_name || "—"}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(row.issue_date)}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(row.due_date)}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{formatBalance(row.amount_total)}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{formatBalance(row.amount_outstanding)}</TableCell>
+                          <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
+                            <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${row.status === "paid" ? "bg-emerald-500/80 text-white border-emerald-400/50" : row.status === "open" ? "bg-blue-500/80 text-white border-blue-400/50" : "bg-zinc-500/80 text-white border-zinc-400/50"}`}>
+                              {row.status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-xs">{Object.keys(row.source_summary || {}).join(", ") || "—"}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

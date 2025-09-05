@@ -4,12 +4,14 @@
 
 import { ensureQBOSchema, query } from "./db"
 import { log } from "./logger"
+import { upsertApArFromInvoice } from "./ap-ar"
 import {
   isGcpEntityStoreEnabled,
   gcpUpsertEntities,
   gcpGetEntities,
   gcpDeleteEntity,
 } from "./entity-store-gcp"
+import { normalizeQboInvoice } from "./invoice-adapters"
 import { upsertUnifiedInvoices, deleteUnifiedInvoice } from "./unified-invoices"
 
 function getEntityId(item: unknown): string | null {
@@ -65,6 +67,18 @@ export async function upsertEntities(
       totalInserted = Math.max(totalInserted, insertedGcp)
       if (entityType === "Invoice" && userId) {
         await upsertUnifiedInvoices(userId, "qbo", realmId, items)
+        for (const item of items) {
+          const obj = item as Record<string, unknown>
+          const id = obj.Id != null ? String(obj.Id) : null
+          if (id) {
+            try {
+              const normalized = normalizeQboInvoice(obj, userId, realmId)
+              await upsertApArFromInvoice(normalized, "qbo", id, item)
+            } catch (e) {
+              log("qbo.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "qbo")
+            }
+          }
+        }
       }
     } catch (err) {
       log("entity_store.upsert.failed", { realmId, entityType, error: err instanceof Error ? err.message : String(err) }, "qbo")
@@ -93,7 +107,21 @@ export async function upsertEntities(
         log("entity_store.upsert.succeeded", { realmId, entityType, count: inserted }, "qbo")
         if (entityType === "Invoice") {
           const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
-          if (userId) await upsertUnifiedInvoices(userId, "qbo", realmId, items)
+          if (userId) {
+            await upsertUnifiedInvoices(userId, "qbo", realmId, items)
+            for (const item of items) {
+              const obj = item as Record<string, unknown>
+              const id = obj.Id != null ? String(obj.Id) : null
+              if (id) {
+                try {
+                  const normalized = normalizeQboInvoice(obj, userId, realmId)
+                  await upsertApArFromInvoice(normalized, "qbo", id, item)
+                } catch (e) {
+                  log("qbo.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "qbo")
+                }
+              }
+            }
+          }
         }
       }
       totalInserted = Math.max(totalInserted, inserted)
@@ -115,7 +143,21 @@ export async function upsertEntities(
     log("entity_store.upsert.succeeded", { realmId, entityType, count: inserted }, "qbo")
     if (entityType === "Invoice") {
       const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
-      if (userId) await upsertUnifiedInvoices(userId, "qbo", realmId, items)
+      if (userId) {
+        await upsertUnifiedInvoices(userId, "qbo", realmId, items)
+        for (const item of items) {
+          const obj = item as Record<string, unknown>
+          const id = obj.Id != null ? String(obj.Id) : null
+          if (id) {
+            try {
+              const normalized = normalizeQboInvoice(obj, userId, realmId)
+              await upsertApArFromInvoice(normalized, "qbo", id, item)
+            } catch (e) {
+              log("qbo.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "qbo")
+            }
+          }
+        }
+      }
     }
   }
   return inserted
