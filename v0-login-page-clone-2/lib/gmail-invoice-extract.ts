@@ -17,13 +17,21 @@ export type GmailMessageRow = {
   body_plain: string | null
 }
 
-const SYSTEM_PROMPT = `You are a financial document parser. Your job is to read raw email text (often invoices or bills) and output a single JSON object.
+const SYSTEM_PROMPT = `You are a financial document parser. Your job is to read raw email text (invoices, bills, and payment requests) and output a single JSON object.
 
 Rules:
 - If the email is NOT an invoice, bill, or payment request, set "is_invoice_or_bill": false and output minimal other fields.
-- Otherwise set "is_invoice_or_bill": true and fill all fields you can.
-- AP (accounts payable) = the company must pay someone else (bills). AR (accounts receivable) = someone else must pay the company (invoices).
-- Emails TO @profitwise.app from vendors = AP (bills). Emails FROM @profitwise.app to customers = AR (invoices).
+- Otherwise set "is_invoice_or_bill": true and fill ALL fields you can.
+- VERY IMPORTANT: Do NOT assume everything is an "invoice". Many documents will be BILLS (the company owes money to a vendor).
+- "kind":
+  - Use "invoice" when the sender is charging the recipient as a customer (accounts receivable document sent to be paid by someone else).
+  - Use "bill" when the sender is a vendor or supplier charging the recipient (accounts payable document that the recipient must pay).
+  - Use "other" for statements, receipts, or things that are not clearly an invoice or bill.
+- "side":
+  - AP (accounts payable) = the company (email account owner) must pay someone else (bills from vendors, supplier invoices the company needs to pay).
+  - AR (accounts receivable) = someone else must pay the company (invoices to customers, payment requests sent by the company).
+- If unsure but it clearly looks like a vendor charging the company, prefer side="AP" and kind="bill".
+- If unsure but it clearly looks like the company is charging a customer, prefer side="AR" and kind="invoice".
 - Extract amounts as numbers (e.g. 78.0 not "$78"). Use YYYY-MM-DD for dates.
 - For source_system_hint: use "stripe" if Stripe, "qbo" if QuickBooks/Intuit, else "other" or null.
 - Output ONLY valid JSON, no markdown, no explanations.`
@@ -46,8 +54,14 @@ const OUTPUT_SCHEMA = `{
   "source_system_hint": "stripe" | "qbo" | "other" | null
 }`
 
-function buildUserPrompt(msg: GmailMessageRow): string {
+function buildUserPrompt(msg: GmailMessageRow, invoiceSenderHints: string[]): string {
   const body = (msg.body_plain ?? "").slice(0, BODY_TRUNCATE)
+  const hints =
+    invoiceSenderHints.length > 0
+      ? `Known invoice/bill senders for this company (email addresses or domains):\n${invoiceSenderHints
+          .map((e) => `- ${e}`)
+          .join("\n")}\n\n`
+      : ""
   return `Email:
 From: ${msg.from_email ?? ""}
 To: ${msg.to_emails ?? ""}
@@ -56,8 +70,26 @@ Subject: ${msg.subject ?? ""}
 Body:
 ${body}
 
+${hints}Use the known senders above as a strong signal: if the FROM address matches one of them (by exact email or domain), it is very likely a vendor or billing system sending a bill to the company (AP, kind="bill").
+
 Output JSON with this schema (only the JSON, nothing else):
 ${OUTPUT_SCHEMA}`
+}
+
+function isFromKnownInvoiceSender(fromEmail: string | null, invoiceSenderHints: string[]): boolean {
+  const from = fromEmail?.toLowerCase().trim()
+  if (!from) return false
+  return invoiceSenderHints.some((hint) => {
+    const v = hint.toLowerCase().trim()
+    if (!v) return false
+    // If hint looks like a domain (starts with @ or has no @), treat as domain match
+    if (!v.includes("@") || v.startsWith("@")) {
+      const domain = v.startsWith("@") ? v.slice(1) : v
+      return from.endsWith(`@${domain}`)
+    }
+    // Full email match
+    return from === v
+  })
 }
 
 function parseJsonOutput(text: string): Record<string, unknown> | null {
@@ -82,7 +114,8 @@ function candidateKeywords(subject: string | null, body: string | null): boolean
 
 export async function extractInvoiceFromGmail(
   msg: GmailMessageRow,
-  userId: string
+  userId: string,
+  invoiceSenderHints: string[] = []
 ): Promise<NormalizedInvoiceJSON | null> {
   if (!candidateKeywords(msg.subject, msg.body_plain)) {
     log("gmail.invoice_extract.skipped_no_keywords", { messageId: msg.message_id, subject: msg.subject?.slice(0, 80), bodyLen: (msg.body_plain ?? "").length }, "gmail")
@@ -98,7 +131,7 @@ export async function extractInvoiceFromGmail(
     return null
   }
 
-  const userContent = buildUserPrompt(msg)
+  const userContent = buildUserPrompt(msg, invoiceSenderHints)
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -191,11 +224,27 @@ export async function extractInvoiceFromGmail(
   const total = typeof parsed.total === "number" ? parsed.total : null
   const amountOutstanding = typeof parsed.amount_outstanding === "number" ? parsed.amount_outstanding : total
 
+  const fromKnownSender = isFromKnownInvoiceSender(msg.from_email, invoiceSenderHints)
+
+  const inferredKind: "invoice" | "bill" | "other" =
+    kind === "other" && fromKnownSender ? "bill" : kind
+
+  const inferredSide: "AP" | "AR" | "unknown" =
+    side === "AP" || side === "AR"
+      ? side
+      : fromKnownSender
+        ? "AP"
+        : inferredKind === "bill"
+          ? "AP"
+          : inferredKind === "invoice"
+            ? "AR"
+            : "unknown"
+
   const normalized: NormalizedInvoiceJSON = {
     version: 1,
     user_id: userId,
-    side: side === "unknown" ? "AR" : side,
-    kind,
+    side: inferredSide,
+    kind: inferredKind,
     invoice_number: typeof parsed.invoice_number === "string" ? parsed.invoice_number : null,
     issue_date: typeof parsed.issue_date === "string" ? parsed.issue_date : null,
     due_date: typeof parsed.due_date === "string" ? parsed.due_date : null,
