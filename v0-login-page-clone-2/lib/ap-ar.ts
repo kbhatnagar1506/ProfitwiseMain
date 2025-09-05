@@ -5,6 +5,7 @@
 
 import { ensureApArSchema, ensureInvoiceDocumentsSchema, query } from "./db"
 import { insertInvoiceDocument, type InvoiceProvider, type NormalizedInvoiceJSON } from "./invoice-documents"
+import { resolveInvoiceCandidate } from "./ap-ar-resolver"
 import { log } from "./logger"
 
 const TOLERANCE = 0.01
@@ -167,7 +168,15 @@ export async function upsertApArFromInvoice(
         normalized.currency,
       ]
     )
-    await insertInvoiceDocument(normalized, provider, providerInvoiceId, match.id, raw)
+    const versionId = await insertInvoiceDocument(normalized, provider, providerInvoiceId, match.id, raw)
+    if (versionId) {
+      try {
+        const outcome = await resolveInvoiceCandidate(versionId, { shadowMode: true })
+        log("ap_ar.resolver_shadow", { versionId, provider, providerInvoiceId, outcome }, "db")
+      } catch (e) {
+        log("ap_ar.resolver_shadow.error", { versionId, error: e instanceof Error ? e.message : String(e) }, "db")
+      }
+    }
     log("ap_ar.upsert.matched", { apArId: match.id, provider, providerInvoiceId }, "db")
     return match.id
   }
@@ -205,7 +214,15 @@ export async function upsertApArFromInvoice(
     ]
   )
   const apArId = rows[0].id
-  await insertInvoiceDocument(normalized, provider, providerInvoiceId, apArId, raw)
+  const versionId = await insertInvoiceDocument(normalized, provider, providerInvoiceId, apArId, raw)
+  if (versionId) {
+    try {
+      const outcome = await resolveInvoiceCandidate(versionId, { shadowMode: true })
+      log("ap_ar.resolver_shadow", { versionId, provider, providerInvoiceId, outcome }, "db")
+    } catch (e) {
+      log("ap_ar.resolver_shadow.error", { versionId, error: e instanceof Error ? e.message : String(e) }, "db")
+    }
+  }
   log("ap_ar.upsert.created", { apArId, provider, providerInvoiceId }, "db")
   return apArId
 }

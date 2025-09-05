@@ -461,6 +461,16 @@ const AP_AR_SQL = `
     counterparty_email  TEXT,
     description         TEXT,
     source_summary      JSONB DEFAULT '{}'::jsonb,
+    document_type       TEXT NOT NULL DEFAULT 'invoice',
+    classification_confidence REAL,
+    match_confidence    REAL,
+    canonical_confidence REAL,
+    needs_review        BOOLEAN NOT NULL DEFAULT FALSE,
+    resolution_status   TEXT NOT NULL DEFAULT 'auto',
+    winning_sources     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_authority_score REAL,
+    counterparty_id     UUID,
+    last_verified_at    TIMESTAMPTZ,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
   )
@@ -475,9 +485,67 @@ const INVOICE_DOCUMENTS_SQL = `
     ap_ar_id            UUID REFERENCES ap_ar(id) ON DELETE SET NULL,
     normalized          JSONB NOT NULL,
     raw                 JSONB,
+    latest_version_id   UUID,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(user_id, provider, provider_invoice_id)
+  )
+`
+
+const INVOICE_DOCUMENT_VERSIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS invoice_document_versions (
+    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_document_id       UUID NOT NULL REFERENCES invoice_documents(id) ON DELETE CASCADE,
+    normalized                JSONB NOT NULL,
+    raw                       JSONB NOT NULL,
+    extracted_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    extractor_version         TEXT,
+    model_version             TEXT,
+    document_type             TEXT NOT NULL,
+    candidate_side            TEXT NOT NULL,
+    classification_confidence REAL,
+    extraction_confidence     REAL,
+    source_authority          REAL,
+    promotion_status          TEXT NOT NULL DEFAULT 'pending',
+    review_reason             TEXT,
+    fingerprint_invoice       TEXT,
+    fingerprint_binary        TEXT,
+    fingerprint_semantic      TEXT,
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`
+
+const COUNTERPARTIES_SQL = `
+  CREATE TABLE IF NOT EXISTS counterparties (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    canonical_name  TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    emails          TEXT[] NOT NULL DEFAULT '{}'::text[],
+    domains         TEXT[] NOT NULL DEFAULT '{}'::text[],
+    aliases         TEXT[] NOT NULL DEFAULT '{}'::text[],
+    tax_id          TEXT,
+    payment_handles JSONB,
+    confidence      REAL NOT NULL DEFAULT 1.0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`
+
+const AP_AR_MATCH_CANDIDATES_SQL = `
+  CREATE TABLE IF NOT EXISTS ap_ar_match_candidates (
+    id                           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_document_version_id  UUID NOT NULL REFERENCES invoice_document_versions(id) ON DELETE CASCADE,
+    ap_ar_id                     UUID REFERENCES ap_ar(id) ON DELETE CASCADE,
+    score                        REAL NOT NULL,
+    classification_confidence    REAL,
+    match_confidence             REAL,
+    explanation                  TEXT,
+    chosen                       BOOLEAN NOT NULL DEFAULT FALSE,
+    needs_review                 BOOLEAN NOT NULL DEFAULT FALSE,
+    reviewed_by                  UUID,
+    reviewed_at                  TIMESTAMPTZ,
+    created_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
 `
 
@@ -490,8 +558,20 @@ export async function ensureApArSchema(): Promise<void> {
   if (!p) return
   await ensureAuthSchema()
   await p.query(AP_AR_SQL)
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS document_type TEXT NOT NULL DEFAULT 'invoice'")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS classification_confidence REAL")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS match_confidence REAL")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS canonical_confidence REAL")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE")
+  await p.query(\"ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS resolution_status TEXT NOT NULL DEFAULT 'auto'\")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS winning_sources JSONB NOT NULL DEFAULT '{}'::jsonb")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS source_authority_score REAL")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS counterparty_id UUID")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMPTZ")
   await p.query("CREATE INDEX IF NOT EXISTS idx_ap_ar_user_side ON ap_ar (user_id, side)")
   await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_ap_ar_unique_invnum ON ap_ar (user_id, side, invoice_number) WHERE invoice_number IS NOT NULL")
+  await p.query(COUNTERPARTIES_SQL)
+  await p.query(AP_AR_MATCH_CANDIDATES_SQL)
   apArSchemaEnsured = true
   log("db.ap_ar.schema.ensured", undefined, "db")
 }
@@ -504,6 +584,12 @@ export async function ensureInvoiceDocumentsSchema(): Promise<void> {
   await ensureApArSchema()
   await p.query(INVOICE_DOCUMENTS_SQL)
   await p.query("ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS ap_ar_id UUID REFERENCES ap_ar(id) ON DELETE SET NULL")
+  await p.query("ALTER TABLE invoice_documents ADD COLUMN IF NOT EXISTS latest_version_id UUID")
+  await p.query(INVOICE_DOCUMENT_VERSIONS_SQL)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_doc_versions_doc ON invoice_document_versions (invoice_document_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_doc_versions_status ON invoice_document_versions (promotion_status)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_doc_versions_fingerprint_invoice ON invoice_document_versions (fingerprint_invoice)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_doc_versions_fingerprint_binary ON invoice_document_versions (fingerprint_binary)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_documents_ap_ar_id ON invoice_documents (ap_ar_id) WHERE ap_ar_id IS NOT NULL")
   invoiceDocumentsSchemaEnsured = true
   log("db.invoice_documents.schema.ensured", undefined, "db")

@@ -3,6 +3,7 @@
  * Each document is a normalized view of a source invoice (Stripe, QBO, Gmail, etc.), plus the raw payload.
  */
 
+import crypto from "crypto"
 import { ensureInvoiceDocumentsSchema, query } from "./db"
 import { log } from "./logger"
 
@@ -60,25 +61,113 @@ export type InvoiceDocumentRow = {
   updated_at: string
 }
 
+function getSourceAuthority(provider: InvoiceProvider): number {
+  switch (provider) {
+    case "qbo":
+    case "xero":
+      return 0.99
+    case "stripe":
+      return 0.97
+    case "manual":
+      return 0.9
+    case "gmail":
+      return 0.6
+    default:
+      return 0.5
+  }
+}
+
+function computeInvoiceFingerprint(doc: NormalizedInvoiceJSON): string | null {
+  const parts = [
+    doc.invoice_number ?? "",
+    (doc.counterparty_name ?? "").toLowerCase(),
+    doc.total != null ? String(doc.total) : "",
+    (doc.currency ?? "").toUpperCase(),
+    doc.issue_date ?? "",
+  ]
+  const key = parts.join("|")
+  if (!key.replace(/\|/g, "")) return null
+  return crypto.createHash("sha256").update(key).digest("hex")
+}
+
 export async function insertInvoiceDocument(
   doc: NormalizedInvoiceJSON,
   provider: InvoiceProvider,
   providerInvoiceId: string,
   apArId: string | null,
   raw: unknown
-): Promise<void> {
+): Promise<string | null> {
   await ensureInvoiceDocumentsSchema()
   try {
-    await query(
+    const normalizedJson = JSON.stringify(doc)
+    const rawJson = JSON.stringify(raw ?? {})
+
+    const { rows } = await query<{ id: string }>(
       `INSERT INTO invoice_documents (user_id, provider, provider_invoice_id, ap_ar_id, normalized, raw)
        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
        ON CONFLICT (user_id, provider, provider_invoice_id) DO UPDATE SET
          ap_ar_id = EXCLUDED.ap_ar_id,
          normalized = EXCLUDED.normalized,
          raw = EXCLUDED.raw,
-         updated_at = NOW()`,
-      [doc.user_id, provider, providerInvoiceId, apArId, JSON.stringify(doc), JSON.stringify(raw ?? {})]
+         updated_at = NOW()
+       RETURNING id`,
+      [doc.user_id, provider, providerInvoiceId, apArId, normalizedJson, rawJson]
     )
+
+    const invoiceDocumentId = rows[0]?.id
+
+    if (invoiceDocumentId) {
+      const documentType = doc.kind
+      const candidateSide = doc.side
+      const sourceAuthority = getSourceAuthority(provider)
+      const classificationConfidence =
+        candidateSide === "unknown" ? 0.4 : sourceAuthority
+      const extractionConfidence = sourceAuthority
+      const fingerprintInvoice = computeInvoiceFingerprint(doc)
+
+      const versionRes = await query<{ id: string }>(
+        `INSERT INTO invoice_document_versions (
+           invoice_document_id,
+           normalized,
+           raw,
+           extractor_version,
+           model_version,
+           document_type,
+           candidate_side,
+           classification_confidence,
+           extraction_confidence,
+           source_authority,
+           fingerprint_invoice
+         )
+         VALUES ($1, $2::jsonb, $3::jsonb, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id`,
+        [
+          invoiceDocumentId,
+          normalizedJson,
+          rawJson,
+          null,
+          null,
+          documentType,
+          candidateSide,
+          classificationConfidence,
+          extractionConfidence,
+          sourceAuthority,
+          fingerprintInvoice,
+        ]
+      )
+
+      const latestVersionId = versionRes.rows[0]?.id
+      if (latestVersionId) {
+        await query(
+          `UPDATE invoice_documents
+           SET latest_version_id = $1, updated_at = NOW()
+           WHERE id = $2`,
+          [latestVersionId, invoiceDocumentId]
+        )
+        return latestVersionId
+      }
+    }
+    return null
   } catch (err) {
     log(
       "invoice_documents.insert.failed",
