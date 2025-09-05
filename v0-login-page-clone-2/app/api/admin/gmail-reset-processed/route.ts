@@ -26,8 +26,9 @@ export async function POST(req: NextRequest) {
     const { rows } = await query<{ message_id: string }>(
       `UPDATE gmail_synced_messages
        SET processed_for_ap_ar = FALSE
-       WHERE synced_at > NOW() - INTERVAL '1 day' * $1
-       RETURNING message_id`
+       WHERE synced_at > NOW() - ($1::text || ' days')::interval
+       RETURNING message_id`,
+      [days]
     )
     const count = rows.length
     log("admin.gmail-reset-processed.done", { count, days }, "gmail")
