@@ -3,6 +3,7 @@
  * Used by cron job (e.g. every hour). Uses getValidGmailAccessToken for auth.
  */
 
+import { convert as htmlToText } from "html-to-text"
 import { ensureGmailSchema, query } from "./db"
 import { getValidGmailAccessToken } from "./gmail-oauth"
 import { log } from "./logger"
@@ -36,13 +37,13 @@ function extractPlainBody(payload: GmailPayload | undefined): string {
     if (part.parts && part.parts.length) queue.push(...part.parts)
   }
 
-  // 3. Fallback: first text/html we can find, stripped to text
+  // 3. Fallback: first text/html we can find, convert to clean plain text
   const htmlQueue: GmailPayload[] = [...payload.parts]
   while (htmlQueue.length) {
     const part = htmlQueue.shift()!
     if (part.body?.data && (part as any).mimeType === "text/html") {
       const html = decodeBase64Url(part.body.data)
-      return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+      return htmlToText(html, { wordwrap: false }).trim()
     }
     if (part.parts && part.parts.length) htmlQueue.push(...part.parts)
   }
