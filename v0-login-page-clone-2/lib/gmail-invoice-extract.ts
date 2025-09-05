@@ -84,7 +84,13 @@ export async function extractInvoiceFromGmail(
   msg: GmailMessageRow,
   userId: string
 ): Promise<NormalizedInvoiceJSON | null> {
-  if (!candidateKeywords(msg.subject, msg.body_plain)) return null
+  if (!candidateKeywords(msg.subject, msg.body_plain)) {
+    log("gmail.invoice_extract.skipped_no_keywords", { messageId: msg.message_id, subject: msg.subject?.slice(0, 80), bodyLen: (msg.body_plain ?? "").length }, "gmail")
+    return null
+  }
+
+  const bodyPreview = (msg.body_plain ?? "").slice(0, 400)
+  log("gmail.invoice_extract.attempting", { messageId: msg.message_id, subject: msg.subject, bodyLen: (msg.body_plain ?? "").length, bodyPreview }, "gmail")
 
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) {
@@ -121,8 +127,22 @@ export async function extractInvoiceFromGmail(
   if (!content) return null
 
   const parsed = parseJsonOutput(content)
-  if (!parsed) return null
-  if (parsed.is_invoice_or_bill !== true) return null
+  if (!parsed) {
+    log("gmail.invoice_extract.parse_failed", { messageId: msg.message_id, contentPreview: content.slice(0, 300) }, "gmail")
+    return null
+  }
+  if (parsed.is_invoice_or_bill !== true) {
+    log("gmail.invoice_extract.not_invoice", { messageId: msg.message_id, isInvoice: parsed.is_invoice_or_bill }, "gmail")
+    return null
+  }
+  log("gmail.invoice_extract.llm_response", {
+    messageId: msg.message_id,
+    total: parsed.total,
+    counterparty_name: parsed.counterparty_name,
+    invoice_number: parsed.invoice_number,
+    status: parsed.status,
+    side: parsed.side,
+  }, "gmail")
 
   const side = (parsed.side === "AP" || parsed.side === "AR" ? parsed.side : "unknown") as "AP" | "AR" | "unknown"
   const kind = (["invoice", "bill", "other"].includes(parsed.kind as string) ? parsed.kind : "other") as "invoice" | "bill" | "other"
