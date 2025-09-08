@@ -285,8 +285,22 @@ const QBO_SYNC_STATUS_SQL = `
   )
 `
 
+const STRIPE_CONNECTIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS stripe_connections (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stripe_user_id  TEXT NOT NULL UNIQUE,
+    access_token    TEXT NOT NULL,
+    refresh_token   TEXT,
+    scope           TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
 let xeroSchemaEnsured = false
 let qboSchemaEnsured = false
+let stripeSchemaEnsured = false
 
 export async function ensureXeroSchema(): Promise<void> {
   if (xeroSchemaEnsured) return
@@ -319,6 +333,16 @@ export async function ensureQBOSchema(): Promise<void> {
   await p.query("ALTER TABLE qbo_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()")
   qboSchemaEnsured = true
   log("qbo.schema.ensured", undefined, "qbo")
+}
+
+export async function ensureStripeSchema(): Promise<void> {
+  if (stripeSchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(STRIPE_CONNECTIONS_SQL)
+  stripeSchemaEnsured = true
+  log("stripe.schema.ensured", undefined, "stripe")
 }
 
 const MERCHANT_TAGS_SQL = `

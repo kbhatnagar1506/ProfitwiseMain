@@ -42,6 +42,10 @@ export default function OAuthConnectorPage() {
       window.location.href = "/api/quickbooks/oauth/authorize"
       return
     }
+    if (integration === "stripe") {
+      window.location.href = "/api/stripe/oauth/authorize"
+      return
+    }
     if (integration === "xero") {
       window.location.href = "/api/xero/oauth/authorize"
       return
