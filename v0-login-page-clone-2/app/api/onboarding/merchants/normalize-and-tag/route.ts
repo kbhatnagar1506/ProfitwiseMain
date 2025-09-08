@@ -17,10 +17,10 @@ function getSupermemoryClient(): Supermemory | null {
   return new Supermemory({ apiKey })
 }
 
-async function fetchCompanyContextFromSupermemory(): Promise<string> {
+async function fetchCompanyContextFromSupermemory(userId: string): Promise<string> {
   const client = getSupermemoryClient()
   if (!client) return ""
-  const tag = getUserFinanceTag(user.id)
+  const tag = getUserFinanceTag(userId)
   const snippets: string[] = []
   const seen = new Set<string>()
   const searchQueries = [
@@ -216,7 +216,7 @@ export async function POST(_req: NextRequest) {
   )
   const companyContext = userRows[0]?.final_context ?? ""
 
-  const supermemoryContext = await fetchCompanyContextFromSupermemory()
+  const supermemoryContext = await fetchCompanyContextFromSupermemory(user.id)
 
   let totalNormalized = 0
   const accountSummaries: { account_id: string; account_name: string; merchants: number }[] = []
