@@ -1,4 +1,13 @@
-export type LogChannel = "qbo" | "plaid" | "xero" | "supermemory" | "db" | "auth" | "system" | "gcp"
+export type LogChannel =
+  | "qbo"
+  | "plaid"
+  | "xero"
+  | "supermemory"
+  | "db"
+  | "auth"
+  | "system"
+  | "gcp"
+  | "stripe"
 
 /**
  * Emoji for filtering in log viewers (e.g. Heroku):
@@ -21,6 +30,8 @@ function prefix(channel?: LogChannel): string {
       return "[Plaid]"
     case "xero":
       return "[Xero]"
+    case "stripe":
+      return "[Stripe]"
     case "supermemory":
       return "[Supermemory]"
     case "db":
