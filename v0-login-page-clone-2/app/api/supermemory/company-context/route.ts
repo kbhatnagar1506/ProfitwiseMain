@@ -75,7 +75,13 @@ CRITICAL: Extract every detail. Do not omit anything. Include every name, number
 
 async function summarizeWithOpenAI(rawSnippets: string[]): Promise<string> {
   const text = rawSnippets.slice(0, 200).join("\n\n---\n\n")
-  return callOpenAI(SYSTEM_SUMMARIZE, text, 16384, 0.2)
+  // Use a smaller max_tokens and enforce a hard timeout so we stay under
+  // Heroku's 30s request limit (search + summary).
+  const summaryPromise = callOpenAI(SYSTEM_SUMMARIZE, text, 4096, 0.2)
+  const timeoutPromise = new Promise<string>((_, reject) =>
+    setTimeout(() => reject(new Error("openai_timeout")), 20_000)
+  )
+  return Promise.race([summaryPromise, timeoutPromise])
 }
 
 const SYSTEM_REFINE = `You are an expert editor. The user will provide: (1) the current "Company context" text, and (2) their edit instructions or requested changes. Your job is to output a revised, complete Company context that incorporates their edits. Preserve all unrelated content; only change what they ask to change. Output the full revised document as flowing summary prose—paragraphs only, no markdown headings (#, ##, ###), no bullet or numbered lists. Do not include sensitive info (EIN, addresses, account numbers, etc.). Do not output a diff or instructions.`
@@ -112,15 +118,26 @@ export async function GET(_req: NextRequest) {
   ]
 
   try {
-    for (const q of searchQueries) {
-      const searchRes = await client.search.execute({
-        q,
-        containerTags: [containerTag],
-        limit: 80,
-        includeSummary: true,
-        chunkThreshold: 0.35,
-      })
-      const results = (searchRes as { results?: Array<{ chunks?: Array<{ content?: string }>; title?: string | null; summary?: string | null; content?: string | null }> })?.results ?? []
+    // Run Supermemory searches in parallel with smaller limits to avoid
+    // long serial latency that can trigger Heroku's 30s timeout.
+    const searchPromises = searchQueries.map((q) =>
+      client.search
+        .execute({
+          q,
+          containerTags: [containerTag],
+          limit: 40,
+          includeSummary: true,
+          chunkThreshold: 0.35,
+        })
+        .catch(() => ({ results: [] }))
+    )
+
+    const searchResponses = await Promise.all(
+      searchPromises
+    ) as Array<{ results?: Array<{ chunks?: Array<{ content?: string }>; title?: string | null; summary?: string | null; content?: string | null }> }>
+
+    for (const searchRes of searchResponses) {
+      const results = searchRes?.results ?? []
       for (const r of results) {
         if (r.summary && !seen.has(r.summary)) {
           seen.add(r.summary)
@@ -154,6 +171,15 @@ export async function GET(_req: NextRequest) {
     return NextResponse.json({ context })
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
+    if (message === "openai_timeout") {
+      return NextResponse.json(
+        {
+          error: "Timed out generating company summary",
+          details: "OpenAI took too long to respond. Please try again.",
+        },
+        { status: 504 }
+      )
+    }
     return NextResponse.json(
       { error: "Failed to generate company summary", details: message },
       { status: 500 }
