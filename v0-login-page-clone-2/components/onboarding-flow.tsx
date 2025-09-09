@@ -161,10 +161,15 @@ export function OnboardingFlow({
   type InvoiceRow = { unique_id: string; id: string; number: string; date: string | null; total: number | null; customer: string | null; email: string | null; source: "qbo" | "xero" | "stripe"; amount_paid?: number | null; amount_due?: number | null; status?: string | null; paid?: boolean; updated_at?: string | null }
   const [step9Invoices, setStep9Invoices] = useState<InvoiceRow[]>([])
   const [step9InvoicesLoading, setStep9InvoicesLoading] = useState(false)
-  type ApArRow = { id: string; side: string; status: string; invoice_number: string | null; issue_date: string | null; due_date: string | null; currency: string | null; amount_total: number; amount_outstanding: number; counterparty_name: string | null; counterparty_email: string | null; source_summary: Record<string, unknown>; created_at: string; updated_at: string }
+  type ApArRow = { id: string; side: string; status: string; invoice_number: string | null; issue_date: string | null; due_date: string | null; currency: string | null; amount_total: number; amount_outstanding: number; counterparty_name: string | null; counterparty_email: string | null; source_summary: Record<string, unknown>; created_at: string; updated_at: string; needs_review?: boolean; resolution_status?: string; classification_confidence?: number | null; match_confidence?: number | null; document_type?: string }
   const [step9ArItems, setStep9ArItems] = useState<ApArRow[]>([])
   const [step9ApItems, setStep9ApItems] = useState<ApArRow[]>([])
   const [step9ApArLoading, setStep9ApArLoading] = useState(false)
+  type ReviewItem = { version_id: string; provider: string; provider_invoice_id: string; document_type: string; candidate_side: string; classification_confidence: number | null; extraction_confidence: number | null; source_authority: number | null; review_reason: string | null; normalized: Record<string, unknown> }
+  const [step9ReviewItems, setStep9ReviewItems] = useState<ReviewItem[]>([])
+  const [step9ReviewLoading, setStep9ReviewLoading] = useState(false)
+  const [step9ReviewCounts, setStep9ReviewCounts] = useState<Record<string, number>>({})
+  const [step9ReviewActionLoading, setStep9ReviewActionLoading] = useState<string | null>(null)
   type AccountingTx = {
     transaction_id: string
     account_id: string
@@ -541,6 +546,16 @@ export function OnboardingFlow({
       })
       .catch(() => { setStep9ArItems([]); setStep9ApItems([]) })
       .finally(() => setStep9ApArLoading(false))
+
+    setStep9ReviewLoading(true)
+    fetch("/api/ap-ar/review-queue")
+      .then((r) => (r.ok ? r.json() : { items: [], queues: {} }))
+      .then((data: { items?: ReviewItem[]; queues?: Record<string, number> }) => {
+        setStep9ReviewItems(data.items ?? [])
+        setStep9ReviewCounts(data.queues ?? {})
+      })
+      .catch(() => { setStep9ReviewItems([]); setStep9ReviewCounts({}) })
+      .finally(() => setStep9ReviewLoading(false))
   }, [currentStep])
 
   const onPlaidSuccess = useCallback(
@@ -1869,6 +1884,121 @@ export function OnboardingFlow({
                           <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-xs">{Object.keys(row.source_summary || {}).join(", ") || "—"}</TableCell>
                         </TableRow>
                       ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            {/* Needs Review */}
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden mt-6">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-amber-500/20">
+                <h3 className="text-lg font-semibold text-amber-300">Needs Review</h3>
+                <div className="flex gap-2 text-xs">
+                  {Object.entries(step9ReviewCounts).map(([queue, count]) => (
+                    <span key={queue} className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-amber-300">
+                      {queue}: {count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {step9ReviewLoading ? (
+                <p className="text-gray-400 text-center py-8">Loading review queue…</p>
+              ) : step9ReviewItems.length === 0 ? (
+                <p className="text-gray-400 text-center py-8">No items need review. All candidates were auto-resolved or rejected.</p>
+              ) : (
+                <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-amber-500/20 hover:bg-transparent">
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Source</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Type</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Side</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Invoice #</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Counterparty</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Reason</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {step9ReviewItems.map((item) => {
+                        const n = item.normalized as Record<string, unknown>
+                        const confPct = item.classification_confidence != null ? Math.round(item.classification_confidence * 100) : null
+                        return (
+                          <TableRow key={item.version_id} className="border-amber-500/20 hover:bg-amber-500/5">
+                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
+                              <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${item.provider === "gmail" ? "bg-red-500/80 text-white border-red-400/50" : item.provider === "qbo" ? "bg-blue-500/80 text-white border-blue-400/50" : item.provider === "xero" ? "bg-emerald-500/80 text-white border-emerald-400/50" : "bg-purple-500/80 text-white border-purple-400/50"}`}>
+                                {item.provider}
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-gray-300 border-amber-500/20 px-3 py-2 whitespace-nowrap text-xs">{item.document_type}</TableCell>
+                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
+                              <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${item.candidate_side === "AP" ? "bg-orange-500/80 text-white border-orange-400/50" : item.candidate_side === "AR" ? "bg-cyan-500/80 text-white border-cyan-400/50" : "bg-zinc-500/80 text-white border-zinc-400/50"}`}>
+                                {item.candidate_side}
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-white border-amber-500/20 px-3 py-2 whitespace-nowrap font-medium text-sm">{(n.invoice_number as string) || "—"}</TableCell>
+                            <TableCell className="text-gray-300 border-amber-500/20 px-3 py-2 whitespace-nowrap text-sm">{(n.counterparty_name as string) || "—"}</TableCell>
+                            <TableCell className="text-gray-300 border-amber-500/20 px-3 py-2 whitespace-nowrap text-right text-sm">{n.total != null ? formatBalance(n.total as number) : "—"}</TableCell>
+                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
+                              {confPct != null ? (
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-12 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${confPct >= 80 ? "bg-emerald-400" : confPct >= 50 ? "bg-amber-400" : "bg-red-400"}`}
+                                      style={{ width: `${confPct}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-xs text-gray-400">{confPct}%</span>
+                                </div>
+                              ) : <span className="text-xs text-gray-500">—</span>}
+                            </TableCell>
+                            <TableCell className="text-gray-400 border-amber-500/20 px-3 py-2 whitespace-nowrap text-xs max-w-[200px] truncate" title={item.review_reason ?? ""}>{item.review_reason || "—"}</TableCell>
+                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
+                              <div className="flex gap-1">
+                                <button
+                                  type="button"
+                                  disabled={step9ReviewActionLoading === item.version_id}
+                                  onClick={async () => {
+                                    setStep9ReviewActionLoading(item.version_id)
+                                    try {
+                                      await fetch("/api/ap-ar/review-queue/resolve", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ versionId: item.version_id, action: "approve" }),
+                                      })
+                                      setStep9ReviewItems((prev) => prev.filter((r) => r.version_id !== item.version_id))
+                                    } finally { setStep9ReviewActionLoading(null) }
+                                  }}
+                                  className="rounded px-2 py-1 text-xs font-medium bg-emerald-600/80 text-white hover:bg-emerald-500 border border-emerald-500/50 disabled:opacity-50"
+                                >
+                                  {step9ReviewActionLoading === item.version_id ? "…" : "Approve"}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={step9ReviewActionLoading === item.version_id}
+                                  onClick={async () => {
+                                    setStep9ReviewActionLoading(item.version_id)
+                                    try {
+                                      await fetch("/api/ap-ar/review-queue/resolve", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ versionId: item.version_id, action: "reject" }),
+                                      })
+                                      setStep9ReviewItems((prev) => prev.filter((r) => r.version_id !== item.version_id))
+                                    } finally { setStep9ReviewActionLoading(null) }
+                                  }}
+                                  className="rounded px-2 py-1 text-xs font-medium bg-red-600/80 text-white hover:bg-red-500 border border-red-500/50 disabled:opacity-50"
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
                     </TableBody>
                   </Table>
                 </div>
