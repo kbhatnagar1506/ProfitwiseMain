@@ -4,9 +4,10 @@
 
 import { ensureStripeSchema, query } from "./db"
 import { log } from "./logger"
-import { upsertApArFromInvoice } from "./ap-ar"
 import { normalizeStripeInvoice } from "./invoice-adapters"
 import { upsertUnifiedInvoices, deleteUnifiedInvoice } from "./unified-invoices"
+import { insertInvoiceDocument } from "./invoice-documents"
+import { resolveInvoiceCandidate } from "./ap-ar-resolver"
 
 function getEntityId(item: unknown): string | null {
   if (item == null || typeof item !== "object") return null
@@ -98,7 +99,10 @@ export async function upsertStripeEntities(
             if (id) {
               try {
                 const normalized = normalizeStripeInvoice(obj, userId)
-                await upsertApArFromInvoice(normalized, "stripe", id, item)
+                const versionId = await insertInvoiceDocument(normalized, "stripe", id, null, item)
+                if (versionId) {
+                  await resolveInvoiceCandidate(versionId, { shadowMode: false })
+                }
               } catch (e) {
                 log("stripe.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "stripe")
               }

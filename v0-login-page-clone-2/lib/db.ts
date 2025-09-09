@@ -444,6 +444,7 @@ export async function ensureUnifiedInvoicesSchema(): Promise<void> {
   log("db.unified_invoices.schema.ensured", undefined, "db")
 }
 
+// AP/AR ledger: canonical accounting truth (what we owe / what's owed to us). Documents link here via resolver.
 const AP_AR_SQL = `
   CREATE TABLE IF NOT EXISTS ap_ar (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -476,6 +477,7 @@ const AP_AR_SQL = `
   )
 `
 
+// Document layer: one row per source document (bill, invoice, payment); links to ap_ar when resolved.
 const INVOICE_DOCUMENTS_SQL = `
   CREATE TABLE IF NOT EXISTS invoice_documents (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -492,6 +494,7 @@ const INVOICE_DOCUMENTS_SQL = `
   )
 `
 
+// Candidate versions (document_type: invoice | bill | payment | …) for resolver; promotion_status drives review queue.
 const INVOICE_DOCUMENT_VERSIONS_SQL = `
   CREATE TABLE IF NOT EXISTS invoice_document_versions (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),

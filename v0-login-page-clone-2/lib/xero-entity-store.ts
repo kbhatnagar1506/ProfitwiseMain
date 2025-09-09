@@ -4,7 +4,6 @@
 
 import { ensureXeroSchema, query } from "./db"
 import { log } from "./logger"
-import { upsertApArFromInvoice } from "./ap-ar"
 import { normalizeXeroInvoice } from "./invoice-adapters"
 import {
   isGcpEntityStoreEnabled,
@@ -12,6 +11,8 @@ import {
   gcpGetEntities,
 } from "./entity-store-gcp"
 import { upsertUnifiedInvoices } from "./unified-invoices"
+import { insertInvoiceDocument } from "./invoice-documents"
+import { resolveInvoiceCandidate } from "./ap-ar-resolver"
 
 async function getUserIdByTenantId(tenantId: string): Promise<string | undefined> {
   try {
@@ -73,7 +74,8 @@ export async function upsertEntities(
           if (!id) continue
           try {
             const normalized = normalizeXeroInvoice(obj, userId, tenantId)
-            await upsertApArFromInvoice(normalized, "xero", String(id), item)
+            const versionId = await insertInvoiceDocument(normalized, "xero", String(id), null, item)
+            if (versionId) await resolveInvoiceCandidate(versionId, { shadowMode: false })
           } catch (e) {
             log("xero.ap_ar.upsert.failed", { tenantId, entityId: String(id), error: e instanceof Error ? e.message : String(e) }, "xero")
           }
@@ -117,7 +119,8 @@ export async function upsertEntities(
             if (!id) continue
             try {
               const normalized = normalizeXeroInvoice(obj, userId, tenantId)
-              await upsertApArFromInvoice(normalized, "xero", String(id), item)
+              const versionId = await insertInvoiceDocument(normalized, "xero", String(id), null, item)
+              if (versionId) await resolveInvoiceCandidate(versionId, { shadowMode: false })
             } catch (e) {
               log("xero.ap_ar.upsert.failed", { tenantId, entityId: String(id), error: e instanceof Error ? e.message : String(e) }, "xero")
             }

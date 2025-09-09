@@ -1,7 +1,8 @@
 /**
- * AP/AR Resolver: truth-resolution engine.
- * Scores candidate versions against existing canonical ap_ar rows,
- * applies hard blockers, field-level precedence, and promotion thresholds.
+ * AP/AR Resolver: maps the document layer into the AP/AR ledger.
+ * - Bills & invoices: create new ledger rows or merge into existing (field-level precedence).
+ * - Payments: never create rows; only match to existing ledger rows and update/clear (reduce amount_outstanding, set status).
+ * Scores candidates, applies blockers and thresholds; ambiguous cases go to Needs Review.
  */
 
 import { query, ensureApArSchema, ensureInvoiceDocumentsSchema } from "./db"
@@ -52,7 +53,10 @@ type ApArCanonicalRow = {
   source_summary: Record<string, unknown>
 }
 
-const NON_PROMOTABLE_TYPES = new Set(["receipt", "statement", "payment_confirmation", "quote", "purchase_order", "unknown"])
+/** Document types that are neither bill/invoice (create/merge) nor payment (apply-to-ledger); sent to review. */
+const NON_PROMOTABLE_TYPES = new Set(["receipt", "statement", "quote", "purchase_order", "unknown"])
+/** Payment documents only update/clear existing ledger rows; never create new ones. */
+const PAYMENT_DOCUMENT_TYPES = new Set(["payment", "payment_confirmation"])
 const AMOUNT_TOLERANCE = 0.50
 
 function normalizeInvNum(n: string | null): string {
@@ -201,6 +205,81 @@ export async function resolveInvoiceCandidate(
       )
     }
     log("ap_ar_resolver.unknown_side_hold", { versionId }, "db")
+    return outcome
+  }
+
+  // Payment documents: only match to existing ledger rows and apply payment (reduce amount_outstanding); never create.
+  if (PAYMENT_DOCUMENT_TYPES.has(v.document_type)) {
+    const paymentAmount = normalized.total != null && normalized.total > 0 ? normalized.total : 0
+    if (paymentAmount === 0) {
+      const outcome: ResolveOutcome = {
+        type: "needs_review",
+        queue: "data_quality",
+        reason: "payment_amount_missing_or_zero",
+      }
+      if (!shadowMode) {
+        await query(
+          `UPDATE invoice_document_versions SET promotion_status = 'needs_review', review_reason = $1 WHERE id = $2`,
+          [outcome.reason, versionId]
+        )
+      }
+      return outcome
+    }
+    const { rows: apRowsRaw } = await query<ApArCanonicalRow & { amount_total: string; amount_outstanding: string }>(
+      `SELECT id, user_id, side, status, invoice_number, issue_date::text, due_date::text,
+              currency, amount_total, amount_outstanding, counterparty_name, counterparty_email,
+              counterparty_type, counterparty_id, document_type,
+              COALESCE(winning_sources, '{}'::jsonb) as winning_sources,
+              COALESCE(source_summary, '{}'::jsonb) as source_summary
+       FROM ap_ar
+       WHERE user_id = $1 AND side = $2`,
+      [normalized.user_id, v.candidate_side]
+    )
+    const apRows: ApArCanonicalRow[] = apRowsRaw.map((r) => ({
+      ...r,
+      amount_total: Number(r.amount_total),
+      amount_outstanding: Number(r.amount_outstanding),
+      winning_sources: (r.winning_sources as Record<string, unknown>) ?? {},
+      source_summary: (r.source_summary as Record<string, unknown>) ?? {},
+    }))
+    const matches: MatchResult[] = apRows.map((row) => scoreMatch(normalized, row))
+    matches.sort((a, b) => b.score - a.score)
+    const best = matches[0]
+    const hasBlockers = best ? best.blockers.length > 0 : false
+    if (best && best.score >= 95 && !hasBlockers && best.apArId) {
+      const outcome: ResolveOutcome = { type: "promoted", apArId: best.apArId, action: "merged" }
+      if (!shadowMode) {
+        const row = apRows.find((r) => r.id === best.apArId)!
+        const newOutstanding = Math.max(0, row.amount_outstanding - paymentAmount)
+        const newStatus = newOutstanding <= 0 ? "paid" : "partially_paid"
+        await query(
+          `UPDATE ap_ar SET amount_outstanding = $1, status = $2, updated_at = NOW() WHERE id = $3`,
+          [newOutstanding, newStatus, best.apArId]
+        )
+        await query(
+          `UPDATE invoice_document_versions SET promotion_status = 'promoted' WHERE id = $1`,
+          [versionId]
+        )
+        await query(
+          `UPDATE invoice_documents SET ap_ar_id = $1, updated_at = NOW() WHERE id = $2`,
+          [best.apArId, v.invoice_document_id]
+        )
+      }
+      log("ap_ar_resolver.payment_applied", { versionId, apArId: best.apArId, paymentAmount, shadowMode }, "db")
+      return outcome
+    }
+    const outcome: ResolveOutcome = {
+      type: "needs_review",
+      queue: "match",
+      reason: best ? "payment_unmatched_or_ambiguous" : "payment_no_ledger_match",
+    }
+    if (!shadowMode) {
+      await query(
+        `UPDATE invoice_document_versions SET promotion_status = 'needs_review', review_reason = $1 WHERE id = $2`,
+        [outcome.reason, versionId]
+      )
+    }
+    log("ap_ar_resolver.payment_hold", { versionId, bestScore: best?.score, shadowMode }, "db")
     return outcome
   }
 

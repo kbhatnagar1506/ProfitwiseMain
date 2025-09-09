@@ -1753,15 +1753,16 @@ export function OnboardingFlow({
             <div className="text-center mb-8">
               <h2 className="text-2xl font-semibold text-white mb-3">{steps[8].title}</h2>
               <p className="text-gray-400 text-base">
-                Confirm the invoices we’ve pulled in from your connected tools (QuickBooks, Xero, Stripe) match what you expect to see.
+                We pull in documents (bills, invoices, payments) from your connected tools and map them to your AR/AP ledger. Confirm the ledger and resolve any documents that need your input.
               </p>
             </div>
             <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden">
-              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Unified invoices (QuickBooks, Xero, Stripe)</h3>
+              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Source documents (QuickBooks, Xero, Stripe)</h3>
+              <p className="text-gray-500 text-sm px-4 pb-2">Bills and invoices from connected tools — these feed into the ledger below.</p>
               {step9InvoicesLoading ? (
-                <p className="text-gray-400 text-center py-8">Loading invoices…</p>
+                <p className="text-gray-400 text-center py-8">Loading documents…</p>
               ) : step9Invoices.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No invoices yet. Connect QuickBooks, Xero, or Stripe and run a sync to see invoices here.</p>
+                <p className="text-gray-400 text-center py-8">No documents yet. Connect QuickBooks, Xero, or Stripe and run a sync to see them here.</p>
               ) : (
                 <div className="overflow-x-auto max-h-[50vh] overflow-y-auto">
                   <Table>
@@ -1800,13 +1801,14 @@ export function OnboardingFlow({
               )}
             </div>
 
-            {/* AR – Receivables (Invoices) */}
+            {/* AR Ledger — Receivables */}
             <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden mt-6">
-              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Accounts Receivable — Invoices</h3>
+              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">AR Ledger — Receivables</h3>
+              <p className="text-gray-500 text-sm px-4 pb-2">What&apos;s owed to you (resolved from invoices and payments).</p>
               {step9ApArLoading ? (
-                <p className="text-gray-400 text-center py-8">Loading AR…</p>
+                <p className="text-gray-400 text-center py-8">Loading AR ledger…</p>
               ) : step9ArItems.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No receivables yet. Invoices from Stripe, QuickBooks, and Gmail will appear here.</p>
+                <p className="text-gray-400 text-center py-8">No receivables yet. Invoices from Stripe, QuickBooks, Gmail, and Xero will appear here once resolved.</p>
               ) : (
                 <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
                   <Table>
@@ -1845,13 +1847,14 @@ export function OnboardingFlow({
               )}
             </div>
 
-            {/* AP – Payables (Bills) */}
+            {/* AP Ledger — Payables */}
             <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden mt-6">
-              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Accounts Payable — Bills</h3>
+              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">AP Ledger — Payables</h3>
+              <p className="text-gray-500 text-sm px-4 pb-2">What you owe (resolved from bills and payments).</p>
               {step9ApArLoading ? (
-                <p className="text-gray-400 text-center py-8">Loading AP…</p>
+                <p className="text-gray-400 text-center py-8">Loading AP ledger…</p>
               ) : step9ApItems.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No payables yet. Bills from Gmail and other sources will appear here.</p>
+                <p className="text-gray-400 text-center py-8">No payables yet. Bills from Gmail, QuickBooks, Xero, and other sources will appear here once resolved.</p>
               ) : (
                 <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
                   <Table>
@@ -1890,33 +1893,40 @@ export function OnboardingFlow({
               )}
             </div>
 
-            {/* Needs Review */}
+            {/* Documents needing review — document layer, not ledger */}
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden mt-6">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-amber-500/20">
-                <h3 className="text-lg font-semibold text-amber-300">Needs Review</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-amber-500/20">
+                <div>
+                  <h3 className="text-lg font-semibold text-amber-300">Documents needing review</h3>
+                  <p className="text-amber-200/80 text-sm mt-0.5">Bills, invoices, or payments that couldn’t be auto-matched to the ledger. Approve to apply or reject.</p>
+                </div>
                 <div className="flex gap-2 text-xs">
-                  {Object.entries(step9ReviewCounts).map(([queue, count]) => (
-                    <span key={queue} className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-amber-300">
-                      {queue}: {count}
-                    </span>
-                  ))}
+                  {Object.entries(step9ReviewCounts).map(([queue, count]) => {
+                    const label = queue === "classification" ? "Type / side" : queue === "match" ? "Match" : queue === "conflict" ? "Conflict" : queue === "data_quality" ? "Data quality" : queue
+                    if (count === 0) return null
+                    return (
+                      <span key={queue} className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-amber-300">
+                        {label}: {count}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
               {step9ReviewLoading ? (
-                <p className="text-gray-400 text-center py-8">Loading review queue…</p>
+                <p className="text-gray-400 text-center py-8">Loading documents…</p>
               ) : step9ReviewItems.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No items need review. All candidates were auto-resolved or rejected.</p>
+                <p className="text-gray-400 text-center py-8">No documents need review. All were auto-resolved or rejected.</p>
               ) : (
                 <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
                   <Table>
                     <TableHeader>
                       <TableRow className="border-amber-500/20 hover:bg-transparent">
                         <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Source</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Type</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Doc type</TableHead>
                         <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Side</TableHead>
                         <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Invoice #</TableHead>
                         <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Counterparty</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
+                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
                         <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
                         <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Reason</TableHead>
                         <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Actions</TableHead>
@@ -1926,6 +1936,15 @@ export function OnboardingFlow({
                       {step9ReviewItems.map((item) => {
                         const n = item.normalized as Record<string, unknown>
                         const confPct = item.classification_confidence != null ? Math.round(item.classification_confidence * 100) : null
+                        const docType = item.document_type ?? "other"
+                        const docTypeBadge =
+                          docType === "payment"
+                            ? "bg-violet-500/80 text-white border-violet-400/50"
+                            : docType === "bill"
+                              ? "bg-orange-500/80 text-white border-orange-400/50"
+                              : docType === "invoice"
+                                ? "bg-cyan-500/80 text-white border-cyan-400/50"
+                                : "bg-zinc-500/80 text-white border-zinc-400/50"
                         return (
                           <TableRow key={item.version_id} className="border-amber-500/20 hover:bg-amber-500/5">
                             <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
@@ -1933,7 +1952,11 @@ export function OnboardingFlow({
                                 {item.provider}
                               </span>
                             </TableCell>
-                            <TableCell className="text-gray-300 border-amber-500/20 px-3 py-2 whitespace-nowrap text-xs">{item.document_type}</TableCell>
+                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
+                              <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium capitalize ${docTypeBadge}`}>
+                                {docType === "payment_confirmation" ? "Payment" : docType}
+                              </span>
+                            </TableCell>
                             <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
                               <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${item.candidate_side === "AP" ? "bg-orange-500/80 text-white border-orange-400/50" : item.candidate_side === "AR" ? "bg-cyan-500/80 text-white border-cyan-400/50" : "bg-zinc-500/80 text-white border-zinc-400/50"}`}>
                                 {item.candidate_side}

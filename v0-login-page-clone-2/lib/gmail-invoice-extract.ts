@@ -17,29 +17,31 @@ export type GmailMessageRow = {
   body_plain: string | null
 }
 
-const SYSTEM_PROMPT = `You are a financial document parser. Your job is to read raw email text (invoices, bills, and payment requests) and output a single JSON object.
+const SYSTEM_PROMPT = `You are a financial document parser. Your job is to read raw email text (invoices, bills, payments, and payment requests) and output a single JSON object.
 
 Rules:
-- If the email is NOT an invoice, bill, or payment request, set "is_invoice_or_bill": false and output minimal other fields.
+- If the email is NOT an invoice, bill, payment, or payment request, set "is_invoice_or_bill": false and output minimal other fields.
 - Otherwise set "is_invoice_or_bill": true and fill ALL fields you can.
-- VERY IMPORTANT: Do NOT assume everything is an "invoice". Many documents will be BILLS (the company owes money to a vendor).
+- VERY IMPORTANT: Do NOT assume everything is an "invoice". Many documents are BILLS (company owes vendor) or PAYMENTS (payment made/received).
 - "kind":
-  - Use "invoice" when the sender is charging the recipient as a customer (accounts receivable document sent to be paid by someone else).
-  - Use "bill" when the sender is a vendor or supplier charging the recipient (accounts payable document that the recipient must pay).
-  - Use "other" for statements, receipts, or things that are not clearly an invoice or bill.
+  - Use "invoice" when the sender is charging the recipient as a customer (AR document sent to be paid by someone else).
+  - Use "bill" when the sender is a vendor/supplier charging the recipient (AP document that the recipient must pay).
+  - Use "payment" when the email is a payment confirmation, receipt for payment made, or evidence that a payment was applied (e.g. "we received your payment", "payment of $X applied", "your payment has been received").
+  - Use "other" for statements, generic receipts, quotes, or things that are not clearly an invoice, bill, or payment.
 - "side":
-  - AP (accounts payable) = the company (email account owner) must pay someone else (bills from vendors, supplier invoices the company needs to pay).
-  - AR (accounts receivable) = someone else must pay the company (invoices to customers, payment requests sent by the company).
-- If unsure but it clearly looks like a vendor charging the company, prefer side="AP" and kind="bill".
-- If unsure but it clearly looks like the company is charging a customer, prefer side="AR" and kind="invoice".
-- Extract amounts as numbers (e.g. 78.0 not "$78"). Use YYYY-MM-DD for dates.
+  - AP = the company (email account owner) must pay someone else (bills, vendor invoices).
+  - AR = someone else must pay the company (invoices to customers, payment requests from the company).
+  - For "payment" kind: use AP if the company made the payment (reducing what we owe); use AR if the company received the payment (reducing what's owed to us).
+- If unsure but clearly a vendor charging the company, prefer side="AP" and kind="bill".
+- If unsure but clearly the company charging a customer, prefer side="AR" and kind="invoice".
+- Extract amounts as numbers (e.g. 78.0 not "$78"). Use YYYY-MM-DD for dates. For payments, "total" is the payment amount.
 - For source_system_hint: use "stripe" if Stripe, "qbo" if QuickBooks/Intuit, else "other" or null.
 - Output ONLY valid JSON, no markdown, no explanations.`
 
 const OUTPUT_SCHEMA = `{
   "is_invoice_or_bill": boolean,
   "side": "AP" | "AR" | "unknown",
-  "kind": "invoice" | "bill" | "other",
+  "kind": "invoice" | "bill" | "payment" | "other",
   "invoice_number": string | null,
   "issue_date": string | null,
   "due_date": string | null,
@@ -190,7 +192,7 @@ export async function extractInvoiceFromGmail(
   }
 
   const side = (parsed.side === "AP" || parsed.side === "AR" ? parsed.side : "unknown") as "AP" | "AR" | "unknown"
-  const kind = (["invoice", "bill", "other"].includes(parsed.kind as string) ? parsed.kind : "other") as "invoice" | "bill" | "other"
+  const kind = (["invoice", "bill", "payment", "other"].includes(parsed.kind as string) ? parsed.kind : "other") as "invoice" | "bill" | "payment" | "other"
   const status = (["open", "paid", "partially_paid", "void", "cancelled", "draft", "unknown"].includes(parsed.status as string)
     ? parsed.status
     : "unknown") as NormalizedInvoiceJSON["status"]
@@ -226,8 +228,8 @@ export async function extractInvoiceFromGmail(
 
   const fromKnownSender = isFromKnownInvoiceSender(msg.from_email, invoiceSenderHints)
 
-  const inferredKind: "invoice" | "bill" | "other" =
-    kind === "other" && fromKnownSender ? "bill" : kind
+  const inferredKind: "invoice" | "bill" | "payment" | "other" =
+    kind === "payment" ? "payment" : kind === "other" && fromKnownSender ? "bill" : kind
 
   const inferredSide: "AP" | "AR" | "unknown" =
     side === "AP" || side === "AR"
