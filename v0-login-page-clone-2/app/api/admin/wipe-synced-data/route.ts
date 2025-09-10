@@ -7,8 +7,6 @@ import {
   ensureStripeSchema,
   ensureGmailSchema,
   ensureMerchantTagsSchema,
-  ensureUnifiedInvoicesSchema,
-  ensureInvoiceDocumentsSchema,
   query,
 } from "@/lib/db"
 import { gcpDeleteScope } from "@/lib/entity-store-gcp"
@@ -61,8 +59,6 @@ export async function POST(req: NextRequest) {
     await ensureStripeSchema()
     await ensureGmailSchema()
     await ensureMerchantTagsSchema()
-    await ensureUnifiedInvoicesSchema()
-    await ensureInvoiceDocumentsSchema()
   } catch (err) {
     log("admin.wipe-synced.schema_failed", { error: err instanceof Error ? err.message : String(err) }, "db")
     return NextResponse.json({ error: "Schema setup failed", details: String(err) }, { status: 500 })
