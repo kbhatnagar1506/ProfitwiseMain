@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
+import { after } from "next/server"
 import { ensureQBOSchema, query } from "@/lib/db"
 import { getAllForEntity, ENTITY_TYPES, type QBOEntityType } from "@/lib/quickbooks"
 import { upsertEntities } from "@/lib/qbo-entity-store"
 import { log } from "@/lib/logger"
+
+export const maxDuration = 300
 
 async function runQboSyncForRealm(realm_id: string, user_id: string): Promise<void> {
   await ensureQBOSchema()
@@ -64,11 +67,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, realms: 0, message: "No QBO connections" })
   }
 
-  for (const { realm_id, user_id } of rows) {
-    void runQboSyncForRealm(realm_id, user_id).catch((e) => {
-      log("admin.sync-qbo-all.background_error", { realmId: realm_id, error: String(e) }, "qbo")
-    })
-  }
+  const realmsToSync = rows.map((r) => ({ realm_id: r.realm_id, user_id: r.user_id }))
+  after(async () => {
+    for (const { realm_id, user_id } of realmsToSync) {
+      try {
+        await runQboSyncForRealm(realm_id, user_id)
+      } catch (e) {
+        log("admin.sync-qbo-all.after_error", { realmId: realm_id, error: String(e) }, "qbo")
+      }
+    }
+  })
 
   log("admin.sync-qbo-all.queued", { realms: rows.length, realmIds: rows.map((r) => r.realm_id) }, "qbo")
   return NextResponse.json({
