@@ -1,13 +1,11 @@
 /**
- * Pipeline: process gmail_synced_messages through LLM extraction and upsert into AP/AR.
+ * Pipeline: process gmail_synced_messages through LLM extraction and persist extracted JSON alongside the raw message.
  */
 
 import { ensureGmailSchema, query } from "./db"
 import { extractInvoiceFromGmail, type GmailMessageRow } from "./gmail-invoice-extract"
 import { log } from "./logger"
 import { gcpReadGmailInvoiceSenders } from "./entity-store-gcp"
-import { insertInvoiceDocument } from "./invoice-documents"
-import { resolveInvoiceCandidate } from "./ap-ar-resolver"
 
 async function getInboxUserId(): Promise<string | null> {
   const envUserId = process.env.GMAIL_INBOX_USER_ID
@@ -70,14 +68,12 @@ export async function runGmailInvoicePipeline(options: { limit?: number } = {}):
       body_plain: r.body_plain,
     }
     try {
-      const normalized = await extractInvoiceFromGmail(msg, userId, invoiceSenderHints)
-      if (normalized) {
-        const rawPayload = { subject: r.subject, from: r.from_email, to: r.to_emails }
-        const versionId = await insertInvoiceDocument(normalized, "gmail", r.message_id, null, rawPayload)
-        if (versionId) {
-          const outcome = await resolveInvoiceCandidate(versionId, { shadowMode: false })
-          log("gmail.invoice_pipeline.resolver_outcome", { messageId: r.message_id, versionId, outcome }, "gmail")
-        }
+      const extractedJson = await extractInvoiceFromGmail(msg, userId, invoiceSenderHints)
+      if (extractedJson) {
+        await query(
+          "UPDATE gmail_synced_messages SET extracted_invoice = $2::jsonb WHERE message_id = $1",
+          [r.message_id, JSON.stringify(extractedJson)]
+        )
         extracted++
       }
       await query(
