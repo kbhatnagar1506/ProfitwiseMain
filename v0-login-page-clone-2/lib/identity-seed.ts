@@ -1,9 +1,12 @@
 /**
- * Identity resolution engine v2.
+ * Identity resolution engine v3.
  *
- * Extracts identity signals from all raw data stores (QBO, Xero, Stripe, Plaid, Gmail),
- * pre-filters noise (internal transfers, fees, ACH metadata), normalizes via LLM,
- * detects self-entity and known processors, and resolves into a canonical entity graph.
+ * Improvements over v2:
+ * - Domain dedup: domain signals match existing entity domain aliases
+ * - Processor variant merge: strips "- USD", "customer -", "vendor -" suffixes
+ * - Owner detection: cross-refs user email, company domain, QBO owner fields
+ * - QBO Account entities: bank accounts, credit cards as bank_account type
+ * - Fuzzy matching: Levenshtein for emails at same domain, test/sample filtering
  */
 
 import { query, ensureIdentitySchema } from "./db"
@@ -43,15 +46,25 @@ const KNOWN_PROCESSORS = new Set([
   "shopify", "melio", "paypal", "square", "stripe", "gusto", "adp",
   "chase", "wells fargo", "intuit", "quickbooks", "bank of america",
   "mercury", "brex", "ramp", "plaid", "wise", "payoneer", "venmo",
-  "zelle", "cash app", "apple pay", "google pay",
+  "zelle", "cash app", "apple pay", "google pay", "gateway services",
+  "merchant bankcard", "worldpay", "authorize.net", "bill.com",
 ])
 
 function isKnownProcessor(name: string): boolean {
-  const n = name.toLowerCase().trim()
+  const n = normalizeProcessorName(name).toLowerCase().trim()
   for (const p of KNOWN_PROCESSORS) {
     if (n === p || n.startsWith(p + " ") || n.includes(` ${p}`) || n.includes(`${p}/`)) return true
   }
   return false
+}
+
+function normalizeProcessorName(name: string): string {
+  return name
+    .replace(/\s*-\s*USD$/i, "")
+    .replace(/\s+customer\s*-?\s*$/i, "")
+    .replace(/\s+vendor\s*-?\s*$/i, "")
+    .replace(/\s*\[wholesale\]\s*$/i, "")
+    .trim()
 }
 
 const PLAID_NOISE_PATTERNS = [
@@ -74,12 +87,62 @@ function isPlaidNoise(txnName: string): boolean {
   return PLAID_NOISE_PATTERNS.some((p) => p.test(txnName.trim()))
 }
 
-// ─── Self-entity detection ─────────────────────────────────────────
+const TEST_PATTERNS = [
+  /^test$/i, /^test\s/i, /\stest$/i,
+  /^sample\s/i, /^psc\s*test/i, /^jack\s*test/i,
+]
 
-async function getSelfNames(userId: string): Promise<string[]> {
-  const names: string[] = []
+function isTestEntity(name: string): boolean {
+  return TEST_PATTERNS.some((p) => p.test(name.trim()))
+}
 
-  // From QBO CompanyInfo
+// ─── Levenshtein distance ──────────────────────────────────────────
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length
+  if (m === 0) return n
+  if (n === 0) return m
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0))
+  for (let i = 0; i <= m; i++) dp[i][0] = i
+  for (let j = 0; j <= n; j++) dp[0][j] = j
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
+    }
+  }
+  return dp[m][n]
+}
+
+// ─── Self-entity & owner detection ─────────────────────────────────
+
+type SelfContext = {
+  selfNames: string[]
+  selfDomains: string[]
+  ownerNames: string[]
+  ownerEmails: string[]
+  userEmail: string | null
+}
+
+async function getSelfContext(userId: string): Promise<SelfContext> {
+  const ctx: SelfContext = { selfNames: [], selfDomains: [], ownerNames: [], ownerEmails: [], userEmail: null }
+
+  // User's own email
+  const { rows: userRows } = await query<{ email: string; company_form: Record<string, string> | null }>(
+    "SELECT email, company_form FROM users WHERE id = $1",
+    [userId]
+  )
+  if (userRows[0]) {
+    ctx.userEmail = userRows[0].email
+    const form = userRows[0].company_form
+    if (form) {
+      if (form.companyName) ctx.selfNames.push(form.companyName)
+      if (form.legalName && form.legalName !== form.companyName) ctx.selfNames.push(form.legalName)
+    }
+  }
+
+  // QBO CompanyInfo
   const { rows: companyInfoRows } = await query<{ data: Record<string, unknown> }>(
     `SELECT e.data FROM qbo_entities e
      JOIN qbo_connections c ON c.realm_id = e.realm_id
@@ -91,31 +154,57 @@ async function getSelfNames(userId: string): Promise<string[]> {
     const d = companyInfoRows[0].data
     const cn = d.CompanyName as string | undefined
     const ln = d.LegalName as string | undefined
-    if (cn) names.push(cn)
-    if (ln && ln !== cn) names.push(ln)
+    if (cn) ctx.selfNames.push(cn)
+    if (ln && ln !== cn) ctx.selfNames.push(ln)
+
+    // Owner info from CompanyInfo
+    const email = (d.Email as Record<string, unknown>)?.Address as string | undefined
+    if (email) ctx.ownerEmails.push(email.toLowerCase())
+    const companyEmail = (d.CompanyEmail as Record<string, unknown>)?.Address as string | undefined
+    if (companyEmail) ctx.ownerEmails.push(companyEmail.toLowerCase())
+
+    // Extract domain from company email
+    if (companyEmail) {
+      const domain = companyEmail.split("@")[1]?.toLowerCase()
+      if (domain && !domain.includes("gmail") && !domain.includes("yahoo") && !domain.includes("hotmail")) {
+        ctx.selfDomains.push(domain)
+      }
+    }
+    if (email) {
+      const domain = email.split("@")[1]?.toLowerCase()
+      if (domain && !domain.includes("gmail") && !domain.includes("yahoo") && !domain.includes("hotmail")) {
+        ctx.selfDomains.push(domain)
+      }
+    }
   }
 
-  // From qbo_connections.company_name
+  // qbo_connections.company_name
   const { rows: connRows } = await query<{ company_name: string | null }>(
     "SELECT company_name FROM qbo_connections WHERE user_id = $1",
     [userId]
   )
   for (const r of connRows) {
-    if (r.company_name) names.push(r.company_name)
+    if (r.company_name) ctx.selfNames.push(r.company_name)
   }
 
-  // From user's company_form
-  const { rows: userRows } = await query<{ company_form: Record<string, string> | null }>(
-    "SELECT company_form FROM users WHERE id = $1",
-    [userId]
-  )
-  const form = userRows[0]?.company_form
-  if (form) {
-    if (form.companyName) names.push(form.companyName)
-    if (form.legalName && form.legalName !== form.companyName) names.push(form.legalName)
-  }
+  // Deduplicate
+  ctx.selfNames = [...new Set(ctx.selfNames.filter(Boolean))]
+  ctx.selfDomains = [...new Set(ctx.selfDomains.filter(Boolean))]
+  ctx.ownerEmails = [...new Set(ctx.ownerEmails.filter(Boolean))]
 
-  return [...new Set(names.filter(Boolean))]
+  // Derive owner names from owner emails
+  for (const e of ctx.ownerEmails) {
+    const local = e.split("@")[0]
+    if (local && local.length > 2) ctx.ownerNames.push(local)
+  }
+  if (ctx.userEmail) {
+    ctx.ownerEmails.push(ctx.userEmail)
+    const local = ctx.userEmail.split("@")[0]
+    if (local && local.length > 2) ctx.ownerNames.push(local)
+  }
+  ctx.ownerNames = [...new Set(ctx.ownerNames)]
+
+  return ctx
 }
 
 function isSelfEntity(name: string, selfNames: string[]): boolean {
@@ -124,14 +213,33 @@ function isSelfEntity(name: string, selfNames: string[]): boolean {
     const snNorm = sn.toLowerCase().replace(/[^a-z0-9]/g, "")
     if (!snNorm || !norm) continue
     if (norm === snNorm) return true
-    if (norm.includes(snNorm) || snNorm.includes(norm)) return true
+    if (norm.length >= 5 && snNorm.length >= 5 && (norm.includes(snNorm) || snNorm.includes(norm))) return true
+  }
+  return false
+}
+
+function isOwnerEntity(name: string, email: string | null, ctx: SelfContext): boolean {
+  // Check if email matches owner emails
+  if (email) {
+    for (const oe of ctx.ownerEmails) {
+      if (email.toLowerCase() === oe) return true
+    }
+    // Check if email is at the company domain (strong signal for owner/internal)
+    const domain = email.split("@")[1]?.toLowerCase()
+    if (domain && ctx.selfDomains.includes(domain)) return true
+  }
+  // Check name against owner names
+  const normName = name.toLowerCase().replace(/[^a-z0-9]/g, "")
+  for (const on of ctx.ownerNames) {
+    const onNorm = on.toLowerCase().replace(/[^a-z0-9]/g, "")
+    if (onNorm.length >= 4 && normName.length >= 4 && (normName.includes(onNorm) || onNorm.includes(normName))) return true
   }
   return false
 }
 
 // ─── Signal extraction ─────────────────────────────────────────────
 
-async function extractQboSignals(userId: string, selfNames: string[]): Promise<Signal[]> {
+async function extractQboSignals(userId: string, ctx: SelfContext): Promise<Signal[]> {
   const signals: Signal[] = []
 
   const { rows: customers } = await query<{ entity_id: string; data: Record<string, unknown> }>(
@@ -144,10 +252,14 @@ async function extractQboSignals(userId: string, selfNames: string[]): Promise<S
     const d = row.data
     const displayName = (d.DisplayName ?? d.FullyQualifiedName ?? "") as string
     if (!displayName) continue
+    if (isTestEntity(displayName)) continue
+
+    const email = (d.PrimaryEmailAddr as Record<string, unknown>)?.Address as string | undefined
 
     let entityType: EntityType = "customer"
-    if (isSelfEntity(displayName, selfNames)) entityType = "internal"
+    if (isSelfEntity(displayName, ctx.selfNames)) entityType = "internal"
     else if (isKnownProcessor(displayName)) entityType = "processor"
+    else if (isOwnerEntity(displayName, email ?? null, ctx)) entityType = "owner"
 
     signals.push({ alias: displayName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 })
 
@@ -155,7 +267,6 @@ async function extractQboSignals(userId: string, selfNames: string[]): Promise<S
     if (companyName && companyName !== displayName) {
       signals.push({ alias: companyName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 })
     }
-    const email = (d.PrimaryEmailAddr as Record<string, unknown>)?.Address as string | undefined
     if (email) {
       signals.push({ alias: email.toLowerCase(), alias_type: "email", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
     }
@@ -176,9 +287,12 @@ async function extractQboSignals(userId: string, selfNames: string[]): Promise<S
     const d = row.data
     const displayName = (d.DisplayName ?? d.FullyQualifiedName ?? "") as string
     if (!displayName) continue
+    if (isTestEntity(displayName)) continue
+
+    const email = (d.PrimaryEmailAddr as Record<string, unknown>)?.Address as string | undefined
 
     let entityType: EntityType = "vendor"
-    if (isSelfEntity(displayName, selfNames)) entityType = "internal"
+    if (isSelfEntity(displayName, ctx.selfNames)) entityType = "internal"
     else if (isKnownProcessor(displayName)) entityType = "processor"
 
     signals.push({ alias: displayName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 })
@@ -187,7 +301,6 @@ async function extractQboSignals(userId: string, selfNames: string[]): Promise<S
     if (companyName && companyName !== displayName) {
       signals.push({ alias: companyName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 })
     }
-    const email = (d.PrimaryEmailAddr as Record<string, unknown>)?.Address as string | undefined
     if (email) {
       signals.push({ alias: email.toLowerCase(), alias_type: "email", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
     }
@@ -211,10 +324,39 @@ async function extractQboSignals(userId: string, selfNames: string[]): Promise<S
     }
   }
 
+  // QBO Account entities (bank accounts, credit cards)
+  const { rows: accounts } = await query<{ entity_id: string; data: Record<string, unknown> }>(
+    `SELECT e.entity_id, e.data FROM qbo_entities e
+     JOIN qbo_connections c ON c.realm_id = e.realm_id
+     WHERE c.user_id = $1 AND e.entity_type = 'Account'`,
+    [userId]
+  )
+  for (const row of accounts) {
+    const d = row.data
+    const name = (d.Name ?? d.FullyQualifiedName ?? "") as string
+    const acctType = (d.AccountType ?? "") as string
+    const acctSubType = (d.AccountSubType ?? "") as string
+    if (!name) continue
+
+    const isBankOrCC = /^(Bank|Credit Card|Other Current Asset)$/i.test(acctType)
+      || /^(Checking|Savings|Money Market|Credit Card|Trust)$/i.test(acctSubType)
+    if (!isBankOrCC) continue
+
+    signals.push({
+      alias: name,
+      alias_type: "name",
+      source: "qbo",
+      source_id: row.entity_id,
+      entity_type: "bank_account",
+      confidence: 0.9,
+      extra: { account_type: acctType, account_sub_type: acctSubType },
+    })
+  }
+
   return signals
 }
 
-async function extractXeroSignals(userId: string, selfNames: string[]): Promise<Signal[]> {
+async function extractXeroSignals(userId: string, ctx: SelfContext): Promise<Signal[]> {
   const signals: Signal[] = []
 
   const { rows: contacts } = await query<{ entity_id: string; data: Record<string, unknown> }>(
@@ -227,11 +369,12 @@ async function extractXeroSignals(userId: string, selfNames: string[]): Promise<
     const d = row.data
     const name = d.Name as string | undefined
     if (!name) continue
+    if (isTestEntity(name)) continue
 
     const isCustomer = d.IsCustomer === true
     const isSupplier = d.IsSupplier === true
     let entityType: EntityType = isSupplier ? "vendor" : isCustomer ? "customer" : "unknown"
-    if (isSelfEntity(name, selfNames)) entityType = "internal"
+    if (isSelfEntity(name, ctx.selfNames)) entityType = "internal"
     else if (isKnownProcessor(name)) entityType = "processor"
 
     signals.push({ alias: name, alias_type: "name", source: "xero", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 })
@@ -244,7 +387,7 @@ async function extractXeroSignals(userId: string, selfNames: string[]): Promise<
   return signals
 }
 
-async function extractStripeSignals(userId: string, selfNames: string[]): Promise<Signal[]> {
+async function extractStripeSignals(userId: string, ctx: SelfContext): Promise<Signal[]> {
   const signals: Signal[] = []
 
   const { rows: customers } = await query<{ entity_id: string; data: Record<string, unknown> }>(
@@ -258,7 +401,7 @@ async function extractStripeSignals(userId: string, selfNames: string[]): Promis
     if (!name) continue
 
     let entityType: EntityType = "customer"
-    if (isSelfEntity(name, selfNames)) entityType = "internal"
+    if (isSelfEntity(name, ctx.selfNames)) entityType = "internal"
 
     signals.push({ alias: name, alias_type: "name", source: "stripe", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 })
     const email = d.email as string | undefined
@@ -280,10 +423,8 @@ async function extractPlaidMerchantStrings(userId: string): Promise<string[]> {
   )
   const set = new Set<string>()
   for (const r of rows) {
-    // Prefer merchant_name (cleaner), fall back to name
     const val = r.merchant_name?.trim() || r.name?.trim()
     if (!val) continue
-    // Pre-filter noise before sending to LLM
     if (isPlaidNoise(val)) continue
     set.add(val)
   }
@@ -321,13 +462,13 @@ async function extractGmailSignals(userId: string): Promise<Signal[]> {
 
 // ─── LLM normalization for Plaid merchant strings ──────────────────
 
-async function llmNormalizeMerchants(merchants: string[], selfNames: string[]): Promise<LlmNormResult[]> {
+async function llmNormalizeMerchants(merchants: string[], ctx: SelfContext): Promise<LlmNormResult[]> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey || merchants.length === 0) return []
 
   const results: LlmNormResult[] = []
   const batchSize = 50
-  const selfNamesStr = selfNames.length > 0 ? selfNames.join(", ") : "(not provided)"
+  const selfNamesStr = ctx.selfNames.length > 0 ? ctx.selfNames.join(", ") : "(not provided)"
 
   for (let i = 0; i < merchants.length; i += batchSize) {
     const batch = merchants.slice(i, i + batchSize)
@@ -345,7 +486,7 @@ Given raw bank transaction descriptions, return a JSON array. Each element:
 Entity type rules:
 - "internal": the business itself ("${selfNamesStr}") or its own accounts appearing in transactions
 - "owner": the business owner(s) — personal transfers, personal credit card payments by the owner
-- "processor": payment intermediaries — Shopify, Melio, PayPal, Square, Stripe, Gusto, ADP, Chase, Wells Fargo, Intuit, Zelle, Venmo, etc.
+- "processor": payment intermediaries — Shopify, Melio, PayPal, Square, Stripe, Gusto, ADP, Chase, Wells Fargo, Intuit, Zelle, Venmo, Gateway Services, Merchant Bankcard, etc.
 - "bank_account": bank-to-bank transfers, money market movements, account-to-account transfers (set skip=true for these)
 - "employee": individuals receiving payroll or reimbursements
 - "tax_authority": IRS, state tax agencies, sales tax payments
@@ -355,12 +496,13 @@ Entity type rules:
 
 Normalization rules:
 - Strip prefixes: "SQ *", "TST*", "PAYPAL *", "PREAUTHORIZED ACH CREDIT/DEBIT", "MISCELLANEOUS CREDIT/DEBIT", "TRANSFER CREDIT/DEBIT", etc.
-- Strip suffixes: reference numbers, routing info, addresses, timestamps
+- Strip suffixes: reference numbers, routing info, addresses, timestamps, "- USD", "customer -", "vendor -"
 - For ACH descriptions like "PIVOT CULINARY M/ACH Pmt Invoice 1029...", extract just the company name: "Pivot Culinary"
 - For Zelle transfers like "ZELLE MICHELLE SCHOR", extract just the person name: "Michelle Schor"
-- Merge variations: "Shopify", "SHOPIFY/SHOPIFY ST-...", "Shopify - USD" → all normalize to "Shopify"
+- Merge variations: "Shopify", "SHOPIFY/SHOPIFY ST-...", "Shopify - USD", "Shopify customer - USD", "Shopify vendor - USD" → all normalize to "Shopify"
 - If the same real entity appears with different descriptions, normalize to the same canonical name
 - Names with parenthetical context like "Brenna Sleggs (Pittsburgh Penguins)" should normalize to "Brenna Sleggs" with the context preserved in domain_guess or dropped
+- Test/sample entries like "test", "Sample Customer", "PSC Test" should have skip=true
 
 Output ONLY valid JSON array. No markdown, no explanation.`
 
@@ -428,11 +570,11 @@ function validEntityType(t: string): EntityType {
 type EntityRow = { id: string; canonical_name: string; entity_type: string; confidence: number }
 type AliasRow = { alias: string; alias_type: string; source: string }
 
-async function findCandidateEntity(
+function findCandidateEntity(
   signal: Signal,
   existingEntities: EntityRow[],
   existingAliases: Map<string, AliasRow[]>
-): Promise<{ entityId: string; matchScore: number } | null> {
+): { entityId: string; matchScore: number } | null {
   // 1. Exact alias match (email or account_ref)
   if (signal.alias_type === "email" || signal.alias_type === "account_ref") {
     for (const ent of existingEntities) {
@@ -443,36 +585,52 @@ async function findCandidateEntity(
         }
       }
     }
+    // Fuzzy email match: same domain, edit distance <= 2 on local part
+    if (signal.alias_type === "email") {
+      const [sigLocal, sigDomain] = signal.alias.toLowerCase().split("@")
+      if (sigLocal && sigDomain) {
+        for (const ent of existingEntities) {
+          const aliases = existingAliases.get(ent.id) ?? []
+          for (const a of aliases) {
+            if (a.alias_type !== "email") continue
+            const [aLocal, aDomain] = a.alias.toLowerCase().split("@")
+            if (aDomain === sigDomain && aLocal && levenshtein(sigLocal, aLocal) <= 2 && levenshtein(sigLocal, aLocal) > 0) {
+              return { entityId: ent.id, matchScore: 0.85 }
+            }
+          }
+        }
+      }
+    }
   }
 
-  // 2. Normalized name match (exact, then with parenthetical stripped, then substring)
+  // 2. Normalized name match (exact, stripped, processor-normalized, substring)
   if (signal.alias_type === "name" || signal.alias_type === "merchant_string") {
     const norm = normalizeForMatch(signal.alias)
     const normStripped = normalizeForMatch(stripParenthetical(signal.alias))
+    const normProcessor = normalizeForMatch(normalizeProcessorName(signal.alias))
     if (norm.length < 2) return null
 
     for (const ent of existingEntities) {
       const entNorm = normalizeForMatch(ent.canonical_name)
       const entNormStripped = normalizeForMatch(stripParenthetical(ent.canonical_name))
+      const entNormProcessor = normalizeForMatch(normalizeProcessorName(ent.canonical_name))
 
-      // Exact match
-      if (entNorm === norm || entNormStripped === normStripped) {
+      if (entNorm === norm || entNormStripped === normStripped || entNormProcessor === normProcessor) {
         return { entityId: ent.id, matchScore: 0.85 }
       }
-      // Substring: one fully contains the other (handles truncated Plaid names)
       if (norm.length >= 4 && entNorm.length >= 4) {
         if (entNorm.includes(norm) || norm.includes(entNorm)) {
           return { entityId: ent.id, matchScore: 0.75 }
         }
       }
 
-      // Check aliases
       const aliases = existingAliases.get(ent.id) ?? []
       for (const a of aliases) {
         if (a.alias_type !== "name" && a.alias_type !== "merchant_string") continue
         const aNorm = normalizeForMatch(a.alias)
         const aNormStripped = normalizeForMatch(stripParenthetical(a.alias))
-        if (aNorm === norm || aNormStripped === normStripped) {
+        const aNormProcessor = normalizeForMatch(normalizeProcessorName(a.alias))
+        if (aNorm === norm || aNormStripped === normStripped || aNormProcessor === normProcessor) {
           return { entityId: ent.id, matchScore: 0.8 }
         }
         if (norm.length >= 4 && aNorm.length >= 4 && (aNorm.includes(norm) || norm.includes(aNorm))) {
@@ -482,13 +640,20 @@ async function findCandidateEntity(
     }
   }
 
-  // 3. Domain match
+  // 3. Domain match — check both domain aliases AND entity canonical names that look like domains
   if (signal.alias_type === "domain") {
     for (const ent of existingEntities) {
       const aliases = existingAliases.get(ent.id) ?? []
       for (const a of aliases) {
         if (a.alias_type === "domain" && a.alias === signal.alias) {
           return { entityId: ent.id, matchScore: 0.7 }
+        }
+        // Also check if any email alias has this domain
+        if (a.alias_type === "email") {
+          const emailDomain = a.alias.split("@")[1]?.toLowerCase()
+          if (emailDomain === signal.alias) {
+            return { entityId: ent.id, matchScore: 0.7 }
+          }
         }
       }
     }
@@ -523,46 +688,43 @@ export async function seedIdentityGraph(userId: string): Promise<{
   plaidSkipped: number
   selfEntities: number
   processorsDetected: number
+  testSkipped: number
+  bankAccounts: number
 }> {
   await ensureIdentitySchema()
 
   const stats = {
     entitiesCreated: 0, entitiesUpdated: 0, aliasesCreated: 0,
     assertionsCreated: 0, plaidMerchantsNormalized: 0, plaidSkipped: 0,
-    selfEntities: 0, processorsDetected: 0,
+    selfEntities: 0, processorsDetected: 0, testSkipped: 0, bankAccounts: 0,
   }
 
   log("identity.seed.start", { userId }, "identity")
 
-  // Detect self-entity names
-  const selfNames = await getSelfNames(userId)
-  log("identity.seed.self_names", { userId, selfNames }, "identity")
+  const ctx = await getSelfContext(userId)
+  log("identity.seed.self_context", { userId, selfNames: ctx.selfNames, selfDomains: ctx.selfDomains, ownerEmails: ctx.ownerEmails }, "identity")
 
   // Phase 1: Collect signals from accounting tools + Gmail
   const [qboSignals, xeroSignals, stripeSignals, gmailSignals] = await Promise.all([
-    extractQboSignals(userId, selfNames),
-    extractXeroSignals(userId, selfNames),
-    extractStripeSignals(userId, selfNames),
+    extractQboSignals(userId, ctx),
+    extractXeroSignals(userId, ctx),
+    extractStripeSignals(userId, ctx),
     extractGmailSignals(userId),
   ])
 
   // Phase 2: LLM-normalize Plaid merchant strings (pre-filtered)
   const plaidMerchants = await extractPlaidMerchantStrings(userId)
-  const normalized = await llmNormalizeMerchants(plaidMerchants, selfNames)
+  const normalized = await llmNormalizeMerchants(plaidMerchants, ctx)
 
   const plaidSignals: Signal[] = []
   for (const n of normalized) {
-    if (n.skip) {
-      stats.plaidSkipped++
-      continue
-    }
+    if (n.skip) { stats.plaidSkipped++; continue }
+    if (isTestEntity(n.normalized)) { stats.testSkipped++; continue }
     stats.plaidMerchantsNormalized++
 
     let entityType = validEntityType(n.entity_type)
-
-    // Override with known-processor detection
     if (isKnownProcessor(n.normalized)) entityType = "processor"
-    if (isSelfEntity(n.normalized, selfNames)) entityType = "internal"
+    if (isSelfEntity(n.normalized, ctx.selfNames)) entityType = "internal"
 
     if (entityType === "processor") stats.processorsDetected++
     if (entityType === "internal") stats.selfEntities++
@@ -576,7 +738,6 @@ export async function seedIdentityGraph(userId: string): Promise<{
       confidence: 0.8,
       extra: { raw_merchant: n.raw },
     })
-    // Also store the raw string as a merchant_string alias for future matching
     plaidSignals.push({
       alias: n.raw,
       alias_type: "merchant_string",
@@ -597,17 +758,13 @@ export async function seedIdentityGraph(userId: string): Promise<{
     }
   }
 
-  // Create self-entity signal if we have self names
+  // Self-entity signals
   const selfSignals: Signal[] = []
-  for (const sn of selfNames) {
-    selfSignals.push({
-      alias: sn,
-      alias_type: "name",
-      source: "system",
-      source_id: null,
-      entity_type: "internal",
-      confidence: 0.99,
-    })
+  for (const sn of ctx.selfNames) {
+    selfSignals.push({ alias: sn, alias_type: "name", source: "system", source_id: null, entity_type: "internal", confidence: 0.99 })
+  }
+  for (const sd of ctx.selfDomains) {
+    selfSignals.push({ alias: sd, alias_type: "domain", source: "system", source_id: null, entity_type: "internal", confidence: 0.9 })
   }
 
   const allSignals = [...selfSignals, ...qboSignals, ...xeroSignals, ...stripeSignals, ...plaidSignals, ...gmailSignals]
@@ -621,6 +778,7 @@ export async function seedIdentityGraph(userId: string): Promise<{
     gmail: gmailSignals.length,
     total: allSignals.length,
     plaidSkipped: stats.plaidSkipped,
+    testSkipped: stats.testSkipped,
   }, "identity")
 
   // Phase 3: Resolve signals into entities
@@ -647,13 +805,12 @@ export async function seedIdentityGraph(userId: string): Promise<{
 
   const aliasMap = await loadAliases()
 
-  // Process signals: highest confidence first
   const prioritized = allSignals.sort((a, b) => b.confidence - a.confidence)
 
   for (const signal of prioritized) {
     if (!signal.alias || signal.alias.trim().length === 0) continue
 
-    const candidate = await findCandidateEntity(signal, entities, aliasMap)
+    const candidate = findCandidateEntity(signal, entities, aliasMap)
 
     let entityId: string
 
@@ -669,10 +826,11 @@ export async function seedIdentityGraph(userId: string): Promise<{
       const ent = entities.find((e) => e.id === entityId)
       if (ent) ent.confidence = Math.max(ent.confidence, newConfidence)
     } else {
-      // Use the stripped name as canonical (no parenthetical context)
       const canonicalName = signal.alias_type === "email"
         ? signal.alias.split("@")[0] ?? signal.alias
-        : stripParenthetical(signal.alias)
+        : signal.alias_type === "domain"
+          ? signal.alias
+          : normalizeProcessorName(stripParenthetical(signal.alias))
 
       const { rows: inserted } = await query<{ id: string }>(
         `INSERT INTO entities (user_id, entity_type, canonical_name, display_name, confidence)
@@ -686,6 +844,7 @@ export async function seedIdentityGraph(userId: string): Promise<{
       entityId = inserted[0]?.id
       if (!entityId) continue
       stats.entitiesCreated++
+      if (signal.entity_type === "bank_account") stats.bankAccounts++
 
       entities.push({ id: entityId, canonical_name: canonicalName, entity_type: signal.entity_type, confidence: signal.confidence })
     }
@@ -710,6 +869,10 @@ export async function seedIdentityGraph(userId: string): Promise<{
            ON CONFLICT (entity_id, alias, alias_type, source) DO NOTHING`,
           [entityId, domain, signal.source, signal.source_id, 0.6]
         )
+        // Update in-memory alias map so domain dedup works for subsequent signals
+        const existing = aliasMap.get(entityId) ?? []
+        existing.push({ alias: domain, alias_type: "domain", source: signal.source })
+        aliasMap.set(entityId, existing)
       }
     }
 
@@ -734,11 +897,10 @@ export async function seedIdentityGraph(userId: string): Promise<{
     aliasMap.set(entityId, existing)
   }
 
-  // Record resolution decision
   await query(
     `INSERT INTO identity_resolution_decisions (user_id, decision_type, reason)
      VALUES ($1, 'auto_create', $2)`,
-    [userId, `Seeded ${stats.entitiesCreated} new, updated ${stats.entitiesUpdated}, skipped ${stats.plaidSkipped} noise, from ${allSignals.length} signals`]
+    [userId, `v3: ${stats.entitiesCreated} new, ${stats.entitiesUpdated} updated, ${stats.plaidSkipped} noise skipped, ${stats.testSkipped} test skipped, ${stats.bankAccounts} bank accounts, from ${allSignals.length} signals`]
   )
 
   log("identity.seed.done", { userId, ...stats }, "identity")
