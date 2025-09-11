@@ -509,48 +509,53 @@ export function OnboardingFlow({
     if (currentStep !== 9) return
     let cancelled = false
 
-    setIdentitySeeding(true)
+    setIdentityLoading(true)
     setIdentityError(null)
-    setIdentityData(null)
 
-    // Fire seed (returns immediately — work happens in background on server)
-    fetch("/api/identity/seed", { method: "POST" }).catch(() => {})
+    // Try loading existing identity data first
+    fetch("/api/identity")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((data: IdentityData) => {
+        if (cancelled) return
+        if (data.entities.length > 0) {
+          setIdentityData(data)
+          setIdentityLoading(false)
+          setIdentitySeeding(false)
+          return
+        }
 
-    // Poll /api/identity until entities appear (or we give up after ~90s)
-    let attempts = 0
-    const maxAttempts = 30
-    const poll = () => {
-      if (cancelled) return
-      attempts++
-      fetch("/api/identity")
-        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-        .then((data: IdentityData) => {
+        // No entities yet — trigger seed and poll
+        setIdentitySeeding(true)
+        setIdentityLoading(false)
+        fetch("/api/identity/seed", { method: "POST" }).catch(() => {})
+
+        let attempts = 0
+        const maxAttempts = 30
+        const poll = () => {
           if (cancelled) return
-          if (data.entities.length > 0) {
-            setIdentityData(data)
-            setIdentitySeeding(false)
-            setIdentityLoading(false)
-          } else if (attempts < maxAttempts) {
-            setTimeout(poll, 3000)
-          } else {
-            setIdentitySeeding(false)
-            setIdentityLoading(false)
-          }
-        })
-        .catch((err) => {
-          if (cancelled) return
-          if (attempts < maxAttempts) {
-            setTimeout(poll, 3000)
-          } else {
-            setIdentityError(err instanceof Error ? err.message : "Failed to load identity graph")
-            setIdentitySeeding(false)
-            setIdentityLoading(false)
-          }
-        })
-    }
-
-    // First poll after 2s to give the seed a head start
-    setTimeout(poll, 2000)
+          attempts++
+          fetch("/api/identity")
+            .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+            .then((d: IdentityData) => {
+              if (cancelled) return
+              if (d.entities.length > 0) {
+                setIdentityData(d)
+                setIdentitySeeding(false)
+              } else if (attempts < maxAttempts) {
+                setTimeout(poll, 3000)
+              } else {
+                setIdentitySeeding(false)
+              }
+            })
+            .catch(() => { if (!cancelled && attempts < maxAttempts) setTimeout(poll, 3000) })
+        }
+        setTimeout(poll, 2000)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setIdentityError(err instanceof Error ? err.message : "Failed to load identity graph")
+        setIdentityLoading(false)
+      })
 
     return () => { cancelled = true }
   }, [currentStep])
@@ -1695,7 +1700,7 @@ export function OnboardingFlow({
             {!identityLoading && !identitySeeding && idEntities.length > 0 && (
               <div className="space-y-6">
                 {/* Summary stats */}
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap gap-3 items-end">
                   <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
                     <div className="text-2xl font-bold text-white">{idEntities.length}</div>
                     <div className="text-xs text-gray-400">Total entities</div>
@@ -1710,6 +1715,31 @@ export function OnboardingFlow({
                     <div className="text-2xl font-bold text-white">{idAliases.length}</div>
                     <div className="text-xs text-gray-400">Aliases</div>
                   </div>
+                  <button
+                    type="button"
+                    disabled={identitySeeding}
+                    onClick={() => {
+                      setIdentitySeeding(true)
+                      fetch("/api/identity/seed?force=true", { method: "POST" }).catch(() => {})
+                      let a = 0
+                      const rePoll = () => {
+                        a++
+                        fetch("/api/identity")
+                          .then((r) => r.ok ? r.json() : null)
+                          .then((d: IdentityData | null) => {
+                            if (d && d.entities.length > 0) { setIdentityData(d); setIdentitySeeding(false) }
+                            else if (a < 30) setTimeout(rePoll, 3000)
+                            else setIdentitySeeding(false)
+                          })
+                          .catch(() => { if (a < 30) setTimeout(rePoll, 3000); else setIdentitySeeding(false) })
+                      }
+                      setTimeout(rePoll, 3000)
+                    }}
+                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="text-sm font-medium text-white">{identitySeeding ? "Scanning\u2026" : "Re-scan sources"}</div>
+                    <div className="text-xs text-gray-400">Pick up new data</div>
+                  </button>
                 </div>
 
                 {/* Entity list */}
