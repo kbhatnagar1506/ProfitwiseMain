@@ -1378,7 +1378,7 @@ export function OnboardingFlow({
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {plaidTxns.slice(0, 200).map((tx: any, idx: number) => {
+                            {plaidTxns.map((tx: any, idx: number) => {
                               const account = plaidAccounts.find((a: any) => a.account_id === tx.account_id)
                               return (
                                 <TableRow
