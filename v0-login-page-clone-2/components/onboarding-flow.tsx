@@ -1669,13 +1669,24 @@ export function OnboardingFlow({
           s === "stripe" ? "bg-purple-500/80 border-purple-400/50" :
           s === "plaid" ? "bg-amber-500/80 border-amber-400/50" :
           s === "gmail" ? "bg-red-500/80 border-red-400/50" :
+          s === "system" ? "bg-white/30 border-white/20" :
           "bg-zinc-500/80 border-zinc-400/50"
         const typeColor = (t: string) =>
           t === "vendor" ? "bg-orange-500/80 border-orange-400/50" :
           t === "customer" ? "bg-cyan-500/80 border-cyan-400/50" :
           t === "processor" ? "bg-violet-500/80 border-violet-400/50" :
           t === "employee" ? "bg-pink-500/80 border-pink-400/50" :
+          t === "internal" ? "bg-yellow-500/80 border-yellow-400/50" :
+          t === "owner" ? "bg-rose-500/80 border-rose-400/50" :
+          t === "bank_account" ? "bg-slate-500/80 border-slate-400/50" :
+          t === "tax_authority" ? "bg-red-700/80 border-red-600/50" :
+          t === "lender" ? "bg-indigo-500/80 border-indigo-400/50" :
           "bg-zinc-500/80 border-zinc-400/50"
+        const typeLabel = (t: string) =>
+          t === "bank_account" ? "bank acct" :
+          t === "tax_authority" ? "tax auth" :
+          t === "unknown" ? "unclassified" :
+          t
 
         return (
           <div className="pt-0 pb-2 w-full">
@@ -1708,7 +1719,7 @@ export function OnboardingFlow({
                   {Object.entries(typeCounts).sort((a, b) => b[1] - a[1]).map(([type, count]) => (
                     <div key={type} className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
                       <div className="text-2xl font-bold text-white">{count}</div>
-                      <div className="text-xs text-gray-400 capitalize">{type === "unknown" ? "Unclassified" : type + "s"}</div>
+                      <div className="text-xs text-gray-400 capitalize">{typeLabel(type) + "s"}</div>
                     </div>
                   ))}
                   <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
@@ -1720,7 +1731,10 @@ export function OnboardingFlow({
                     disabled={identitySeeding}
                     onClick={() => {
                       setIdentitySeeding(true)
-                      fetch("/api/identity/seed?force=true", { method: "POST" }).catch(() => {})
+                      setIdentityData(null)
+                      fetch("/api/identity/wipe", { method: "POST" })
+                        .then(() => fetch("/api/identity/seed?force=true", { method: "POST" }))
+                        .catch(() => {})
                       let a = 0
                       const rePoll = () => {
                         a++
@@ -1765,7 +1779,7 @@ export function OnboardingFlow({
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-white font-medium truncate">{ent.display_name || ent.canonical_name}</span>
                                 <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium text-white capitalize ${typeColor(ent.entity_type)}`}>
-                                  {ent.entity_type}
+                                  {typeLabel(ent.entity_type)}
                                 </span>
                                 {sources.map((s) => (
                                   <span key={s} className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${sourceColor(s)}`}>
