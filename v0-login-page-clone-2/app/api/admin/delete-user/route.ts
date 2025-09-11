@@ -45,11 +45,29 @@ export async function POST(req: NextRequest) {
 
   try {
     await ensureAuthSchema()
-    const res = await query<{ id: string }>("DELETE FROM users WHERE email = $1 RETURNING id", [
-      email,
+    const userRes = await query<{ id: string }>("SELECT id FROM users WHERE email = $1", [email])
+    const user = userRes.rows[0]
+    if (!user) {
+      return NextResponse.json({ ok: true, email, deleted: 0 })
+    }
+    const userId = user.id
+
+    // Delete dependent rows first to satisfy older schemas that may not have
+    // ON DELETE CASCADE configured.
+    await query("DELETE FROM plaid_items WHERE user_id = $1", [userId])
+    await query("DELETE FROM qbo_connections WHERE user_id = $1", [userId])
+    await query("DELETE FROM xero_connections WHERE user_id = $1", [userId])
+    await query("DELETE FROM stripe_connections WHERE user_id = $1", [userId])
+    await query("DELETE FROM merchant_tags WHERE user_id = $1", [userId])
+    await query("DELETE FROM user_whatsapp WHERE user_id = $1", [userId])
+    await query("DELETE FROM user_slack WHERE user_id = $1", [userId])
+    await query("DELETE FROM sessions WHERE user_id = $1", [userId])
+
+    const res = await query<{ id: string }>("DELETE FROM users WHERE id = $1 RETURNING id", [
+      userId,
     ])
     const deleted = res.rows.length
-    log("admin.delete-user.done", { email, deleted }, "db")
+    log("admin.delete-user.done", { email, userId, deleted }, "db")
     return NextResponse.json({ ok: true, email, deleted })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
