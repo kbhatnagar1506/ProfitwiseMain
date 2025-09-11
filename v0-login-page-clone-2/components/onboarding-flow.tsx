@@ -89,6 +89,11 @@ const steps = [
     title: "Review your data",
     description: "Inspect the raw data we’ve pulled in from your banks, accounting tools, and Gmail.",
   },
+  {
+    id: 9,
+    title: "Identity graph",
+    description: "See every vendor, customer, and entity we’ve resolved across all your connected sources.",
+  },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -170,6 +175,15 @@ export function OnboardingFlow({
   const [whatsappCodeInput, setWhatsappCodeInput] = useState("")
   const [whatsappSendLoading, setWhatsappSendLoading] = useState(false)
   const [whatsappVerifyLoading, setWhatsappVerifyLoading] = useState(false)
+  type IdentityEntity = { id: string; entity_type: string; canonical_name: string; display_name: string | null; domain: string | null; confidence: number; metadata: Record<string, unknown>; created_at: string }
+  type IdentityAlias = { id: string; entity_id: string; alias: string; alias_type: string; source: string; source_id: string | null; confidence: number }
+  type IdentityAssertionCount = { entity_id: string; assertion_type: string; source: string; count: number; avg_score: number }
+  type IdentityData = { entities: IdentityEntity[]; aliases: IdentityAlias[]; relationships: unknown[]; assertionCounts: IdentityAssertionCount[] }
+  const [identityData, setIdentityData] = useState<IdentityData | null>(null)
+  const [identityLoading, setIdentityLoading] = useState(false)
+  const [identitySeeding, setIdentitySeeding] = useState(false)
+  const [identityError, setIdentityError] = useState<string | null>(null)
+  const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -489,6 +503,26 @@ export function OnboardingFlow({
         setRawDataError(err instanceof Error ? err.message : "Failed to load raw data")
       })
       .finally(() => setRawDataLoading(false))
+  }, [currentStep])
+
+  useEffect(() => {
+    if (currentStep !== 9) return
+    setIdentitySeeding(true)
+    setIdentityError(null)
+    fetch("/api/identity/seed", { method: "POST" })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then(() => {
+        setIdentitySeeding(false)
+        setIdentityLoading(true)
+        return fetch("/api/identity")
+      })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((data: IdentityData) => setIdentityData(data))
+      .catch((err) => {
+        setIdentityData(null)
+        setIdentityError(err instanceof Error ? err.message : "Failed to load identity graph")
+      })
+      .finally(() => { setIdentitySeeding(false); setIdentityLoading(false) })
   }, [currentStep])
 
   const onPlaidSuccess = useCallback(
@@ -1573,654 +1607,178 @@ export function OnboardingFlow({
             </div>
           )
         }
-
-        const reloadTableFromDb = () => {
-          setSelectedAccountingTransaction(null)
-          setMerchantsNormalizeError(null)
-          fetch("/api/onboarding/merchants/transactions?limit=200")
-            .then((res) => (res.ok ? res.json() : { transactions: [] }))
-            .then((data: { transactions?: AccountingTx[] }) => setAccountingTransactions(data.transactions ?? []))
-            .catch(() => {})
-        }
-        const saveMerchantToMemory = () => {
-          if (!selectedAccountingTransaction) return
-          setMerchantSaveLoading(true)
-          setMerchantsNormalizeError(null)
-          const norm = merchantEditDraft.normalized_name.trim() || selectedAccountingTransaction.normalized_name
-          const tag = merchantEditDraft.tag.trim() || selectedAccountingTransaction.tag
-          const txType = merchantEditDraft.transaction_type
-          fetch("/api/onboarding/merchants/update", {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              account_id: selectedAccountingTransaction.account_id,
-              raw_name: selectedAccountingTransaction.raw_name,
-              normalized_name: norm,
-              tag,
-              transaction_type: txType,
-            }),
-          })
-            .then((res) => (res.ok ? undefined : Promise.reject(new Error("Save failed"))))
-            .then(() => {
-              setSelectedAccountingTransaction((prev) =>
-                prev ? { ...prev, normalized_name: norm, tag, transaction_type: txType, confidence: 1 } : null
-              )
-              setAccountingTransactions((prev) =>
-                prev.map((tx) =>
-                  tx.account_id === selectedAccountingTransaction.account_id && tx.raw_name === selectedAccountingTransaction.raw_name
-                    ? { ...tx, normalized_name: norm, tag, transaction_type: txType, confidence: 1 }
-                    : tx
-                )
-              )
-            })
-            .catch(() => setMerchantsNormalizeError("Failed to save to memory"))
-            .finally(() => setMerchantSaveLoading(false))
-        }
-        const TRANSACTION_TYPE_OPTIONS = ["Recurring subscription", "Recurring (other)", "One-time"]
-        const TAG_COLORS = [
-          "bg-blue-500/80 text-white border-blue-400/50",
-          "bg-emerald-500/80 text-white border-emerald-400/50",
-          "bg-amber-500/80 text-black border-amber-400/50",
-          "bg-violet-500/80 text-white border-violet-400/50",
-          "bg-rose-500/80 text-white border-rose-400/50",
-          "bg-cyan-500/80 text-black border-cyan-400/50",
-          "bg-lime-500/80 text-black border-lime-400/50",
-          "bg-orange-500/80 text-black border-orange-400/50",
-        ]
-        const tagColor = (tag: string) => TAG_COLORS[Math.abs(tag.split("").reduce((a, c) => (a + c.charCodeAt(0)) | 0, 0)) % TAG_COLORS.length]
-        const typeColor = (t: string) =>
-          t === "Recurring subscription"
-            ? "bg-sky-500/80 text-white border-sky-400/50"
-            : t === "Recurring (other)"
-              ? "bg-amber-500/70 text-black border-amber-400/50"
-              : "bg-zinc-500/60 text-white border-zinc-400/50"
-        const formatTxDate = (d: string) => (d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—")
-        const formatTxTime = (created: string) => (created ? new Date(created).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }) : "—")
-        const confidenceColor = (c: number) =>
-          c >= 0.7 ? "text-emerald-400" : c >= 0.4 ? "text-amber-400" : "text-rose-400"
-        const formatConfidence = (c: number) => `${Math.round((c ?? 0) * 100)}%`
-        const filteredByAccount = accountFilter
-          ? accountingTransactions.filter((tx) => tx.account_name === accountFilter)
-          : accountingTransactions
-        const recurringTxs = filteredByAccount.filter(
-          (tx) => tx.transaction_type === "Recurring subscription" || tx.transaction_type === "Recurring (other)"
-        )
-        const otherTxs = filteredByAccount.filter(
-          (tx) => tx.transaction_type !== "Recurring subscription" && tx.transaction_type !== "Recurring (other)"
-        )
-        const uniqueAccounts = Array.from(
-          new Map(accountingTransactions.map((tx) => [tx.account_name, tx.account_name])).values()
-        ).sort()
-        const renderTxRow = (tx: AccountingTx) => {
-          const isSelected = selectedAccountingTransaction?.transaction_id === tx.transaction_id
-          return (
-            <TableRow
-              key={tx.transaction_id}
-              className={`border-white/20 cursor-pointer hover:bg-white/10 ${isSelected ? "bg-white/15" : "hover:bg-white/5"}`}
-              onClick={() => {
-                setSelectedAccountingTransaction(tx)
-                setMerchantEditDraft({
-                  normalized_name: tx.normalized_name,
-                  tag: tx.tag,
-                  transaction_type: tx.transaction_type,
-                })
-                setAiSuggestMessage("")
-              }}
-            >
-              <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxDate(tx.date)}</TableCell>
-              <TableCell className="text-gray-400 border-white/20 px-3 py-2 whitespace-nowrap text-sm">{formatTxTime(tx.created_at)}</TableCell>
-              <TableCell
-                className={`border-white/20 px-3 py-2 whitespace-nowrap text-right font-medium text-sm ${
-                  tx.amount < 0 ? "text-emerald-400" : "text-rose-400"
-                }`}
-              >
-                {formatBalance(tx.amount)}
-              </TableCell>
-              <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.account_name}</TableCell>
-              <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">{tx.normalized_name}</TableCell>
-              <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${tagColor(tx.tag)}`}>{tx.tag}</span>
-              </TableCell>
-              <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${typeColor(tx.transaction_type)}`}>
-                  {tx.transaction_type}
-                </span>
-              </TableCell>
-              <TableCell className={`border-white/20 px-3 py-2 whitespace-nowrap text-sm font-medium ${confidenceColor(tx.confidence ?? 0)}`} title="AI confidence">
-                {formatConfidence(tx.confidence ?? 0)}
-              </TableCell>
-            </TableRow>
-          )
-        }
-        const suggestWithAi = () => {
-          if (!selectedAccountingTransaction || !aiSuggestMessage.trim()) return
-          setAiSuggestLoading(true)
-          fetch("/api/onboarding/merchants/suggest", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              raw_name: selectedAccountingTransaction.raw_name,
-              normalized_name: merchantEditDraft.normalized_name,
-              tag: merchantEditDraft.tag,
-              transaction_type: merchantEditDraft.transaction_type,
-              user_message: aiSuggestMessage.trim(),
-            }),
-          })
-            .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Suggest failed"))))
-            .then((data: { normalized_name?: string; tag?: string; transaction_type?: string }) => {
-              setMerchantEditDraft((d) => ({
-                normalized_name: data.normalized_name ?? d.normalized_name,
-                tag: data.tag ?? d.tag,
-                transaction_type:
-                  (data.transaction_type as "Recurring subscription" | "Recurring (other)" | "One-time") ?? d.transaction_type,
-              }))
-              setAiSuggestMessage("")
-            })
-            .catch(() => setMerchantsNormalizeError("AI suggest failed. Try again."))
-            .finally(() => setAiSuggestLoading(false))
-        }
-        return (
-          <div className="pt-0 pb-2 w-full">
-            <h2 className="text-3xl font-bold tracking-tight text-white mb-2">{steps[7].title}</h2>
-            <p className="text-gray-400 text-lg mb-5">{steps[7].description}</p>
-            {merchantsNormalizeError && (
-              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4">
-                <p className="text-red-300 text-sm">{merchantsNormalizeError}</p>
-                <Button
-                  onClick={() => {
-                    setMerchantsNormalizeError(null)
-                    fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" })
-                      .then((r) => (r.ok ? fetch("/api/onboarding/merchants/transactions?limit=200") : Promise.reject(new Error(r.statusText))))
-                      .then((r) => (r.ok ? r.json() : { transactions: [] }))
-                      .then((data: { transactions?: AccountingTx[] }) => setAccountingTransactions(data.transactions ?? []))
-                      .catch(() => setMerchantsNormalizeError("Request failed"))
-                  }}
-                  variant="outline"
-                  className="mt-3 border-white/30 text-white hover:bg-white/10"
-                >
-                  Try again
-                </Button>
-              </div>
-            )}
-            {accountingTransactions.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 mb-4">
-                <span className="text-gray-400 text-sm">Account:</span>
-                <button
-                  type="button"
-                  onClick={() => setAccountFilter(null)}
-                  className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
-                    accountFilter === null ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
-                  }`}
-                >
-                  All
-                </button>
-                {uniqueAccounts.map((name) => (
-                  <button
-                    key={name}
-                    type="button"
-                    onClick={() => setAccountFilter(name)}
-                    className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
-                      accountFilter === name ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
-                    }`}
-                  >
-                    {name}
-                  </button>
-                ))}
-                <Button
-                  type="button"
-                  onClick={() => {
-                    setRerunAiLoading(true)
-                    setMerchantsNormalizeError(null)
-                    fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" })
-                      .then((r) => (r.ok ? fetch("/api/onboarding/merchants/transactions?limit=200") : Promise.reject(new Error(r.statusText))))
-                      .then((r) => (r.ok ? r.json() : { transactions: [] }))
-                      .then((data: { transactions?: AccountingTx[] }) => setAccountingTransactions(data.transactions ?? []))
-                      .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Re-run failed"))
-                      .finally(() => setRerunAiLoading(false))
-                  }}
-                  disabled={rerunAiLoading}
-                  variant="outline"
-                  className="ml-auto border-white/30 text-white hover:bg-white/10"
-                >
-                  {rerunAiLoading ? "Re-running AI…" : "Reload — Re-run AI (last 2 months)"}
-                </Button>
-              </div>
-            )}
-            <div className="mb-6">
-              {accountingTransactionsLoading ? (
-                <div className="flex items-center gap-2 py-6 text-gray-400">
-                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Loading transactions…
-                </div>
-              ) : accountingTransactions.length === 0 ? (
-                <p className="text-gray-400 py-4">No transactions in the last 2 months. Connect bank accounts and sync.</p>
-              ) : (
-                <>
-                  <div className="mb-6">
-                    <h3 className="text-lg font-semibold text-white mb-2">All transactions</h3>
-                    <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[40vh] mb-2">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="border-white/20 hover:bg-transparent">
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredByAccount.length === 0 ? (
-                            <TableRow className="border-white/20">
-                              <TableCell colSpan={8} className="text-gray-400 text-center py-6 border-white/20">
-                                No transactions in this view.
-                              </TableCell>
-                            </TableRow>
-                          ) : (
-                            filteredByAccount.map((tx) => renderTxRow(tx))
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </div>
-                  <div className="mb-4">
-                    <h3 className="text-lg font-semibold text-white mb-2">Recurring & Subscriptions</h3>
-                    <div className="rounded-lg border border-white/20 bg-white/5 overflow-x-auto overflow-y-auto max-h-[40vh] mb-2">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="border-white/20 hover:bg-transparent">
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Time</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Account</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Merchant</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Tag</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Transaction type</TableHead>
-                            <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {recurringTxs.length === 0 ? (
-                            <TableRow className="border-white/20">
-                              <TableCell colSpan={8} className="text-gray-400 text-center py-6 border-white/20">
-                                No recurring or subscription transactions in this view.
-                              </TableCell>
-                            </TableRow>
-                          ) : (
-                            recurringTxs.map((tx) => renderTxRow(tx))
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </div>
-                  {selectedAccountingTransaction && (
-                    <div className="rounded-2xl border border-white/25 bg-black/70 p-5 space-y-4">
-                      <p className="text-gray-400 text-sm font-medium">Editing: {selectedAccountingTransaction.raw_name}</p>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                          <label className="text-gray-400 text-xs block mb-1">Normalized name</label>
-                <Input
-                            className="bg-white/10 border-white/20 text-white"
-                            value={merchantEditDraft.normalized_name}
-                            onChange={(e) => setMerchantEditDraft((d) => ({ ...d, normalized_name: e.target.value }))}
-                            placeholder="Canonical name"
-                />
-              </div>
-              <div>
-                          <label className="text-gray-400 text-xs block mb-1">Tag</label>
-                <Input
-                            className="bg-white/10 border-white/20 text-white"
-                            value={merchantEditDraft.tag}
-                            onChange={(e) => setMerchantEditDraft((d) => ({ ...d, tag: e.target.value }))}
-                            placeholder="e.g. Software, Subscriptions"
-                />
-              </div>
-                        <div>
-                          <label className="text-gray-400 text-xs block mb-1">Transaction type</label>
-                          <select
-                            className="w-full rounded-md border border-white/20 bg-white/10 text-white px-3 py-2 text-sm"
-                            value={merchantEditDraft.transaction_type}
-                            onChange={(e) =>
-                              setMerchantEditDraft((d) => ({ ...d, transaction_type: e.target.value as "Recurring subscription" | "Recurring (other)" | "One-time" }))
-                            }
-                          >
-                            {TRANSACTION_TYPE_OPTIONS.map((opt) => (
-                              <option key={opt} value={opt} className="bg-gray-900 text-white">
-                                {opt}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                      <div className="border-t border-white/20 pt-3">
-                        <label className="text-gray-400 text-xs block mb-2">
-                          Ask AI to adjust these fields (chat-style)
-                        </label>
-                        <div className="flex items-end gap-3">
-                          <div className="flex-1">
-                            <div className="rounded-2xl border border-white/20 bg-zinc-950/90 px-3 py-2">
-                              <textarea
-                                className="w-full bg-transparent text-white text-sm placeholder:text-gray-500 resize-none focus:outline-none"
-                                value={aiSuggestMessage}
-                                onChange={(e) => setAiSuggestMessage(e.target.value)}
-                                placeholder='e.g. "Make this Software, Recurring subscription"'
-                                rows={2}
-                              />
-                            </div>
-                          </div>
-                          <Button
-                            type="button"
-                            onClick={suggestWithAi}
-                            disabled={aiSuggestLoading || !aiSuggestMessage.trim()}
-                            className="rounded-full bg-white text-black hover:bg-gray-200 px-4 h-9 text-sm font-medium"
-                          >
-                            {aiSuggestLoading ? "Thinking…" : "Ask AI"}
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="flex justify-end">
-                        <Button
-                          onClick={saveMerchantToMemory}
-                          disabled={merchantSaveLoading}
-                          className="bg-white text-black hover:bg-gray-200 min-w-[140px]"
-                        >
-                          {merchantSaveLoading ? "Saving…" : "Save"}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        )
       }
 
       case 9: {
-        const formatInvDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—")
-        const formatTimestamp = (ts: string | null | undefined) => (ts ? new Date(ts).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—")
+        const idEntities = identityData?.entities ?? []
+        const idAliases = identityData?.aliases ?? []
+        const idAssertionCounts = identityData?.assertionCounts ?? []
+        const aliasesByEntity = new Map<string, IdentityAlias[]>()
+        for (const a of idAliases) {
+          const list = aliasesByEntity.get(a.entity_id) ?? []
+          list.push(a)
+          aliasesByEntity.set(a.entity_id, list)
+        }
+        const assertionsByEntity = new Map<string, IdentityAssertionCount[]>()
+        for (const a of idAssertionCounts) {
+          const list = assertionsByEntity.get(a.entity_id) ?? []
+          list.push(a)
+          assertionsByEntity.set(a.entity_id, list)
+        }
+        const typeCounts: Record<string, number> = {}
+        for (const e of idEntities) { typeCounts[e.entity_type] = (typeCounts[e.entity_type] ?? 0) + 1 }
+        const confPct = (c: number) => Math.round(c * 100)
+        const sourceColor = (s: string) =>
+          s === "qbo" ? "bg-blue-500/80 border-blue-400/50" :
+          s === "xero" ? "bg-emerald-500/80 border-emerald-400/50" :
+          s === "stripe" ? "bg-purple-500/80 border-purple-400/50" :
+          s === "plaid" ? "bg-amber-500/80 border-amber-400/50" :
+          s === "gmail" ? "bg-red-500/80 border-red-400/50" :
+          "bg-zinc-500/80 border-zinc-400/50"
+        const typeColor = (t: string) =>
+          t === "vendor" ? "bg-orange-500/80 border-orange-400/50" :
+          t === "customer" ? "bg-cyan-500/80 border-cyan-400/50" :
+          t === "processor" ? "bg-violet-500/80 border-violet-400/50" :
+          t === "employee" ? "bg-pink-500/80 border-pink-400/50" :
+          "bg-zinc-500/80 border-zinc-400/50"
+
         return (
-          <div>
-            <div className="text-center mb-8">
-              <h2 className="text-2xl font-semibold text-white mb-3">{steps[8].title}</h2>
-              <p className="text-gray-400 text-base">
-                We pull in documents (bills, invoices, payments) from your connected tools and map them to your AR/AP ledger. Confirm the ledger and resolve any documents that need your input.
-              </p>
-            </div>
-            <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden">
-              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">Source documents (QuickBooks, Xero, Stripe)</h3>
-              <p className="text-gray-500 text-sm px-4 pb-2">Bills and invoices from connected tools — these feed into the ledger below.</p>
-              {step9InvoicesLoading ? (
-                <p className="text-gray-400 text-center py-8">Loading documents…</p>
-              ) : step9Invoices.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No documents yet. Connect QuickBooks, Xero, or Stripe and run a sync to see them here.</p>
-              ) : (
-                <div className="overflow-x-auto max-h-[50vh] overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-white/20 hover:bg-transparent">
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">System ID</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Number</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Updated</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Customer</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Email</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Source</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {step9Invoices.map((inv) => (
-                        <TableRow key={inv.unique_id} className="border-white/20 hover:bg-white/5">
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap font-mono text-xs">{inv.id || "—"}</TableCell>
-                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{inv.number || "—"}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(inv.date)}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatTimestamp(inv.updated_at)}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{inv.total != null ? formatBalance(inv.total) : "—"}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{inv.customer || "—"}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{inv.email || "—"}</TableCell>
-                          <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                            <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${inv.source === "qbo" ? "bg-blue-500/80 text-white border-blue-400/50" : inv.source === "xero" ? "bg-emerald-500/80 text-white border-emerald-400/50" : "bg-purple-500/80 text-white border-purple-400/50"}`}>
-                              {inv.source === "qbo" ? "QuickBooks" : inv.source === "xero" ? "Xero" : "Stripe"}
-                            </span>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </div>
+          <div className="pt-0 pb-2 w-full">
+            <h2 className="text-3xl font-bold tracking-tight text-white mb-2">{steps[8].title}</h2>
+            <p className="text-gray-400 text-lg mb-5">{steps[8].description}</p>
 
-            {/* AR Ledger — Receivables */}
-            <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden mt-6">
-              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">AR Ledger — Receivables</h3>
-              <p className="text-gray-500 text-sm px-4 pb-2">What&apos;s owed to you (resolved from invoices and payments).</p>
-              {step9ApArLoading ? (
-                <p className="text-gray-400 text-center py-8">Loading AR ledger…</p>
-              ) : step9ArItems.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No receivables yet. Invoices from Stripe, QuickBooks, Gmail, and Xero will appear here once resolved.</p>
-              ) : (
-                <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-white/20 hover:bg-transparent">
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Invoice #</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Customer</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Issue Date</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Due Date</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Outstanding</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Status</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Sources</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {step9ArItems.map((row) => (
-                        <TableRow key={row.id} className="border-white/20 hover:bg-white/5">
-                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{row.invoice_number || "—"}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{row.counterparty_name || "—"}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(row.issue_date)}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(row.due_date)}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{formatBalance(row.amount_total)}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{formatBalance(row.amount_outstanding)}</TableCell>
-                          <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                            <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${row.status === "paid" ? "bg-emerald-500/80 text-white border-emerald-400/50" : row.status === "open" ? "bg-blue-500/80 text-white border-blue-400/50" : "bg-zinc-500/80 text-white border-zinc-400/50"}`}>
-                              {row.status}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-xs">{Object.keys(row.source_summary || {}).join(", ") || "—"}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </div>
+            {(identitySeeding || identityLoading) && (
+              <div className="flex items-center gap-2 py-6 text-gray-400">
+                <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                {identitySeeding ? "Resolving identities across all sources (this may take a moment)\u2026" : "Loading identity graph\u2026"}
+              </div>
+            )}
 
-            {/* AP Ledger — Payables */}
-            <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden mt-6">
-              <h3 className="text-lg font-semibold text-white px-4 py-3 border-b border-white/20">AP Ledger — Payables</h3>
-              <p className="text-gray-500 text-sm px-4 pb-2">What you owe (resolved from bills and payments).</p>
-              {step9ApArLoading ? (
-                <p className="text-gray-400 text-center py-8">Loading AP ledger…</p>
-              ) : step9ApItems.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No payables yet. Bills from Gmail, QuickBooks, Xero, and other sources will appear here once resolved.</p>
-              ) : (
-                <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-white/20 hover:bg-transparent">
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Invoice #</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Vendor</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Issue Date</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Due Date</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Outstanding</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Status</TableHead>
-                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Sources</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {step9ApItems.map((row) => (
-                        <TableRow key={row.id} className="border-white/20 hover:bg-white/5">
-                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{row.invoice_number || "—"}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{row.counterparty_name || "—"}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(row.issue_date)}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(row.due_date)}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{formatBalance(row.amount_total)}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{formatBalance(row.amount_outstanding)}</TableCell>
-                          <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                            <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${row.status === "paid" ? "bg-emerald-500/80 text-white border-emerald-400/50" : row.status === "open" ? "bg-blue-500/80 text-white border-blue-400/50" : "bg-zinc-500/80 text-white border-zinc-400/50"}`}>
-                              {row.status}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-xs">{Object.keys(row.source_summary || {}).join(", ") || "—"}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </div>
+            {identityError && !identityLoading && !identitySeeding && (
+              <p className="text-red-300 text-sm mb-4">Failed to load identity graph: {identityError}</p>
+            )}
 
-            {/* Documents needing review — document layer, not ledger */}
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden mt-6">
-              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-amber-500/20">
-                <div>
-                  <h3 className="text-lg font-semibold text-amber-300">Documents needing review</h3>
-                  <p className="text-amber-200/80 text-sm mt-0.5">Bills, invoices, or payments that couldn’t be auto-matched to the ledger. Approve to apply or reject.</p>
+            {!identityLoading && !identitySeeding && identityData && idEntities.length === 0 && (
+              <p className="text-gray-400 text-sm mb-4">No entities resolved yet. Connect integrations and sync data first.</p>
+            )}
+
+            {!identityLoading && !identitySeeding && idEntities.length > 0 && (
+              <div className="space-y-6">
+                {/* Summary stats */}
+                <div className="flex flex-wrap gap-3">
+                  <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
+                    <div className="text-2xl font-bold text-white">{idEntities.length}</div>
+                    <div className="text-xs text-gray-400">Total entities</div>
+                  </div>
+                  {Object.entries(typeCounts).sort((a, b) => b[1] - a[1]).map(([type, count]) => (
+                    <div key={type} className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
+                      <div className="text-2xl font-bold text-white">{count}</div>
+                      <div className="text-xs text-gray-400 capitalize">{type === "unknown" ? "Unclassified" : type + "s"}</div>
+                    </div>
+                  ))}
+                  <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
+                    <div className="text-2xl font-bold text-white">{idAliases.length}</div>
+                    <div className="text-xs text-gray-400">Aliases</div>
+                  </div>
                 </div>
-                <div className="flex gap-2 text-xs">
-                  {Object.entries(step9ReviewCounts).map(([queue, count]) => {
-                    const label = queue === "classification" ? "Type / side" : queue === "match" ? "Match" : queue === "conflict" ? "Conflict" : queue === "data_quality" ? "Data quality" : queue
-                    if (count === 0) return null
-                    return (
-                      <span key={queue} className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-amber-300">
-                        {label}: {count}
-                      </span>
-                    )
-                  })}
+
+                {/* Entity list */}
+                <div className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-white/20">
+                    <h3 className="text-lg font-semibold text-white">Resolved entities</h3>
+                    <p className="text-gray-400 text-sm mt-0.5">Click an entity to see its aliases, sources, and evidence.</p>
+                  </div>
+                  <div className="max-h-[60vh] overflow-y-auto divide-y divide-white/10">
+                    {idEntities.map((ent) => {
+                      const expanded = identityExpandedEntity === ent.id
+                      const entAliases = aliasesByEntity.get(ent.id) ?? []
+                      const entAssertions = assertionsByEntity.get(ent.id) ?? []
+                      const sources = [...new Set(entAliases.map((a) => a.source))]
+                      return (
+                        <div key={ent.id}>
+                          <button
+                            type="button"
+                            onClick={() => setIdentityExpandedEntity(expanded ? null : ent.id)}
+                            className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-white font-medium truncate">{ent.display_name || ent.canonical_name}</span>
+                                <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium text-white capitalize ${typeColor(ent.entity_type)}`}>
+                                  {ent.entity_type}
+                                </span>
+                                {sources.map((s) => (
+                                  <span key={s} className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${sourceColor(s)}`}>
+                                    {s}
+                                  </span>
+                                ))}
+                              </div>
+                              {ent.domain && <span className="text-xs text-gray-500 mt-0.5 block">{ent.domain}</span>}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full ${ent.confidence >= 0.8 ? "bg-emerald-400" : ent.confidence >= 0.5 ? "bg-amber-400" : "bg-red-400"}`}
+                                    style={{ width: `${confPct(ent.confidence)}%` }}
+                                  />
+                                </div>
+                                <span className="text-xs text-gray-400 w-8 text-right">{confPct(ent.confidence)}%</span>
+                              </div>
+                              <span className="text-xs text-gray-500">{entAliases.length} alias{entAliases.length !== 1 ? "es" : ""}</span>
+                              <svg className={`w-4 h-4 text-gray-500 transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                            </div>
+                          </button>
+                          {expanded && (
+                            <div className="px-4 pb-4 space-y-3">
+                              {/* Aliases table */}
+                              <div className="rounded-lg border border-white/15 bg-black/40 overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr className="border-b border-white/15">
+                                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Alias</th>
+                                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Type</th>
+                                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Source</th>
+                                      <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs">Confidence</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-white/10">
+                                    {entAliases.map((a) => (
+                                      <tr key={a.id} className="hover:bg-white/5">
+                                        <td className="text-white px-3 py-1.5 font-mono text-xs">{a.alias}</td>
+                                        <td className="text-gray-400 px-3 py-1.5 text-xs capitalize">{a.alias_type.replace("_", " ")}</td>
+                                        <td className="px-3 py-1.5">
+                                          <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${sourceColor(a.source)}`}>{a.source}</span>
+                                        </td>
+                                        <td className="text-gray-400 px-3 py-1.5 text-xs text-right">{confPct(a.confidence)}%</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {/* Evidence summary */}
+                              {entAssertions.length > 0 && (
+                                <div className="rounded-lg border border-white/15 bg-black/40 p-3">
+                                  <div className="text-xs font-medium text-gray-400 mb-2">Evidence summary</div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {entAssertions.map((a, i) => (
+                                      <span key={i} className="inline-flex items-center gap-1 rounded-full bg-white/10 border border-white/15 px-2 py-0.5 text-xs text-gray-300">
+                                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${sourceColor(a.source)}`} />
+                                        {a.assertion_type.replace("_", " ")} via {a.source} ({a.count}x, avg {confPct(a.avg_score)}%)
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
-              {step9ReviewLoading ? (
-                <p className="text-gray-400 text-center py-8">Loading documents…</p>
-              ) : step9ReviewItems.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No documents need review. All were auto-resolved or rejected.</p>
-              ) : (
-                <div className="overflow-x-auto max-h-[40vh] overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-amber-500/20 hover:bg-transparent">
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Source</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Doc type</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Side</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Invoice #</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Counterparty</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap text-right">Amount</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Confidence</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Reason</TableHead>
-                        <TableHead className="text-amber-200 font-semibold border-amber-500/20 bg-amber-500/10 px-3 py-2 whitespace-nowrap">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {step9ReviewItems.map((item) => {
-                        const n = item.normalized as Record<string, unknown>
-                        const confPct = item.classification_confidence != null ? Math.round(item.classification_confidence * 100) : null
-                        const docType = item.document_type ?? "other"
-                        const docTypeBadge =
-                          docType === "payment"
-                            ? "bg-violet-500/80 text-white border-violet-400/50"
-                            : docType === "bill"
-                              ? "bg-orange-500/80 text-white border-orange-400/50"
-                              : docType === "invoice"
-                                ? "bg-cyan-500/80 text-white border-cyan-400/50"
-                                : "bg-zinc-500/80 text-white border-zinc-400/50"
-                        return (
-                          <TableRow key={item.version_id} className="border-amber-500/20 hover:bg-amber-500/5">
-                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
-                              <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${item.provider === "gmail" ? "bg-red-500/80 text-white border-red-400/50" : item.provider === "qbo" ? "bg-blue-500/80 text-white border-blue-400/50" : item.provider === "xero" ? "bg-emerald-500/80 text-white border-emerald-400/50" : "bg-purple-500/80 text-white border-purple-400/50"}`}>
-                                {item.provider}
-                              </span>
-                            </TableCell>
-                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
-                              <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium capitalize ${docTypeBadge}`}>
-                                {docType === "payment_confirmation" ? "Payment" : docType}
-                              </span>
-                            </TableCell>
-                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
-                              <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${item.candidate_side === "AP" ? "bg-orange-500/80 text-white border-orange-400/50" : item.candidate_side === "AR" ? "bg-cyan-500/80 text-white border-cyan-400/50" : "bg-zinc-500/80 text-white border-zinc-400/50"}`}>
-                                {item.candidate_side}
-                              </span>
-                            </TableCell>
-                            <TableCell className="text-white border-amber-500/20 px-3 py-2 whitespace-nowrap font-medium text-sm">{(n.invoice_number as string) || "—"}</TableCell>
-                            <TableCell className="text-gray-300 border-amber-500/20 px-3 py-2 whitespace-nowrap text-sm">{(n.counterparty_name as string) || "—"}</TableCell>
-                            <TableCell className="text-gray-300 border-amber-500/20 px-3 py-2 whitespace-nowrap text-right text-sm">{n.total != null ? formatBalance(n.total as number) : "—"}</TableCell>
-                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
-                              {confPct != null ? (
-                                <div className="flex items-center gap-1.5">
-                                  <div className="w-12 h-1.5 rounded-full bg-white/10 overflow-hidden">
-                                    <div
-                                      className={`h-full rounded-full ${confPct >= 80 ? "bg-emerald-400" : confPct >= 50 ? "bg-amber-400" : "bg-red-400"}`}
-                                      style={{ width: `${confPct}%` }}
-                                    />
-                                  </div>
-                                  <span className="text-xs text-gray-400">{confPct}%</span>
-                                </div>
-                              ) : <span className="text-xs text-gray-500">—</span>}
-                            </TableCell>
-                            <TableCell className="text-gray-400 border-amber-500/20 px-3 py-2 whitespace-nowrap text-xs max-w-[200px] truncate" title={item.review_reason ?? ""}>{item.review_reason || "—"}</TableCell>
-                            <TableCell className="border-amber-500/20 px-3 py-2 whitespace-nowrap">
-                              <div className="flex gap-1">
-                                <button
-                                  type="button"
-                                  disabled={step9ReviewActionLoading === item.version_id}
-                                  onClick={async () => {
-                                    setStep9ReviewActionLoading(item.version_id)
-                                    try {
-                                      await fetch("/api/ap-ar/review-queue/resolve", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ versionId: item.version_id, action: "approve" }),
-                                      })
-                                      setStep9ReviewItems((prev) => prev.filter((r) => r.version_id !== item.version_id))
-                                    } finally { setStep9ReviewActionLoading(null) }
-                                  }}
-                                  className="rounded px-2 py-1 text-xs font-medium bg-emerald-600/80 text-white hover:bg-emerald-500 border border-emerald-500/50 disabled:opacity-50"
-                                >
-                                  {step9ReviewActionLoading === item.version_id ? "…" : "Approve"}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={step9ReviewActionLoading === item.version_id}
-                                  onClick={async () => {
-                                    setStep9ReviewActionLoading(item.version_id)
-                                    try {
-                                      await fetch("/api/ap-ar/review-queue/resolve", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ versionId: item.version_id, action: "reject" }),
-                                      })
-                                      setStep9ReviewItems((prev) => prev.filter((r) => r.version_id !== item.version_id))
-                                    } finally { setStep9ReviewActionLoading(null) }
-                                  }}
-                                  className="rounded px-2 py-1 text-xs font-medium bg-red-600/80 text-white hover:bg-red-500 border border-red-500/50 disabled:opacity-50"
-                                >
-                                  Reject
-                                </button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </div>
+            )}
           </div>
         )
       }
@@ -2241,13 +1799,13 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isStep8 = currentStep === 8
+  const isWideStep = currentStep === 8 || currentStep === 9
   return (
     <div
       className={
         isStep6
           ? "w-full max-w-[96rem] mx-auto px-4 pt-6 pb-8"
-          : isStep8
+          : isWideStep
             ? "w-full max-w-[90vw] mx-auto px-4 pt-10 pb-8 md:pt-16 md:pb-10"
             : "w-full max-w-5xl mx-auto px-4 pt-10 pb-8 md:pt-16 md:pb-10"
       }
