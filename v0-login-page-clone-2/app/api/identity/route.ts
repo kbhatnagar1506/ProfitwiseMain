@@ -14,7 +14,7 @@ export async function GET() {
   try {
     await ensureIdentitySchema()
   } catch {
-    return NextResponse.json({ entities: [], aliases: [], relationships: [], assertions: [] })
+    return NextResponse.json({ entities: [], aliases: [], relationships: [], assertionCounts: [] })
   }
 
   const userId = user.id
@@ -58,8 +58,29 @@ export async function GET() {
     ).then((r) => r.rows)
   }
 
+  // Compute per-entity evidence summary for the frontend
+  const aliasArr = aliases as { entity_id: string; alias_type: string; source: string }[]
+  const evidenceMap: Record<string, { source_count: number; evidence_count: number; sources: string[] }> = {}
+  for (const a of aliasArr) {
+    if (!evidenceMap[a.entity_id]) evidenceMap[a.entity_id] = { source_count: 0, evidence_count: 0, sources: [] }
+    evidenceMap[a.entity_id].evidence_count++
+    if (!evidenceMap[a.entity_id].sources.includes(a.source)) {
+      evidenceMap[a.entity_id].sources.push(a.source)
+    }
+  }
+  for (const key of Object.keys(evidenceMap)) {
+    evidenceMap[key].source_count = evidenceMap[key].sources.length
+  }
+
+  const enrichedEntities = (entities as Record<string, unknown>[]).map((e) => ({
+    ...e,
+    source_count: evidenceMap[(e as { id: string }).id]?.source_count ?? 0,
+    evidence_count: evidenceMap[(e as { id: string }).id]?.evidence_count ?? 0,
+    sources: evidenceMap[(e as { id: string }).id]?.sources ?? [],
+  }))
+
   return NextResponse.json({
-    entities,
+    entities: enrichedEntities,
     aliases,
     relationships,
     assertionCounts,

@@ -1,12 +1,12 @@
 /**
- * Identity resolution engine v3.
+ * Identity resolution engine v4.
  *
- * Improvements over v2:
- * - Domain dedup: domain signals match existing entity domain aliases
- * - Processor variant merge: strips "- USD", "customer -", "vendor -" suffixes
- * - Owner detection: cross-refs user email, company domain, QBO owner fields
- * - QBO Account entities: bank accounts, credit cards as bank_account type
- * - Fuzzy matching: Levenshtein for emails at same domain, test/sample filtering
+ * Key changes from v3:
+ * - Signals grouped by source record: email/domain signals from the same QBO/Xero
+ *   record always attach to the same entity as the name signal (no standalone email entities)
+ * - ledger_account vs bank_account: QBO Accounts split into real bank/CC vs ledger
+ * - Evidence-native confidence: P(entity) = 1 - product(1 - signal_i) across all signals
+ * - Canonical entity is the resolved node; aliases + assertions are evidence
  */
 
 import { query, ensureIdentitySchema } from "./db"
@@ -18,7 +18,7 @@ const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
 const ENTITY_TYPES = [
   "vendor", "customer", "employee", "processor", "bank_account",
-  "tax_authority", "owner", "lender", "internal", "unknown",
+  "ledger_account", "tax_authority", "owner", "lender", "internal", "unknown",
 ] as const
 type EntityType = (typeof ENTITY_TYPES)[number]
 
@@ -30,6 +30,16 @@ type Signal = {
   entity_type: EntityType
   confidence: number
   extra?: Record<string, unknown>
+}
+
+/**
+ * A SignalGroup bundles all signals that came from the same source record.
+ * The anchor is the name signal; satellites are email, domain, etc.
+ * When resolved, all signals in the group attach to the same entity.
+ */
+type SignalGroup = {
+  anchor: Signal
+  satellites: Signal[]
 }
 
 type LlmNormResult = {
@@ -128,7 +138,6 @@ type SelfContext = {
 async function getSelfContext(userId: string): Promise<SelfContext> {
   const ctx: SelfContext = { selfNames: [], selfDomains: [], ownerNames: [], ownerEmails: [], userEmail: null }
 
-  // User's own email
   const { rows: userRows } = await query<{ email: string; company_form: Record<string, string> | null }>(
     "SELECT email, company_form FROM users WHERE id = $1",
     [userId]
@@ -142,7 +151,6 @@ async function getSelfContext(userId: string): Promise<SelfContext> {
     }
   }
 
-  // QBO CompanyInfo
   const { rows: companyInfoRows } = await query<{ data: Record<string, unknown> }>(
     `SELECT e.data FROM qbo_entities e
      JOIN qbo_connections c ON c.realm_id = e.realm_id
@@ -157,28 +165,20 @@ async function getSelfContext(userId: string): Promise<SelfContext> {
     if (cn) ctx.selfNames.push(cn)
     if (ln && ln !== cn) ctx.selfNames.push(ln)
 
-    // Owner info from CompanyInfo
     const email = (d.Email as Record<string, unknown>)?.Address as string | undefined
     if (email) ctx.ownerEmails.push(email.toLowerCase())
     const companyEmail = (d.CompanyEmail as Record<string, unknown>)?.Address as string | undefined
     if (companyEmail) ctx.ownerEmails.push(companyEmail.toLowerCase())
 
-    // Extract domain from company email
-    if (companyEmail) {
-      const domain = companyEmail.split("@")[1]?.toLowerCase()
-      if (domain && !domain.includes("gmail") && !domain.includes("yahoo") && !domain.includes("hotmail")) {
-        ctx.selfDomains.push(domain)
-      }
-    }
-    if (email) {
-      const domain = email.split("@")[1]?.toLowerCase()
+    for (const e of [companyEmail, email]) {
+      if (!e) continue
+      const domain = e.split("@")[1]?.toLowerCase()
       if (domain && !domain.includes("gmail") && !domain.includes("yahoo") && !domain.includes("hotmail")) {
         ctx.selfDomains.push(domain)
       }
     }
   }
 
-  // qbo_connections.company_name
   const { rows: connRows } = await query<{ company_name: string | null }>(
     "SELECT company_name FROM qbo_connections WHERE user_id = $1",
     [userId]
@@ -187,12 +187,10 @@ async function getSelfContext(userId: string): Promise<SelfContext> {
     if (r.company_name) ctx.selfNames.push(r.company_name)
   }
 
-  // Deduplicate
   ctx.selfNames = [...new Set(ctx.selfNames.filter(Boolean))]
   ctx.selfDomains = [...new Set(ctx.selfDomains.filter(Boolean))]
   ctx.ownerEmails = [...new Set(ctx.ownerEmails.filter(Boolean))]
 
-  // Derive owner names from owner emails
   for (const e of ctx.ownerEmails) {
     const local = e.split("@")[0]
     if (local && local.length > 2) ctx.ownerNames.push(local)
@@ -219,16 +217,13 @@ function isSelfEntity(name: string, selfNames: string[]): boolean {
 }
 
 function isOwnerEntity(name: string, email: string | null, ctx: SelfContext): boolean {
-  // Check if email matches owner emails
   if (email) {
     for (const oe of ctx.ownerEmails) {
       if (email.toLowerCase() === oe) return true
     }
-    // Check if email is at the company domain (strong signal for owner/internal)
     const domain = email.split("@")[1]?.toLowerCase()
     if (domain && ctx.selfDomains.includes(domain)) return true
   }
-  // Check name against owner names
   const normName = name.toLowerCase().replace(/[^a-z0-9]/g, "")
   for (const on of ctx.ownerNames) {
     const onNorm = on.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -237,10 +232,14 @@ function isOwnerEntity(name: string, email: string | null, ctx: SelfContext): bo
   return false
 }
 
-// ─── Signal extraction ─────────────────────────────────────────────
+// ─── Signal extraction (grouped by source record) ──────────────────
 
-async function extractQboSignals(userId: string, ctx: SelfContext): Promise<Signal[]> {
-  const signals: Signal[] = []
+function makeGroup(anchor: Signal, satellites: Signal[] = []): SignalGroup {
+  return { anchor, satellites }
+}
+
+async function extractQboSignalGroups(userId: string, ctx: SelfContext): Promise<SignalGroup[]> {
+  const groups: SignalGroup[] = []
 
   const { rows: customers } = await query<{ entity_id: string; data: Record<string, unknown> }>(
     `SELECT e.entity_id, e.data FROM qbo_entities e
@@ -251,8 +250,7 @@ async function extractQboSignals(userId: string, ctx: SelfContext): Promise<Sign
   for (const row of customers) {
     const d = row.data
     const displayName = (d.DisplayName ?? d.FullyQualifiedName ?? "") as string
-    if (!displayName) continue
-    if (isTestEntity(displayName)) continue
+    if (!displayName || isTestEntity(displayName)) continue
 
     const email = (d.PrimaryEmailAddr as Record<string, unknown>)?.Address as string | undefined
 
@@ -261,20 +259,22 @@ async function extractQboSignals(userId: string, ctx: SelfContext): Promise<Sign
     else if (isKnownProcessor(displayName)) entityType = "processor"
     else if (isOwnerEntity(displayName, email ?? null, ctx)) entityType = "owner"
 
-    signals.push({ alias: displayName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 })
+    const anchor: Signal = { alias: displayName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 }
+    const sats: Signal[] = []
 
     const companyName = d.CompanyName as string | undefined
     if (companyName && companyName !== displayName) {
-      signals.push({ alias: companyName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 })
+      sats.push({ alias: companyName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 })
     }
     if (email) {
-      signals.push({ alias: email.toLowerCase(), alias_type: "email", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
+      sats.push({ alias: email.toLowerCase(), alias_type: "email", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
     }
     const web = (d.WebAddr as Record<string, unknown>)?.URI as string | undefined
     if (web) {
       const domain = extractDomain(web)
-      if (domain) signals.push({ alias: domain, alias_type: "domain", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.7 })
+      if (domain) sats.push({ alias: domain, alias_type: "domain", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.7 })
     }
+    groups.push(makeGroup(anchor, sats))
   }
 
   const { rows: vendors } = await query<{ entity_id: string; data: Record<string, unknown> }>(
@@ -286,8 +286,7 @@ async function extractQboSignals(userId: string, ctx: SelfContext): Promise<Sign
   for (const row of vendors) {
     const d = row.data
     const displayName = (d.DisplayName ?? d.FullyQualifiedName ?? "") as string
-    if (!displayName) continue
-    if (isTestEntity(displayName)) continue
+    if (!displayName || isTestEntity(displayName)) continue
 
     const email = (d.PrimaryEmailAddr as Record<string, unknown>)?.Address as string | undefined
 
@@ -295,15 +294,17 @@ async function extractQboSignals(userId: string, ctx: SelfContext): Promise<Sign
     if (isSelfEntity(displayName, ctx.selfNames)) entityType = "internal"
     else if (isKnownProcessor(displayName)) entityType = "processor"
 
-    signals.push({ alias: displayName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 })
+    const anchor: Signal = { alias: displayName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 }
+    const sats: Signal[] = []
 
     const companyName = d.CompanyName as string | undefined
     if (companyName && companyName !== displayName) {
-      signals.push({ alias: companyName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 })
+      sats.push({ alias: companyName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 })
     }
     if (email) {
-      signals.push({ alias: email.toLowerCase(), alias_type: "email", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
+      sats.push({ alias: email.toLowerCase(), alias_type: "email", source: "qbo", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
     }
+    groups.push(makeGroup(anchor, sats))
   }
 
   // QBO Employees
@@ -317,14 +318,16 @@ async function extractQboSignals(userId: string, ctx: SelfContext): Promise<Sign
     const d = row.data
     const displayName = (d.DisplayName ?? d.PrintOnCheckName ?? "") as string
     if (!displayName) continue
-    signals.push({ alias: displayName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: "employee", confidence: 0.9 })
+    const anchor: Signal = { alias: displayName, alias_type: "name", source: "qbo", source_id: row.entity_id, entity_type: "employee", confidence: 0.9 }
+    const sats: Signal[] = []
     const email = (d.PrimaryEmailAddr as Record<string, unknown>)?.Address as string | undefined
     if (email) {
-      signals.push({ alias: email.toLowerCase(), alias_type: "email", source: "qbo", source_id: row.entity_id, entity_type: "employee", confidence: 0.95 })
+      sats.push({ alias: email.toLowerCase(), alias_type: "email", source: "qbo", source_id: row.entity_id, entity_type: "employee", confidence: 0.95 })
     }
+    groups.push(makeGroup(anchor, sats))
   }
 
-  // QBO Account entities (bank accounts, credit cards)
+  // QBO Account entities — split bank_account vs ledger_account
   const { rows: accounts } = await query<{ entity_id: string; data: Record<string, unknown> }>(
     `SELECT e.entity_id, e.data FROM qbo_entities e
      JOIN qbo_connections c ON c.realm_id = e.realm_id
@@ -338,26 +341,30 @@ async function extractQboSignals(userId: string, ctx: SelfContext): Promise<Sign
     const acctSubType = (d.AccountSubType ?? "") as string
     if (!name) continue
 
-    const isBankOrCC = /^(Bank|Credit Card|Other Current Asset)$/i.test(acctType)
+    const isRealBank = /^(Bank|Credit Card)$/i.test(acctType)
       || /^(Checking|Savings|Money Market|Credit Card|Trust)$/i.test(acctSubType)
-    if (!isBankOrCC) continue
 
-    signals.push({
+    const isLedger = /^(Other Current Asset|Other Current Liability|Equity|Income|Cost of Goods Sold|Expense|Other Income|Other Expense|Accounts Receivable|Accounts Payable|Fixed Asset|Long Term Liability)$/i.test(acctType)
+
+    if (!isRealBank && !isLedger) continue
+
+    const eType: EntityType = isRealBank ? "bank_account" : "ledger_account"
+    groups.push(makeGroup({
       alias: name,
       alias_type: "name",
       source: "qbo",
       source_id: row.entity_id,
-      entity_type: "bank_account",
+      entity_type: eType,
       confidence: 0.9,
       extra: { account_type: acctType, account_sub_type: acctSubType },
-    })
+    }))
   }
 
-  return signals
+  return groups
 }
 
-async function extractXeroSignals(userId: string, ctx: SelfContext): Promise<Signal[]> {
-  const signals: Signal[] = []
+async function extractXeroSignalGroups(userId: string, ctx: SelfContext): Promise<SignalGroup[]> {
+  const groups: SignalGroup[] = []
 
   const { rows: contacts } = await query<{ entity_id: string; data: Record<string, unknown> }>(
     `SELECT e.entity_id, e.data FROM xero_entities e
@@ -368,8 +375,7 @@ async function extractXeroSignals(userId: string, ctx: SelfContext): Promise<Sig
   for (const row of contacts) {
     const d = row.data
     const name = d.Name as string | undefined
-    if (!name) continue
-    if (isTestEntity(name)) continue
+    if (!name || isTestEntity(name)) continue
 
     const isCustomer = d.IsCustomer === true
     const isSupplier = d.IsSupplier === true
@@ -377,18 +383,20 @@ async function extractXeroSignals(userId: string, ctx: SelfContext): Promise<Sig
     if (isSelfEntity(name, ctx.selfNames)) entityType = "internal"
     else if (isKnownProcessor(name)) entityType = "processor"
 
-    signals.push({ alias: name, alias_type: "name", source: "xero", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 })
+    const anchor: Signal = { alias: name, alias_type: "name", source: "xero", source_id: row.entity_id, entity_type: entityType, confidence: 0.9 }
+    const sats: Signal[] = []
     const email = d.EmailAddress as string | undefined
     if (email) {
-      signals.push({ alias: email.toLowerCase(), alias_type: "email", source: "xero", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
+      sats.push({ alias: email.toLowerCase(), alias_type: "email", source: "xero", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
     }
+    groups.push(makeGroup(anchor, sats))
   }
 
-  return signals
+  return groups
 }
 
-async function extractStripeSignals(userId: string, ctx: SelfContext): Promise<Signal[]> {
-  const signals: Signal[] = []
+async function extractStripeSignalGroups(userId: string, ctx: SelfContext): Promise<SignalGroup[]> {
+  const groups: SignalGroup[] = []
 
   const { rows: customers } = await query<{ entity_id: string; data: Record<string, unknown> }>(
     `SELECT entity_id, data FROM stripe_entities
@@ -403,14 +411,16 @@ async function extractStripeSignals(userId: string, ctx: SelfContext): Promise<S
     let entityType: EntityType = "customer"
     if (isSelfEntity(name, ctx.selfNames)) entityType = "internal"
 
-    signals.push({ alias: name, alias_type: "name", source: "stripe", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 })
+    const anchor: Signal = { alias: name, alias_type: "name", source: "stripe", source_id: row.entity_id, entity_type: entityType, confidence: 0.85 }
+    const sats: Signal[] = []
     const email = d.email as string | undefined
     if (email) {
-      signals.push({ alias: email.toLowerCase(), alias_type: "email", source: "stripe", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
+      sats.push({ alias: email.toLowerCase(), alias_type: "email", source: "stripe", source_id: row.entity_id, entity_type: entityType, confidence: 0.95 })
     }
+    groups.push(makeGroup(anchor, sats))
   }
 
-  return signals
+  return groups
 }
 
 async function extractPlaidMerchantStrings(userId: string): Promise<string[]> {
@@ -431,8 +441,8 @@ async function extractPlaidMerchantStrings(userId: string): Promise<string[]> {
   return Array.from(set)
 }
 
-async function extractGmailSignals(userId: string): Promise<Signal[]> {
-  const signals: Signal[] = []
+async function extractGmailSignalGroups(userId: string): Promise<SignalGroup[]> {
+  const groups: SignalGroup[] = []
 
   const { rows } = await query<{
     message_id: string
@@ -449,15 +459,20 @@ async function extractGmailSignals(userId: string): Promise<Signal[]> {
     const inv = row.extracted_invoice
     if (!inv) continue
     const cpType: EntityType = inv.counterparty_type === "vendor" ? "vendor" : inv.counterparty_type === "customer" ? "customer" : "unknown"
+
     if (inv.counterparty_name) {
-      signals.push({ alias: inv.counterparty_name, alias_type: "name", source: "gmail", source_id: row.message_id, entity_type: cpType, confidence: 0.7 })
-    }
-    if (inv.counterparty_email) {
-      signals.push({ alias: inv.counterparty_email.toLowerCase(), alias_type: "email", source: "gmail", source_id: row.message_id, entity_type: cpType, confidence: 0.8 })
+      const anchor: Signal = { alias: inv.counterparty_name, alias_type: "name", source: "gmail", source_id: row.message_id, entity_type: cpType, confidence: 0.7 }
+      const sats: Signal[] = []
+      if (inv.counterparty_email) {
+        sats.push({ alias: inv.counterparty_email.toLowerCase(), alias_type: "email", source: "gmail", source_id: row.message_id, entity_type: cpType, confidence: 0.8 })
+      }
+      groups.push(makeGroup(anchor, sats))
+    } else if (inv.counterparty_email) {
+      groups.push(makeGroup({ alias: inv.counterparty_email.toLowerCase(), alias_type: "email", source: "gmail", source_id: row.message_id, entity_type: cpType, confidence: 0.8 }))
     }
   }
 
-  return signals
+  return groups
 }
 
 // ─── LLM normalization for Plaid merchant strings ──────────────────
@@ -575,7 +590,6 @@ function findCandidateEntity(
   existingEntities: EntityRow[],
   existingAliases: Map<string, AliasRow[]>
 ): { entityId: string; matchScore: number } | null {
-  // 1. Exact alias match (email or account_ref)
   if (signal.alias_type === "email" || signal.alias_type === "account_ref") {
     for (const ent of existingEntities) {
       const aliases = existingAliases.get(ent.id) ?? []
@@ -585,7 +599,6 @@ function findCandidateEntity(
         }
       }
     }
-    // Fuzzy email match: same domain, edit distance <= 2 on local part
     if (signal.alias_type === "email") {
       const [sigLocal, sigDomain] = signal.alias.toLowerCase().split("@")
       if (sigLocal && sigDomain) {
@@ -603,7 +616,6 @@ function findCandidateEntity(
     }
   }
 
-  // 2. Normalized name match (exact, stripped, processor-normalized, substring)
   if (signal.alias_type === "name" || signal.alias_type === "merchant_string") {
     const norm = normalizeForMatch(signal.alias)
     const normStripped = normalizeForMatch(stripParenthetical(signal.alias))
@@ -640,7 +652,6 @@ function findCandidateEntity(
     }
   }
 
-  // 3. Domain match — check both domain aliases AND entity canonical names that look like domains
   if (signal.alias_type === "domain") {
     for (const ent of existingEntities) {
       const aliases = existingAliases.get(ent.id) ?? []
@@ -648,7 +659,6 @@ function findCandidateEntity(
         if (a.alias_type === "domain" && a.alias === signal.alias) {
           return { entityId: ent.id, matchScore: 0.7 }
         }
-        // Also check if any email alias has this domain
         if (a.alias_type === "email") {
           const emailDomain = a.alias.split("@")[1]?.toLowerCase()
           if (emailDomain === signal.alias) {
@@ -659,7 +669,6 @@ function findCandidateEntity(
     }
   }
 
-  // 4. Email domain cross-match
   if (signal.alias_type === "email") {
     const domain = extractDomain(signal.alias)
     if (domain) {
@@ -677,6 +686,22 @@ function findCandidateEntity(
   return null
 }
 
+// ─── Evidence-native confidence ────────────────────────────────────
+
+/**
+ * Computes confidence from independent evidence signals.
+ * P(entity) = 1 - product(1 - signal_i) for all signals attached to this entity.
+ * Each unique (source, alias_type) pair contributes independently.
+ */
+function computeEvidenceConfidence(signals: Signal[]): number {
+  if (signals.length === 0) return 0
+  let product = 1
+  for (const s of signals) {
+    product *= (1 - s.confidence)
+  }
+  return Math.round((1 - product) * 1000) / 1000
+}
+
 // ─── Main seed function ────────────────────────────────────────────
 
 export async function seedIdentityGraph(userId: string): Promise<{
@@ -690,13 +715,15 @@ export async function seedIdentityGraph(userId: string): Promise<{
   processorsDetected: number
   testSkipped: number
   bankAccounts: number
+  ledgerAccounts: number
 }> {
   await ensureIdentitySchema()
 
   const stats = {
     entitiesCreated: 0, entitiesUpdated: 0, aliasesCreated: 0,
     assertionsCreated: 0, plaidMerchantsNormalized: 0, plaidSkipped: 0,
-    selfEntities: 0, processorsDetected: 0, testSkipped: 0, bankAccounts: 0,
+    selfEntities: 0, processorsDetected: 0, testSkipped: 0,
+    bankAccounts: 0, ledgerAccounts: 0,
   }
 
   log("identity.seed.start", { userId }, "identity")
@@ -704,19 +731,19 @@ export async function seedIdentityGraph(userId: string): Promise<{
   const ctx = await getSelfContext(userId)
   log("identity.seed.self_context", { userId, selfNames: ctx.selfNames, selfDomains: ctx.selfDomains, ownerEmails: ctx.ownerEmails }, "identity")
 
-  // Phase 1: Collect signals from accounting tools + Gmail
-  const [qboSignals, xeroSignals, stripeSignals, gmailSignals] = await Promise.all([
-    extractQboSignals(userId, ctx),
-    extractXeroSignals(userId, ctx),
-    extractStripeSignals(userId, ctx),
-    extractGmailSignals(userId),
+  // Phase 1: Collect signal groups from accounting tools + Gmail
+  const [qboGroups, xeroGroups, stripeGroups, gmailGroups] = await Promise.all([
+    extractQboSignalGroups(userId, ctx),
+    extractXeroSignalGroups(userId, ctx),
+    extractStripeSignalGroups(userId, ctx),
+    extractGmailSignalGroups(userId),
   ])
 
-  // Phase 2: LLM-normalize Plaid merchant strings (pre-filtered)
+  // Phase 2: LLM-normalize Plaid merchant strings
   const plaidMerchants = await extractPlaidMerchantStrings(userId)
   const normalized = await llmNormalizeMerchants(plaidMerchants, ctx)
 
-  const plaidSignals: Signal[] = []
+  const plaidGroups: SignalGroup[] = []
   for (const n of normalized) {
     if (n.skip) { stats.plaidSkipped++; continue }
     if (isTestEntity(n.normalized)) { stats.testSkipped++; continue }
@@ -729,7 +756,7 @@ export async function seedIdentityGraph(userId: string): Promise<{
     if (entityType === "processor") stats.processorsDetected++
     if (entityType === "internal") stats.selfEntities++
 
-    plaidSignals.push({
+    const anchor: Signal = {
       alias: n.normalized,
       alias_type: "name",
       source: "plaid",
@@ -737,51 +764,42 @@ export async function seedIdentityGraph(userId: string): Promise<{
       entity_type: entityType,
       confidence: 0.8,
       extra: { raw_merchant: n.raw },
-    })
-    plaidSignals.push({
-      alias: n.raw,
-      alias_type: "merchant_string",
-      source: "plaid",
-      source_id: null,
-      entity_type: entityType,
-      confidence: 0.6,
-    })
-    if (n.domain_guess) {
-      plaidSignals.push({
-        alias: n.domain_guess,
-        alias_type: "domain",
-        source: "plaid",
-        source_id: null,
-        entity_type: entityType,
-        confidence: 0.6,
-      })
     }
+    const sats: Signal[] = [
+      { alias: n.raw, alias_type: "merchant_string", source: "plaid", source_id: null, entity_type: entityType, confidence: 0.6 },
+    ]
+    if (n.domain_guess) {
+      sats.push({ alias: n.domain_guess, alias_type: "domain", source: "plaid", source_id: null, entity_type: entityType, confidence: 0.6 })
+    }
+    plaidGroups.push(makeGroup(anchor, sats))
   }
 
-  // Self-entity signals
-  const selfSignals: Signal[] = []
+  // Self-entity groups
+  const selfGroups: SignalGroup[] = []
   for (const sn of ctx.selfNames) {
-    selfSignals.push({ alias: sn, alias_type: "name", source: "system", source_id: null, entity_type: "internal", confidence: 0.99 })
+    selfGroups.push(makeGroup({ alias: sn, alias_type: "name", source: "system", source_id: null, entity_type: "internal", confidence: 0.99 }))
   }
   for (const sd of ctx.selfDomains) {
-    selfSignals.push({ alias: sd, alias_type: "domain", source: "system", source_id: null, entity_type: "internal", confidence: 0.9 })
+    selfGroups.push(makeGroup({ alias: sd, alias_type: "domain", source: "system", source_id: null, entity_type: "internal", confidence: 0.9 }))
   }
 
-  const allSignals = [...selfSignals, ...qboSignals, ...xeroSignals, ...stripeSignals, ...plaidSignals, ...gmailSignals]
+  const allGroups = [...selfGroups, ...qboGroups, ...xeroGroups, ...stripeGroups, ...plaidGroups, ...gmailGroups]
+  const totalSignals = allGroups.reduce((sum, g) => sum + 1 + g.satellites.length, 0)
   log("identity.seed.signals_collected", {
     userId,
-    self: selfSignals.length,
-    qbo: qboSignals.length,
-    xero: xeroSignals.length,
-    stripe: stripeSignals.length,
-    plaid: plaidSignals.length,
-    gmail: gmailSignals.length,
-    total: allSignals.length,
+    groups: allGroups.length,
+    totalSignals,
+    self: selfGroups.length,
+    qbo: qboGroups.length,
+    xero: xeroGroups.length,
+    stripe: stripeGroups.length,
+    plaid: plaidGroups.length,
+    gmail: gmailGroups.length,
     plaidSkipped: stats.plaidSkipped,
     testSkipped: stats.testSkipped,
   }, "identity")
 
-  // Phase 3: Resolve signals into entities
+  // Phase 3: Resolve signal groups into entities
   let entities = (await query<EntityRow>(
     "SELECT id, canonical_name, entity_type, confidence FROM entities WHERE user_id = $1",
     [userId]
@@ -805,32 +823,30 @@ export async function seedIdentityGraph(userId: string): Promise<{
 
   const aliasMap = await loadAliases()
 
-  const prioritized = allSignals.sort((a, b) => b.confidence - a.confidence)
+  // Track signals per entity for evidence-native confidence
+  const entitySignals = new Map<string, Signal[]>()
 
-  for (const signal of prioritized) {
-    if (!signal.alias || signal.alias.trim().length === 0) continue
+  // Sort groups: higher anchor confidence first
+  allGroups.sort((a, b) => b.anchor.confidence - a.anchor.confidence)
 
-    const candidate = findCandidateEntity(signal, entities, aliasMap)
+  for (const group of allGroups) {
+    const { anchor, satellites } = group
+    if (!anchor.alias || anchor.alias.trim().length === 0) continue
+
+    // Resolve the anchor to find or create the entity
+    const candidate = findCandidateEntity(anchor, entities, aliasMap)
 
     let entityId: string
 
     if (candidate && candidate.matchScore >= 0.6) {
       entityId = candidate.entityId
       stats.entitiesUpdated++
-
-      const newConfidence = Math.min(1, candidate.matchScore * 0.5 + signal.confidence * 0.5)
-      await query(
-        `UPDATE entities SET confidence = GREATEST(confidence, $1), updated_at = NOW() WHERE id = $2`,
-        [newConfidence, entityId]
-      )
-      const ent = entities.find((e) => e.id === entityId)
-      if (ent) ent.confidence = Math.max(ent.confidence, newConfidence)
     } else {
-      const canonicalName = signal.alias_type === "email"
-        ? signal.alias.split("@")[0] ?? signal.alias
-        : signal.alias_type === "domain"
-          ? signal.alias
-          : normalizeProcessorName(stripParenthetical(signal.alias))
+      const canonicalName = anchor.alias_type === "email"
+        ? anchor.alias.split("@")[0] ?? anchor.alias
+        : anchor.alias_type === "domain"
+          ? anchor.alias
+          : normalizeProcessorName(stripParenthetical(anchor.alias))
 
       const { rows: inserted } = await query<{ id: string }>(
         `INSERT INTO entities (user_id, entity_type, canonical_name, display_name, confidence)
@@ -839,68 +855,89 @@ export async function seedIdentityGraph(userId: string): Promise<{
            confidence = GREATEST(entities.confidence, EXCLUDED.confidence),
            updated_at = NOW()
          RETURNING id`,
-        [userId, signal.entity_type, canonicalName, signal.alias, signal.confidence]
+        [userId, anchor.entity_type, canonicalName, anchor.alias, anchor.confidence]
       )
       entityId = inserted[0]?.id
       if (!entityId) continue
       stats.entitiesCreated++
-      if (signal.entity_type === "bank_account") stats.bankAccounts++
+      if (anchor.entity_type === "bank_account") stats.bankAccounts++
+      if (anchor.entity_type === "ledger_account") stats.ledgerAccounts++
 
-      entities.push({ id: entityId, canonical_name: canonicalName, entity_type: signal.entity_type, confidence: signal.confidence })
+      entities.push({ id: entityId, canonical_name: canonicalName, entity_type: anchor.entity_type, confidence: anchor.confidence })
     }
 
-    // Upsert alias
-    await query(
-      `INSERT INTO entity_aliases (entity_id, alias, alias_type, source, source_id, confidence)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (entity_id, alias, alias_type, source) DO UPDATE SET
-         confidence = GREATEST(entity_aliases.confidence, EXCLUDED.confidence)`,
-      [entityId, signal.alias, signal.alias_type, signal.source, signal.source_id, signal.confidence]
-    )
-    stats.aliasesCreated++
+    // Attach ALL signals in the group (anchor + satellites) to this entity
+    const allSignals = [anchor, ...satellites]
+    const prevSignals = entitySignals.get(entityId) ?? []
+    prevSignals.push(...allSignals)
+    entitySignals.set(entityId, prevSignals)
 
-    // Add domain alias from email signals
-    if (signal.alias_type === "email") {
-      const domain = extractDomain(signal.alias)
-      if (domain) {
-        await query(
-          `INSERT INTO entity_aliases (entity_id, alias, alias_type, source, source_id, confidence)
-           VALUES ($1, $2, 'domain', $3, $4, $5)
-           ON CONFLICT (entity_id, alias, alias_type, source) DO NOTHING`,
-          [entityId, domain, signal.source, signal.source_id, 0.6]
-        )
-        // Update in-memory alias map so domain dedup works for subsequent signals
-        const existing = aliasMap.get(entityId) ?? []
-        existing.push({ alias: domain, alias_type: "domain", source: signal.source })
-        aliasMap.set(entityId, existing)
+    for (const signal of allSignals) {
+      if (!signal.alias || signal.alias.trim().length === 0) continue
+
+      // Upsert alias
+      await query(
+        `INSERT INTO entity_aliases (entity_id, alias, alias_type, source, source_id, confidence)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (entity_id, alias, alias_type, source) DO UPDATE SET
+           confidence = GREATEST(entity_aliases.confidence, EXCLUDED.confidence)`,
+        [entityId, signal.alias, signal.alias_type, signal.source, signal.source_id, signal.confidence]
+      )
+      stats.aliasesCreated++
+
+      // Auto-derive domain alias from email
+      if (signal.alias_type === "email") {
+        const domain = extractDomain(signal.alias)
+        if (domain) {
+          await query(
+            `INSERT INTO entity_aliases (entity_id, alias, alias_type, source, source_id, confidence)
+             VALUES ($1, $2, 'domain', $3, $4, $5)
+             ON CONFLICT (entity_id, alias, alias_type, source) DO NOTHING`,
+            [entityId, domain, signal.source, signal.source_id, 0.6]
+          )
+          const existing = aliasMap.get(entityId) ?? []
+          existing.push({ alias: domain, alias_type: "domain", source: signal.source })
+          aliasMap.set(entityId, existing)
+        }
       }
+
+      // Record assertion
+      await query(
+        `INSERT INTO identity_assertions (entity_id, assertion_type, source, source_record, value, score)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          entityId,
+          signal.alias_type === "email" ? "email_match" : signal.alias_type === "name" ? "name_match" : signal.alias_type === "domain" ? "domain_match" : "source_ref",
+          signal.source,
+          JSON.stringify({ source_id: signal.source_id, extra: signal.extra }),
+          signal.alias,
+          signal.confidence,
+        ]
+      )
+      stats.assertionsCreated++
+
+      // Update in-memory alias map
+      const existing = aliasMap.get(entityId) ?? []
+      existing.push({ alias: signal.alias, alias_type: signal.alias_type, source: signal.source })
+      aliasMap.set(entityId, existing)
     }
+  }
 
-    // Record assertion
+  // Phase 4: Recompute evidence-native confidence for all touched entities
+  for (const [entityId, signals] of entitySignals) {
+    const evidenceConf = computeEvidenceConfidence(signals)
     await query(
-      `INSERT INTO identity_assertions (entity_id, assertion_type, source, source_record, value, score)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        entityId,
-        signal.alias_type === "email" ? "email_match" : signal.alias_type === "name" ? "name_match" : signal.alias_type === "domain" ? "domain_match" : "source_ref",
-        signal.source,
-        JSON.stringify({ source_id: signal.source_id, extra: signal.extra }),
-        signal.alias,
-        signal.confidence,
-      ]
+      `UPDATE entities SET confidence = $1, updated_at = NOW() WHERE id = $2`,
+      [evidenceConf, entityId]
     )
-    stats.assertionsCreated++
-
-    // Update alias map for subsequent lookups
-    const existing = aliasMap.get(entityId) ?? []
-    existing.push({ alias: signal.alias, alias_type: signal.alias_type, source: signal.source })
-    aliasMap.set(entityId, existing)
+    const ent = entities.find((e) => e.id === entityId)
+    if (ent) ent.confidence = evidenceConf
   }
 
   await query(
     `INSERT INTO identity_resolution_decisions (user_id, decision_type, reason)
      VALUES ($1, 'auto_create', $2)`,
-    [userId, `v3: ${stats.entitiesCreated} new, ${stats.entitiesUpdated} updated, ${stats.plaidSkipped} noise skipped, ${stats.testSkipped} test skipped, ${stats.bankAccounts} bank accounts, from ${allSignals.length} signals`]
+    [userId, `v4: ${stats.entitiesCreated} new, ${stats.entitiesUpdated} updated, ${stats.plaidSkipped} noise, ${stats.testSkipped} test, ${stats.bankAccounts} bank, ${stats.ledgerAccounts} ledger, from ${totalSignals} signals in ${allGroups.length} groups`]
   )
 
   log("identity.seed.done", { userId, ...stats }, "identity")

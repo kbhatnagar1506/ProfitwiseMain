@@ -175,7 +175,7 @@ export function OnboardingFlow({
   const [whatsappCodeInput, setWhatsappCodeInput] = useState("")
   const [whatsappSendLoading, setWhatsappSendLoading] = useState(false)
   const [whatsappVerifyLoading, setWhatsappVerifyLoading] = useState(false)
-  type IdentityEntity = { id: string; entity_type: string; canonical_name: string; display_name: string | null; domain: string | null; confidence: number; metadata: Record<string, unknown>; created_at: string }
+  type IdentityEntity = { id: string; entity_type: string; canonical_name: string; display_name: string | null; domain: string | null; confidence: number; metadata: Record<string, unknown>; created_at: string; source_count: number; evidence_count: number; sources: string[] }
   type IdentityAlias = { id: string; entity_id: string; alias: string; alias_type: string; source: string; source_id: string | null; confidence: number }
   type IdentityAssertionCount = { entity_id: string; assertion_type: string; source: string; count: number; avg_score: number }
   type IdentityData = { entities: IdentityEntity[]; aliases: IdentityAlias[]; relationships: unknown[]; assertionCounts: IdentityAssertionCount[] }
@@ -1679,11 +1679,13 @@ export function OnboardingFlow({
           t === "internal" ? "bg-yellow-500/80 border-yellow-400/50" :
           t === "owner" ? "bg-rose-500/80 border-rose-400/50" :
           t === "bank_account" ? "bg-slate-500/80 border-slate-400/50" :
+          t === "ledger_account" ? "bg-teal-600/80 border-teal-500/50" :
           t === "tax_authority" ? "bg-red-700/80 border-red-600/50" :
           t === "lender" ? "bg-indigo-500/80 border-indigo-400/50" :
           "bg-zinc-500/80 border-zinc-400/50"
         const typeLabel = (t: string) =>
           t === "bank_account" ? "bank acct" :
+          t === "ledger_account" ? "ledger" :
           t === "tax_authority" ? "tax auth" :
           t === "unknown" ? "unclassified" :
           t
@@ -1759,15 +1761,17 @@ export function OnboardingFlow({
                 {/* Entity list */}
                 <div className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
                   <div className="px-4 py-3 border-b border-white/20">
-                    <h3 className="text-lg font-semibold text-white">Resolved entities</h3>
-                    <p className="text-gray-400 text-sm mt-0.5">Click an entity to see its aliases, sources, and evidence.</p>
+                    <h3 className="text-lg font-semibold text-white">Canonical entities</h3>
+                    <p className="text-gray-400 text-sm mt-0.5">Each row is a resolved identity. Expand to see the evidence trail that supports it.</p>
                   </div>
                   <div className="max-h-[60vh] overflow-y-auto divide-y divide-white/10">
                     {idEntities.map((ent) => {
                       const expanded = identityExpandedEntity === ent.id
                       const entAliases = aliasesByEntity.get(ent.id) ?? []
                       const entAssertions = assertionsByEntity.get(ent.id) ?? []
-                      const sources = [...new Set(entAliases.map((a) => a.source))]
+                      const nameAliases = entAliases.filter((a) => a.alias_type === "name" || a.alias_type === "merchant_string")
+                      const emailAliases = entAliases.filter((a) => a.alias_type === "email")
+                      const domainAliases = entAliases.filter((a) => a.alias_type === "domain")
                       return (
                         <div key={ent.id}>
                           <button
@@ -1777,68 +1781,87 @@ export function OnboardingFlow({
                           >
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-white font-medium truncate">{ent.display_name || ent.canonical_name}</span>
+                                <span className="text-white font-semibold truncate">{ent.canonical_name}</span>
                                 <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium text-white capitalize ${typeColor(ent.entity_type)}`}>
                                   {typeLabel(ent.entity_type)}
                                 </span>
-                                {sources.map((s) => (
+                              </div>
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                {(ent.sources ?? []).map((s: string) => (
                                   <span key={s} className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${sourceColor(s)}`}>
                                     {s}
                                   </span>
                                 ))}
+                                <span className="text-[10px] text-gray-500">{ent.evidence_count ?? entAliases.length} evidence signals from {ent.source_count ?? new Set(entAliases.map((a) => a.source)).size} source{(ent.source_count ?? 1) !== 1 ? "s" : ""}</span>
                               </div>
-                              {ent.domain && <span className="text-xs text-gray-500 mt-0.5 block">{ent.domain}</span>}
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
                               <div className="flex items-center gap-1.5">
                                 <div className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden">
                                   <div
-                                    className={`h-full rounded-full ${ent.confidence >= 0.8 ? "bg-emerald-400" : ent.confidence >= 0.5 ? "bg-amber-400" : "bg-red-400"}`}
+                                    className={`h-full rounded-full ${ent.confidence >= 0.9 ? "bg-emerald-400" : ent.confidence >= 0.7 ? "bg-amber-400" : "bg-red-400"}`}
                                     style={{ width: `${confPct(ent.confidence)}%` }}
                                   />
                                 </div>
                                 <span className="text-xs text-gray-400 w-8 text-right">{confPct(ent.confidence)}%</span>
                               </div>
-                              <span className="text-xs text-gray-500">{entAliases.length} alias{entAliases.length !== 1 ? "es" : ""}</span>
                               <svg className={`w-4 h-4 text-gray-500 transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                             </div>
                           </button>
                           {expanded && (
-                            <div className="px-4 pb-4 space-y-3">
-                              {/* Aliases table */}
-                              <div className="rounded-lg border border-white/15 bg-black/40 overflow-x-auto">
-                                <table className="w-full text-sm">
-                                  <thead>
-                                    <tr className="border-b border-white/15">
-                                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Alias</th>
-                                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Type</th>
-                                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Source</th>
-                                      <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs">Confidence</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-white/10">
-                                    {entAliases.map((a) => (
-                                      <tr key={a.id} className="hover:bg-white/5">
-                                        <td className="text-white px-3 py-1.5 font-mono text-xs">{a.alias}</td>
-                                        <td className="text-gray-400 px-3 py-1.5 text-xs capitalize">{a.alias_type.replace("_", " ")}</td>
-                                        <td className="px-3 py-1.5">
-                                          <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${sourceColor(a.source)}`}>{a.source}</span>
-                                        </td>
-                                        <td className="text-gray-400 px-3 py-1.5 text-xs text-right">{confPct(a.confidence)}%</td>
-                                      </tr>
+                            <div className="px-4 pb-4 space-y-3 border-l-2 border-white/10 ml-4">
+                              <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider pt-1">Evidence trail</div>
+                              {/* Names / identifiers */}
+                              {nameAliases.length > 0 && (
+                                <div>
+                                  <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Names</div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {nameAliases.map((a) => (
+                                      <span key={a.id} className="inline-flex items-center gap-1 rounded-md bg-white/5 border border-white/10 px-2 py-1 text-xs text-white">
+                                        {a.alias}
+                                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${sourceColor(a.source)}`} title={a.source} />
+                                      </span>
                                     ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                              {/* Evidence summary */}
+                                  </div>
+                                </div>
+                              )}
+                              {/* Emails */}
+                              {emailAliases.length > 0 && (
+                                <div>
+                                  <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Emails</div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {emailAliases.map((a) => (
+                                      <span key={a.id} className="inline-flex items-center gap-1 rounded-md bg-white/5 border border-white/10 px-2 py-1 text-xs text-gray-300 font-mono">
+                                        {a.alias}
+                                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${sourceColor(a.source)}`} title={a.source} />
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {/* Domains */}
+                              {domainAliases.length > 0 && (
+                                <div>
+                                  <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Domains</div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {domainAliases.map((a) => (
+                                      <span key={a.id} className="inline-flex items-center gap-1 rounded-md bg-white/5 border border-white/10 px-2 py-1 text-xs text-gray-400 font-mono">
+                                        {a.alias}
+                                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${sourceColor(a.source)}`} title={a.source} />
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {/* Assertion evidence */}
                               {entAssertions.length > 0 && (
-                                <div className="rounded-lg border border-white/15 bg-black/40 p-3">
-                                  <div className="text-xs font-medium text-gray-400 mb-2">Evidence summary</div>
-                                  <div className="flex flex-wrap gap-2">
+                                <div>
+                                  <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Assertions</div>
+                                  <div className="flex flex-wrap gap-1.5">
                                     {entAssertions.map((a, i) => (
-                                      <span key={i} className="inline-flex items-center gap-1 rounded-full bg-white/10 border border-white/15 px-2 py-0.5 text-xs text-gray-300">
+                                      <span key={i} className="inline-flex items-center gap-1 rounded-full bg-white/5 border border-white/10 px-2 py-0.5 text-[11px] text-gray-400">
                                         <span className={`inline-block w-1.5 h-1.5 rounded-full ${sourceColor(a.source)}`} />
-                                        {a.assertion_type.replace("_", " ")} via {a.source} ({a.count}x, avg {confPct(a.avg_score)}%)
+                                        {a.assertion_type.replace(/_/g, " ")} via {a.source} ({a.count}x, avg {confPct(a.avg_score)}%)
                                       </span>
                                     ))}
                                   </div>
