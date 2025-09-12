@@ -598,6 +598,48 @@ export async function ensureIdentitySchema(): Promise<void> {
   log("identity.schema.ensured", undefined, "db")
 }
 
+// ─── Money Movement Layer ──────────────────────────────────────────
+
+const MOVEMENTS_SQL = `
+  CREATE TABLE IF NOT EXISTS movements (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source          TEXT NOT NULL,
+    source_type     TEXT NOT NULL,
+    source_id       TEXT NOT NULL,
+    entity_id       UUID REFERENCES entities(id) ON DELETE SET NULL,
+    date            DATE NOT NULL,
+    amount          NUMERIC NOT NULL,
+    raw_description TEXT,
+    counterparty    TEXT,
+    movement_class  TEXT NOT NULL,
+    pnl_eligible    BOOLEAN NOT NULL DEFAULT false,
+    from_account    TEXT,
+    to_account      TEXT,
+    confidence      REAL DEFAULT 0.5,
+    metadata        JSONB DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, source, source_id)
+  )
+`
+
+let movementsSchemaEnsured = false
+
+export async function ensureMovementsSchema(): Promise<void> {
+  if (movementsSchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await ensureIdentitySchema()
+  await p.query(MOVEMENTS_SQL)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_user ON movements (user_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_class ON movements (user_id, movement_class)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_pnl ON movements (user_id, pnl_eligible)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_entity ON movements (entity_id)")
+  movementsSchemaEnsured = true
+  log("movements.schema.ensured", undefined, "db")
+}
+
 export async function query<T = unknown>(
   text: string,
   params?: unknown[]
