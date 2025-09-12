@@ -1679,13 +1679,11 @@ export function OnboardingFlow({
           t === "internal" ? "bg-yellow-500/80 border-yellow-400/50" :
           t === "owner" ? "bg-rose-500/80 border-rose-400/50" :
           t === "bank_account" ? "bg-slate-500/80 border-slate-400/50" :
-          t === "ledger_account" ? "bg-teal-600/80 border-teal-500/50" :
           t === "tax_authority" ? "bg-red-700/80 border-red-600/50" :
           t === "lender" ? "bg-indigo-500/80 border-indigo-400/50" :
           "bg-zinc-500/80 border-zinc-400/50"
         const typeLabel = (t: string) =>
           t === "bank_account" ? "bank acct" :
-          t === "ledger_account" ? "ledger" :
           t === "tax_authority" ? "tax auth" :
           t === "unknown" ? "unclassified" :
           t
