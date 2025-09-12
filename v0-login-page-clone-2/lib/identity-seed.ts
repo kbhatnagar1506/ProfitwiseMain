@@ -327,33 +327,26 @@ async function extractQboSignalGroups(userId: string, ctx: SelfContext): Promise
     groups.push(makeGroup(anchor, sats))
   }
 
-  // QBO Account entities — only real bank/credit card accounts (not ledger accounts)
-  const { rows: accounts } = await query<{ entity_id: string; data: Record<string, unknown> }>(
-    `SELECT e.entity_id, e.data FROM qbo_entities e
-     JOIN qbo_connections c ON c.realm_id = e.realm_id
-     WHERE c.user_id = $1 AND e.entity_type = 'Account'`,
+  // Connected financial accounts from Plaid (real bank/CC accounts with live data)
+  const { rows: plaidAccounts } = await query<{ account_id: string; name: string | null; type: string | null; subtype: string | null; mask: string | null }>(
+    `SELECT pa.account_id, pa.name, pa.type, pa.subtype, pa.mask
+     FROM plaid_accounts pa
+     JOIN plaid_items pi ON pi.item_id = pa.item_id
+     WHERE pi.user_id = $1`,
     [userId]
   )
-  for (const row of accounts) {
-    const d = row.data
-    const name = (d.Name ?? d.FullyQualifiedName ?? "") as string
-    const acctType = (d.AccountType ?? "") as string
-    const acctSubType = (d.AccountSubType ?? "") as string
+  for (const acct of plaidAccounts) {
+    const name = acct.name?.trim()
     if (!name) continue
-
-    const isRealBank = /^(Bank|Credit Card)$/i.test(acctType)
-      || /^(Checking|Savings|Money Market|Credit Card|Trust)$/i.test(acctSubType)
-
-    if (!isRealBank) continue
-
+    const label = acct.mask ? `${name} (••${acct.mask})` : name
     groups.push(makeGroup({
-      alias: name,
+      alias: label,
       alias_type: "name",
-      source: "qbo",
-      source_id: row.entity_id,
+      source: "plaid",
+      source_id: acct.account_id,
       entity_type: "bank_account",
-      confidence: 0.9,
-      extra: { account_type: acctType, account_sub_type: acctSubType },
+      confidence: 0.95,
+      extra: { account_type: acct.type, account_subtype: acct.subtype, mask: acct.mask },
     }))
   }
 
