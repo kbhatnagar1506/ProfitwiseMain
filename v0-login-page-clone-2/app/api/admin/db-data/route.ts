@@ -141,5 +141,25 @@ export async function GET(req: NextRequest) {
     out.stripe_connections = { error: String(e) }
   }
 
+  try {
+    const stripeEnt = await query<{
+      stripe_account_id: string
+      entity_type: string
+      entity_id: string
+      updated_at: Date
+    }>("SELECT stripe_account_id, entity_type, entity_id, updated_at FROM stripe_entities ORDER BY entity_type, entity_id")
+    const byType: Record<string, number> = {}
+    for (const r of stripeEnt.rows) {
+      byType[r.entity_type] = (byType[r.entity_type] ?? 0) + 1
+    }
+    out.stripe_entities = {
+      count: stripeEnt.rows.length,
+      by_type: byType,
+      rows: stripeEnt.rows,
+    }
+  } catch (e) {
+    out.stripe_entities = { error: String(e) }
+  }
+
   return NextResponse.json(out)
 }
