@@ -34,9 +34,12 @@ function verifyStripeSignature(rawBody: Buffer, signatureHeader: string, secret:
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET
+  const secretEnv = process.env.STRIPE_WEBHOOK_SECRET
+  const secrets = secretEnv
+    ? secretEnv.split(",").map((s) => s.trim()).filter(Boolean)
+    : []
 
-  if (!secret) {
+  if (secrets.length === 0) {
     error("stripe.webhook.misconfigured_no_secret", undefined, "stripe")
     return NextResponse.json({ error: "Webhook not configured" }, { status: 500 })
   }
@@ -51,7 +54,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const rawBody = Buffer.from(await request.arrayBuffer())
 
-  if (!verifyStripeSignature(rawBody, sigHeader, secret)) {
+  const valid = secrets.some((secret) => verifyStripeSignature(rawBody, sigHeader, secret))
+  if (!valid) {
     warn("stripe.webhook.signature_verification_failed", undefined, "stripe")
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 })
   }
