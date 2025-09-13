@@ -3,6 +3,7 @@ import { cookies } from "next/headers"
 import { log, error as logError } from "@/lib/logger"
 import { exchangeCodeForTokens } from "@/lib/stripe"
 import { setToken } from "@/lib/stripe-token-store"
+import { runStripeSyncForUser } from "@/lib/stripe-sync"
 
 const STATE_COOKIE = "stripe_oauth_state"
 
@@ -63,6 +64,11 @@ export async function GET(request: NextRequest) {
       { userId }
     )
     log("stripe.oauth.callback.succeeded", { stripeUserId, hasScope: !!scope }, "stripe")
+
+    // Run full Stripe sync in background so invoices/customers/etc. are pulled without user action
+    void runStripeSyncForUser(userId).catch((e) => {
+      logError("stripe.oauth.callback.sync_failed", e, "stripe")
+    })
   } catch (err) {
     logError("stripe.oauth.callback.failed", err, "stripe")
     return NextResponse.redirect(new URL("/onboarding?error=stripe_token_exchange", base), 302)
