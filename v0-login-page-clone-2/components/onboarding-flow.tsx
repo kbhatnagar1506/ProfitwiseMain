@@ -394,12 +394,20 @@ export function OnboardingFlow({
     if (currentStep !== 6) return
     setCompanyContextError(null)
     setCompanyContextLoading(true)
-    // Prefer saved context when coming back from next step; only run AI merge when we have no saved context
+
+    let pollInterval: ReturnType<typeof setInterval> | null = null
+
+    const stopPolling = () => {
+      if (pollInterval) {
+        clearInterval(pollInterval)
+        pollInterval = null
+      }
+      setCompanyContextLoading(false)
+    }
+
     fetch("/api/context/save")
       .then(async (res) => {
-        if (!res.ok) {
-          return { ok: false as const, data: { finalContext: null as string | null } }
-        }
+        if (!res.ok) return { ok: false as const, data: { finalContext: null as string | null } }
         const data = (await res.json()) as { finalContext?: string | null }
         return { ok: true as const, data }
       })
@@ -407,45 +415,49 @@ export function OnboardingFlow({
         if (result.ok && result.data.finalContext && String(result.data.finalContext).trim()) {
           setCompanyContext(String(result.data.finalContext).trim())
           setEditedContext(null)
-          setCompanyContextLoading(false)
+          stopPolling()
           return
         }
         if (!result.ok) {
-          setCompanyContextLoading(false)
+          stopPolling()
           return
         }
         setCompanyContext(null)
-        let companyContextText = ""
-        return fetch("/api/supermemory/company-context")
-          .then((res) => (res.ok ? res.json() : { context: "" }) as Promise<{ context?: string }>)
-          .then((data) => {
-            companyContextText = data.context ?? ""
-            return fetch("/api/context/financial")
-          })
+        // No saved context: start async build and poll until ready; user gets WhatsApp when done
+        return fetch("/api/context/build-and-notify", { method: "POST" })
           .then((res) => {
-            if (!res.ok) throw new Error("Failed to load financial context")
+            if (!res.ok) throw new Error("Failed to start context build")
             return res.json()
           })
-          .then((financialContext) =>
-            fetch("/api/context/merge", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ companyContext: companyContextText, financialContext }),
-            })
-          )
-          .then((res) => {
-            if (!res.ok) throw new Error("Failed to merge context")
-            return res.json() as Promise<{ finalContext?: string }>
-          })
-          .then((mergeData) => {
-            setCompanyContext(mergeData.finalContext ?? null)
-            setEditedContext(null)
+          .then(() => {
+            const poll = () => {
+              fetch("/api/context/save")
+                .then((res) => (res.ok ? res.json() : { finalContext: null }))
+                .then((data: { finalContext?: string | null }) => {
+                  const ctx = data.finalContext && String(data.finalContext).trim()
+                  if (ctx) {
+                    setCompanyContext(ctx)
+                    setEditedContext(null)
+                    stopPolling()
+                  }
+                })
+                .catch(() => {})
+            }
+            poll()
+            pollInterval = setInterval(poll, 5000)
           })
       })
       .catch((err) => {
-        if (err?.message) setCompanyContextError("We couldn't build your company context. You can try again or continue.")
+        if (err?.message) setCompanyContextError("We couldn't start building your context. You can try again or continue.")
+        stopPolling()
       })
-      .finally(() => setCompanyContextLoading(false))
+      .finally(() => {
+        if (!pollInterval) setCompanyContextLoading(false)
+      })
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval)
+    }
   }, [currentStep])
 
   useEffect(() => {
@@ -1081,7 +1093,7 @@ export function OnboardingFlow({
             <div className="py-12 flex flex-col items-center justify-center text-center max-w-lg mx-auto">
               <h2 className="text-2xl font-semibold text-white mb-3">Building your company and financial context</h2>
               <p className="text-gray-400 text-base mb-8">
-                We’re combining your business docs with expenses and vendors from the last 60 days. This usually takes a few seconds.
+                We’re combining your business docs with expenses and vendors from the last 60 days. We’ll notify you on WhatsApp when it’s ready. You can wait here or come back later.
               </p>
               <div className="flex flex-col items-center gap-4">
                 <div className="h-10 w-10 rounded-full border-2 border-white/30 border-t-white animate-spin" />
