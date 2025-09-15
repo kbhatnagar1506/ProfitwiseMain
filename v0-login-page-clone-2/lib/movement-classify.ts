@@ -66,8 +66,6 @@ const ALL_MOVEMENT_TYPES = [...NON_PNL_TYPES, ...PNL_TYPES, ...FALLBACK_TYPES] a
 type MovementType = (typeof ALL_MOVEMENT_TYPES)[number]
 
 const PNL_ELIGIBLE_SET = new Set<string>(PNL_TYPES as unknown as string[])
-const NON_PNL_SET = new Set<string>(NON_PNL_TYPES as unknown as string[])
-
 function isPnlEligible(t: MovementType): boolean {
   return PNL_ELIGIBLE_SET.has(t)
 }
@@ -83,6 +81,8 @@ type SourceObservation = {
   raw_description: string | null
   counterparty: string | null
   plaid_category: string[] | null
+  plaid_pfc: Record<string, string> | null   // personal_finance_category
+  plaid_payment_channel: string | null        // "in store" | "online" | "other"
   account_name: string | null
   account_id: string | null
   metadata: Record<string, unknown>
@@ -103,6 +103,8 @@ type CanonicalMovement = {
   raw_description: string | null
   evidence: SourceObservation[]
   plaid_category: string[] | null
+  plaid_pfc: Record<string, string> | null
+  plaid_payment_channel: string | null
   metadata: Record<string, unknown>
 }
 
@@ -228,9 +230,12 @@ async function extractPlaidObservations(userId: string): Promise<SourceObservati
 
   const { rows: txns } = await query<{
     transaction_id: string; account_id: string; amount: string; date: string
-    name: string | null; merchant_name: string | null; category: string[] | null; pending: boolean
+    name: string | null; merchant_name: string | null; category: string[] | null
+    personal_finance_category: Record<string, string> | null
+    payment_channel: string | null; pending: boolean
   }>(
-    `SELECT pt.transaction_id, pt.account_id, pt.amount, pt.date, pt.name, pt.merchant_name, pt.category, pt.pending
+    `SELECT pt.transaction_id, pt.account_id, pt.amount, pt.date, pt.name, pt.merchant_name,
+            pt.category, pt.personal_finance_category, pt.payment_channel, pt.pending
      FROM plaid_transactions pt
      JOIN plaid_items pi ON pi.item_id = pt.item_id
      WHERE pi.user_id = $1 AND pt.pending = false`,
@@ -251,9 +256,11 @@ async function extractPlaidObservations(userId: string): Promise<SourceObservati
       raw_description: desc,
       counterparty: tx.merchant_name?.trim() || null,
       plaid_category: tx.category,
+      plaid_pfc: tx.personal_finance_category,
+      plaid_payment_channel: tx.payment_channel,
       account_name: accountNames.get(tx.account_id) ?? tx.account_id,
       account_id: tx.account_id,
-      metadata: { plaid_name: tx.name },
+      metadata: { plaid_name: tx.name, payment_channel: tx.payment_channel },
     })
   }
 
@@ -315,6 +322,8 @@ async function extractQboObservations(userId: string): Promise<SourceObservation
       raw_description: memo || counterparty || row.entity_type,
       counterparty,
       plaid_category: null,
+      plaid_pfc: null,
+      plaid_payment_channel: null,
       account_name: bankAcct ?? fromAcct ?? toAcct ?? null,
       account_id: null,
       metadata: {
@@ -382,6 +391,8 @@ async function extractStripeObservations(userId: string): Promise<SourceObservat
       raw_description: desc,
       counterparty,
       plaid_category: null,
+      plaid_pfc: null,
+      plaid_payment_channel: null,
       account_name: "Stripe",
       account_id: null,
       metadata: { stripe_type: txnType, status: d.status, stripe_customer_id: d.customer ?? null },
@@ -435,6 +446,8 @@ async function extractXeroObservations(userId: string): Promise<SourceObservatio
       raw_description: ref || counterparty || row.entity_type,
       counterparty,
       plaid_category: null,
+      plaid_pfc: null,
+      plaid_payment_channel: null,
       account_name: acctName,
       account_id: null,
       metadata: { xero_type: row.entity_type, xero_sub_type: xeroType },
@@ -446,16 +459,30 @@ async function extractXeroObservations(userId: string): Promise<SourceObservatio
 
 // ─── Step 2: Deduplicate / coalesce into canonical movements ────────
 
+const SOURCE_PRIORITY: Record<string, number> = { qbo: 4, xero: 3, stripe: 2, plaid: 1 }
+
+function counterpartyMatchScore(a: string | null, b: string | null): number {
+  if (!a || !b) return 0.5
+  const na = normKey(a)
+  const nb = normKey(b)
+  if (na === nb) return 1.0
+  if (na.length < 3 || nb.length < 3) return 0
+  const shorter = na.length <= nb.length ? na : nb
+  const longer = na.length > nb.length ? na : nb
+  if (longer.startsWith(shorter) || longer.endsWith(shorter)) {
+    return shorter.length / longer.length
+  }
+  return 0
+}
+
 function coalesceObservations(observations: SourceObservation[]): CanonicalMovement[] {
-  // Build dedup keys: |amount| rounded, date, normalized counterparty prefix
+  // Dedup key: |amount| rounded to cents + date (narrow window)
+  // Counterparty is NOT in the key — checked explicitly during pairing
   type KeyedObs = SourceObservation & { _key: string }
   const keyed: KeyedObs[] = observations.map((o) => ({
     ...o,
-    _key: `${Math.abs(o.amount).toFixed(2)}|${o.date}|${normKey(o.counterparty ?? o.raw_description ?? "").slice(0, 12)}`,
+    _key: `${Math.abs(o.amount).toFixed(2)}|${o.date}`,
   }))
-
-  // Source priority: qbo/xero > stripe > plaid (accounting systems are richest)
-  const PRIORITY: Record<string, number> = { qbo: 4, xero: 3, stripe: 2, plaid: 1 }
 
   const groups = new Map<string, KeyedObs[]>()
   for (const o of keyed) {
@@ -467,7 +494,12 @@ function coalesceObservations(observations: SourceObservation[]): CanonicalMovem
   const movements: CanonicalMovement[] = []
 
   for (const [, group] of groups) {
-    // Within same source, keep each as separate movement
+    if (group.length === 1) {
+      movements.push(obsToCanonical([group[0]]))
+      continue
+    }
+
+    // Within same source, always keep each as separate movement
     const bySource = new Map<string, KeyedObs[]>()
     for (const o of group) {
       const list = bySource.get(o.source) ?? []
@@ -476,16 +508,14 @@ function coalesceObservations(observations: SourceObservation[]): CanonicalMovem
     }
 
     if (bySource.size === 1) {
-      // All from same source — each is its own movement
       for (const o of group) {
         movements.push(obsToCanonical([o]))
       }
       continue
     }
 
-    // Cross-source group: pair by matching sign, keep primary, link rest as evidence
-    // Sort all by priority
-    group.sort((a, b) => (PRIORITY[b.source] ?? 0) - (PRIORITY[a.source] ?? 0))
+    // Cross-source: attempt to pair observations that describe the same cash event
+    group.sort((a, b) => (SOURCE_PRIORITY[b.source] ?? 0) - (SOURCE_PRIORITY[a.source] ?? 0))
 
     const used = new Set<number>()
     for (let i = 0; i < group.length; i++) {
@@ -494,16 +524,19 @@ function coalesceObservations(observations: SourceObservation[]): CanonicalMovem
       const evidenceGroup = [primary]
       used.add(i)
 
-      // Find cross-source matches (same sign or opposite for transfer pairing)
       for (let j = i + 1; j < group.length; j++) {
         if (used.has(j)) continue
         const candidate = group[j]
         if (candidate.source === primary.source) continue
-        // Same direction match = duplicate observation of same event
-        if (Math.sign(candidate.amount) === Math.sign(primary.amount)) {
-          evidenceGroup.push(candidate)
-          used.add(j)
-        }
+        if (Math.sign(candidate.amount) !== Math.sign(primary.amount)) continue
+
+        // Require counterparty similarity OR at least one side has no counterparty
+        const cpScore = counterpartyMatchScore(primary.counterparty, candidate.counterparty)
+        const eitherBlank = !primary.counterparty || !candidate.counterparty
+        if (cpScore < 0.5 && !eitherBlank) continue
+
+        evidenceGroup.push(candidate)
+        used.add(j)
       }
 
       movements.push(obsToCanonical(evidenceGroup))
@@ -536,10 +569,14 @@ function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
     }
   }
 
-  // Merge plaid categories
+  // Merge plaid fields
   let plaidCat: string[] | null = null
+  let plaidPfc: Record<string, string> | null = null
+  let plaidChannel: string | null = null
   for (const e of evidence) {
-    if (e.plaid_category && e.plaid_category.length > 0) { plaidCat = e.plaid_category; break }
+    if (e.plaid_category && e.plaid_category.length > 0 && !plaidCat) plaidCat = e.plaid_category
+    if (e.plaid_pfc && !plaidPfc) plaidPfc = e.plaid_pfc
+    if (e.plaid_payment_channel && !plaidChannel) plaidChannel = e.plaid_payment_channel
   }
 
   // Merge metadata
@@ -564,6 +601,8 @@ function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
     raw_description: primary.raw_description,
     evidence,
     plaid_category: plaidCat,
+    plaid_pfc: plaidPfc,
+    plaid_payment_channel: plaidChannel,
     metadata: mergedMeta,
   }
 }
@@ -659,7 +698,59 @@ function resolveAccounts(movements: CanonicalMovement[], ctx: MovementIdentityCo
 
 // ─── Step 4: Resolve counterparty identity ──────────────────────────
 
-function resolveCounterpartyIdentity(m: CanonicalMovement, ctx: MovementIdentityContext): MovementIdentityEntry | null {
+// Build a prefix index for fast fuzzy lookups (built once per classify run)
+type PrefixIndex = Map<string, Array<{ fullKey: string; entry: MovementIdentityEntry }>>
+
+function buildPrefixIndex(ctx: MovementIdentityContext): PrefixIndex {
+  const idx: PrefixIndex = new Map()
+  const PREFIX_LEN = 6
+  for (const [k, entry] of ctx) {
+    if (k.startsWith("__") || k.length < 4) continue
+    const prefix = k.slice(0, PREFIX_LEN)
+    const list = idx.get(prefix) ?? []
+    list.push({ fullKey: k, entry })
+    idx.set(prefix, list)
+  }
+  return idx
+}
+
+function fuzzyMatch(query: string, candidate: string): number {
+  if (query === candidate) return 1.0
+  const shorter = query.length <= candidate.length ? query : candidate
+  const longer = query.length > candidate.length ? query : candidate
+  if (shorter.length < 4) return 0
+
+  // Prefix/suffix containment with length ratio
+  if (longer.startsWith(shorter) || longer.endsWith(shorter)) {
+    return shorter.length / longer.length
+  }
+
+  // Token overlap: split by common word boundaries in normalized strings
+  // (digits act as separators in normKey output)
+  const qTokens = query.match(/[a-z]+/g) ?? []
+  const cTokens = candidate.match(/[a-z]+/g) ?? []
+  if (qTokens.length === 0 || cTokens.length === 0) return 0
+
+  let matches = 0
+  for (const qt of qTokens) {
+    if (qt.length < 3) continue
+    for (const ct of cTokens) {
+      if (ct.length < 3) continue
+      if (ct === qt || (ct.length >= 4 && qt.length >= 4 && (ct.startsWith(qt) || qt.startsWith(ct)))) {
+        matches++
+        break
+      }
+    }
+  }
+  const significantTokens = qTokens.filter((t) => t.length >= 3).length
+  return significantTokens > 0 ? matches / significantTokens : 0
+}
+
+function resolveCounterpartyIdentity(
+  m: CanonicalMovement,
+  ctx: MovementIdentityContext,
+  prefixIdx: PrefixIndex
+): MovementIdentityEntry | null {
   const candidates: string[] = []
   if (m.counterparty) candidates.push(m.counterparty)
   if (m.raw_description && m.raw_description !== m.counterparty) candidates.push(m.raw_description)
@@ -668,14 +759,33 @@ function resolveCounterpartyIdentity(m: CanonicalMovement, ctx: MovementIdentity
     const key = normKey(c)
     if (key.length < 2) continue
 
+    // 1. Exact match (O(1))
     const exact = ctx.get(key)
     if (exact) return exact
 
-    for (const [k, entry] of ctx) {
-      if (k.startsWith("__")) continue
-      if (k.length >= 4 && key.length >= 4 && (k.includes(key) || key.includes(k))) {
-        return entry
+    // 2. Prefix-indexed fuzzy match (O(bucket_size) not O(n))
+    if (key.length >= 6) {
+      const prefix = key.slice(0, 6)
+      const bucket = prefixIdx.get(prefix)
+      if (bucket) {
+        let bestScore = 0
+        let bestEntry: MovementIdentityEntry | null = null
+        for (const { fullKey, entry } of bucket) {
+          const score = fuzzyMatch(key, fullKey)
+          if (score > bestScore && score >= 0.6) {
+            bestScore = score
+            bestEntry = entry
+          }
+        }
+        if (bestEntry) return bestEntry
       }
+    }
+
+    // 3. Reverse containment: check if query is a well-known entity name
+    //    Only for short-ish queries (< 20 chars) to avoid false positives
+    if (key.length >= 5 && key.length <= 20) {
+      const directHit = ctx.get(key)
+      if (directHit) return directHit
     }
   }
 
@@ -687,7 +797,24 @@ function resolveCounterpartyIdentity(m: CanonicalMovement, ctx: MovementIdentity
 function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | null): { type: MovementType; confidence: number } | null {
   const desc = (m.raw_description ?? "").toLowerCase()
   const catStr = (m.plaid_category ?? []).join(" ").toLowerCase()
+  const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
+  const pfcDetailed = (m.plaid_pfc?.detailed ?? "").toUpperCase()
   const primaryObs = m.evidence[0]
+
+  // ── Plaid personal_finance_category (high-quality signal) ──
+  if (pfcPrimary === "TRANSFER_IN" || pfcPrimary === "TRANSFER_OUT") {
+    if (pfcDetailed.includes("ACCOUNT_TRANSFER")) return { type: "internal_transfer", confidence: 0.9 }
+    if (pfcDetailed.includes("LOAN") || pfcDetailed.includes("MORTGAGE")) {
+      return m.direction === "inflow"
+        ? { type: "loan_funding", confidence: 0.85 }
+        : { type: "loan_principal_payment", confidence: 0.85 }
+    }
+    if (pfcDetailed.includes("CREDIT_CARD")) return { type: "credit_card_payment", confidence: 0.9 }
+    if (pfcDetailed.includes("DEPOSIT")) return { type: "internal_transfer", confidence: 0.8 }
+  }
+  if (pfcPrimary === "LOAN_PAYMENTS") {
+    return { type: "loan_principal_payment", confidence: 0.9 }
+  }
 
   // ── Structural: cross-account transfer (already paired) ──
   if (m.metadata.transfer_type === "cross_account") {
@@ -764,14 +891,17 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
 
   // ── Transfer patterns (bank description) ──
   if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
-    // If identity says internal or bank_account → internal_transfer
+    // Only classify as internal_transfer if identity confirms it's own account
     if (identity && (identity.role === "internal" || identity.role === "bank_account" || identity.is_own_account)) {
       return { type: "internal_transfer", confidence: 0.85 }
     }
-    // Plaid transfer category
-    if (catStr.includes("transfer") && !catStr.includes("wire transfer")) {
-      return { type: "internal_transfer", confidence: 0.75 }
+    // Plaid transfer category + both from/to accounts known (strong internal signal)
+    if (catStr.includes("transfer") && !catStr.includes("wire transfer") && m.linked_internal_account_id) {
+      return { type: "internal_transfer", confidence: 0.8 }
     }
+    // Without identity or linked account, do NOT force internal_transfer —
+    // this could be a vendor wire, customer wire, etc. Let it fall through
+    // to operating classification or fallback as unknown_transfer_candidate.
   }
 
   // ── Identity: processor → settlement ──
@@ -795,7 +925,20 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
 function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry | null): { type: MovementType; confidence: number } | null {
   const desc = (m.raw_description ?? "").toLowerCase()
   const catStr = (m.plaid_category ?? []).join(" ").toLowerCase()
+  const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
+  const pfcDetailed = (m.plaid_pfc?.detailed ?? "").toUpperCase()
   const primaryObs = m.evidence[0]
+
+  // ── Plaid personal_finance_category operating signals ──
+  if (pfcPrimary === "BANK_FEES") return { type: "cash_out_bank_fee", confidence: 0.9 }
+  if (pfcPrimary === "INCOME" && pfcDetailed.includes("INTEREST")) return { type: "cash_in_interest", confidence: 0.9 }
+  if (pfcPrimary === "INCOME") return { type: "cash_in_customer", confidence: 0.75 }
+  if (pfcDetailed.includes("TAX") || pfcPrimary === "GOVERNMENT_AND_NON_PROFIT") {
+    if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", confidence: 0.9 }
+  }
+  if (pfcPrimary === "RENT_AND_UTILITIES" || pfcPrimary === "GENERAL_SERVICES") {
+    return { type: "cash_out_operating_expense", confidence: 0.8 }
+  }
 
   // ── Bank fees ──
   if (BANK_FEE_PATTERNS.some((p) => p.test(desc))) {
@@ -866,8 +1009,22 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
 
   // ── QBO type fallback ──
   if (primaryObs.source === "qbo") {
-    if (["Invoice", "Payment", "SalesReceipt", "Deposit"].includes(primaryObs.source_type)) {
-      return { type: "cash_in_customer", confidence: 0.75 }
+    if (["Invoice", "SalesReceipt"].includes(primaryObs.source_type)) {
+      return { type: "cash_in_customer", confidence: 0.8 }
+    }
+    if (primaryObs.source_type === "Payment") {
+      // QBO Payment is specifically a customer payment against an invoice
+      return { type: "cash_in_customer", confidence: 0.8 }
+    }
+    if (primaryObs.source_type === "Deposit") {
+      // QBO Deposit can be mixed — only high confidence if we have a customer counterparty
+      if (m.counterparty && identity?.role === "customer") {
+        return { type: "cash_in_customer", confidence: 0.75 }
+      }
+      // Without identity, it could be owner contribution, transfer, or mixed — lower confidence
+      return m.counterparty
+        ? { type: "cash_in_customer", confidence: 0.6 }
+        : { type: "unknown_inflow", confidence: 0.4 }
     }
     if (["Bill", "BillPayment", "Purchase"].includes(primaryObs.source_type)) {
       return { type: "cash_out_vendor", confidence: 0.75 }
@@ -903,6 +1060,13 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
   // ── Plaid category-based operating heuristics ──
   if (m.direction === "inflow" && catStr.includes("deposit")) {
     return { type: "cash_in_customer", confidence: 0.6 }
+  }
+
+  // ── Plaid payment_channel: "in store" or "online" strongly suggests operating ──
+  if (m.plaid_payment_channel === "in store" || m.plaid_payment_channel === "online") {
+    return m.direction === "inflow"
+      ? { type: "cash_in_customer", confidence: 0.6 }
+      : { type: "cash_out_operating_expense", confidence: 0.6 }
   }
 
   return null
@@ -1079,6 +1243,9 @@ export async function classifyMovements(userId: string): Promise<{
     identityCtx = await buildMovementIdentityContext(userId)
   }
 
+  // Build prefix index for fast fuzzy identity lookups
+  const prefixIdx = buildPrefixIndex(identityCtx)
+
   // Step 2b: Coalesce cross-source observations into canonical movements
   let movements = coalesceObservations(allObs)
 
@@ -1102,7 +1269,7 @@ export async function classifyMovements(userId: string): Promise<{
 
   // Step 4: Resolve counterparty identity
   for (const m of movements) {
-    const entry = resolveCounterpartyIdentity(m, identityCtx)
+    const entry = resolveCounterpartyIdentity(m, identityCtx, prefixIdx)
     if (entry) {
       m.counterparty_entity_id = entry.entity_id
       m.counterparty_entity_type = entry.role
@@ -1125,7 +1292,7 @@ export async function classifyMovements(userId: string): Promise<{
   const needsLlm: Array<{ idx: number; movement: CanonicalMovement; identity: MovementIdentityEntry | null }> = []
 
   for (const m of movements) {
-    const identity = m.counterparty_entity_id ? resolveCounterpartyIdentity(m, identityCtx) : null
+    const identity = m.counterparty_entity_id ? resolveCounterpartyIdentity(m, identityCtx, prefixIdx) : null
 
     // Step 5: Non-P&L first
     const nonPnl = classifyNonPnl(m, identity)
@@ -1172,15 +1339,51 @@ export async function classifyMovements(userId: string): Promise<{
     const llmResults = await llmClassifyBatch(needsLlm.map((n) => ({ movement: n.movement, identity: n.identity })))
 
     for (const llmResult of llmResults) {
-      const match = needsLlm.find((_, i) => i === llmResult.index)
-      if (match && llmResult.confidence > classified[match.idx].confidence) {
+      const globalIdx = llmResult.index
+      if (globalIdx < 0 || globalIdx >= needsLlm.length) continue
+      const target = needsLlm[globalIdx]
+      if (llmResult.confidence > classified[target.idx].confidence) {
         const t = llmResult.movement_type as MovementType
-        classified[match.idx].movement_type = t
-        classified[match.idx].pnl_eligible = isPnlEligible(t)
-        classified[match.idx].confidence = llmResult.confidence
-        classified[match.idx].review_needed = llmResult.confidence < 0.7
+        classified[target.idx].movement_type = t
+        classified[target.idx].pnl_eligible = isPnlEligible(t)
+        classified[target.idx].confidence = llmResult.confidence
+        classified[target.idx].review_needed = llmResult.confidence < 0.7
         stats.llm_classified++
       }
+    }
+  }
+
+  // Step 8b: Direction/type consistency validation
+  const INFLOW_TYPES = new Set<string>([
+    "cash_in_customer", "cash_in_refund", "cash_in_interest",
+    "loan_funding", "owner_contribution", "unknown_inflow",
+  ])
+  const OUTFLOW_TYPES = new Set<string>([
+    "cash_out_vendor", "cash_out_operating_expense", "cash_out_refund",
+    "cash_out_bank_fee", "cash_out_payroll", "cash_out_tax", "cash_out_interest",
+    "credit_card_payment", "loan_principal_payment", "owner_draw", "unknown_outflow",
+  ])
+  // Types that can be either direction: internal_transfer, processor_payout,
+  // processor_fee_settlement, account_verification, opening_balance,
+  // balance_adjustment, other_operating, unknown_transfer_candidate
+
+  for (const c of classified) {
+    const isInflow = c.direction === "inflow"
+    if (isInflow && OUTFLOW_TYPES.has(c.movement_type)) {
+      // Direction contradicts type — flag for review, downgrade confidence
+      c.review_needed = true
+      c.confidence = Math.min(c.confidence, 0.5)
+      log("movements.classify.direction_mismatch", {
+        type: c.movement_type, direction: c.direction, amount: c.amount,
+        counterparty: c.counterparty,
+      }, "movements")
+    } else if (!isInflow && INFLOW_TYPES.has(c.movement_type)) {
+      c.review_needed = true
+      c.confidence = Math.min(c.confidence, 0.5)
+      log("movements.classify.direction_mismatch", {
+        type: c.movement_type, direction: c.direction, amount: c.amount,
+        counterparty: c.counterparty,
+      }, "movements")
     }
   }
 

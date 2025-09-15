@@ -14,6 +14,8 @@ export type TransactionRow = {
   name: string
   merchant_name: string | null
   category: string[] | null
+  personal_finance_category: Record<string, string> | null
+  payment_channel: string | null
   pending: boolean
 }
 
@@ -62,6 +64,8 @@ function plaidTransactionToRow(t: {
   name?: string | null
   merchant_name?: string | null
   category?: string[] | null
+  personal_finance_category?: Record<string, string> | null
+  payment_channel?: string | null
   pending?: boolean
 }): TransactionRow {
   return {
@@ -72,6 +76,8 @@ function plaidTransactionToRow(t: {
     name: typeof t.name === "string" ? t.name : "",
     merchant_name: t.merchant_name ?? null,
     category: t.category ?? null,
+    personal_finance_category: t.personal_finance_category ?? null,
+    payment_channel: t.payment_channel ?? null,
     pending: t.pending ?? false,
   }
 }
@@ -82,8 +88,8 @@ export async function upsertTransactions(itemId: string, transactions: Transacti
     await ensurePlaidSchema()
     for (const t of transactions) {
       await query(
-        `INSERT INTO plaid_transactions (item_id, account_id, transaction_id, amount, date, name, merchant_name, category, pending, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, NOW())
+        `INSERT INTO plaid_transactions (item_id, account_id, transaction_id, amount, date, name, merchant_name, category, personal_finance_category, payment_channel, pending, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, NOW())
          ON CONFLICT (item_id, transaction_id) DO UPDATE SET
            account_id = EXCLUDED.account_id,
            amount = EXCLUDED.amount,
@@ -91,6 +97,8 @@ export async function upsertTransactions(itemId: string, transactions: Transacti
            name = EXCLUDED.name,
            merchant_name = EXCLUDED.merchant_name,
            category = EXCLUDED.category,
+           personal_finance_category = EXCLUDED.personal_finance_category,
+           payment_channel = EXCLUDED.payment_channel,
            pending = EXCLUDED.pending`,
         [
           itemId,
@@ -101,6 +109,8 @@ export async function upsertTransactions(itemId: string, transactions: Transacti
           t.name,
           t.merchant_name,
           t.category ? JSON.stringify(t.category) : null,
+          t.personal_finance_category ? JSON.stringify(t.personal_finance_category) : null,
+          t.payment_channel,
           t.pending,
         ]
       )
