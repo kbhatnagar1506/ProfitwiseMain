@@ -25,14 +25,7 @@ const MOVEMENT_CLASSES = [
   "payroll",
   "tax",
   "owner_draw",
-  "owner_contribution",
-  "other_income",
   "uncategorized",
-  "unresolved_inflow",
-  "unresolved_outflow",
-  "owner_related_candidate",
-  "funding_candidate",
-  "transfer_candidate",
 ] as const
 type MovementClass = (typeof MOVEMENT_CLASSES)[number]
 
@@ -41,7 +34,6 @@ const PNL_ELIGIBLE_CLASSES = new Set<MovementClass>([
   "operating_expense",
   "payroll",
   "tax",
-  "other_income",
 ])
 
 type RawMovement = {
@@ -61,64 +53,9 @@ type RawMovement = {
 }
 
 type ClassifiedMovement = RawMovement & {
-  event_id: string
   movement_class: MovementClass
   pnl_eligible: boolean
-  statement_impact: string | null
-  movement_subclass: string | null
   confidence: number
-  event_type: string | null
-  movement_mechanic: string | null
-  review_status: string | null
-}
-
-type EventCluster = {
-  id: string
-  movements: RawMovement[]
-}
-
-function groupMovementsIntoEvents(movements: RawMovement[]): EventCluster[] {
-  const clusters: EventCluster[] = []
-  const used = new Set<number>()
-
-  const norm = (s: string | null) => (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "")
-
-  for (let i = 0; i < movements.length; i++) {
-    if (used.has(i)) continue
-    const m = movements[i]
-    const cluster: RawMovement[] = [m]
-    used.add(i)
-
-    const date = new Date(m.date)
-    const amt = Math.abs(m.amount)
-    const cp = norm(m.counterparty)
-    const desc = norm(m.raw_description)
-
-    for (let j = i + 1; j < movements.length; j++) {
-      if (used.has(j)) continue
-      const n = movements[j]
-      if (Math.abs(Math.abs(n.amount) - amt) > 0.01) continue
-
-      const d2 = new Date(n.date)
-      const diffDays = Math.abs((d2.getTime() - date.getTime()) / (1000 * 60 * 60 * 24))
-      if (diffDays > 1) continue
-
-      const cp2 = norm(n.counterparty)
-      const desc2 = norm(n.raw_description)
-      const exactMatch = (cp && cp2 && (cp === cp2 || cp.includes(cp2) || cp2.includes(cp))) ||
-        (desc && desc2 && (desc === desc2 || desc.includes(desc2) || desc2.includes(desc)))
-      const overlapMatch = desc && desc2 && desc.length >= 6 && desc2.length >= 6 &&
-        (desc2.includes(desc.substring(0, 6)) || desc.includes(desc2.substring(0, 6)))
-      if (!exactMatch && !overlapMatch) continue
-
-      cluster.push(n)
-      used.add(j)
-    }
-
-    clusters.push({ id: crypto.randomUUID(), movements: cluster })
-  }
-
-  return clusters
 }
 
 // ─── Known patterns ────────────────────────────────────────────────
@@ -173,47 +110,6 @@ const REFUND_PATTERNS = [
   /\bcredit memo\b/i,
   /\breversed?\b/i,
   /\bchargeback\b/i,
-]
-
-const ZELLE_TRANSFER_PATTERNS = [
-  /acct-to-acct transfer/i,
-  /transfer credit/i,
-  /money move/i,
-  /zelle/i,
-  /miscellaneous (credit|debit).*transfer/i,
-]
-
-const OPENING_BALANCE_PATTERNS = [
-  /opening balance/i,
-  /created by qb online to adjust balance/i,
-  /adjust balance for deletion/i,
-]
-
-const ZERO_AMOUNT_PATTERNS = [
-  /rate change/i,
-  /debit \(any type\)\s+rate change/i,
-  /adjust balance for deletion/i,
-  /created by qb online to adjust balance/i,
-]
-
-const SHOPIFY_PATTERNS = [/shopify/i]
-const GATEWAY_PATTERNS = [/gateway services/i, /gateway.*webpayment/i]
-
-const LIABILITY_PAYMENT_PATTERNS = [
-  /payment thank you/i,
-  /chase credit crd/i,
-  /chase credit card/i,
-  /\bepay\b/i,
-]
-
-const PLATFORM_SUBSCRIPTION_PATTERNS = [
-  /intuit\s*\*qbooks/i,
-  /qbooks online/i,
-  /google\s*\*workspace/i,
-  /zapier\.com/i,
-  /docusign/i,
-  /amazon\.com/i,
-  /amazon mktpl/i,
 ]
 
 // ─── Phase 1: Extract raw movements from all sources ───────────────
@@ -423,8 +319,7 @@ async function linkToIdentities(
 
   for (const m of movements) {
     if (!m.counterparty && !m.raw_description) continue
-    const raw = (m.counterparty ?? m.raw_description ?? "").replace(/\s*\(deleted\)$/i, "").trim()
-    const search = raw.toLowerCase().replace(/[^a-z0-9]/g, "")
+    const search = (m.counterparty ?? m.raw_description ?? "").toLowerCase().replace(/[^a-z0-9]/g, "")
     if (search.length < 2) continue
 
     const exact = nameIndex.get(search)
@@ -446,699 +341,83 @@ async function linkToIdentities(
 
 // ─── Phase 3: Rule-based classification ────────────────────────────
 
-type ClassifyResult = {
-  cls: MovementClass
-  subclass: string | null
-  confidence: number
-  event_type: string
-  movement_mechanic: string | null
-  statement_impact: string
-  review_status: string
-}
-
-function getStatementImpactFromAxes(eventType: string, movementMechanic: string | null): string {
-  if (eventType === "sale") return "pnl_revenue"
-  if (eventType === "purchase" || eventType === "payroll" || eventType === "tax_payment" || eventType === "fee" || eventType === "platform_fee") return "pnl_expense"
-  if (eventType === "refund") return "pnl_contra_revenue"
-  if (eventType === "other_income") return "pnl_other_income"
-  if (eventType === "transfer" || eventType === "processor_settlement") return "bs_only"
-  if (eventType === "liability_settlement") return "bs_liability_settlement"
-  if (eventType === "owner_contribution" || eventType === "owner_draw") return "bs_equity"
-  if (eventType === "adjustment" || eventType === "verification") return "non_posting"
-  return "bs_only"
-}
-
-function getReviewStatus(confidence: number, cls: MovementClass): string {
-  if (cls === "owner_related_candidate" || cls === "funding_candidate" || cls === "transfer_candidate" || cls === "unresolved_inflow" || cls === "unresolved_outflow") return "needs_review"
-  if (cls === "owner_draw" || cls === "owner_contribution") return "provisional"
-  if (confidence >= 0.85) return "confirmed"
-  if (confidence >= 0.7) return "provisional"
-  return "needs_review"
-}
-
-function mapClassToEventType(cls: MovementClass, amount: number): string {
-  if (cls === "operating_revenue") return "sale"
-  if (cls === "operating_expense") return "purchase"
-  if (cls === "internal_transfer") return "transfer"
-  if (cls === "settlement") return "processor_settlement"
-  if (cls === "fee") return "fee"
-  if (cls === "refund") return "refund"
-  if (cls === "financing") return amount >= 0 ? "debt_draw" : "debt_repayment"
-  if (cls === "payroll") return "payroll"
-  if (cls === "tax") return "tax_payment"
-  if (cls === "owner_draw") return amount >= 0 ? "owner_contribution" : "owner_draw"
-  if (cls === "owner_contribution") return "owner_contribution"
-  if (cls === "other_income") return "other_income"
-  return "unknown"
-}
-
-function mapClassToMovementMechanic(cls: MovementClass, amount: number): string | null {
-  if (cls === "operating_revenue") return "customer_receipt"
-  if (cls === "operating_expense") return "vendor_payout"
-  if (cls === "internal_transfer") return "internal_transfer"
-  if (cls === "settlement") return "processor_payout"
-  if (cls === "fee") return "bank_fee"
-  if (cls === "refund") return "reversal"
-  if (cls === "owner_draw" || cls === "owner_contribution") return amount >= 0 ? "owner_in" : "owner_out"
-  if (cls === "owner_related_candidate" || cls === "funding_candidate") return amount >= 0 ? "transfer_in" : "transfer_out"
-  if (cls === "unresolved_inflow") return "transfer_in"
-  if (cls === "unresolved_outflow") return "transfer_out"
-  return null
-}
-
-function classifyByRules(m: RawMovement): ClassifyResult | null {
+function classifyByRules(m: RawMovement): { cls: MovementClass; confidence: number } | null {
   const desc = (m.raw_description ?? "").toLowerCase()
   const counterparty = (m.counterparty ?? "").toLowerCase()
   const cats = m.plaid_category ?? []
   const catStr = cats.join(" ").toLowerCase()
-  const hasQboInvoice = m.source === "qbo" && ["Invoice", "Payment", "SalesReceipt", "Deposit"].includes(m.source_type)
 
-  // Zero-dollar artifacts – non-posting
-  if (Math.abs(m.amount) < 0.01 && ZERO_AMOUNT_PATTERNS.some((p) => p.test(desc))) {
-    return {
-      cls: "uncategorized",
-      subclass: "adjustment",
-      confidence: 0.92,
-      event_type: "adjustment",
-      movement_mechanic: null,
-      statement_impact: "non_posting",
-      review_status: "excluded",
-    }
-  }
-
-  // Micro-deposits / verification – never owner draw
-  if (desc.includes("acctverify")) {
-    return {
-      cls: "uncategorized",
-      subclass: "verification",
-      confidence: 0.92,
-      event_type: "verification",
-      movement_mechanic: null,
-      statement_impact: "non_posting",
-      review_status: "excluded",
-    }
-  }
-
-  // Opening balance / setup adjustments – not expense
-  if (OPENING_BALANCE_PATTERNS.some((p) => p.test(desc))) {
-    return {
-      cls: "unresolved_outflow",
-      subclass: "setup_adjustment",
-      confidence: 0.9,
-      event_type: "adjustment",
-      movement_mechanic: null,
-      statement_impact: "non_posting",
-      review_status: "needs_review",
-    }
-  }
-
-  // Bank interest – other income, not financing
-  if (desc.includes("interest credit") || desc.includes("interest paid")) {
-    return {
-      cls: "other_income",
-      subclass: "interest_income",
-      confidence: 0.82,
-      event_type: "other_income",
-      movement_mechanic: "bank_interest",
-      statement_impact: "pnl_other_income",
-      review_status: "confirmed",
-    }
-  }
-
-  // Test/manual artifacts
-  if (/jack test|test\s*entry/i.test(desc) || /jack test/i.test(counterparty)) {
-    return {
-      cls: "owner_related_candidate",
-      subclass: "test_artifact",
-      confidence: 0.9,
-      event_type: "unknown",
-      movement_mechanic: null,
-      statement_impact: "non_posting",
-      review_status: "excluded",
-    }
-  }
-
-  // Zelle / Acct-to-Acct / Transfer Credit – owner contribution vs draw by amount direction
-  const isZelleOrTransferLike = ZELLE_TRANSFER_PATTERNS.some((p) => p.test(desc))
-  if (isZelleOrTransferLike) {
-    if (m.entity_type === "customer" && hasQboInvoice) {
-      return {
-        cls: "operating_revenue",
-        subclass: null,
-        confidence: 0.85,
-        event_type: "sale",
-        movement_mechanic: "customer_receipt",
-        statement_impact: "pnl_revenue",
-        review_status: "confirmed",
-      }
-    }
-    if (m.entity_type === "vendor") {
-      return {
-        cls: "operating_expense",
-        subclass: null,
-        confidence: 0.85,
-        event_type: "purchase",
-        movement_mechanic: "vendor_payout",
-        statement_impact: "pnl_expense",
-        review_status: "confirmed",
-      }
-    }
-    if (m.entity_type === "owner") {
-      if (m.amount >= 0) {
-        return {
-          cls: "owner_contribution",
-          subclass: null,
-          confidence: 0.88,
-          event_type: "owner_contribution",
-          movement_mechanic: "owner_in",
-          statement_impact: "bs_equity",
-          review_status: "provisional",
-        }
-      }
-      return {
-        cls: "owner_draw",
-        subclass: null,
-        confidence: 0.88,
-        event_type: "owner_draw",
-        movement_mechanic: "owner_out",
-        statement_impact: "bs_equity",
-        review_status: "provisional",
-      }
-    }
-    if (m.amount >= 0) {
-      return {
-        cls: "owner_related_candidate",
-        subclass: "owner_contribution_candidate",
-        confidence: 0.5,
-        event_type: "unknown",
-        movement_mechanic: "transfer_in",
-        statement_impact: "bs_only",
-        review_status: "needs_review",
-      }
-    }
-    return {
-      cls: "owner_related_candidate",
-      subclass: "owner_draw_candidate",
-      confidence: 0.5,
-      event_type: "unknown",
-      movement_mechanic: "transfer_out",
-      statement_impact: "bs_only",
-      review_status: "needs_review",
-    }
-  }
-
-  // Platform subscriptions (Intuit, Google, Zapier, etc.) – expense, not settlement
-  if (PLATFORM_SUBSCRIPTION_PATTERNS.some((p) => p.test(desc))) {
-    return {
-      cls: "operating_expense",
-      subclass: "platform_fee",
-      confidence: 0.88,
-      event_type: "fee",
-      movement_mechanic: "processor_debit",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-
-  // Shopify debit – platform fee / processor debit, not generic settlement
-  if ((SHOPIFY_PATTERNS.some((p) => p.test(desc)) || SHOPIFY_PATTERNS.some((p) => p.test(counterparty))) && m.amount < 0) {
-    return {
-      cls: "fee",
-      subclass: "platform_fee",
-      confidence: 0.9,
-      event_type: "platform_fee",
-      movement_mechanic: "processor_debit",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-
-  // Gateway Services – fee expense
-  if (GATEWAY_PATTERNS.some((p) => p.test(desc)) || GATEWAY_PATTERNS.some((p) => p.test(counterparty))) {
-    return {
-      cls: "fee",
-      subclass: null,
-      confidence: 0.9,
-      event_type: "fee",
-      movement_mechanic: "processor_debit",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-
-  // Chase credit card / liability payments – liability settlement, not processor
-  if (LIABILITY_PAYMENT_PATTERNS.some((p) => p.test(desc)) && /jack|rubenstein|credit crd|epay/i.test(desc)) {
-    return {
-      cls: "settlement",
-      subclass: "liability_settlement",
-      confidence: 0.9,
-      event_type: "liability_settlement",
-      movement_mechanic: "credit_card_payment",
-      statement_impact: "bs_liability_settlement",
-      review_status: "confirmed",
-    }
-  }
-
-  // QBO Transfer entity type
+  // QBO Transfer entity type is always internal_transfer
   if (m.source === "qbo" && m.source_type === "Transfer") {
-    return {
-      cls: "internal_transfer",
-      subclass: null,
-      confidence: 0.96,
-      event_type: "transfer",
-      movement_mechanic: "internal_transfer",
-      statement_impact: "bs_only",
-      review_status: "confirmed",
-    }
+    return { cls: "internal_transfer", confidence: 0.95 }
   }
 
-  // QBO RefundReceipt, CreditMemo, VendorCredit
+  // QBO RefundReceipt, CreditMemo, VendorCredit → refund
   if (m.source === "qbo" && ["RefundReceipt", "CreditMemo", "VendorCredit"].includes(m.source_type)) {
-    return {
-      cls: "refund",
-      subclass: null,
-      confidence: 0.91,
-      event_type: "refund",
-      movement_mechanic: "reversal",
-      statement_impact: "pnl_contra_revenue",
-      review_status: "confirmed",
-    }
+    return { cls: "refund", confidence: 0.9 }
   }
 
-  // Stripe payouts
+  // Stripe payouts are settlements (processor → bank)
   if (m.source === "stripe" && m.source_type === "payout") {
-    return {
-      cls: "settlement",
-      subclass: "processor_settlement",
-      confidence: 0.95,
-      event_type: "processor_settlement",
-      movement_mechanic: "processor_payout",
-      statement_impact: "bs_only",
-      review_status: "confirmed",
-    }
+    return { cls: "settlement", confidence: 0.95 }
   }
 
+  // Stripe balance_transaction with type 'stripe_fee' or 'fee'
   if (m.source === "stripe" && m.source_type === "balance_transaction") {
     const sType = (m.metadata.stripe_type ?? "") as string
-    if (sType === "stripe_fee" || sType === "fee") {
-      return {
-        cls: "fee",
-        subclass: null,
-        confidence: 0.95,
-        event_type: "fee",
-        movement_mechanic: "processor_debit",
-        statement_impact: "pnl_expense",
-        review_status: "confirmed",
-      }
-    }
-    if (sType === "refund") {
-      return {
-        cls: "refund",
-        subclass: null,
-        confidence: 0.95,
-        event_type: "refund",
-        movement_mechanic: "reversal",
-        statement_impact: "pnl_contra_revenue",
-        review_status: "confirmed",
-      }
-    }
-    if (sType === "payout") {
-      return {
-        cls: "settlement",
-        subclass: "processor_settlement",
-        confidence: 0.9,
-        event_type: "processor_settlement",
-        movement_mechanic: "processor_payout",
-        statement_impact: "bs_only",
-        review_status: "confirmed",
-      }
-    }
+    if (sType === "stripe_fee" || sType === "fee") return { cls: "fee", confidence: 0.95 }
+    if (sType === "refund") return { cls: "refund", confidence: 0.95 }
+    if (sType === "payout") return { cls: "settlement", confidence: 0.9 }
   }
 
-  // Identity-based (before transfer heuristics)
-  if (m.entity_type === "processor") {
-    return {
-      cls: "settlement",
-      subclass: "processor_settlement",
-      confidence: 0.9,
-      event_type: "processor_settlement",
-      movement_mechanic: "processor_payout",
-      statement_impact: "bs_only",
-      review_status: "confirmed",
-    }
-  }
-  if (m.entity_type === "employee") {
-    return {
-      cls: "payroll",
-      subclass: null,
-      confidence: 0.9,
-      event_type: "payroll",
-      movement_mechanic: "vendor_payout",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-  if (m.entity_type === "tax_authority") {
-    return {
-      cls: "tax",
-      subclass: null,
-      confidence: 0.9,
-      event_type: "tax_payment",
-      movement_mechanic: "vendor_payout",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-  if (m.entity_type === "lender") {
-    return {
-      cls: "financing",
-      subclass: null,
-      confidence: 0.85,
-      event_type: m.amount >= 0 ? "debt_draw" : "debt_repayment",
-      movement_mechanic: null,
-      statement_impact: "bs_liability_settlement",
-      review_status: "confirmed",
-    }
-  }
-  if (m.entity_type === "internal") {
-    return {
-      cls: "internal_transfer",
-      subclass: null,
-      confidence: 0.85,
-      event_type: "transfer",
-      movement_mechanic: "internal_transfer",
-      statement_impact: "bs_only",
-      review_status: "confirmed",
-    }
-  }
-
-  // Owner with strong personal pattern – contribution vs draw by amount
-  if (m.entity_type === "owner") {
-    if (desc.includes("zelle") || /chase credit crd|epay|wells fargo.*dda to dda/i.test(desc)) {
-      if (m.amount >= 0) {
-        return {
-          cls: "owner_contribution",
-          subclass: null,
-          confidence: 0.87,
-          event_type: "owner_contribution",
-          movement_mechanic: "owner_in",
-          statement_impact: "bs_equity",
-          review_status: "provisional",
-        }
-      }
-      return {
-        cls: "owner_draw",
-        subclass: null,
-        confidence: 0.87,
-        event_type: "owner_draw",
-        movement_mechanic: "owner_out",
-        statement_impact: "bs_equity",
-        review_status: "provisional",
-      }
-    }
-    return {
-      cls: "owner_related_candidate",
-      subclass: null,
-      confidence: 0.55,
-      event_type: "unknown",
-      movement_mechanic: m.amount >= 0 ? "transfer_in" : "transfer_out",
-      statement_impact: "bs_only",
-      review_status: "needs_review",
-    }
-  }
-
-  if (m.entity_type === "vendor") {
-    return {
-      cls: "operating_expense",
-      subclass: null,
-      confidence: 0.82,
-      event_type: "purchase",
-      movement_mechanic: "vendor_payout",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-  if (m.entity_type === "customer") {
-    return {
-      cls: "operating_revenue",
-      subclass: null,
-      confidence: 0.82,
-      event_type: "sale",
-      movement_mechanic: "customer_receipt",
-      statement_impact: "pnl_revenue",
-      review_status: "confirmed",
-    }
-  }
-
-  // Customer payments from Plaid (Pivot Culinary, Marlins, etc.) – revenue, not transfer
-  if (m.source === "plaid" && m.amount > 0) {
-    if (desc.includes("pivot culinary") || desc.includes("marlins") || desc.includes("troubadour") || desc.includes("performance supply")) {
-      return {
-        cls: "operating_revenue",
-        subclass: null,
-        confidence: 0.85,
-        event_type: "sale",
-        movement_mechanic: "customer_receipt",
-        statement_impact: "pnl_revenue",
-        review_status: "confirmed",
-      }
-    }
-  }
-
-  // Vendor ACH debits (Mylk Labs, etc.) – expense, not transfer
-  if (m.source === "plaid" && m.amount < 0 && desc.includes("invoices") && /mylk|barnana|spread|gnarly|think jerky|neve|cocotaps|realsy|purely|king orchards|untapped|belles/i.test(desc)) {
-    return {
-      cls: "operating_expense",
-      subclass: null,
-      confidence: 0.85,
-      event_type: "purchase",
-      movement_mechanic: "vendor_payout",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-
-  // Merchant bankcard ACH – processor settlement
-  if (m.source === "plaid" && desc.includes("preauthorized ach") && desc.includes("merchant bankcd/deposit")) {
-    return {
-      cls: "settlement",
-      subclass: "processor_settlement",
-      confidence: 0.9,
-      event_type: "processor_settlement",
-      movement_mechanic: "processor_payout",
-      statement_impact: "bs_only",
-      review_status: "confirmed",
-    }
-  }
+  // Identity-based classification
+  if (m.entity_type === "processor") return { cls: "settlement", confidence: 0.9 }
+  if (m.entity_type === "employee") return { cls: "payroll", confidence: 0.9 }
+  if (m.entity_type === "tax_authority") return { cls: "tax", confidence: 0.9 }
+  if (m.entity_type === "owner") return { cls: "owner_draw", confidence: 0.9 }
+  if (m.entity_type === "lender") return { cls: "financing", confidence: 0.85 }
+  if (m.entity_type === "internal") return { cls: "internal_transfer", confidence: 0.85 }
 
   // Plaid category-based
-  if (catStr.includes("bank fees")) {
-    return {
-      cls: "fee",
-      subclass: null,
-      confidence: 0.86,
-      event_type: "fee",
-      movement_mechanic: "bank_fee",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-  if (catStr.includes("payroll")) {
-    return {
-      cls: "payroll",
-      subclass: null,
-      confidence: 0.85,
-      event_type: "payroll",
-      movement_mechanic: "vendor_payout",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-  if (catStr.includes("tax")) {
-    return {
-      cls: "tax",
-      subclass: null,
-      confidence: 0.8,
-      event_type: "tax_payment",
-      movement_mechanic: "vendor_payout",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-  if (catStr.includes("loan")) {
-    return {
-      cls: "financing",
-      subclass: null,
-      confidence: 0.8,
-      event_type: m.amount >= 0 ? "debt_draw" : "debt_repayment",
-      movement_mechanic: null,
-      statement_impact: "bs_liability_settlement",
-      review_status: "confirmed",
-    }
-  }
+  if (catStr.includes("bank fees")) return { cls: "fee", confidence: 0.85 }
+  if (catStr.includes("payroll")) return { cls: "payroll", confidence: 0.85 }
+  if (catStr.includes("tax")) return { cls: "tax", confidence: 0.8 }
+  if (catStr.includes("transfer") && !catStr.includes("wire transfer")) return { cls: "internal_transfer", confidence: 0.75 }
+  if (catStr.includes("loan")) return { cls: "financing", confidence: 0.8 }
 
-  // Transfer patterns – only when NOT customer/vendor evidence
-  if (catStr.includes("transfer") && !catStr.includes("wire transfer") && !m.entity_type) {
-    return {
-      cls: "internal_transfer",
-      subclass: null,
-      confidence: 0.78,
-      event_type: "transfer",
-      movement_mechanic: "internal_transfer",
-      statement_impact: "bs_only",
-      review_status: "provisional",
-    }
-  }
-  if (TRANSFER_PATTERNS.some((p) => p.test(desc)) && !m.entity_type) {
-    return {
-      cls: "internal_transfer",
-      subclass: null,
-      confidence: 0.8,
-      event_type: "transfer",
-      movement_mechanic: "internal_transfer",
-      statement_impact: "bs_only",
-      review_status: "confirmed",
-    }
-  }
+  // Pattern-based on description
+  if (TRANSFER_PATTERNS.some((p) => p.test(desc))) return { cls: "internal_transfer", confidence: 0.8 }
+  if (FEE_PATTERNS.some((p) => p.test(desc))) return { cls: "fee", confidence: 0.8 }
+  if (TAX_PATTERNS.some((p) => p.test(desc))) return { cls: "tax", confidence: 0.8 }
+  if (FINANCING_PATTERNS.some((p) => p.test(desc))) return { cls: "financing", confidence: 0.75 }
+  if (REFUND_PATTERNS.some((p) => p.test(desc))) return { cls: "refund", confidence: 0.75 }
 
-  if (FEE_PATTERNS.some((p) => p.test(desc))) {
-    return {
-      cls: "fee",
-      subclass: null,
-      confidence: 0.82,
-      event_type: "fee",
-      movement_mechanic: "bank_fee",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-  if (TAX_PATTERNS.some((p) => p.test(desc))) {
-    return {
-      cls: "tax",
-      subclass: null,
-      confidence: 0.8,
-      event_type: "tax_payment",
-      movement_mechanic: "vendor_payout",
-      statement_impact: "pnl_expense",
-      review_status: "confirmed",
-    }
-  }
-  if (FINANCING_PATTERNS.some((p) => p.test(desc))) {
-    return {
-      cls: "financing",
-      subclass: null,
-      confidence: 0.75,
-      event_type: m.amount >= 0 ? "debt_draw" : "debt_repayment",
-      movement_mechanic: null,
-      statement_impact: "bs_liability_settlement",
-      review_status: "provisional",
-    }
-  }
-  if (REFUND_PATTERNS.some((p) => p.test(desc))) {
-    return {
-      cls: "refund",
-      subclass: null,
-      confidence: 0.78,
-      event_type: "refund",
-      movement_mechanic: "reversal",
-      statement_impact: "pnl_contra_revenue",
-      review_status: "provisional",
-    }
-  }
-
+  // Payroll processor match
   const cpNorm = counterparty.replace(/[^a-z0-9]/g, "")
   for (const pp of PAYROLL_PROCESSORS) {
-    if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) {
-      return {
-        cls: "payroll",
-        subclass: null,
-        confidence: 0.85,
-        event_type: "payroll",
-        movement_mechanic: "vendor_payout",
-        statement_impact: "pnl_expense",
-        review_status: "confirmed",
-      }
-    }
+    if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) return { cls: "payroll", confidence: 0.85 }
   }
 
-  // QBO type fallback
+  // QBO type-based fallback for remaining QBO records
   if (m.source === "qbo") {
     if (["Invoice", "Payment", "SalesReceipt", "Deposit"].includes(m.source_type)) {
-      return {
-        cls: "operating_revenue",
-        subclass: null,
-        confidence: 0.78,
-        event_type: "sale",
-        movement_mechanic: "customer_receipt",
-        statement_impact: "pnl_revenue",
-        review_status: "provisional",
-      }
+      return { cls: "operating_revenue", confidence: 0.8 }
     }
     if (["Bill", "BillPayment", "Purchase"].includes(m.source_type)) {
-      return {
-        cls: "operating_expense",
-        subclass: null,
-        confidence: 0.78,
-        event_type: "purchase",
-        movement_mechanic: "vendor_payout",
-        statement_impact: "pnl_expense",
-        review_status: "provisional",
-      }
+      return { cls: "operating_expense", confidence: 0.8 }
     }
   }
 
+  // Stripe payment_intent / invoice → revenue
   if (m.source === "stripe" && (m.source_type === "payment_intent" || m.source_type === "invoice")) {
-    return {
-      cls: "operating_revenue",
-      subclass: null,
-      confidence: 0.75,
-      event_type: "sale",
-      movement_mechanic: "customer_receipt",
-      statement_impact: "pnl_revenue",
-      review_status: "provisional",
-    }
+    return { cls: "operating_revenue", confidence: 0.75 }
   }
 
-  if (m.entity_type === "vendor") {
-    return {
-      cls: "operating_expense",
-      subclass: null,
-      confidence: 0.68,
-      event_type: "purchase",
-      movement_mechanic: "vendor_payout",
-      statement_impact: "pnl_expense",
-      review_status: "provisional",
-    }
-  }
-  if (m.entity_type === "customer") {
-    return {
-      cls: "operating_revenue",
-      subclass: null,
-      confidence: 0.68,
-      event_type: "sale",
-      movement_mechanic: "customer_receipt",
-      statement_impact: "pnl_revenue",
-      review_status: "provisional",
-    }
-  }
+  // Identity-based: vendor → expense, customer → revenue
+  if (m.entity_type === "vendor") return { cls: "operating_expense", confidence: 0.7 }
+  if (m.entity_type === "customer") return { cls: "operating_revenue", confidence: 0.7 }
 
   return null
-}
-
-function computeEventConfidence(
-  base: number,
-  hasCrossSource: boolean,
-  movements: RawMovement[],
-  cls: MovementClass
-): number {
-  let c = base
-  if (hasCrossSource) c += 0.06
-  const sources = new Set(movements.map((m) => m.source))
-  if (sources.has("qbo") && sources.has("plaid")) c += 0.04
-  const desc = (movements[0]?.raw_description ?? "").toLowerCase()
-  if (desc === "deposit" || desc === "deposit deposit") c -= 0.18
-  if (cls === "operating_revenue" && !movements[0]?.entity_type && desc.length < 15) c -= 0.15
-  return Math.round(Math.min(0.99, Math.max(0.12, c)) * 100) / 100
 }
 
 // ─── Phase 4: LLM fallback ─────────────────────────────────────────
@@ -1166,7 +445,7 @@ async function llmClassifyBatch(unclassified: RawMovement[]): Promise<LlmClassRe
     const systemPrompt = `You classify financial movements for a small business. For each record, determine the movement_class.
 
 Classes:
-- operating_revenue: customer payments, sales, invoice receipts (only when clearly a sale)
+- operating_revenue: customer payments, sales, invoice receipts
 - operating_expense: vendor payments, purchases, services, supplies
 - internal_transfer: own-account-to-own-account movements
 - settlement: processor payouts (Shopify/Stripe/PayPal → bank)
@@ -1175,17 +454,8 @@ Classes:
 - financing: loan draws/repayments, credit line activity
 - payroll: employee compensation, payroll processor debits
 - tax: IRS, state tax, sales tax remittance
-- owner_draw: owner distributions, money leaving business to owner
-- owner_contribution: owner putting money into business (inflows from owner)
-- other_income: bank interest, non-operating income
+- owner_draw: owner distributions, personal transfers
 - uncategorized: cannot determine
-- unresolved_inflow: unclear inflow (Zelle, transfer-like with no invoice link)
-- unresolved_outflow: unclear outflow
-- owner_related_candidate: possibly owner-related, needs review
-- funding_candidate: possibly funding/contribution
-- transfer_candidate: possibly internal transfer
-
-NEVER put Zelle, Acct-to-Acct Transfer, or generic "Transfer Credit" inflows into operating_revenue without a clear customer invoice. Prefer owner_related_candidate or unresolved_inflow.
 
 Return a JSON array. Each element:
 - "index": the 1-based number
@@ -1284,119 +554,64 @@ export async function classifyMovements(userId: string): Promise<{
   // Link to identity layer
   await linkToIdentities(allMovements, userId)
 
-  // Group into events
-  const clusters = groupMovementsIntoEvents(allMovements)
-
+  // Phase 1: Rule-based classification
   const classified: ClassifiedMovement[] = []
-  const unclassifiedEvents: EventCluster[] = []
+  const unclassified: RawMovement[] = []
 
-  for (const cluster of clusters) {
-    const primary =
-      cluster.movements.find((m) => m.source === "qbo") ??
-      cluster.movements.find((m) => m.source === "plaid") ??
-      cluster.movements[0]
-
-    const rule = classifyByRules(primary)
-    if (rule) {
-      const cls = rule.cls
-      const pnl = PNL_ELIGIBLE_CLASSES.has(cls)
-      const hasCrossSource = cluster.movements.length > 1
-      const confidence = computeEventConfidence(rule.confidence, hasCrossSource, cluster.movements, cls)
-
-      for (const m of cluster.movements) {
-        classified.push({
-          ...m,
-          event_id: cluster.id,
-          movement_class: cls,
-          pnl_eligible: pnl,
-          statement_impact: rule.statement_impact,
-          movement_subclass: rule.subclass,
-          confidence,
-          event_type: rule.event_type,
-          movement_mechanic: rule.movement_mechanic,
-          review_status: rule.review_status,
-        })
-        stats.byClass[cls] = (stats.byClass[cls] ?? 0) + 1
-        if (pnl) stats.pnlEligible++
-      }
-      stats.ruleClassified += cluster.movements.length
+  for (const m of allMovements) {
+    const result = classifyByRules(m)
+    if (result) {
+      classified.push({
+        ...m,
+        movement_class: result.cls,
+        pnl_eligible: PNL_ELIGIBLE_CLASSES.has(result.cls),
+        confidence: result.confidence,
+      })
+      stats.ruleClassified++
     } else {
-      unclassifiedEvents.push(cluster)
+      unclassified.push(m)
     }
   }
 
-  // LLM fallback on primary movement per unclassified event
-  if (unclassifiedEvents.length > 0) {
-    const primaries: RawMovement[] = unclassifiedEvents.map((cluster) => {
-      const p =
-        cluster.movements.find((m) => m.source === "qbo") ??
-        cluster.movements.find((m) => m.source === "plaid") ??
-        cluster.movements[0]
-      return p
-    })
-
-    const llmResults = await llmClassifyBatch(primaries)
+  // Phase 2: LLM fallback for unclassified
+  if (unclassified.length > 0) {
+    const llmResults = await llmClassifyBatch(unclassified)
     const llmMap = new Map(llmResults.map((r) => [r.source_id, r]))
 
-    for (let i = 0; i < unclassifiedEvents.length; i++) {
-      const cluster = unclassifiedEvents[i]
-      const primary = primaries[i]
-      const llmResult = llmMap.get(primary.source_id)
+    for (const m of unclassified) {
+      const llmResult = llmMap.get(m.source_id)
       const cls = (llmResult?.movement_class ?? "uncategorized") as MovementClass
-      const pnl = PNL_ELIGIBLE_CLASSES.has(cls)
-      const hasCrossSource = cluster.movements.length > 1
-      const confidence = computeEventConfidence(llmResult?.confidence ?? 0.42, hasCrossSource, cluster.movements, cls)
-      const eventType = mapClassToEventType(cls, primary.amount)
-      const movementMechanic = mapClassToMovementMechanic(cls, primary.amount)
-      const statementImpact = getStatementImpactFromAxes(eventType, movementMechanic)
-      const reviewStatus = getReviewStatus(confidence, cls)
-
-      for (const m of cluster.movements) {
-        classified.push({
-          ...m,
-          event_id: cluster.id,
-          movement_class: cls,
-          pnl_eligible: pnl,
-          statement_impact: statementImpact,
-          movement_subclass: null,
-          confidence,
-          event_type: eventType,
-          movement_mechanic: movementMechanic,
-          review_status: reviewStatus,
-        })
-        stats.byClass[cls] = (stats.byClass[cls] ?? 0) + 1
-        if (pnl) stats.pnlEligible++
-      }
-      if (llmResult) stats.llmClassified += cluster.movements.length
+      classified.push({
+        ...m,
+        movement_class: cls,
+        pnl_eligible: PNL_ELIGIBLE_CLASSES.has(cls),
+        confidence: llmResult?.confidence ?? 0.3,
+      })
+      if (llmResult) stats.llmClassified++
     }
   }
 
-  // Persist
+  // Phase 3: Persist
   for (const m of classified) {
+    stats.byClass[m.movement_class] = (stats.byClass[m.movement_class] ?? 0) + 1
+    if (m.pnl_eligible) stats.pnlEligible++
+
     await query(
-      `INSERT INTO movements (user_id, event_id, source, source_type, source_id, entity_id, date, amount, raw_description, counterparty, movement_class, pnl_eligible, statement_impact, movement_subclass, from_account, to_account, confidence, metadata, event_type, movement_mechanic, review_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+      `INSERT INTO movements (user_id, source, source_type, source_id, entity_id, date, amount, raw_description, counterparty, movement_class, pnl_eligible, from_account, to_account, confidence, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        ON CONFLICT (user_id, source, source_id) DO UPDATE SET
-         event_id = EXCLUDED.event_id,
          entity_id = EXCLUDED.entity_id,
          movement_class = EXCLUDED.movement_class,
          pnl_eligible = EXCLUDED.pnl_eligible,
-         statement_impact = EXCLUDED.statement_impact,
-         movement_subclass = EXCLUDED.movement_subclass,
          counterparty = EXCLUDED.counterparty,
          confidence = EXCLUDED.confidence,
-         metadata = EXCLUDED.metadata,
-         event_type = EXCLUDED.event_type,
-         movement_mechanic = EXCLUDED.movement_mechanic,
-         review_status = EXCLUDED.review_status`,
+         metadata = EXCLUDED.metadata`,
       [
-        userId, m.event_id, m.source, m.source_type, m.source_id,
+        userId, m.source, m.source_type, m.source_id,
         m.entity_id, m.date, m.amount, m.raw_description,
         m.counterparty, m.movement_class, m.pnl_eligible,
-        m.statement_impact, m.movement_subclass,
         m.from_account, m.to_account, m.confidence,
         JSON.stringify(m.metadata),
-        m.event_type, m.movement_mechanic, m.review_status,
       ]
     )
   }

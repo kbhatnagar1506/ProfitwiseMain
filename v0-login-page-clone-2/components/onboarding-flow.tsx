@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef, Fragment } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { usePlaidLink } from "react-plaid-link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -189,15 +189,13 @@ export function OnboardingFlow({
   const [identitySeeding, setIdentitySeeding] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
-  type MovementRow = { id: string; event_id?: string | null; source: string; source_type: string; source_id: string; entity_id: string | null; date: string; amount: string; raw_description: string | null; counterparty: string | null; movement_class: string; pnl_eligible: boolean; statement_impact?: string | null; movement_subclass?: string | null; from_account: string | null; to_account: string | null; confidence: number; metadata: Record<string, unknown>; created_at: string }
-  type EventRow = { id: string; event_id: string | null; date: string; amount: string; counterparty: string | null; raw_description: string | null; movement_class: string; statement_impact: string | null; movement_subclass: string | null; confidence: number; source: string; evidence_count: number }
+  type MovementRow = { id: string; source: string; source_type: string; source_id: string; entity_id: string | null; date: string; amount: string; raw_description: string | null; counterparty: string | null; movement_class: string; pnl_eligible: boolean; from_account: string | null; to_account: string | null; confidence: number; metadata: Record<string, unknown>; created_at: string }
   type MovementSummary = { movement_class: string; pnl_eligible: boolean; count: number; total_amount: string }
-  type MovementsData = { movements: MovementRow[]; events?: EventRow[]; summary: MovementSummary[] }
+  type MovementsData = { movements: MovementRow[]; summary: MovementSummary[] }
   const [movementsData, setMovementsData] = useState<MovementsData | null>(null)
   const [movementsLoading, setMovementsLoading] = useState(false)
   const [movementsClassifying, setMovementsClassifying] = useState(false)
   const [movementsError, setMovementsError] = useState<string | null>(null)
-  const [movementsExpandedEvent, setMovementsExpandedEvent] = useState<string | null>(null)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -1945,16 +1943,9 @@ export function OnboardingFlow({
       }
 
       case 10: {
-        const PNL_ELIGIBLE_CLASSES_UI = new Set(["operating_revenue", "operating_expense", "payroll", "tax", "other_income"])
-        const PNL_STATEMENT_IMPACTS = new Set(["pnl_revenue", "pnl_expense", "pnl_contra_revenue", "pnl_other_income"])
-        const UNRESOLVED_CLASSES = new Set(["unresolved_inflow", "unresolved_outflow", "owner_related_candidate", "funding_candidate", "transfer_candidate"])
-        const isSystemRow = (r: { statement_impact?: string | null; event_type?: string | null }) =>
-          r.statement_impact === "non_posting" || r.event_type === "adjustment" || r.event_type === "verification"
+        const PNL_ELIGIBLE_CLASSES_UI = new Set(["operating_revenue", "operating_expense", "payroll", "tax"])
         const mvts = movementsData?.movements ?? []
-        const events = movementsData?.events ?? []
         const mvtSummary = movementsData?.summary ?? []
-        const rows = events.length > 0 ? events : mvts
-        const totalCount = events.length > 0 ? events.length : mvts.length
 
         const classCounts: Record<string, number> = {}
         const classAmounts: Record<string, number> = {}
@@ -1978,9 +1969,6 @@ export function OnboardingFlow({
           c === "payroll" ? "bg-pink-500/80 border-pink-400/50" :
           c === "tax" ? "bg-red-700/80 border-red-600/50" :
           c === "owner_draw" ? "bg-rose-500/80 border-rose-400/50" :
-          c === "owner_contribution" ? "bg-teal-500/80 border-teal-400/50" :
-          c === "other_income" ? "bg-cyan-500/80 border-cyan-400/50" :
-          UNRESOLVED_CLASSES.has(c) ? "bg-amber-700/80 border-amber-600/50" :
           "bg-zinc-500/80 border-zinc-400/50"
 
         const mvtClassLabel = (c: string) =>
@@ -1994,20 +1982,13 @@ export function OnboardingFlow({
           c === "payroll" ? "Payroll" :
           c === "tax" ? "Tax" :
           c === "owner_draw" ? "Owner Draw" :
-          c === "owner_contribution" ? "Owner Contribution" :
-          c === "other_income" ? "Other Income" :
           c === "uncategorized" ? "Uncategorized" :
-          c === "unresolved_inflow" ? "Unresolved inflow" :
-          c === "unresolved_outflow" ? "Unresolved outflow" :
-          c === "owner_related_candidate" ? "Owner-related (review)" :
-          c === "funding_candidate" ? "Funding candidate" :
-          c === "transfer_candidate" ? "Transfer candidate" :
           c
 
         const mvtSourceColor = (s: string) =>
-          s?.includes("plaid") ? "bg-amber-500/80" :
-          s?.includes("qbo") ? "bg-blue-500/80" :
-          s?.includes("stripe") ? "bg-purple-500/80" :
+          s === "plaid" ? "bg-amber-500/80" :
+          s === "qbo" ? "bg-blue-500/80" :
+          s === "stripe" ? "bg-purple-500/80" :
           "bg-zinc-500/80"
 
         const fmtAmt = (a: string | number) => {
@@ -2018,15 +1999,11 @@ export function OnboardingFlow({
         }
 
         const classOrder = [
-          "operating_revenue", "operating_expense", "payroll", "tax", "other_income",
+          "operating_revenue", "operating_expense", "payroll", "tax",
           "internal_transfer", "settlement", "fee", "refund",
-          "financing", "owner_draw", "owner_contribution",
-          "unresolved_inflow", "unresolved_outflow", "owner_related_candidate", "funding_candidate", "transfer_candidate",
-          "uncategorized",
+          "financing", "owner_draw", "uncategorized",
         ]
         const activeClasses = classOrder.filter((c) => (classCounts[c] ?? 0) > 0)
-        const systemRows = rows.filter((r) => isSystemRow(r))
-        const hasSystemRows = systemRows.length > 0
 
         return (
           <div className="pt-0 pb-2 w-full">
@@ -2044,17 +2021,17 @@ export function OnboardingFlow({
               <p className="text-red-300 text-sm mb-4">Failed to load movements: {movementsError}</p>
             )}
 
-            {!movementsLoading && !movementsClassifying && movementsData && totalCount === 0 && (
+            {!movementsLoading && !movementsClassifying && movementsData && mvts.length === 0 && (
               <p className="text-gray-400 text-sm mb-4">No movements classified yet. Connect integrations and sync data first.</p>
             )}
 
-            {!movementsLoading && !movementsClassifying && totalCount > 0 && (
+            {!movementsLoading && !movementsClassifying && mvts.length > 0 && (
               <div className="space-y-6">
                 {/* Summary stats */}
                 <div className="flex flex-wrap gap-3 items-end">
                   <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
-                    <div className="text-2xl font-bold text-white">{totalCount}</div>
-                    <div className="text-xs text-gray-400">{events.length > 0 ? "Events" : "Movements"}</div>
+                    <div className="text-2xl font-bold text-white">{mvts.length}</div>
+                    <div className="text-xs text-gray-400">Total movements</div>
                   </div>
                   <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
                     <div className="text-2xl font-bold text-emerald-400">{pnlCount}</div>
@@ -2096,25 +2073,17 @@ export function OnboardingFlow({
 
                 {/* Tables per movement class */}
                 {activeClasses.map((cls) => {
-                  const clsRows = rows.filter((r) => r.movement_class === cls && !isSystemRow(r))
-                  if (clsRows.length === 0) return null
+                  const clsMvts = mvts.filter((m) => m.movement_class === cls)
                   const isPnl = PNL_ELIGIBLE_CLASSES_UI.has(cls)
-                  const isUnresolved = UNRESOLVED_CLASSES.has(cls)
-                  const stmtImpact = clsRows[0] && "statement_impact" in clsRows[0] ? (clsRows[0] as { statement_impact?: string }).statement_impact : null
-                  const showPnlBadge = stmtImpact && PNL_STATEMENT_IMPACTS.has(stmtImpact)
                   return (
-                    <div key={cls} className={`rounded-xl border overflow-hidden ${isUnresolved ? "border-amber-500/40 bg-amber-950/20" : "border-white/20 bg-white/5"}`}>
+                    <div key={cls} className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
                       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/20">
                         <span className={`inline-flex rounded-md border px-2.5 py-1 text-sm font-semibold text-white ${mvtClassColor(cls)}`}>
                           {mvtClassLabel(cls)}
                         </span>
-                        <span className="text-sm text-gray-400">{classCounts[cls]} event{classCounts[cls] !== 1 ? "s" : ""}</span>
+                        <span className="text-sm text-gray-400">{classCounts[cls]} movement{classCounts[cls] !== 1 ? "s" : ""}</span>
                         <span className="text-sm text-gray-500">{fmtAmt(classAmounts[cls] ?? 0)} net</span>
-                        {isUnresolved ? (
-                          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[11px] text-amber-400 font-medium">
-                            Needs review
-                          </span>
-                        ) : showPnlBadge ? (
+                        {isPnl ? (
                           <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] text-emerald-400 font-medium">
                             <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
                             P&L
@@ -2134,143 +2103,34 @@ export function OnboardingFlow({
                               <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
                               <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
                               <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
-                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[80px]">Source</th>
-                              <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[55px]">Conf</th>
+                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[60px]">Source</th>
+                              <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-white/5">
-                            {clsRows.slice(0, 200).map((r) => {
-                              const eventKey = "event_id" in r && r.event_id ? r.event_id : r.id
-                              const evidence = mvts.filter((m: { event_id?: string | null; id: string }) =>
-                                m.event_id === eventKey || m.id === r.id
-                              )
-                              const isExpanded = movementsExpandedEvent === r.id
-                              return (
-                                <Fragment key={r.id}>
-                                  <tr
-                                    onClick={() => setMovementsExpandedEvent(isExpanded ? null : r.id)}
-                                    className="hover:bg-white/5 cursor-pointer select-none"
-                                  >
-                                    <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap w-[90px]">
-                                      <span className="inline-flex items-center gap-1">
-                                        <span className={`inline-block w-4 transition-transform ${isExpanded ? "rotate-90" : ""}`}>
-                                          ▸
-                                        </span>
-                                        {r.date?.split("T")[0]}
-                                      </span>
-                                    </td>
-                                    <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${parseFloat(String(r.amount)) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                                      {fmtAmt(r.amount)}
-                                    </td>
-                                    <td className="text-white px-3 py-1.5 text-xs truncate max-w-[200px]">{(r as { display_counterparty?: string | null }).display_counterparty ?? r.counterparty ?? "\u2014"}</td>
-                                    <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[250px]">{r.raw_description ?? "\u2014"}</td>
-                                    <td className="px-3 py-1.5">
-                                      <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${mvtSourceColor(r.source)}`}>
-                                        {r.source}
-                                        {"evidence_count" in r && r.evidence_count > 1 ? ` (${r.evidence_count})` : ""}
-                                      </span>
-                                    </td>
-                                    <td className="text-gray-500 px-3 py-1.5 text-xs text-right">{Math.round((r.confidence ?? 0.5) * 100)}%</td>
-                                  </tr>
-                                  {isExpanded && evidence.length > 0 && (
-                                    <tr key={`${r.id}-evidence`}>
-                                      <td colSpan={6} className="px-3 py-2 bg-black/30 border-b border-white/10">
-                                        <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-2">Evidence trail</div>
-                                        <div className="rounded-lg border border-white/10 overflow-hidden">
-                                          <table className="w-full text-xs">
-                                            <thead>
-                                              <tr className="bg-white/5 border-b border-white/10">
-                                                <th className="text-left text-gray-500 font-medium px-2 py-1.5">Source</th>
-                                                <th className="text-left text-gray-500 font-medium px-2 py-1.5">Date</th>
-                                                <th className="text-right text-gray-500 font-medium px-2 py-1.5">Amount</th>
-                                                <th className="text-left text-gray-500 font-medium px-2 py-1.5">Counterparty</th>
-                                                <th className="text-left text-gray-500 font-medium px-2 py-1.5">Description</th>
-                                                <th className="text-right text-gray-500 font-medium px-2 py-1.5">Conf</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-white/5">
-                                              {evidence.map((m: { id: string; source?: string; date?: string; amount?: string | number; counterparty?: string | null; display_counterparty?: string | null; raw_description?: string | null; confidence?: number }) => (
-                                                <tr key={m.id} className="hover:bg-white/5">
-                                                  <td className="px-2 py-1.5">
-                                                    <span className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${mvtSourceColor(m.source ?? "")}`}>
-                                                      {m.source ?? "\u2014"}
-                                                    </span>
-                                                  </td>
-                                                  <td className="text-gray-400 px-2 py-1.5 whitespace-nowrap">{m.date?.split?.("T")[0] ?? "\u2014"}</td>
-                                                  <td className={`px-2 py-1.5 text-right font-mono whitespace-nowrap ${parseFloat(String(m.amount ?? 0)) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                                                    {fmtAmt(m.amount ?? 0)}
-                                                  </td>
-                                                  <td className="text-white px-2 py-1.5 truncate max-w-[180px]">{m.display_counterparty ?? m.counterparty ?? "\u2014"}</td>
-                                                  <td className="text-gray-400 px-2 py-1.5 truncate max-w-[220px]" title={m.raw_description ?? undefined}>{m.raw_description ?? "\u2014"}</td>
-                                                  <td className="text-gray-500 px-2 py-1.5 text-right">{Math.round((m.confidence ?? 0.5) * 100)}%</td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  )}
-                                </Fragment>
-                              )
-                            })}
+                            {clsMvts.slice(0, 200).map((m) => (
+                              <tr key={m.id} className="hover:bg-white/5">
+                                <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
+                                <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${parseFloat(m.amount) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                  {fmtAmt(m.amount)}
+                                </td>
+                                <td className="text-white px-3 py-1.5 text-xs truncate max-w-[200px]">{m.counterparty ?? "\u2014"}</td>
+                                <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[250px]">{m.raw_description ?? "\u2014"}</td>
+                                <td className="px-3 py-1.5">
+                                  <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${mvtSourceColor(m.source)}`}>{m.source}</span>
+                                </td>
+                                <td className="text-gray-500 px-3 py-1.5 text-xs text-right">{Math.round(m.confidence * 100)}%</td>
+                              </tr>
+                            ))}
                           </tbody>
                         </table>
-                        {clsRows.length > 200 && (
-                          <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {clsRows.length} events</div>
+                        {clsMvts.length > 200 && (
+                          <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {clsMvts.length} movements</div>
                         )}
                       </div>
                     </div>
                   )
                 })}
-
-                {/* System / Non-posting section */}
-                {hasSystemRows && (
-                  <details className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
-                    <summary className="px-4 py-3 border-b border-white/20 cursor-pointer list-none flex items-center gap-3">
-                      <span className="inline-flex rounded-md border px-2.5 py-1 text-sm font-semibold text-gray-400 bg-zinc-600/50 border-zinc-500/50">
-                        System / Non-posting
-                      </span>
-                      <span className="text-sm text-gray-500">{systemRows.length} event{systemRows.length !== 1 ? "s" : ""}</span>
-                    </summary>
-                    <div className="max-h-[30vh] overflow-y-auto overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead className="sticky top-0 bg-black/60 backdrop-blur-sm">
-                          <tr className="border-b border-white/15">
-                            <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[90px]">Date</th>
-                            <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
-                            <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
-                            <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
-                            <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[80px]">Source</th>
-                            <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[55px]">Conf</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-white/5">
-                          {systemRows.slice(0, 100).map((r) => (
-                            <tr key={r.id} className="hover:bg-white/5">
-                              <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{r.date?.split?.("T")[0]}</td>
-                              <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${parseFloat(String(r.amount)) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                                {fmtAmt(r.amount)}
-                              </td>
-                              <td className="text-white px-3 py-1.5 text-xs truncate max-w-[200px]">{(r as { display_counterparty?: string | null }).display_counterparty ?? r.counterparty ?? "\u2014"}</td>
-                              <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[250px]">{r.raw_description ?? "\u2014"}</td>
-                              <td className="px-3 py-1.5">
-                                <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${mvtSourceColor(r.source)}`}>
-                                  {r.source}
-                                  {"evidence_count" in r && r.evidence_count > 1 ? ` (${r.evidence_count})` : ""}
-                                </span>
-                              </td>
-                              <td className="text-gray-500 px-3 py-1.5 text-xs text-right">{Math.round((r.confidence ?? 0.5) * 100)}%</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {systemRows.length > 100 && (
-                        <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 100 of {systemRows.length} events</div>
-                      )}
-                    </div>
-                  </details>
-                )}
               </div>
             )}
           </div>

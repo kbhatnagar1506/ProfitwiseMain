@@ -99,7 +99,7 @@ function isPlaidNoise(txnName: string): boolean {
 
 const TEST_PATTERNS = [
   /^test$/i, /^test\s/i, /\stest$/i,
-  /^sample\s/i, /^psc\s*test/i, /^jack\s*test/i,
+  /^sample\s/i, /^demo\s/i, /^fake\s/i, /^dummy\s/i,
 ]
 
 function isTestEntity(name: string): boolean {
@@ -502,12 +502,12 @@ Entity type rules:
 Normalization rules:
 - Strip prefixes: "SQ *", "TST*", "PAYPAL *", "PREAUTHORIZED ACH CREDIT/DEBIT", "MISCELLANEOUS CREDIT/DEBIT", "TRANSFER CREDIT/DEBIT", etc.
 - Strip suffixes: reference numbers, routing info, addresses, timestamps, "- USD", "customer -", "vendor -"
-- For ACH descriptions like "PIVOT CULINARY M/ACH Pmt Invoice 1029...", extract just the company name: "Pivot Culinary"
+- For ACH descriptions like "ACME CORP M/ACH Pmt Invoice 1029...", extract just the company name: "Acme Corp"
 - For Zelle transfers like "ZELLE MICHELLE SCHOR", extract just the person name: "Michelle Schor"
 - Merge variations: "Shopify", "SHOPIFY/SHOPIFY ST-...", "Shopify - USD", "Shopify customer - USD", "Shopify vendor - USD" → all normalize to "Shopify"
 - If the same real entity appears with different descriptions, normalize to the same canonical name
 - Names with parenthetical context like "Brenna Sleggs (Pittsburgh Penguins)" should normalize to "Brenna Sleggs" with the context preserved in domain_guess or dropped
-- Test/sample entries like "test", "Sample Customer", "PSC Test" should have skip=true
+- Test/sample entries like "test", "Sample Customer", "Test Company", "Demo Vendor" should have skip=true
 
 Output ONLY valid JSON array. No markdown, no explanation.`
 
