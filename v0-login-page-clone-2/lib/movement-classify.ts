@@ -15,7 +15,7 @@
  *   Step 9: Batch persist
  */
 
-import { query, ensureMovementsSchema } from "./db"
+import { query, ensureMovementsSchema, ensurePlaidSchema } from "./db"
 import { log } from "./logger"
 import {
   buildMovementIdentityContext,
@@ -1242,6 +1242,7 @@ export async function classifyMovements(userId: string): Promise<{
   by_type: Record<string, number>
 }> {
   await ensureMovementsSchema()
+  await ensurePlaidSchema()
 
   const stats = {
     total_observations: 0, canonical_movements: 0, rule_classified: 0, llm_classified: 0,
