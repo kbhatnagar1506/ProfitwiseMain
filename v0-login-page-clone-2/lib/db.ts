@@ -600,27 +600,38 @@ export async function ensureIdentitySchema(): Promise<void> {
 
 // ─── Money Movement Layer ──────────────────────────────────────────
 
-const MOVEMENTS_SQL = `
+const MOVEMENTS_V3_SQL = `
   CREATE TABLE IF NOT EXISTS movements (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    source          TEXT NOT NULL,
-    source_type     TEXT NOT NULL,
-    source_id       TEXT NOT NULL,
-    entity_id       UUID REFERENCES entities(id) ON DELETE SET NULL,
-    date            DATE NOT NULL,
-    amount          NUMERIC NOT NULL,
-    raw_description TEXT,
-    counterparty    TEXT,
-    movement_class  TEXT NOT NULL,
-    pnl_eligible    BOOLEAN NOT NULL DEFAULT false,
-    from_account    TEXT,
-    to_account      TEXT,
-    confidence      REAL DEFAULT 0.5,
-    metadata        JSONB DEFAULT '{}'::jsonb,
-    created_at      TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, source, source_id)
+    id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    direction                 TEXT NOT NULL CHECK (direction IN ('inflow', 'outflow')),
+    amount                    NUMERIC NOT NULL,
+    date                      DATE NOT NULL,
+    movement_type             TEXT NOT NULL,
+    pnl_eligible              BOOLEAN NOT NULL DEFAULT false,
+    cash_account_id           TEXT,
+    counterparty              TEXT,
+    counterparty_entity_id    UUID REFERENCES entities(id) ON DELETE SET NULL,
+    counterparty_entity_type  TEXT,
+    linked_internal_account_id TEXT,
+    confidence                REAL DEFAULT 0.5,
+    review_needed             BOOLEAN NOT NULL DEFAULT false,
+    evidence_hash             TEXT NOT NULL,
+    evidence_refs             JSONB NOT NULL DEFAULT '[]'::jsonb,
+    raw_description           TEXT,
+    metadata                  JSONB DEFAULT '{}'::jsonb,
+    created_at                TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, evidence_hash)
   )
+`
+
+const MOVEMENTS_MIGRATE_SQL = `
+  DO $$
+  BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='movements' AND column_name='movement_class') THEN
+      DROP TABLE movements CASCADE;
+    END IF;
+  END$$;
 `
 
 let movementsSchemaEnsured = false
@@ -631,11 +642,14 @@ export async function ensureMovementsSchema(): Promise<void> {
   if (!p) return
   await ensureAuthSchema()
   await ensureIdentitySchema()
-  await p.query(MOVEMENTS_SQL)
+  await p.query(MOVEMENTS_MIGRATE_SQL)
+  await p.query(MOVEMENTS_V3_SQL)
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_user ON movements (user_id)")
-  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_class ON movements (user_id, movement_class)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_type ON movements (user_id, movement_type)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_pnl ON movements (user_id, pnl_eligible)")
-  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_entity ON movements (entity_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_entity ON movements (counterparty_entity_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_review ON movements (user_id, review_needed)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_date ON movements (user_id, date)")
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }
