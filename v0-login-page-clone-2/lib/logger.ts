@@ -8,6 +8,8 @@ export type LogChannel =
   | "system"
   | "gcp"
   | "stripe"
+  | "identity"
+  | "movements"
 
 /**
  * Emoji for filtering in log viewers (e.g. Heroku):
@@ -42,6 +44,10 @@ function prefix(channel?: LogChannel): string {
       return "[System]"
     case "gcp":
       return "[GCP]"
+    case "identity":
+      return "[Identity]"
+    case "movements":
+      return "[Movements]"
     default:
       return "[QBO]"
   }
