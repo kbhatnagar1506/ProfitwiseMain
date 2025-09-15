@@ -85,6 +85,8 @@ type SourceObservation = {
   plaid_payment_channel: string | null        // "in store" | "online" | "other"
   account_name: string | null
   account_id: string | null
+  account_type: string | null                 // "depository", "credit", "loan", etc.
+  account_subtype: string | null              // "checking", "savings", "money market", etc.
   metadata: Record<string, unknown>
 }
 
@@ -217,16 +219,22 @@ function normKey(s: string): string {
 
 // ─── Step 1: Extract source observations ────────────────────────────
 
+type PlaidAccountInfo = { name: string; type: string | null; subtype: string | null }
+
 async function extractPlaidObservations(userId: string): Promise<SourceObservation[]> {
   const obs: SourceObservation[] = []
 
-  const { rows: userAccounts } = await query<{ account_id: string; name: string | null }>(
-    `SELECT pa.account_id, pa.name FROM plaid_accounts pa
+  const { rows: userAccounts } = await query<{
+    account_id: string; name: string | null; type: string | null; subtype: string | null
+  }>(
+    `SELECT pa.account_id, pa.name, pa.type, pa.subtype FROM plaid_accounts pa
      JOIN plaid_items pi ON pi.item_id = pa.item_id
      WHERE pi.user_id = $1`,
     [userId]
   )
-  const accountNames = new Map(userAccounts.map((a) => [a.account_id, a.name ?? a.account_id]))
+  const accountInfo = new Map<string, PlaidAccountInfo>(
+    userAccounts.map((a) => [a.account_id, { name: a.name ?? a.account_id, type: a.type, subtype: a.subtype }])
+  )
 
   const { rows: txns } = await query<{
     transaction_id: string; account_id: string; amount: string; date: string
@@ -246,6 +254,7 @@ async function extractPlaidObservations(userId: string): Promise<SourceObservati
     const desc = tx.merchant_name?.trim() || tx.name?.trim() || null
     // Plaid: positive = money left (expense), negative = money in
     const amt = -parseFloat(tx.amount)
+    const acctInfo = accountInfo.get(tx.account_id)
 
     obs.push({
       source: "plaid",
@@ -258,8 +267,10 @@ async function extractPlaidObservations(userId: string): Promise<SourceObservati
       plaid_category: tx.category,
       plaid_pfc: tx.personal_finance_category,
       plaid_payment_channel: tx.payment_channel,
-      account_name: accountNames.get(tx.account_id) ?? tx.account_id,
+      account_name: acctInfo?.name ?? tx.account_id,
       account_id: tx.account_id,
+      account_type: acctInfo?.type ?? null,
+      account_subtype: acctInfo?.subtype ?? null,
       metadata: { plaid_name: tx.name, payment_channel: tx.payment_channel },
     })
   }
@@ -326,6 +337,8 @@ async function extractQboObservations(userId: string): Promise<SourceObservation
       plaid_payment_channel: null,
       account_name: bankAcct ?? fromAcct ?? toAcct ?? null,
       account_id: null,
+      account_type: null,
+      account_subtype: null,
       metadata: {
         qbo_type: row.entity_type,
         doc_number: docNumber,
@@ -395,6 +408,8 @@ async function extractStripeObservations(userId: string): Promise<SourceObservat
       plaid_payment_channel: null,
       account_name: "Stripe",
       account_id: null,
+      account_type: null,
+      account_subtype: null,
       metadata: { stripe_type: txnType, status: d.status, stripe_customer_id: d.customer ?? null },
     })
   }
@@ -450,6 +465,8 @@ async function extractXeroObservations(userId: string): Promise<SourceObservatio
       plaid_payment_channel: null,
       account_name: acctName,
       account_id: null,
+      account_type: null,
+      account_subtype: null,
       metadata: { xero_type: row.entity_type, xero_sub_type: xeroType },
     })
   }
@@ -656,12 +673,20 @@ function pairPlaidTransfers(
         const outflow = a.direction === "outflow" ? a : b
         const inflow = a.direction === "inflow" ? a : b
 
+        const fromObs = outflow.evidence[0]
+        const toObs = inflow.evidence[0]
+
         outflow.evidence = [...outflow.evidence, ...inflow.evidence]
         outflow.linked_internal_account_id = inflow.cash_account_name ?? inflow.cash_account_id
         outflow.metadata = {
           ...outflow.metadata,
           transfer_type: "cross_account",
-          paired_account: inflow.cash_account_name,
+          from_account_name: fromObs.account_name,
+          from_account_type: fromObs.account_type,
+          from_account_subtype: fromObs.account_subtype,
+          to_account_name: toObs.account_name,
+          to_account_type: toObs.account_type,
+          to_account_subtype: toObs.account_subtype,
         }
 
         pairedSet.add(inflow)
@@ -692,6 +717,17 @@ function resolveAccounts(movements: CanonicalMovement[], ctx: MovementIdentityCo
     if (fromAcct && toAcct) {
       m.cash_account_name = m.cash_account_name ?? fromAcct
       m.linked_internal_account_id = m.linked_internal_account_id ?? toAcct
+      // Enrich metadata with consistent from/to naming
+      m.metadata.from_account_name = m.metadata.from_account_name ?? fromAcct
+      m.metadata.to_account_name = m.metadata.to_account_name ?? toAcct
+      m.metadata.transfer_type = m.metadata.transfer_type ?? "qbo_transfer"
+    }
+
+    // For Plaid single-sided transfers, enrich with account info from evidence
+    const primaryEvidence = m.evidence[0]
+    if (primaryEvidence?.source === "plaid" && primaryEvidence.account_type) {
+      m.metadata.account_type = m.metadata.account_type ?? primaryEvidence.account_type
+      m.metadata.account_subtype = m.metadata.account_subtype ?? primaryEvidence.account_subtype
     }
   }
 }
