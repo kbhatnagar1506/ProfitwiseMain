@@ -9,6 +9,7 @@ import {
   gcpUpsertEntities,
   gcpGetEntities,
 } from "./entity-store-gcp"
+import { upsertUnifiedInvoices } from "./unified-invoices"
 
 async function getUserIdByTenantId(tenantId: string): Promise<string | undefined> {
   try {
@@ -62,6 +63,9 @@ export async function upsertEntities(
       const userId = options?.userId ?? (await getUserIdByTenantId(tenantId))
       const insertedGcp = await gcpUpsertEntities("xero", tenantId, entityType, items, getEntityId, userId)
       totalInserted = Math.max(totalInserted, insertedGcp)
+      if (entityType === "Invoice" && userId) {
+        await upsertUnifiedInvoices(userId, "xero", tenantId, items)
+      }
     } catch (err) {
       log("entity_store.upsert.failed", { tenantId, entityType, error: err instanceof Error ? err.message : String(err) }, "xero")
       throw err
@@ -86,6 +90,10 @@ export async function upsertEntities(
       }
       if (inserted > 0) {
         log("entity_store.upsert.succeeded", { tenantId, entityType, count: inserted }, "xero")
+        if (entityType === "Invoice") {
+          const userId = options?.userId ?? (await getUserIdByTenantId(tenantId))
+          if (userId) await upsertUnifiedInvoices(userId, "xero", tenantId, items)
+        }
       }
       totalInserted = Math.max(totalInserted, inserted)
       return totalInserted
@@ -104,6 +112,10 @@ export async function upsertEntities(
   }
   if (inserted > 0) {
     log("entity_store.upsert.succeeded", { tenantId, entityType, count: inserted }, "xero")
+    if (entityType === "Invoice") {
+      const userId = options?.userId ?? (await getUserIdByTenantId(tenantId))
+      if (userId) await upsertUnifiedInvoices(userId, "xero", tenantId, items)
+    }
   }
   return inserted
 }

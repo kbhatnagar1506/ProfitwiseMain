@@ -4,6 +4,7 @@
 
 import { ensureStripeSchema, query } from "./db"
 import { log } from "./logger"
+import { upsertUnifiedInvoices, deleteUnifiedInvoice } from "./unified-invoices"
 
 function getEntityId(item: unknown): string | null {
   if (item == null || typeof item !== "object") return null
@@ -87,6 +88,9 @@ export async function upsertStripeEntities(
           entityType,
           count: inserted,
         }, "stripe")
+        if (entityType === "invoice") {
+          await upsertUnifiedInvoices(userId, "stripe", stripeAccountId, items)
+        }
       }
       totalInserted = Math.max(totalInserted, inserted)
       return totalInserted
@@ -137,6 +141,10 @@ export async function deleteStripeEntity(
       const deleted = rows.length > 0
       if (deleted) {
         log("stripe.entity_store.delete.succeeded", { stripeAccountId, entityType, entityId }, "stripe")
+        if (entityType === "invoice") {
+          const userId = await getUserIdByStripeAccountId(stripeAccountId)
+          if (userId) await deleteUnifiedInvoice(userId, "stripe", stripeAccountId, entityId)
+        }
       }
       return deleted
     } catch (err) {
