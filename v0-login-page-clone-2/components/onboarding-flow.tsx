@@ -158,20 +158,7 @@ export function OnboardingFlow({
   })
   const [merchantSaveLoading, setMerchantSaveLoading] = useState(false)
   const [merchantsNormalizeError, setMerchantsNormalizeError] = useState<string | null>(null)
-  type InvoiceRow = {
-    unique_id: string
-    id: string
-    number: string
-    date: string | null
-    total: number | null
-    customer: string | null
-    email: string | null
-    source: "qbo" | "xero" | "stripe"
-    amount_paid?: number | null
-    amount_due?: number | null
-    status?: string | null
-    paid?: boolean
-  }
+  type InvoiceRow = { unique_id: string; id: string; number: string; date: string | null; total: number | null; customer: string | null; email: string | null; source: "qbo" | "xero" | "stripe"; amount_paid?: number | null; amount_due?: number | null; status?: string | null; paid?: boolean }
   const [step9Invoices, setStep9Invoices] = useState<InvoiceRow[]>([])
   const [step9InvoicesLoading, setStep9InvoicesLoading] = useState(false)
   type AccountingTx = {
@@ -1734,7 +1721,7 @@ export function OnboardingFlow({
             <div className="text-center mb-8">
               <h2 className="text-2xl font-semibold text-white mb-3">{steps[8].title}</h2>
               <p className="text-gray-400 text-base">
-                Confirm the invoices we’ve pulled in from your accounting tools match what you expect to see.
+                Confirm the invoices we’ve pulled in from your connected tools (QuickBooks, Xero, Stripe) match what you expect to see.
               </p>
             </div>
             <div className="rounded-lg border border-white/20 bg-white/5 overflow-hidden">
@@ -1752,27 +1739,21 @@ export function OnboardingFlow({
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Customer</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Email</TableHead>
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Source</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {step9Invoices.map((inv) => (
                         <TableRow key={inv.unique_id} className="border-white/20 hover:bg-white/5">
-                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{inv.number || inv.id || "—"}</TableCell>
+                          <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{inv.number || "—"}</TableCell>
                           <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(inv.date)}</TableCell>
                           <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{inv.total != null ? formatBalance(inv.total) : "—"}</TableCell>
-                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{inv.customer || inv.email || "—"}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{inv.customer || "—"}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{inv.email || "—"}</TableCell>
                           <TableCell className="border-white/20 px-3 py-2 whitespace-nowrap">
-                            <span
-                              className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${
-                                inv.source === "qbo"
-                                  ? "bg-blue-500/80 text-white border-blue-400/50"
-                                  : inv.source === "stripe"
-                                    ? "bg-purple-500/80 text-white border-purple-400/50"
-                                    : "bg-emerald-500/80 text-white border-emerald-400/50"
-                              }`}
-                            >
-                              {inv.source === "qbo" ? "QuickBooks" : inv.source === "stripe" ? "Stripe" : "Xero"}
+                            <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${inv.source === "qbo" ? "bg-blue-500/80 text-white border-blue-400/50" : inv.source === "xero" ? "bg-emerald-500/80 text-white border-emerald-400/50" : "bg-purple-500/80 text-white border-purple-400/50"}`}>
+                              {inv.source === "qbo" ? "QuickBooks" : inv.source === "xero" ? "Xero" : "Stripe"}
                             </span>
                           </TableCell>
                         </TableRow>
