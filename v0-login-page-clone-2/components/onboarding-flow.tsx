@@ -158,7 +158,7 @@ export function OnboardingFlow({
   })
   const [merchantSaveLoading, setMerchantSaveLoading] = useState(false)
   const [merchantsNormalizeError, setMerchantsNormalizeError] = useState<string | null>(null)
-  type InvoiceRow = { unique_id: string; id: string; number: string; date: string | null; total: number | null; customer: string | null; email: string | null; source: "qbo" | "xero" | "stripe"; amount_paid?: number | null; amount_due?: number | null; status?: string | null; paid?: boolean }
+  type InvoiceRow = { unique_id: string; id: string; number: string; date: string | null; total: number | null; customer: string | null; email: string | null; source: "qbo" | "xero" | "stripe"; amount_paid?: number | null; amount_due?: number | null; status?: string | null; paid?: boolean; updated_at?: string | null }
   const [step9Invoices, setStep9Invoices] = useState<InvoiceRow[]>([])
   const [step9InvoicesLoading, setStep9InvoicesLoading] = useState(false)
   type AccountingTx = {
@@ -1716,6 +1716,7 @@ export function OnboardingFlow({
 
       case 9: {
         const formatInvDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—")
+        const formatTimestamp = (ts: string | null | undefined) => (ts ? new Date(ts).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—")
         return (
           <div>
             <div className="text-center mb-8">
@@ -1735,8 +1736,10 @@ export function OnboardingFlow({
                   <Table>
                     <TableHeader>
                       <TableRow className="border-white/20 hover:bg-transparent">
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">System ID</TableHead>
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Number</TableHead>
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Date</TableHead>
+                        <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Updated</TableHead>
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">Total</TableHead>
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Customer</TableHead>
                         <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">Email</TableHead>
@@ -1746,8 +1749,10 @@ export function OnboardingFlow({
                     <TableBody>
                       {step9Invoices.map((inv) => (
                         <TableRow key={inv.unique_id} className="border-white/20 hover:bg-white/5">
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap font-mono text-xs">{inv.id || "—"}</TableCell>
                           <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap font-medium">{inv.number || "—"}</TableCell>
                           <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatInvDate(inv.date)}</TableCell>
+                          <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{formatTimestamp(inv.updated_at)}</TableCell>
                           <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right">{inv.total != null ? formatBalance(inv.total) : "—"}</TableCell>
                           <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{inv.customer || "—"}</TableCell>
                           <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">{inv.email || "—"}</TableCell>

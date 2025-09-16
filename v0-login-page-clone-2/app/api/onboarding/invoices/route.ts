@@ -22,6 +22,7 @@ export type InvoiceRow = {
   amount_due: number | null
   status: string | null
   paid: boolean
+  updated_at: string | null
 }
 
 /** GET /api/onboarding/invoices — returns unified invoices from Postgres (QBO + Xero + Stripe). */
@@ -81,6 +82,7 @@ export async function GET() {
       amount_due,
       status,
       paid,
+      updated_at: r.updated_at ?? null,
     }
   })
 
