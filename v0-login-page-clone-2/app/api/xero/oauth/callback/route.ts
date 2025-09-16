@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { log, error as logError } from "@/lib/logger"
 import { cookies } from "next/headers"
 import { exchangeCodeAndStore } from "@/lib/xero"
+import { runXeroSyncForUser } from "@/lib/xero-sync"
 
 async function handleCallback(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -60,6 +61,11 @@ async function handleCallback(request: NextRequest) {
   try {
     await exchangeCodeAndStore(code, userId)
     log("oauth.callback.succeeded", { hasState: !!state, hasUserId: !!userId }, "xero")
+
+    // Run full Xero sync in background so invoices/contacts/etc. are pulled without user action
+    void runXeroSyncForUser(userId).catch((e) => {
+      logError("xero.oauth.callback.sync_failed", e, "xero")
+    })
   } catch (err) {
     logError("oauth.callback.failed", err, "xero")
     return NextResponse.redirect(new URL("/onboarding?error=xero_token_exchange", base), 302)
