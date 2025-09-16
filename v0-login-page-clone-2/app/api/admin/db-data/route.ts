@@ -5,6 +5,7 @@ import {
   ensureQBOSchema,
   ensureXeroSchema,
   ensureStripeSchema,
+  ensureUnifiedInvoicesSchema,
   query,
 } from "@/lib/db"
 import { log } from "@/lib/logger"
@@ -40,6 +41,7 @@ export async function GET(req: NextRequest) {
     await ensureXeroSchema()
     await ensureQBOSchema()
     await ensureStripeSchema()
+    await ensureUnifiedInvoicesSchema()
   } catch (err) {
     log("admin.db-data.schema_failed", { error: err instanceof Error ? err.message : String(err) }, "db")
     return NextResponse.json({ error: "Schema failed" }, { status: 500 })
@@ -159,6 +161,17 @@ export async function GET(req: NextRequest) {
     }
   } catch (e) {
     out.stripe_entities = { error: String(e) }
+  }
+
+  try {
+    const unif = await query<{ user_id: string; count: string }>(
+      "SELECT user_id, COUNT(*)::text as count FROM unified_invoices GROUP BY user_id"
+    )
+    const total = unif.rows.reduce((sum, r) => sum + parseInt(r.count, 10), 0)
+    const by_user = unif.rows.map((r) => ({ user_id: r.user_id, count: parseInt(r.count, 10) }))
+    out.unified_invoices = { count: total, by_user }
+  } catch (e) {
+    out.unified_invoices = { error: String(e) }
   }
 
   return NextResponse.json(out)
