@@ -74,25 +74,30 @@ export async function upsertEntities(
   if (isProduction()) {
     try {
       await ensureXeroSchema()
+      const userId = options?.userId ?? (await getUserIdByTenantId(tenantId))
+      if (!userId) {
+        log("entity_store.upsert.skipped", { tenantId, entityType, reason: "no_user_for_tenant" }, "xero")
+        return totalInserted
+      }
       let inserted = 0
       for (const item of items) {
         const entityId = getEntityId(item)
         if (!entityId) continue
         await query(
-          `INSERT INTO xero_entities (tenant_id, entity_type, entity_id, data, updated_at)
-           VALUES ($1, $2, $3, $4::jsonb, NOW())
+          `INSERT INTO xero_entities (user_id, tenant_id, entity_type, entity_id, data, updated_at)
+           VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
            ON CONFLICT (tenant_id, entity_type, entity_id) DO UPDATE SET
+             user_id = EXCLUDED.user_id,
              data = EXCLUDED.data,
              updated_at = NOW()`,
-          [tenantId, entityType, entityId, JSON.stringify(item)]
+          [userId, tenantId, entityType, entityId, JSON.stringify(item)]
         )
         inserted++
       }
       if (inserted > 0) {
         log("entity_store.upsert.succeeded", { tenantId, entityType, count: inserted }, "xero")
         if (entityType === "Invoice") {
-          const userId = options?.userId ?? (await getUserIdByTenantId(tenantId))
-          if (userId) await upsertUnifiedInvoices(userId, "xero", tenantId, items)
+          await upsertUnifiedInvoices(userId, "xero", tenantId, items)
         }
       }
       totalInserted = Math.max(totalInserted, inserted)
