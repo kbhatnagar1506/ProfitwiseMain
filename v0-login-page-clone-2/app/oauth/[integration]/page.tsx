@@ -3,10 +3,36 @@
 import { useParams, useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import Image from "next/image"
-import { Loader2 } from "lucide-react"
+import { Loader2, Copy, Check } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import whatsappQr from "../../../Screenshot 2026-03-08 at 03.57.15.png"
+
+function CopyableRow({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+  return (
+    <div className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/10">
+      <div className="flex-1 min-w-0">
+        <p className="text-xs text-gray-500 mb-0.5">{label}</p>
+        <p className="text-sm text-white font-mono truncate">{value}</p>
+      </div>
+      <button
+        type="button"
+        onClick={copy}
+        className="shrink-0 p-2 rounded-md hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+        title="Copy"
+      >
+        {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+      </button>
+    </div>
+  )
+}
 
 export default function OAuthConnectorPage() {
   const params = useParams()
@@ -66,8 +92,101 @@ export default function OAuthConnectorPage() {
       window.location.href = "/api/slack/oauth/authorize"
       return
     }
+    if (integration === "gmail") {
+      // Gmail uses in-app forwarding setup; no redirect
+      return
+    }
     console.log("[v0] OAuth page loaded for:", integrationName)
   }, [integration, integrationName])
+
+  if (integration === "gmail") {
+    const GMAIL_FILTERS_URL = "https://mail.google.com/mail/u/0/#settings/filters"
+    const GMAIL_FWD_URL = "https://mail.google.com/mail/u/0/#settings/fwdandpop"
+    const FORWARD_EMAIL = "invoice@profitwise.app"
+    const SUBJECT_FILTER = "invoice OR payment OR bill"
+    return (
+      <div className="min-h-screen bg-black flex flex-col items-center px-6 py-10">
+        <div className="w-full max-w-4xl">
+          <div className="text-center mb-10">
+            <Image
+              src="/profitwise-logo.png"
+              alt="ProfitWise"
+              width={220}
+              height={60}
+              className="object-contain mx-auto mb-6"
+            />
+            <h1 className="text-2xl font-semibold text-white mb-1">Set up Gmail forwarding</h1>
+            <p className="text-gray-400 text-sm">
+              Forward invoices, payments, and bills to ProfitWise so we can extract and track them.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold text-white">Step 1 — Set a filter</h2>
+              <a
+                href={GMAIL_FILTERS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-blue-400 hover:underline block mb-2"
+              >
+                Open Gmail filters →
+              </a>
+              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video max-w-md">
+                <video
+                  src="/gmail-filter-setup.mp4"
+                  controls
+                  className="w-full h-full object-contain"
+                  playsInline
+                >
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold text-white">Step 2 — Set forwarding address</h2>
+              <a
+                href={GMAIL_FWD_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-blue-400 hover:underline block mb-2"
+              >
+                Open Gmail forwarding →
+              </a>
+              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video max-w-md">
+                <video
+                  src="/gmail-forwarding-setup.mp4"
+                  controls
+                  className="w-full h-full object-contain"
+                  playsInline
+                >
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-10 space-y-4 max-w-xl">
+            <p className="text-sm font-medium text-white">Use these when setting up:</p>
+            <CopyableRow label="Forward to" value={FORWARD_EMAIL} />
+            <CopyableRow label="Subject contains (for filter)" value={SUBJECT_FILTER} />
+          </div>
+
+          <div className="mt-10 flex justify-center">
+            <button
+              type="button"
+              onClick={() => router.back()}
+              className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-white hover:underline"
+            >
+              <span>←</span>
+              <span>Back to onboarding</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (integration === "whatsapp") {
     return (
