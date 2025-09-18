@@ -1018,10 +1018,10 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
 
   // ── Verification deposits ──
   if (m.amount <= 1.0 && VERIFICATION_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "account_verification", signals: { pattern_strength: 0.90, source_authority: srcAuth } }
+    return { type: "account_verification", signals: { pattern_strength: 0.95, source_authority: srcAuth, account_resolution: ar } }
   }
   if (m.amount <= 0.50 && catStr.includes("bank fees")) {
-    return { type: "account_verification", signals: { pattern_strength: 0.85, source_authority: srcAuth } }
+    return { type: "account_verification", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Opening balance ──
@@ -1087,7 +1087,7 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
   // ── Identity: processor → settlement or CC payment ──
   if (identity?.role === "processor" && identity.confidence >= 0.6) {
     if (m.direction === "inflow") {
-      return { type: "processor_payout", signals: { entity_confidence: identity.confidence, pattern_strength: 0.70, source_authority: srcAuth, account_resolution: ar } }
+      return { type: "processor_payout", signals: { entity_confidence: identity.confidence, pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
     }
     const cpLower = (m.counterparty ?? "").toLowerCase()
     const isCcBrand = /\bchase\b|\bamex\b|\bciti\b|\bcapital\s*one\b|\bvisa\b|\bmastercard\b|\bdiscover\b/.test(cpLower)
@@ -1361,10 +1361,11 @@ function applyFamilyLearning(classified: ClassifiedMovement[], families: Map<str
     if (family.dominantConfidence > c.confidence.score) {
       c.movement_type = family.dominantType
       c.pnl_eligible = isPnlEligible(family.dominantType)
+      const familyPatternFloor = family.count >= 10 ? 0.80 : family.count >= 5 ? 0.70 : 0.60
       c.confidence = computeConfidence({
         ...c.confidence,
         history: family.dominantConfidence,
-        pattern_strength: Math.max(c.confidence.pattern_strength, 0.6),
+        pattern_strength: Math.max(c.confidence.pattern_strength, familyPatternFloor),
       })
       c.review_needed = c.confidence.score < 0.7
       c.metadata.family_learned = true
