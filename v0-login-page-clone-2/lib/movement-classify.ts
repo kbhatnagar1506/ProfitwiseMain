@@ -127,13 +127,11 @@ type CanonicalMovement = {
 // ─── Compositional confidence ─────────────────────────────────────
 //
 // Two separate scores:
-//   classification_confidence — "How sure are we this is the right bucket?"
+//   classification_confidence (score) — "How sure are we this is the right bucket?"
 //     Only uses signals that ARE present. Absent signals are neutral, not penalizing.
+//     source_authority boosts trust based on HOW we know (bank > accounting > guess).
 //   evidence_strength — "How well-corroborated is this across sources/history/entities?"
 //     This one DOES penalize for missing corroboration.
-//
-// The final `score` is classification_confidence (the one used for review_needed threshold).
-// evidence_strength is informational — shown in UI but doesn't gate classification.
 
 type ConfidenceBreakdown = {
   score: number                 // = classification_confidence
@@ -141,42 +139,64 @@ type ConfidenceBreakdown = {
   entity_confidence: number     // identity resolution quality (0–1), -1 = not applicable
   account_resolution: number    // how well we know the cash account (0–1)
   pattern_strength: number      // description pattern match strength (0–1)
-  source_agreement: number      // cross-source agreement (0 = single, 1 = full agreement)
+  source_authority: number      // trustworthiness of the primary source (0–1)
+  source_agreement: number      // cross-source agreement, -1 = single source
   history: number               // family/recurring pattern strength (0–1), -1 = not applicable
   directional_consistency: number // how well direction matches type (0–1)
 }
 
+const SOURCE_AUTHORITY: Record<string, number> = {
+  plaid: 0.90,    // bank-observed, high trust
+  stripe: 0.90,   // processor-observed, high trust
+  qbo: 0.80,      // accounting system, medium-high trust
+  xero: 0.80,     // accounting system, medium-high trust
+  email: 0.40,    // extracted, low trust
+}
+
+function getSourceAuthority(evidence: SourceObservation[]): number {
+  if (!evidence.length) return 0.2
+  let best = 0
+  for (const o of evidence) {
+    const a = SOURCE_AUTHORITY[o.source] ?? 0.3
+    if (a > best) best = a
+  }
+  return best
+}
+
 function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBreakdown {
-  const e = signals.entity_confidence ?? -1   // -1 means "not applicable"
+  const e = signals.entity_confidence ?? -1
   const a = signals.account_resolution ?? 0
   const p = signals.pattern_strength ?? 0
-  const s = signals.source_agreement ?? -1
-  const h = signals.history ?? -1
+  const sa = signals.source_authority ?? 0.3
+  const s = signals.source_agreement ?? -1   // -1 = single source (neutral)
+  const h = signals.history ?? -1             // -1 = no family (neutral)
   const d = signals.directional_consistency ?? 1
 
   // ── Classification confidence ──
-  // Only accumulate signals that are present (>= 0). Weight is redistributed
-  // among present signals so absent ones don't drag the score down.
+  // Weights: pattern 25%, account 15%, source_authority 20%, direction 10%
+  // Optional: entity 15%, source_agreement 10%, history 5%
   const signalEntries: Array<{ value: number; weight: number }> = []
-  signalEntries.push({ value: p, weight: 0.20 })             // pattern always present
-  signalEntries.push({ value: a, weight: 0.20 })             // account always present
-  signalEntries.push({ value: d, weight: 0.10 })             // direction always present
-  if (e >= 0) signalEntries.push({ value: e, weight: 0.20 }) // only if entity resolved
-  if (s >= 0) signalEntries.push({ value: s, weight: 0.15 }) // only if multi-source
-  if (h >= 0) signalEntries.push({ value: h, weight: 0.15 }) // only if family exists
+  signalEntries.push({ value: p, weight: 0.25 })              // always present
+  signalEntries.push({ value: a, weight: 0.15 })              // always present
+  signalEntries.push({ value: sa, weight: 0.20 })             // always present
+  signalEntries.push({ value: d, weight: 0.10 })              // always present
+  if (e >= 0) signalEntries.push({ value: e, weight: 0.15 })  // only if entity resolved
+  if (s >= 0) signalEntries.push({ value: s, weight: 0.10 })  // only if multi-source
+  if (h >= 0) signalEntries.push({ value: h, weight: 0.05 })  // only if family exists
 
   const totalWeight = signalEntries.reduce((sum, x) => sum + x.weight, 0)
   const classificationConfidence = totalWeight > 0
     ? Math.min(1, Math.max(0, signalEntries.reduce((sum, x) => sum + x.value * (x.weight / totalWeight), 0)))
-    : p // fallback to pattern alone
+    : p
 
   // ── Evidence strength ──
-  // This DOES penalize for absence — how well corroborated is this movement?
+  // Penalizes for missing corroboration
   const evidenceStrength = Math.min(1, Math.max(0,
-    (e >= 0 ? e : 0) * 0.25 +
-    a * 0.20 +
-    (s >= 0 ? s : 0) * 0.25 +
+    (e >= 0 ? e : 0) * 0.20 +
+    a * 0.15 +
+    (s >= 0 ? s : 0) * 0.30 +
     (h >= 0 ? h : 0) * 0.20 +
+    sa * 0.05 +
     d * 0.10
   ))
 
@@ -186,6 +206,7 @@ function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBre
     entity_confidence: e,
     account_resolution: a,
     pattern_strength: p,
+    source_authority: sa,
     source_agreement: s,
     history: h,
     directional_consistency: d,
@@ -289,7 +310,7 @@ const MERCHANT_DEPOSIT_PATTERNS = [
   /\bdeposit\s+\d{6,}\b/i,
   /\bmerch\s*dep\b/i,
   /\bpos\s*deposit\b/i,
-  /\b(square|clover|toast|stripe|shopify)\b.*\b(deposit|payout|transfer)\b/i,
+  /\b(square|clover|toast|stripe|adyen|worldpay|fiserv|heartland)\b.*\b(deposit|payout|transfer)\b/i,
 ]
 
 const VERIFICATION_PATTERNS = [
@@ -661,12 +682,13 @@ function deriveProvenance(evidence: SourceObservation[]): Provenance {
 }
 
 function sourceAgreementScore(evidence: SourceObservation[]): number {
-  if (evidence.length <= 1) return 0
+  if (evidence.length <= 1) return -1 // single source → absent signal (neutral)
   const sources = new Set(evidence.map((e) => e.source))
+  if (sources.size <= 1) return -1
   const hasBankAndAccounting = [...sources].some((s) => BANK_SOURCES.has(s)) &&
     [...sources].some((s) => !BANK_SOURCES.has(s))
   if (hasBankAndAccounting) return 1.0
-  return sources.size > 1 ? 0.7 : 0.3
+  return 0.7
 }
 
 function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
@@ -954,77 +976,77 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
   const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
   const pfcDetailed = (m.plaid_pfc?.detailed ?? "").toUpperCase()
   const primaryObs = m.evidence[0]
-  const eid = identity?.confidence ?? 0
-  const sa = sourceAgreementScore(m.evidence)
-  const ar = m.cash_account_id ? 0.8 : (m.cash_account_name ? 0.5 : 0.1)
+  const eid = identity?.confidence ?? -1
+  const srcAuth = getSourceAuthority(m.evidence)
+  const ar = m.cash_account_id ? 0.9 : (m.cash_account_name ? 0.6 : 0.2)
 
   // ── Plaid PFC (high-quality signal) ──
   if (pfcPrimary === "TRANSFER_IN" || pfcPrimary === "TRANSFER_OUT") {
-    if (pfcDetailed.includes("ACCOUNT_TRANSFER")) return { type: "internal_transfer", signals: { pattern_strength: 0.9, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
+    if (pfcDetailed.includes("ACCOUNT_TRANSFER")) return { type: "internal_transfer", signals: { pattern_strength: 0.95, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
     if (pfcDetailed.includes("LOAN") || pfcDetailed.includes("MORTGAGE")) {
       const t = m.direction === "inflow" ? "loan_funding" as const : "loan_principal_payment" as const
-      return { type: t, signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
+      return { type: t, signals: { pattern_strength: 0.90, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
     }
-    if (pfcDetailed.includes("CREDIT_CARD")) return { type: "credit_card_payment", signals: { pattern_strength: 0.9, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
-    if (pfcDetailed.includes("DEPOSIT")) return { type: "internal_transfer", signals: { pattern_strength: 0.8, source_agreement: sa, account_resolution: ar } }
+    if (pfcDetailed.includes("CREDIT_CARD")) return { type: "credit_card_payment", signals: { pattern_strength: 0.95, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
+    if (pfcDetailed.includes("DEPOSIT")) return { type: "internal_transfer", signals: { pattern_strength: 0.85, source_authority: srcAuth, account_resolution: ar } }
   }
   if (pfcPrimary === "LOAN_PAYMENTS") {
-    return { type: "loan_principal_payment", signals: { pattern_strength: 0.9, source_agreement: sa, account_resolution: ar } }
+    return { type: "loan_principal_payment", signals: { pattern_strength: 0.95, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Structural: cross-account transfer (paired) ──
   if (m.metadata.transfer_type === "cross_account") {
-    return { type: "internal_transfer", signals: { pattern_strength: 0.95, account_resolution: 1.0, source_agreement: sa } }
+    return { type: "internal_transfer", signals: { pattern_strength: 1.0, account_resolution: 1.0, source_authority: srcAuth } }
   }
 
   // ── Structural: QBO Transfer entity ──
   if (primaryObs.source === "qbo" && primaryObs.source_type === "Transfer") {
-    return { type: "internal_transfer", signals: { pattern_strength: 0.95, account_resolution: ar, source_agreement: sa } }
+    return { type: "internal_transfer", signals: { pattern_strength: 0.95, account_resolution: Math.max(ar, 0.7), source_authority: srcAuth } }
   }
 
   // ── Structural: Stripe payout ──
   if (primaryObs.source === "stripe" && primaryObs.source_type === "payout") {
-    return { type: "processor_payout", signals: { pattern_strength: 0.95, entity_confidence: 0.9, source_agreement: sa, account_resolution: ar } }
+    return { type: "processor_payout", signals: { pattern_strength: 0.95, entity_confidence: 0.9, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Structural: Stripe balance_transaction ──
   if (primaryObs.source === "stripe" && primaryObs.source_type === "balance_transaction") {
     const sType = (m.metadata.stripe_type ?? "") as string
-    if (sType === "stripe_fee" || sType === "fee") return { type: "processor_fee_settlement", signals: { pattern_strength: 0.95, entity_confidence: 0.9, source_agreement: sa } }
-    if (sType === "payout") return { type: "processor_payout", signals: { pattern_strength: 0.9, entity_confidence: 0.9, source_agreement: sa } }
+    if (sType === "stripe_fee" || sType === "fee") return { type: "processor_fee_settlement", signals: { pattern_strength: 0.95, entity_confidence: 0.9, source_authority: srcAuth } }
+    if (sType === "payout") return { type: "processor_payout", signals: { pattern_strength: 0.95, entity_confidence: 0.9, source_authority: srcAuth } }
   }
 
   // ── Verification deposits ──
   if (m.amount <= 1.0 && VERIFICATION_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "account_verification", signals: { pattern_strength: 0.9, source_agreement: sa } }
+    return { type: "account_verification", signals: { pattern_strength: 0.90, source_authority: srcAuth } }
   }
   if (m.amount <= 0.50 && catStr.includes("bank fees")) {
-    return { type: "account_verification", signals: { pattern_strength: 0.85 } }
+    return { type: "account_verification", signals: { pattern_strength: 0.85, source_authority: srcAuth } }
   }
 
   // ── Opening balance ──
   if (OPENING_BALANCE_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "opening_balance", signals: { pattern_strength: 0.85 } }
+    return { type: "opening_balance", signals: { pattern_strength: 0.90, source_authority: srcAuth } }
   }
 
   // ── Credit card payments ──
   if (CC_PAYMENT_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "credit_card_payment", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
+    return { type: "credit_card_payment", signals: { pattern_strength: 0.90, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
   }
   if (identity?.role === "processor" && CC_PAYMENT_PATTERNS.some((p) => p.test(m.counterparty ?? ""))) {
-    return { type: "credit_card_payment", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa } }
+    return { type: "credit_card_payment", signals: { pattern_strength: 0.90, entity_confidence: eid, source_authority: srcAuth } }
   }
 
   // ── Owner draw / contribution (pattern-based) ──
   if (OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "owner_contribution", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa } }
+    return { type: "owner_contribution", signals: { pattern_strength: 0.85, entity_confidence: eid, source_authority: srcAuth } }
   }
   if (OWNER_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "owner_draw", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa } }
+    return { type: "owner_draw", signals: { pattern_strength: 0.85, entity_confidence: eid, source_authority: srcAuth } }
   }
   if (identity?.role === "owner") {
     const t = m.direction === "inflow" ? "owner_contribution" as const : "owner_draw" as const
-    return { type: t, signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa, account_resolution: ar } }
+    return { type: t, signals: { entity_confidence: identity.confidence, pattern_strength: 0.65, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Fix 3: Owner detection from descriptor containing owner name ──
@@ -1033,7 +1055,7 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
     for (const on of selfCtx.ownerNames) {
       const onNorm = on.toLowerCase().replace(/[^a-z0-9]/g, "")
       if (onNorm.length >= 3 && descNorm.includes(onNorm)) {
-        return { type: "owner_contribution_candidate", signals: { entity_confidence: 0.4, pattern_strength: 0.5, account_resolution: ar } }
+        return { type: "owner_contribution_candidate", signals: { entity_confidence: 0.5, pattern_strength: 0.55, source_authority: srcAuth, account_resolution: ar } }
       }
     }
   }
@@ -1041,44 +1063,44 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
   // ── Loan / financing ──
   if (LOAN_PATTERNS.some((p) => p.test(desc))) {
     const t = m.direction === "inflow" ? "loan_funding" as const : "loan_principal_payment" as const
-    return { type: t, signals: { pattern_strength: 0.8, entity_confidence: eid, source_agreement: sa } }
+    return { type: t, signals: { pattern_strength: 0.85, entity_confidence: eid, source_authority: srcAuth } }
   }
   if (catStr.includes("loan")) {
     const t = m.direction === "inflow" ? "loan_funding" as const : "loan_principal_payment" as const
-    return { type: t, signals: { pattern_strength: 0.6, source_agreement: sa } }
+    return { type: t, signals: { pattern_strength: 0.70, source_authority: srcAuth } }
   }
   if (identity?.role === "lender") {
     const t = m.direction === "inflow" ? "loan_funding" as const : "loan_principal_payment" as const
-    return { type: t, signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa } }
+    return { type: t, signals: { entity_confidence: identity.confidence, pattern_strength: 0.60, source_authority: srcAuth } }
   }
 
   // ── Transfer patterns (bank description) ──
   if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
     if (identity && (identity.role === "internal" || identity.role === "bank_account" || identity.is_own_account)) {
-      return { type: "internal_transfer", signals: { pattern_strength: 0.7, entity_confidence: identity.confidence, account_resolution: ar, source_agreement: sa } }
+      return { type: "internal_transfer", signals: { pattern_strength: 0.80, entity_confidence: identity.confidence, account_resolution: ar, source_authority: srcAuth } }
     }
     if (catStr.includes("transfer") && !catStr.includes("wire transfer") && m.linked_internal_account_id) {
-      return { type: "internal_transfer", signals: { pattern_strength: 0.7, account_resolution: 0.9, source_agreement: sa } }
+      return { type: "internal_transfer", signals: { pattern_strength: 0.80, account_resolution: 0.9, source_authority: srcAuth } }
     }
   }
 
   // ── Identity: processor → settlement or CC payment ──
   if (identity?.role === "processor" && identity.confidence >= 0.6) {
     if (m.direction === "inflow") {
-      return { type: "processor_payout", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa, account_resolution: ar } }
+      return { type: "processor_payout", signals: { entity_confidence: identity.confidence, pattern_strength: 0.70, source_authority: srcAuth, account_resolution: ar } }
     }
     const cpLower = (m.counterparty ?? "").toLowerCase()
     const isCcBrand = /\bchase\b|\bamex\b|\bciti\b|\bcapital\s*one\b|\bvisa\b|\bmastercard\b|\bdiscover\b/.test(cpLower)
     const isCcDesc = CC_PAYMENT_PATTERNS.some((p) => p.test(desc))
     if (isCcBrand || isCcDesc) {
-      return { type: "credit_card_payment", signals: { entity_confidence: identity.confidence, pattern_strength: 0.7, source_agreement: sa, account_resolution: ar } }
+      return { type: "credit_card_payment", signals: { entity_confidence: identity.confidence, pattern_strength: 0.80, source_authority: srcAuth, account_resolution: ar } }
     }
-    return { type: "processor_fee_settlement", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa } }
+    return { type: "processor_fee_settlement", signals: { entity_confidence: identity.confidence, pattern_strength: 0.65, source_authority: srcAuth } }
   }
 
   // ── Identity: internal / bank_account → internal_transfer ──
   if (identity && (identity.role === "internal" || identity.role === "bank_account") && identity.confidence >= 0.6) {
-    return { type: "internal_transfer", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, account_resolution: ar, source_agreement: sa } }
+    return { type: "internal_transfer", signals: { entity_confidence: identity.confidence, pattern_strength: 0.70, account_resolution: ar, source_authority: srcAuth } }
   }
 
   return null
@@ -1092,125 +1114,125 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
   const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
   const pfcDetailed = (m.plaid_pfc?.detailed ?? "").toUpperCase()
   const primaryObs = m.evidence[0]
-  const eid = identity?.confidence ?? 0
-  const sa = sourceAgreementScore(m.evidence)
-  const ar = m.cash_account_id ? 0.8 : (m.cash_account_name ? 0.5 : 0.1)
+  const eid = identity?.confidence ?? -1
+  const srcAuth = getSourceAuthority(m.evidence)
+  const ar = m.cash_account_id ? 0.9 : (m.cash_account_name ? 0.6 : 0.2)
 
   // ── Plaid PFC operating signals ──
-  if (pfcPrimary === "BANK_FEES") return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.9, source_agreement: sa } }
-  if (pfcPrimary === "INCOME" && pfcDetailed.includes("INTEREST")) return { type: "cash_in_interest", signals: { pattern_strength: 0.9, source_agreement: sa } }
-  if (pfcPrimary === "INCOME") return { type: "cash_in_customer", signals: { pattern_strength: 0.7, entity_confidence: eid, source_agreement: sa } }
+  if (pfcPrimary === "BANK_FEES") return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.95, source_authority: srcAuth, account_resolution: ar } }
+  if (pfcPrimary === "INCOME" && pfcDetailed.includes("INTEREST")) return { type: "cash_in_interest", signals: { pattern_strength: 0.95, source_authority: srcAuth, account_resolution: ar } }
+  if (pfcPrimary === "INCOME") return { type: "cash_in_customer", signals: { pattern_strength: 0.80, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
   if (pfcDetailed.includes("TAX") || pfcPrimary === "GOVERNMENT_AND_NON_PROFIT") {
-    if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", signals: { pattern_strength: 0.9, source_agreement: sa } }
+    if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", signals: { pattern_strength: 0.95, source_authority: srcAuth, account_resolution: ar } }
   }
   if (pfcPrimary === "RENT_AND_UTILITIES" || pfcPrimary === "GENERAL_SERVICES") {
-    return { type: "cash_out_operating_expense", signals: { pattern_strength: 0.8, source_agreement: sa, account_resolution: ar } }
+    return { type: "cash_out_operating_expense", signals: { pattern_strength: 0.85, source_authority: srcAuth, account_resolution: ar } }
   }
 
-  // ── Bank fees ──
-  if (BANK_FEE_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.85, source_agreement: sa } }
-  if (catStr.includes("bank fees")) return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.8, source_agreement: sa } }
+  // ── Bank fees (descriptor match) ──
+  if (BANK_FEE_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
+  if (catStr.includes("bank fees")) return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.85, source_authority: srcAuth, account_resolution: ar } }
 
   // ── Payroll ──
-  if (catStr.includes("payroll")) return { type: "cash_out_payroll", signals: { pattern_strength: 0.85, source_agreement: sa } }
+  if (catStr.includes("payroll")) return { type: "cash_out_payroll", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
   const cpNorm = normKey(m.counterparty ?? "")
   for (const pp of PAYROLL_PROCESSORS) {
-    if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) return { type: "cash_out_payroll", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa } }
+    if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) return { type: "cash_out_payroll", signals: { pattern_strength: 0.90, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
   }
   if (identity?.role === "employee" && identity.confidence >= 0.6) {
-    return { type: "cash_out_payroll", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa } }
+    return { type: "cash_out_payroll", signals: { entity_confidence: identity.confidence, pattern_strength: 0.60, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Tax ──
-  if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", signals: { pattern_strength: 0.85, source_agreement: sa } }
-  if (catStr.includes("tax")) return { type: "cash_out_tax", signals: { pattern_strength: 0.7, source_agreement: sa } }
+  if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
+  if (catStr.includes("tax")) return { type: "cash_out_tax", signals: { pattern_strength: 0.75, source_authority: srcAuth } }
   if (identity?.role === "tax_authority" && identity.confidence >= 0.6) {
-    return { type: "cash_out_tax", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa } }
+    return { type: "cash_out_tax", signals: { entity_confidence: identity.confidence, pattern_strength: 0.60, source_authority: srcAuth } }
   }
 
   // ── Interest ──
   if (INTEREST_PATTERNS.some((p) => p.test(desc))) {
     const t = m.direction === "inflow" ? "cash_in_interest" as const : "cash_out_interest" as const
-    return { type: t, signals: { pattern_strength: 0.8, source_agreement: sa } }
+    return { type: t, signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Refunds ──
   if (REFUND_PATTERNS.some((p) => p.test(desc))) {
     const t = m.direction === "inflow" ? "cash_in_refund" as const : "cash_out_refund" as const
-    return { type: t, signals: { pattern_strength: 0.8, source_agreement: sa } }
+    return { type: t, signals: { pattern_strength: 0.85, source_authority: srcAuth, account_resolution: ar } }
   }
   if (primaryObs.source === "qbo" && ["RefundReceipt", "CreditMemo", "VendorCredit"].includes(primaryObs.source_type)) {
-    return { type: "cash_out_refund", signals: { pattern_strength: 0.9, source_agreement: sa } }
+    return { type: "cash_out_refund", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
   }
   if (primaryObs.source === "xero" && primaryObs.source_type === "CreditNote") {
-    return { type: "cash_out_refund", signals: { pattern_strength: 0.9, source_agreement: sa } }
+    return { type: "cash_out_refund", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
   }
   if (primaryObs.source === "stripe" && primaryObs.source_type === "balance_transaction") {
     const sType = (m.metadata.stripe_type ?? "") as string
-    if (sType === "refund") return { type: "cash_out_refund", signals: { pattern_strength: 0.9, entity_confidence: 0.9, source_agreement: sa } }
+    if (sType === "refund") return { type: "cash_out_refund", signals: { pattern_strength: 0.95, entity_confidence: 0.9, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Identity: customer / vendor ──
   if (identity?.role === "customer" && identity.confidence >= 0.6) {
-    return { type: "cash_in_customer", signals: { entity_confidence: identity.confidence, pattern_strength: 0.4, source_agreement: sa, account_resolution: ar } }
+    return { type: "cash_in_customer", signals: { entity_confidence: identity.confidence, pattern_strength: 0.60, source_authority: srcAuth, account_resolution: ar } }
   }
   if (identity?.role === "vendor" && identity.confidence >= 0.6) {
-    return { type: "cash_out_vendor", signals: { entity_confidence: identity.confidence, pattern_strength: 0.4, source_agreement: sa, account_resolution: ar } }
+    return { type: "cash_out_vendor", signals: { entity_confidence: identity.confidence, pattern_strength: 0.60, source_authority: srcAuth, account_resolution: ar } }
   }
 
-  // ── QBO type fallback ──
+  // ── QBO type-based classification ──
   if (primaryObs.source === "qbo") {
     if (["Invoice", "SalesReceipt"].includes(primaryObs.source_type)) {
-      return { type: "cash_in_customer", signals: { pattern_strength: 0.8, source_agreement: sa, account_resolution: ar } }
+      return { type: "cash_in_customer", signals: { pattern_strength: 0.85, source_authority: srcAuth, account_resolution: ar } }
     }
     if (primaryObs.source_type === "Payment") {
-      return { type: "cash_in_customer", signals: { pattern_strength: 0.8, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
+      return { type: "cash_in_customer", signals: { pattern_strength: 0.85, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
     }
     if (primaryObs.source_type === "Deposit") {
       if (m.counterparty && identity?.role === "customer") {
-        return { type: "cash_in_customer", signals: { pattern_strength: 0.6, entity_confidence: identity.confidence, source_agreement: sa, account_resolution: ar } }
+        return { type: "cash_in_customer", signals: { pattern_strength: 0.70, entity_confidence: identity.confidence, source_authority: srcAuth, account_resolution: ar } }
       }
       return m.counterparty
-        ? { type: "cash_in_customer", signals: { pattern_strength: 0.5, source_agreement: sa } }
-        : { type: "unknown_inflow", signals: { pattern_strength: 0.2, source_agreement: sa } }
+        ? { type: "cash_in_customer", signals: { pattern_strength: 0.60, source_authority: srcAuth, account_resolution: ar } }
+        : { type: "unknown_inflow", signals: { pattern_strength: 0.20, source_authority: srcAuth } }
     }
     if (["Bill", "BillPayment", "Purchase"].includes(primaryObs.source_type)) {
-      return { type: "cash_out_vendor", signals: { pattern_strength: 0.7, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
+      return { type: "cash_out_vendor", signals: { pattern_strength: 0.80, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
     }
   }
 
-  // ── Xero type fallback ──
+  // ── Xero type-based classification ──
   if (primaryObs.source === "xero") {
     const xeroSubType = (m.metadata.xero_sub_type ?? "") as string
     if (primaryObs.source_type === "Invoice") {
       const t = xeroSubType === "ACCPAY" ? "cash_out_vendor" as const : "cash_in_customer" as const
-      return { type: t, signals: { pattern_strength: 0.7, source_agreement: sa, account_resolution: ar } }
+      return { type: t, signals: { pattern_strength: 0.80, source_authority: srcAuth, account_resolution: ar } }
     }
-    if (primaryObs.source_type === "Bill") return { type: "cash_out_vendor", signals: { pattern_strength: 0.7, source_agreement: sa } }
+    if (primaryObs.source_type === "Bill") return { type: "cash_out_vendor", signals: { pattern_strength: 0.80, source_authority: srcAuth, account_resolution: ar } }
     if (primaryObs.source_type === "Payment") {
       const t = m.direction === "outflow" ? "cash_out_vendor" as const : "cash_in_customer" as const
-      return { type: t, signals: { pattern_strength: 0.6, source_agreement: sa } }
+      return { type: t, signals: { pattern_strength: 0.70, source_authority: srcAuth, account_resolution: ar } }
     }
     if (primaryObs.source_type === "BankTransaction") {
       const t = m.direction === "inflow" ? "cash_in_customer" as const : "cash_out_operating_expense" as const
-      return { type: t, signals: { pattern_strength: 0.5, source_agreement: sa } }
+      return { type: t, signals: { pattern_strength: 0.60, source_authority: srcAuth, account_resolution: ar } }
     }
   }
 
-  // ── Stripe type fallback ──
+  // ── Stripe type-based classification ──
   if (primaryObs.source === "stripe" && (primaryObs.source_type === "payment_intent" || primaryObs.source_type === "invoice")) {
-    return { type: "cash_in_customer", signals: { pattern_strength: 0.7, entity_confidence: 0.7, source_agreement: sa } }
+    return { type: "cash_in_customer", signals: { pattern_strength: 0.80, entity_confidence: 0.7, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Plaid category heuristics ──
   if (m.direction === "inflow" && catStr.includes("deposit")) {
-    return { type: "cash_in_customer", signals: { pattern_strength: 0.5, source_agreement: sa } }
+    return { type: "cash_in_customer", signals: { pattern_strength: 0.55, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Plaid payment_channel ──
   if (m.plaid_payment_channel === "in store" || m.plaid_payment_channel === "online") {
     const t = m.direction === "inflow" ? "cash_in_customer" as const : "cash_out_operating_expense" as const
-    return { type: t, signals: { pattern_strength: 0.5, source_agreement: sa } }
+    return { type: t, signals: { pattern_strength: 0.55, source_authority: srcAuth, account_resolution: ar } }
   }
 
   return null
@@ -1220,23 +1242,23 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
 
 function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEntry | null): ClassifyResult | null {
   const desc = (m.raw_description ?? "").toLowerCase()
-  const sa = sourceAgreementScore(m.evidence)
+  const srcAuth = getSourceAuthority(m.evidence)
 
-  // Merchant deposit: recurring BANKCD/DEPOSIT patterns
+  // Merchant deposit: recurring BANKCD/DEPOSIT patterns — keep classification moderate
   if (m.direction === "inflow" && MERCHANT_DEPOSIT_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "merchant_deposit_unresolved", signals: { pattern_strength: 0.55, source_agreement: sa } }
+    return { type: "merchant_deposit_unresolved", signals: { pattern_strength: 0.45, source_authority: srcAuth } }
   }
 
   // Inflows from owner-linked entities without strong signals
   if (m.direction === "inflow" && identity?.role === "internal") {
     if (!OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
-      return { type: "owner_contribution_candidate", signals: { entity_confidence: identity.confidence, pattern_strength: 0.3 } }
+      return { type: "owner_contribution_candidate", signals: { entity_confidence: identity.confidence, pattern_strength: 0.40, source_authority: srcAuth } }
     }
   }
 
   // Inflows from own accounts without internal transfer pairing
   if (m.direction === "inflow" && identity?.is_own_account && !m.linked_internal_account_id) {
-    return { type: "owner_contribution_candidate", signals: { entity_confidence: identity.confidence, pattern_strength: 0.3 } }
+    return { type: "owner_contribution_candidate", signals: { entity_confidence: identity.confidence, pattern_strength: 0.40, source_authority: srcAuth } }
   }
 
   return null
@@ -1246,13 +1268,14 @@ function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEnt
 
 function classifyFallback(m: CanonicalMovement): ClassifyResult {
   const desc = (m.raw_description ?? "").toLowerCase()
+  const srcAuth = getSourceAuthority(m.evidence)
 
   if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "unknown_transfer_candidate", signals: { pattern_strength: 0.2 } }
+    return { type: "unknown_transfer_candidate", signals: { pattern_strength: 0.15, source_authority: srcAuth * 0.5 } }
   }
 
   const t = m.direction === "inflow" ? "unknown_inflow" as const : "unknown_outflow" as const
-  return { type: t, signals: { pattern_strength: 0.15 } }
+  return { type: t, signals: { pattern_strength: 0.10, source_authority: srcAuth * 0.5 } }
 }
 
 // ─── Step 7b: Family-level learning (persisted to movement_families) ─
@@ -1411,7 +1434,7 @@ Types: ${typeList}
 
 Non-P&L types (not operational cash activity):
 - internal_transfer: own-account-to-own-account
-- processor_payout: Shopify/Stripe/PayPal → bank
+- processor_payout: payment processor settlement → bank (e.g. ACH credit from processor)
 - processor_fee_settlement: processor fees, platform charges
 - credit_card_payment: CC bill payments
 - loan_funding: loan draws, credit line advances
