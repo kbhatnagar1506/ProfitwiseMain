@@ -134,6 +134,7 @@ type ConfidenceBreakdown = {
   pattern_strength: number      // description pattern match strength (0–1)
   source_agreement: number      // cross-source agreement (0 = single, 1 = full agreement)
   history: number               // family/recurring pattern strength (0–1)
+  directional_consistency: number // how well direction matches type (0–1)
 }
 
 function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBreakdown {
@@ -142,13 +143,30 @@ function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBre
   const p = signals.pattern_strength ?? 0
   const s = signals.source_agreement ?? 0
   const h = signals.history ?? 0
+   // By default assume direction is consistent unless explicitly downgraded
+  const d = signals.directional_consistency ?? 1
 
-  // Weighted combination
+  // Weighted combination (user-specified weights):
+  // entity_confidence: 20%, account_resolution: 20%, pattern_strength: 20%,
+  // source_agreement: 15%, history: 15%, directional_consistency: 10%
   const score = Math.min(1, Math.max(0,
-    e * 0.25 + a * 0.15 + p * 0.30 + s * 0.15 + h * 0.15
+    e * 0.20 +
+    a * 0.20 +
+    p * 0.20 +
+    s * 0.15 +
+    h * 0.15 +
+    d * 0.10
   ))
 
-  return { score, entity_confidence: e, account_resolution: a, pattern_strength: p, source_agreement: s, history: h }
+  return {
+    score,
+    entity_confidence: e,
+    account_resolution: a,
+    pattern_strength: p,
+    source_agreement: s,
+    history: h,
+    directional_consistency: d,
+  }
 }
 
 type ClassifiedMovement = CanonicalMovement & {
@@ -1667,7 +1685,11 @@ export async function classifyMovements(userId: string): Promise<{
     const isInflow = c.direction === "inflow"
     if ((isInflow && OUTFLOW_TYPES.has(c.movement_type)) || (!isInflow && INFLOW_TYPES.has(c.movement_type))) {
       c.review_needed = true
-      c.confidence = computeConfidence({ ...c.confidence, pattern_strength: Math.min(c.confidence.pattern_strength, 0.3) })
+      c.confidence = computeConfidence({
+        ...c.confidence,
+        pattern_strength: Math.min(c.confidence.pattern_strength, 0.3),
+        directional_consistency: 0.1,
+      })
       log("movements.classify.direction_mismatch", {
         type: c.movement_type, direction: c.direction, amount: c.amount, counterparty: c.counterparty,
       }, "movements")
