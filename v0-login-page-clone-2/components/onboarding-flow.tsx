@@ -189,7 +189,7 @@ export function OnboardingFlow({
   const [identitySeeding, setIdentitySeeding] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
-  type ConfidenceBreakdown = { score: number; entity_confidence: number; account_resolution: number; pattern_strength: number; source_agreement: number; history: number }
+  type ConfidenceBreakdown = { score: number; evidence_strength: number; entity_confidence: number; account_resolution: number; pattern_strength: number; source_agreement: number; history: number; directional_consistency: number }
   type ObservationRow = { id: string; source: string; source_type: string; source_id: string; amount: string; date: string; raw_description: string | null; counterparty: string | null; account_name: string | null; account_id: string | null }
   type MovementRow = { id: string; direction: string; amount: string; date: string; movement_type: string; pnl_eligible: boolean; provenance: string; cash_account_id: string | null; counterparty: string | null; counterparty_entity_id: string | null; counterparty_entity_type: string | null; linked_internal_account_id: string | null; confidence: ConfidenceBreakdown; review_needed: boolean; observations: ObservationRow[]; raw_description: string | null; metadata: Record<string, unknown>; created_at: string }
   type MovementSummary = { movement_type: string; pnl_eligible: boolean; count: number; total_amount: string }
@@ -2063,7 +2063,7 @@ export function OnboardingFlow({
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">To</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]">Evidence</th>
-                        <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
+                        <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[60px]" title="Classification / Evidence">Conf</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
@@ -2099,9 +2099,10 @@ export function OnboardingFlow({
                                 ))}
                               </div>
                             </td>
-                            <td className="text-gray-500 px-3 py-1.5 text-xs text-right">
+                            <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap">
                               {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
-                              {Math.round(m.confidence.score * 100)}%
+                              <span className="text-white font-medium" title="Classification confidence">{Math.round(m.confidence.score * 100)}%</span>
+                              <span className="text-gray-600 ml-0.5" title="Evidence strength">/{Math.round((m.confidence.evidence_strength ?? 0) * 100)}</span>
                             </td>
                           </tr>
                         )
@@ -2119,7 +2120,7 @@ export function OnboardingFlow({
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Account</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]">Evidence</th>
-                        <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
+                        <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[60px]" title="Classification / Evidence">Conf</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
@@ -2150,9 +2151,10 @@ export function OnboardingFlow({
                               ))}
                             </div>
                           </td>
-                          <td className="text-gray-500 px-3 py-1.5 text-xs text-right">
+                          <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap">
                             {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
-                            {Math.round(m.confidence.score * 100)}%
+                            <span className="text-white font-medium" title="Classification confidence">{Math.round(m.confidence.score * 100)}%</span>
+                            <span className="text-gray-600 ml-0.5" title="Evidence strength">/{Math.round((m.confidence.evidence_strength ?? 0) * 100)}</span>
                           </td>
                         </tr>
                       ))}
