@@ -133,7 +133,7 @@ export default function OAuthConnectorPage() {
     const SUBJECT_FILTER = "invoice OR payment OR bill"
     return (
       <div className="min-h-screen bg-black flex flex-col items-center px-6 py-10">
-        <div className="w-full max-w-6xl">
+        <div className="w-full max-w-7xl">
           <div className="text-center mb-10">
             <Image
               src="/profitwise-logo.png"
@@ -148,82 +148,13 @@ export default function OAuthConnectorPage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
-            <div className="space-y-4">
-              <h2 className="text-lg font-semibold text-white">Step 1 — Set a filter</h2>
-              <a
-                href={GMAIL_FILTERS_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-400 hover:underline block mb-2"
-              >
-                Open Gmail filters →
-              </a>
-              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video w-full">
-                <video
-                  src="/gmail-filter-setup.mp4"
-                  controls
-                  className="w-full h-full object-contain"
-                  playsInline
-                  autoPlay
-                  muted
-                  loop
-                >
-                  Your browser does not support the video tag.
-                </video>
-              </div>
-              <div className="border-t border-white/10 pt-4 mt-4">
-                <p className="text-sm text-gray-400 mb-3">
-                  In the filter, set &quot;Subject&quot; to the text below so only invoice, payment, and bill emails are forwarded.
-                </p>
-                <CopyableRow
-                  label="Subject contains (for filter)"
-                  value={SUBJECT_FILTER}
-                  size="large"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h2 className="text-lg font-semibold text-white">Step 2 — Set forwarding address</h2>
-              <a
-                href={GMAIL_FWD_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-400 hover:underline block mb-2"
-              >
-                Open Gmail forwarding →
-              </a>
-              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video w-full">
-                <video
-                  src="/gmail-forwarding-setup.mp4"
-                  controls
-                  className="w-full h-full object-contain"
-                  playsInline
-                  autoPlay
-                  muted
-                  loop
-                >
-                  Your browser does not support the video tag.
-                </video>
-              </div>
-              <div className="border-t border-white/10 pt-4 mt-4">
-                <p className="text-sm text-gray-400 mb-3">
-                  Add this address as the forwarding destination in Gmail. We’ll receive only the emails that match your filter.
-                </p>
-                <CopyableRow
-                  label="Forward to"
-                  value={FORWARD_EMAIL}
-                  size="large"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-12 border-t border-white/10 pt-10">
+          <div className="mb-10 pb-10 border-b border-white/10">
             <h2 className="text-lg font-semibold text-white mb-1">Emails we&apos;ll be receiving your invoices from</h2>
-            <p className="text-sm text-gray-400 mb-4">
-              List the sender addresses or domains (e.g. billing@vendor.com or @stripe.com) you want us to treat as invoice sources. Click Save to store in your account.
+            <p className="text-sm text-gray-400 mb-2">
+              List the sender addresses. Click Save to store in your account.
+            </p>
+            <p className="text-sm text-gray-500 mb-4 italic">
+              Note: We recommend adding all addresses that might receive invoices, bills, or payments.
             </p>
             <div className="flex flex-wrap gap-2 mb-4">
               {gmailInvoiceSenders.map((email) => (
@@ -313,6 +244,78 @@ export default function OAuthConnectorPage() {
                   {gmailSaveMessage}
                 </span>
               )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold text-white">Step 1 — Set a filter</h2>
+              <a
+                href={GMAIL_FILTERS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-blue-400 hover:underline block mb-2"
+              >
+                Open Gmail filters →
+              </a>
+              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video w-full min-h-[320px]">
+                <video
+                  src="/gmail-filter-setup.mp4"
+                  controls
+                  className="w-full h-full object-contain"
+                  playsInline
+                  autoPlay
+                  muted
+                  loop
+                >
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+              <div className="border-t border-white/10 pt-4 mt-4">
+                <p className="text-sm text-gray-400 mb-3">
+                  In the filter, set &quot;Subject&quot; to the text below so only invoice, payment, and bill emails are forwarded.
+                </p>
+                <CopyableRow
+                  label="Subject contains (for filter)"
+                  value={SUBJECT_FILTER}
+                  size="large"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold text-white">Step 2 — Set forwarding address</h2>
+              <a
+                href={GMAIL_FWD_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-blue-400 hover:underline block mb-2"
+              >
+                Open Gmail forwarding →
+              </a>
+              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video w-full min-h-[320px]">
+                <video
+                  src="/gmail-forwarding-setup.mp4"
+                  controls
+                  className="w-full h-full object-contain"
+                  playsInline
+                  autoPlay
+                  muted
+                  loop
+                >
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+              <div className="border-t border-white/10 pt-4 mt-4">
+                <p className="text-sm text-gray-400 mb-3">
+                  Add this address as the forwarding destination in Gmail. We’ll receive only the emails that match your filter.
+                </p>
+                <CopyableRow
+                  label="Forward to"
+                  value={FORWARD_EMAIL}
+                  size="large"
+                />
+              </div>
             </div>
           </div>
 
