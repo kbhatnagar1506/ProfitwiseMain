@@ -12,7 +12,9 @@ export async function POST() {
   }
 
   await ensureMovementsSchema()
+  // Observations cascade-delete via FK
   await query("DELETE FROM movements WHERE user_id = $1", [user.id])
+  await query("DELETE FROM movement_families WHERE user_id = $1", [user.id])
 
   return NextResponse.json({ ok: true })
 }

@@ -189,7 +189,9 @@ export function OnboardingFlow({
   const [identitySeeding, setIdentitySeeding] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
-  type MovementRow = { id: string; direction: string; amount: string; date: string; movement_type: string; pnl_eligible: boolean; cash_account_id: string | null; counterparty: string | null; counterparty_entity_id: string | null; counterparty_entity_type: string | null; linked_internal_account_id: string | null; confidence: number; review_needed: boolean; evidence_refs: Array<{ source: string; source_type: string; source_id: string }>; raw_description: string | null; metadata: Record<string, unknown>; created_at: string }
+  type ConfidenceBreakdown = { score: number; entity_confidence: number; account_resolution: number; pattern_strength: number; source_agreement: number; history: number }
+  type ObservationRow = { id: string; source: string; source_type: string; source_id: string; amount: string; date: string; raw_description: string | null; counterparty: string | null; account_name: string | null; account_id: string | null }
+  type MovementRow = { id: string; direction: string; amount: string; date: string; movement_type: string; pnl_eligible: boolean; provenance: string; cash_account_id: string | null; counterparty: string | null; counterparty_entity_id: string | null; counterparty_entity_type: string | null; linked_internal_account_id: string | null; confidence: ConfidenceBreakdown; review_needed: boolean; observations: ObservationRow[]; raw_description: string | null; metadata: Record<string, unknown>; created_at: string }
   type MovementSummary = { movement_type: string; pnl_eligible: boolean; count: number; total_amount: string }
   type MovementsData = { movements: MovementRow[]; summary: MovementSummary[] }
   const [movementsData, setMovementsData] = useState<MovementsData | null>(null)
@@ -1960,7 +1962,7 @@ export function OnboardingFlow({
         }
         for (const m of mvts) {
           if (m.review_needed) reviewCount++
-          if (m.metadata?.provenance === "coalesced") coalescedCount++
+          if (m.provenance === "coalesced") coalescedCount++
         }
 
         const TYPE_META: Record<string, { label: string; color: string; group: "pnl" | "non_pnl" | "unknown" }> = {
@@ -2089,17 +2091,17 @@ export function OnboardingFlow({
                             <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[160px]">{m.raw_description ?? "\u2014"}</td>
                             <td className="px-3 py-1.5">
                               <div className="flex gap-0.5 items-center">
-                                {(() => { const p = provenanceLabel(String(m.metadata?.provenance ?? "")); return (
+                                {(() => { const p = provenanceLabel(m.provenance ?? ""); return (
                                   <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
                                 ) })()}
-                                {(m.evidence_refs ?? []).map((e: { source: string; source_id: string }, ei: number) => (
-                                  <span key={ei} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(e.source)}`}>{e.source}</span>
+                                {(m.observations ?? []).map((o: ObservationRow, oi: number) => (
+                                  <span key={oi} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(o.source)}`}>{o.source}</span>
                                 ))}
                               </div>
                             </td>
                             <td className="text-gray-500 px-3 py-1.5 text-xs text-right">
                               {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
-                              {Math.round(m.confidence * 100)}%
+                              {Math.round(m.confidence.score * 100)}%
                             </td>
                           </tr>
                         )
@@ -2140,17 +2142,17 @@ export function OnboardingFlow({
                           <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[200px]">{m.raw_description ?? "\u2014"}</td>
                           <td className="px-3 py-1.5">
                             <div className="flex gap-0.5 items-center">
-                              {(() => { const p = provenanceLabel(String(m.metadata?.provenance ?? "")); return (
+                              {(() => { const p = provenanceLabel(m.provenance ?? ""); return (
                                 <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
                               ) })()}
-                              {(m.evidence_refs ?? []).map((e: { source: string; source_id: string }, ei: number) => (
-                                <span key={ei} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(e.source)}`}>{e.source}</span>
+                              {(m.observations ?? []).map((o: ObservationRow, oi: number) => (
+                                <span key={oi} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(o.source)}`}>{o.source}</span>
                               ))}
                             </div>
                           </td>
                           <td className="text-gray-500 px-3 py-1.5 text-xs text-right">
                             {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
-                            {Math.round(m.confidence * 100)}%
+                            {Math.round(m.confidence.score * 100)}%
                           </td>
                         </tr>
                       ))}

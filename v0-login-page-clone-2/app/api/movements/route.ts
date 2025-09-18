@@ -20,13 +20,24 @@ export async function GET() {
   const userId = user.id
 
   const movements = await query(
-    `SELECT id, direction, amount, date, movement_type, pnl_eligible,
-            cash_account_id, counterparty, counterparty_entity_id,
-            counterparty_entity_type, linked_internal_account_id,
-            confidence, review_needed, evidence_refs,
-            raw_description, metadata, created_at
-     FROM movements WHERE user_id = $1
-     ORDER BY date DESC, created_at DESC`,
+    `SELECT m.id, m.direction, m.amount, m.date, m.movement_type, m.pnl_eligible,
+            m.provenance, m.cash_account_id, m.counterparty, m.counterparty_entity_id,
+            m.counterparty_entity_type, m.linked_internal_account_id,
+            m.confidence, m.review_needed, m.raw_description, m.metadata, m.created_at,
+            COALESCE(
+              json_agg(json_build_object(
+                'id', o.id, 'source', o.source, 'source_type', o.source_type,
+                'source_id', o.source_id, 'amount', o.amount, 'date', o.date,
+                'raw_description', o.raw_description, 'counterparty', o.counterparty,
+                'account_name', o.account_name, 'account_id', o.account_id
+              )) FILTER (WHERE o.id IS NOT NULL),
+              '[]'
+            ) AS observations
+     FROM movements m
+     LEFT JOIN movement_observations o ON o.movement_id = m.id
+     WHERE m.user_id = $1
+     GROUP BY m.id
+     ORDER BY m.date DESC, m.created_at DESC`,
     [userId]
   ).then((r) => r.rows)
 

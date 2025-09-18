@@ -24,8 +24,10 @@ import { log } from "./logger"
 import {
   buildMovementIdentityContext,
   seedIdentityGraph,
+  getSelfContext,
   type MovementIdentityContext,
   type MovementIdentityEntry,
+  type SelfContext,
 } from "./identity-seed"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
@@ -122,10 +124,37 @@ type CanonicalMovement = {
   metadata: Record<string, unknown>
 }
 
+// ─── Compositional confidence ─────────────────────────────────────
+// confidence is the weighted sum of contributing signals, not a static number
+
+type ConfidenceBreakdown = {
+  score: number                 // final composite 0.0–1.0
+  entity_confidence: number     // identity resolution quality (0–1)
+  account_resolution: number    // how well we know the cash account (0–1)
+  pattern_strength: number      // description pattern match strength (0–1)
+  source_agreement: number      // cross-source agreement (0 = single, 1 = full agreement)
+  history: number               // family/recurring pattern strength (0–1)
+}
+
+function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBreakdown {
+  const e = signals.entity_confidence ?? 0
+  const a = signals.account_resolution ?? 0
+  const p = signals.pattern_strength ?? 0
+  const s = signals.source_agreement ?? 0
+  const h = signals.history ?? 0
+
+  // Weighted combination
+  const score = Math.min(1, Math.max(0,
+    e * 0.25 + a * 0.15 + p * 0.30 + s * 0.15 + h * 0.15
+  ))
+
+  return { score, entity_confidence: e, account_resolution: a, pattern_strength: p, source_agreement: s, history: h }
+}
+
 type ClassifiedMovement = CanonicalMovement & {
   movement_type: MovementType
   pnl_eligible: boolean
-  confidence: number
+  confidence: ConfidenceBreakdown
   review_needed: boolean
 }
 
@@ -497,7 +526,9 @@ async function extractXeroObservations(userId: string): Promise<SourceObservatio
 
 // ─── Step 2: Deduplicate / coalesce into canonical movements ────────
 
-const SOURCE_PRIORITY: Record<string, number> = { qbo: 4, xero: 3, stripe: 2, plaid: 1 }
+// Fix 4: Bank observation is ground truth of cash movement
+// Bank sources have highest priority as the primary observation
+const SOURCE_PRIORITY: Record<string, number> = { plaid: 4, stripe: 3, qbo: 2, xero: 1 }
 
 function counterpartyMatchScore(a: string | null, b: string | null): number {
   if (!a || !b) return 0.5
@@ -580,13 +611,21 @@ function coalesceObservations(observations: SourceObservation[]): CanonicalMovem
 }
 
 const BANK_SOURCES = new Set(["plaid"])
-const ACCT_SOURCES = new Set(["qbo", "xero", "stripe"])
 
 function deriveProvenance(evidence: SourceObservation[]): Provenance {
   if (evidence.length > 1) return "coalesced"
   const src = evidence[0].source
   if (BANK_SOURCES.has(src)) return "bank_observed"
   return "accounting_observed"
+}
+
+function sourceAgreementScore(evidence: SourceObservation[]): number {
+  if (evidence.length <= 1) return 0
+  const sources = new Set(evidence.map((e) => e.source))
+  const hasBankAndAccounting = [...sources].some((s) => BANK_SOURCES.has(s)) &&
+    [...sources].some((s) => !BANK_SOURCES.has(s))
+  if (hasBankAndAccounting) return 1.0
+  return sources.size > 1 ? 0.7 : 0.3
 }
 
 function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
@@ -862,136 +901,143 @@ function resolveCounterpartyIdentity(
   return null
 }
 
+// ─── Classification result ────────────────────────────────────────
+
+type ClassifyResult = { type: MovementType; signals: Partial<ConfidenceBreakdown> }
+
 // ─── Step 5: Classify non-P&L movements ─────────────────────────────
 
-function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | null): { type: MovementType; confidence: number } | null {
+function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | null, selfCtx: SelfContext): ClassifyResult | null {
   const desc = (m.raw_description ?? "").toLowerCase()
   const catStr = (m.plaid_category ?? []).join(" ").toLowerCase()
   const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
   const pfcDetailed = (m.plaid_pfc?.detailed ?? "").toUpperCase()
   const primaryObs = m.evidence[0]
+  const eid = identity?.confidence ?? 0
+  const sa = sourceAgreementScore(m.evidence)
+  const ar = m.cash_account_id ? 0.8 : (m.cash_account_name ? 0.5 : 0.1)
 
-  // ── Plaid personal_finance_category (high-quality signal) ──
+  // ── Plaid PFC (high-quality signal) ──
   if (pfcPrimary === "TRANSFER_IN" || pfcPrimary === "TRANSFER_OUT") {
-    if (pfcDetailed.includes("ACCOUNT_TRANSFER")) return { type: "internal_transfer", confidence: 0.9 }
+    if (pfcDetailed.includes("ACCOUNT_TRANSFER")) return { type: "internal_transfer", signals: { pattern_strength: 0.9, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
     if (pfcDetailed.includes("LOAN") || pfcDetailed.includes("MORTGAGE")) {
-      return m.direction === "inflow"
-        ? { type: "loan_funding", confidence: 0.85 }
-        : { type: "loan_principal_payment", confidence: 0.85 }
+      const t = m.direction === "inflow" ? "loan_funding" as const : "loan_principal_payment" as const
+      return { type: t, signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
     }
-    if (pfcDetailed.includes("CREDIT_CARD")) return { type: "credit_card_payment", confidence: 0.9 }
-    if (pfcDetailed.includes("DEPOSIT")) return { type: "internal_transfer", confidence: 0.8 }
+    if (pfcDetailed.includes("CREDIT_CARD")) return { type: "credit_card_payment", signals: { pattern_strength: 0.9, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
+    if (pfcDetailed.includes("DEPOSIT")) return { type: "internal_transfer", signals: { pattern_strength: 0.8, source_agreement: sa, account_resolution: ar } }
   }
   if (pfcPrimary === "LOAN_PAYMENTS") {
-    return { type: "loan_principal_payment", confidence: 0.9 }
+    return { type: "loan_principal_payment", signals: { pattern_strength: 0.9, source_agreement: sa, account_resolution: ar } }
   }
 
-  // ── Structural: cross-account transfer (already paired) ──
+  // ── Structural: cross-account transfer (paired) ──
   if (m.metadata.transfer_type === "cross_account") {
-    return { type: "internal_transfer", confidence: 0.95 }
+    return { type: "internal_transfer", signals: { pattern_strength: 0.95, account_resolution: 1.0, source_agreement: sa } }
   }
 
   // ── Structural: QBO Transfer entity ──
   if (primaryObs.source === "qbo" && primaryObs.source_type === "Transfer") {
-    return { type: "internal_transfer", confidence: 0.95 }
+    return { type: "internal_transfer", signals: { pattern_strength: 0.95, account_resolution: ar, source_agreement: sa } }
   }
 
-  // ── Structural: Stripe payout (processor → bank) ──
+  // ── Structural: Stripe payout ──
   if (primaryObs.source === "stripe" && primaryObs.source_type === "payout") {
-    return { type: "processor_payout", confidence: 0.95 }
+    return { type: "processor_payout", signals: { pattern_strength: 0.95, entity_confidence: 0.9, source_agreement: sa, account_resolution: ar } }
   }
 
-  // ── Structural: Stripe balance_transaction sub-types ──
+  // ── Structural: Stripe balance_transaction ──
   if (primaryObs.source === "stripe" && primaryObs.source_type === "balance_transaction") {
     const sType = (m.metadata.stripe_type ?? "") as string
-    if (sType === "stripe_fee" || sType === "fee") return { type: "processor_fee_settlement", confidence: 0.95 }
-    if (sType === "payout") return { type: "processor_payout", confidence: 0.9 }
+    if (sType === "stripe_fee" || sType === "fee") return { type: "processor_fee_settlement", signals: { pattern_strength: 0.95, entity_confidence: 0.9, source_agreement: sa } }
+    if (sType === "payout") return { type: "processor_payout", signals: { pattern_strength: 0.9, entity_confidence: 0.9, source_agreement: sa } }
   }
 
-  // ── Verification deposits (tiny amounts ≤ $1, verification description) ──
+  // ── Verification deposits ──
   if (m.amount <= 1.0 && VERIFICATION_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "account_verification", confidence: 0.9 }
+    return { type: "account_verification", signals: { pattern_strength: 0.9, source_agreement: sa } }
   }
   if (m.amount <= 0.50 && catStr.includes("bank fees")) {
-    return { type: "account_verification", confidence: 0.85 }
+    return { type: "account_verification", signals: { pattern_strength: 0.85 } }
   }
 
   // ── Opening balance ──
   if (OPENING_BALANCE_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "opening_balance", confidence: 0.85 }
+    return { type: "opening_balance", signals: { pattern_strength: 0.85 } }
   }
 
   // ── Credit card payments ──
   if (CC_PAYMENT_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "credit_card_payment", confidence: 0.85 }
+    return { type: "credit_card_payment", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
   }
   if (identity?.role === "processor" && CC_PAYMENT_PATTERNS.some((p) => p.test(m.counterparty ?? ""))) {
-    return { type: "credit_card_payment", confidence: 0.85 }
+    return { type: "credit_card_payment", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa } }
   }
 
-  // ── Owner draw / contribution ──
+  // ── Owner draw / contribution (pattern-based) ──
   if (OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "owner_contribution", confidence: 0.85 }
+    return { type: "owner_contribution", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa } }
   }
   if (OWNER_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "owner_draw", confidence: 0.85 }
+    return { type: "owner_draw", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa } }
   }
   if (identity?.role === "owner") {
-    return m.direction === "inflow"
-      ? { type: "owner_contribution", confidence: Math.min(0.88, identity.confidence) }
-      : { type: "owner_draw", confidence: Math.min(0.88, identity.confidence) }
+    const t = m.direction === "inflow" ? "owner_contribution" as const : "owner_draw" as const
+    return { type: t, signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa, account_resolution: ar } }
+  }
+
+  // ── Fix 3: Owner detection from descriptor containing owner name ──
+  if (m.direction === "inflow" && selfCtx.ownerNames.length > 0) {
+    const descNorm = normKey(desc)
+    for (const on of selfCtx.ownerNames) {
+      const onNorm = on.toLowerCase().replace(/[^a-z0-9]/g, "")
+      if (onNorm.length >= 3 && descNorm.includes(onNorm)) {
+        return { type: "owner_contribution_candidate", signals: { entity_confidence: 0.4, pattern_strength: 0.5, account_resolution: ar } }
+      }
+    }
   }
 
   // ── Loan / financing ──
   if (LOAN_PATTERNS.some((p) => p.test(desc))) {
-    return m.direction === "inflow"
-      ? { type: "loan_funding", confidence: 0.8 }
-      : { type: "loan_principal_payment", confidence: 0.8 }
+    const t = m.direction === "inflow" ? "loan_funding" as const : "loan_principal_payment" as const
+    return { type: t, signals: { pattern_strength: 0.8, entity_confidence: eid, source_agreement: sa } }
   }
   if (catStr.includes("loan")) {
-    return m.direction === "inflow"
-      ? { type: "loan_funding", confidence: 0.75 }
-      : { type: "loan_principal_payment", confidence: 0.75 }
+    const t = m.direction === "inflow" ? "loan_funding" as const : "loan_principal_payment" as const
+    return { type: t, signals: { pattern_strength: 0.6, source_agreement: sa } }
   }
   if (identity?.role === "lender") {
-    return m.direction === "inflow"
-      ? { type: "loan_funding", confidence: Math.min(0.85, identity.confidence) }
-      : { type: "loan_principal_payment", confidence: Math.min(0.85, identity.confidence) }
+    const t = m.direction === "inflow" ? "loan_funding" as const : "loan_principal_payment" as const
+    return { type: t, signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa } }
   }
 
   // ── Transfer patterns (bank description) ──
   if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
-    // Only classify as internal_transfer if identity confirms it's own account
     if (identity && (identity.role === "internal" || identity.role === "bank_account" || identity.is_own_account)) {
-      return { type: "internal_transfer", confidence: 0.85 }
+      return { type: "internal_transfer", signals: { pattern_strength: 0.7, entity_confidence: identity.confidence, account_resolution: ar, source_agreement: sa } }
     }
-    // Plaid transfer category + both from/to accounts known (strong internal signal)
     if (catStr.includes("transfer") && !catStr.includes("wire transfer") && m.linked_internal_account_id) {
-      return { type: "internal_transfer", confidence: 0.8 }
+      return { type: "internal_transfer", signals: { pattern_strength: 0.7, account_resolution: 0.9, source_agreement: sa } }
     }
-    // Without identity or linked account, do NOT force internal_transfer —
-    // this could be a vendor wire, customer wire, etc. Let it fall through
-    // to operating classification or fallback as unknown_transfer_candidate.
   }
 
   // ── Identity: processor → settlement or CC payment ──
   if (identity?.role === "processor" && identity.confidence >= 0.6) {
     if (m.direction === "inflow") {
-      return { type: "processor_payout", confidence: Math.min(0.88, identity.confidence) }
+      return { type: "processor_payout", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa, account_resolution: ar } }
     }
-    // Check if this is actually a credit card payment, not a processor fee
     const cpLower = (m.counterparty ?? "").toLowerCase()
     const isCcBrand = /\bchase\b|\bamex\b|\bciti\b|\bcapital\s*one\b|\bvisa\b|\bmastercard\b|\bdiscover\b/.test(cpLower)
     const isCcDesc = CC_PAYMENT_PATTERNS.some((p) => p.test(desc))
     if (isCcBrand || isCcDesc) {
-      return { type: "credit_card_payment", confidence: Math.min(0.88, identity.confidence) }
+      return { type: "credit_card_payment", signals: { entity_confidence: identity.confidence, pattern_strength: 0.7, source_agreement: sa, account_resolution: ar } }
     }
-    return { type: "processor_fee_settlement", confidence: Math.min(0.85, identity.confidence) }
+    return { type: "processor_fee_settlement", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa } }
   }
 
   // ── Identity: internal / bank_account → internal_transfer ──
   if (identity && (identity.role === "internal" || identity.role === "bank_account") && identity.confidence >= 0.6) {
-    return { type: "internal_transfer", confidence: Math.min(0.88, identity.confidence) }
+    return { type: "internal_transfer", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, account_resolution: ar, source_agreement: sa } }
   }
 
   return null
@@ -999,112 +1045,96 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
 
 // ─── Step 6: Classify operating cash movements ──────────────────────
 
-function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry | null): { type: MovementType; confidence: number } | null {
+function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry | null): ClassifyResult | null {
   const desc = (m.raw_description ?? "").toLowerCase()
   const catStr = (m.plaid_category ?? []).join(" ").toLowerCase()
   const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
   const pfcDetailed = (m.plaid_pfc?.detailed ?? "").toUpperCase()
   const primaryObs = m.evidence[0]
+  const eid = identity?.confidence ?? 0
+  const sa = sourceAgreementScore(m.evidence)
+  const ar = m.cash_account_id ? 0.8 : (m.cash_account_name ? 0.5 : 0.1)
 
-  // ── Plaid personal_finance_category operating signals ──
-  if (pfcPrimary === "BANK_FEES") return { type: "cash_out_bank_fee", confidence: 0.9 }
-  if (pfcPrimary === "INCOME" && pfcDetailed.includes("INTEREST")) return { type: "cash_in_interest", confidence: 0.9 }
-  if (pfcPrimary === "INCOME") return { type: "cash_in_customer", confidence: 0.75 }
+  // ── Plaid PFC operating signals ──
+  if (pfcPrimary === "BANK_FEES") return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.9, source_agreement: sa } }
+  if (pfcPrimary === "INCOME" && pfcDetailed.includes("INTEREST")) return { type: "cash_in_interest", signals: { pattern_strength: 0.9, source_agreement: sa } }
+  if (pfcPrimary === "INCOME") return { type: "cash_in_customer", signals: { pattern_strength: 0.7, entity_confidence: eid, source_agreement: sa } }
   if (pfcDetailed.includes("TAX") || pfcPrimary === "GOVERNMENT_AND_NON_PROFIT") {
-    if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", confidence: 0.9 }
+    if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", signals: { pattern_strength: 0.9, source_agreement: sa } }
   }
   if (pfcPrimary === "RENT_AND_UTILITIES" || pfcPrimary === "GENERAL_SERVICES") {
-    return { type: "cash_out_operating_expense", confidence: 0.8 }
+    return { type: "cash_out_operating_expense", signals: { pattern_strength: 0.8, source_agreement: sa, account_resolution: ar } }
   }
 
   // ── Bank fees ──
-  if (BANK_FEE_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "cash_out_bank_fee", confidence: 0.85 }
-  }
-  if (catStr.includes("bank fees")) {
-    return { type: "cash_out_bank_fee", confidence: 0.85 }
-  }
+  if (BANK_FEE_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.85, source_agreement: sa } }
+  if (catStr.includes("bank fees")) return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.8, source_agreement: sa } }
 
   // ── Payroll ──
-  if (catStr.includes("payroll")) {
-    return { type: "cash_out_payroll", confidence: 0.85 }
-  }
+  if (catStr.includes("payroll")) return { type: "cash_out_payroll", signals: { pattern_strength: 0.85, source_agreement: sa } }
   const cpNorm = normKey(m.counterparty ?? "")
   for (const pp of PAYROLL_PROCESSORS) {
-    if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) return { type: "cash_out_payroll", confidence: 0.85 }
+    if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) return { type: "cash_out_payroll", signals: { pattern_strength: 0.85, entity_confidence: eid, source_agreement: sa } }
   }
   if (identity?.role === "employee" && identity.confidence >= 0.6) {
-    return { type: "cash_out_payroll", confidence: Math.min(0.88, identity.confidence) }
+    return { type: "cash_out_payroll", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa } }
   }
 
   // ── Tax ──
-  if (TAX_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "cash_out_tax", confidence: 0.85 }
-  }
-  if (catStr.includes("tax")) {
-    return { type: "cash_out_tax", confidence: 0.8 }
-  }
+  if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", signals: { pattern_strength: 0.85, source_agreement: sa } }
+  if (catStr.includes("tax")) return { type: "cash_out_tax", signals: { pattern_strength: 0.7, source_agreement: sa } }
   if (identity?.role === "tax_authority" && identity.confidence >= 0.6) {
-    return { type: "cash_out_tax", confidence: Math.min(0.88, identity.confidence) }
+    return { type: "cash_out_tax", signals: { entity_confidence: identity.confidence, pattern_strength: 0.5, source_agreement: sa } }
   }
 
   // ── Interest ──
   if (INTEREST_PATTERNS.some((p) => p.test(desc))) {
-    return m.direction === "inflow"
-      ? { type: "cash_in_interest", confidence: 0.8 }
-      : { type: "cash_out_interest", confidence: 0.8 }
+    const t = m.direction === "inflow" ? "cash_in_interest" as const : "cash_out_interest" as const
+    return { type: t, signals: { pattern_strength: 0.8, source_agreement: sa } }
   }
 
   // ── Refunds ──
   if (REFUND_PATTERNS.some((p) => p.test(desc))) {
-    return m.direction === "inflow"
-      ? { type: "cash_in_refund", confidence: 0.8 }
-      : { type: "cash_out_refund", confidence: 0.8 }
+    const t = m.direction === "inflow" ? "cash_in_refund" as const : "cash_out_refund" as const
+    return { type: t, signals: { pattern_strength: 0.8, source_agreement: sa } }
   }
   if (primaryObs.source === "qbo" && ["RefundReceipt", "CreditMemo", "VendorCredit"].includes(primaryObs.source_type)) {
-    return { type: "cash_out_refund", confidence: 0.9 }
+    return { type: "cash_out_refund", signals: { pattern_strength: 0.9, source_agreement: sa } }
   }
   if (primaryObs.source === "xero" && primaryObs.source_type === "CreditNote") {
-    return { type: "cash_out_refund", confidence: 0.9 }
+    return { type: "cash_out_refund", signals: { pattern_strength: 0.9, source_agreement: sa } }
   }
   if (primaryObs.source === "stripe" && primaryObs.source_type === "balance_transaction") {
     const sType = (m.metadata.stripe_type ?? "") as string
-    if (sType === "refund") {
-      return { type: "cash_out_refund", confidence: 0.9 }
-    }
+    if (sType === "refund") return { type: "cash_out_refund", signals: { pattern_strength: 0.9, entity_confidence: 0.9, source_agreement: sa } }
   }
 
-  // ── Identity: customer → cash_in_customer ──
+  // ── Identity: customer / vendor ──
   if (identity?.role === "customer" && identity.confidence >= 0.6) {
-    return { type: "cash_in_customer", confidence: Math.min(0.88, identity.confidence) }
+    return { type: "cash_in_customer", signals: { entity_confidence: identity.confidence, pattern_strength: 0.4, source_agreement: sa, account_resolution: ar } }
   }
-
-  // ── Identity: vendor → cash_out_vendor ──
   if (identity?.role === "vendor" && identity.confidence >= 0.6) {
-    return { type: "cash_out_vendor", confidence: Math.min(0.88, identity.confidence) }
+    return { type: "cash_out_vendor", signals: { entity_confidence: identity.confidence, pattern_strength: 0.4, source_agreement: sa, account_resolution: ar } }
   }
 
   // ── QBO type fallback ──
   if (primaryObs.source === "qbo") {
     if (["Invoice", "SalesReceipt"].includes(primaryObs.source_type)) {
-      return { type: "cash_in_customer", confidence: 0.8 }
+      return { type: "cash_in_customer", signals: { pattern_strength: 0.8, source_agreement: sa, account_resolution: ar } }
     }
     if (primaryObs.source_type === "Payment") {
-      // QBO Payment is specifically a customer payment against an invoice
-      return { type: "cash_in_customer", confidence: 0.8 }
+      return { type: "cash_in_customer", signals: { pattern_strength: 0.8, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
     }
     if (primaryObs.source_type === "Deposit") {
-      // QBO Deposit can be mixed — only high confidence if we have a customer counterparty
       if (m.counterparty && identity?.role === "customer") {
-        return { type: "cash_in_customer", confidence: 0.75 }
+        return { type: "cash_in_customer", signals: { pattern_strength: 0.6, entity_confidence: identity.confidence, source_agreement: sa, account_resolution: ar } }
       }
-      // Without identity, it could be owner contribution, transfer, or mixed — lower confidence
       return m.counterparty
-        ? { type: "cash_in_customer", confidence: 0.6 }
-        : { type: "unknown_inflow", confidence: 0.4 }
+        ? { type: "cash_in_customer", signals: { pattern_strength: 0.5, source_agreement: sa } }
+        : { type: "unknown_inflow", signals: { pattern_strength: 0.2, source_agreement: sa } }
     }
     if (["Bill", "BillPayment", "Purchase"].includes(primaryObs.source_type)) {
-      return { type: "cash_out_vendor", confidence: 0.75 }
+      return { type: "cash_out_vendor", signals: { pattern_strength: 0.7, entity_confidence: eid, source_agreement: sa, account_resolution: ar } }
     }
   }
 
@@ -1112,38 +1142,34 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
   if (primaryObs.source === "xero") {
     const xeroSubType = (m.metadata.xero_sub_type ?? "") as string
     if (primaryObs.source_type === "Invoice") {
-      return xeroSubType === "ACCPAY"
-        ? { type: "cash_out_vendor", confidence: 0.75 }
-        : { type: "cash_in_customer", confidence: 0.75 }
+      const t = xeroSubType === "ACCPAY" ? "cash_out_vendor" as const : "cash_in_customer" as const
+      return { type: t, signals: { pattern_strength: 0.7, source_agreement: sa, account_resolution: ar } }
     }
-    if (primaryObs.source_type === "Bill") return { type: "cash_out_vendor", confidence: 0.75 }
+    if (primaryObs.source_type === "Bill") return { type: "cash_out_vendor", signals: { pattern_strength: 0.7, source_agreement: sa } }
     if (primaryObs.source_type === "Payment") {
-      return m.direction === "outflow"
-        ? { type: "cash_out_vendor", confidence: 0.7 }
-        : { type: "cash_in_customer", confidence: 0.7 }
+      const t = m.direction === "outflow" ? "cash_out_vendor" as const : "cash_in_customer" as const
+      return { type: t, signals: { pattern_strength: 0.6, source_agreement: sa } }
     }
     if (primaryObs.source_type === "BankTransaction") {
-      return m.direction === "inflow"
-        ? { type: "cash_in_customer", confidence: 0.65 }
-        : { type: "cash_out_operating_expense", confidence: 0.65 }
+      const t = m.direction === "inflow" ? "cash_in_customer" as const : "cash_out_operating_expense" as const
+      return { type: t, signals: { pattern_strength: 0.5, source_agreement: sa } }
     }
   }
 
   // ── Stripe type fallback ──
   if (primaryObs.source === "stripe" && (primaryObs.source_type === "payment_intent" || primaryObs.source_type === "invoice")) {
-    return { type: "cash_in_customer", confidence: 0.75 }
+    return { type: "cash_in_customer", signals: { pattern_strength: 0.7, entity_confidence: 0.7, source_agreement: sa } }
   }
 
-  // ── Plaid category-based operating heuristics ──
+  // ── Plaid category heuristics ──
   if (m.direction === "inflow" && catStr.includes("deposit")) {
-    return { type: "cash_in_customer", confidence: 0.6 }
+    return { type: "cash_in_customer", signals: { pattern_strength: 0.5, source_agreement: sa } }
   }
 
-  // ── Plaid payment_channel: "in store" or "online" strongly suggests operating ──
+  // ── Plaid payment_channel ──
   if (m.plaid_payment_channel === "in store" || m.plaid_payment_channel === "online") {
-    return m.direction === "inflow"
-      ? { type: "cash_in_customer", confidence: 0.6 }
-      : { type: "cash_out_operating_expense", confidence: 0.6 }
+    const t = m.direction === "inflow" ? "cash_in_customer" as const : "cash_out_operating_expense" as const
+    return { type: t, signals: { pattern_strength: 0.5, source_agreement: sa } }
   }
 
   return null
@@ -1151,24 +1177,25 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
 
 // ─── Step 6b: Provisional classes ───────────────────────────────────
 
-function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEntry | null): { type: MovementType; confidence: number } | null {
+function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEntry | null): ClassifyResult | null {
   const desc = (m.raw_description ?? "").toLowerCase()
+  const sa = sourceAgreementScore(m.evidence)
 
-  // Merchant deposit: recurring BANKCD/DEPOSIT patterns with reference numbers
+  // Merchant deposit: recurring BANKCD/DEPOSIT patterns
   if (m.direction === "inflow" && MERCHANT_DEPOSIT_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "merchant_deposit_unresolved", confidence: 0.55 }
+    return { type: "merchant_deposit_unresolved", signals: { pattern_strength: 0.55, source_agreement: sa } }
   }
 
-  // Inflows from owner-linked entities without strong owner-draw/contribution signals
+  // Inflows from owner-linked entities without strong signals
   if (m.direction === "inflow" && identity?.role === "internal") {
     if (!OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
-      return { type: "owner_contribution_candidate", confidence: 0.5 }
+      return { type: "owner_contribution_candidate", signals: { entity_confidence: identity.confidence, pattern_strength: 0.3 } }
     }
   }
 
-  // Inflows that look like personal transfers to the business
+  // Inflows from own accounts without internal transfer pairing
   if (m.direction === "inflow" && identity?.is_own_account && !m.linked_internal_account_id) {
-    return { type: "owner_contribution_candidate", confidence: 0.5 }
+    return { type: "owner_contribution_candidate", signals: { entity_confidence: identity.confidence, pattern_strength: 0.3 } }
   }
 
   return null
@@ -1176,55 +1203,57 @@ function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEnt
 
 // ─── Step 7: Fallback ───────────────────────────────────────────────
 
-function classifyFallback(m: CanonicalMovement): { type: MovementType; confidence: number } {
+function classifyFallback(m: CanonicalMovement): ClassifyResult {
   const desc = (m.raw_description ?? "").toLowerCase()
 
-  // If it looks like a transfer but we couldn't confirm
   if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "unknown_transfer_candidate", confidence: 0.3 }
+    return { type: "unknown_transfer_candidate", signals: { pattern_strength: 0.2 } }
   }
 
-  return m.direction === "inflow"
-    ? { type: "unknown_inflow", confidence: 0.3 }
-    : { type: "unknown_outflow", confidence: 0.3 }
+  const t = m.direction === "inflow" ? "unknown_inflow" as const : "unknown_outflow" as const
+  return { type: t, signals: { pattern_strength: 0.15 } }
 }
 
-// ─── Step 7b: Family-level learning ──────────────────────────────────
+// ─── Step 7b: Family-level learning (persisted to movement_families) ─
 
 type MovementFamily = {
-  pattern: string        // normalized description prefix
+  family_key: string
+  pattern: string
   account: string | null
   direction: "inflow" | "outflow"
   count: number
   dominantType: MovementType
   dominantConfidence: number
+  last_seen: string
+}
+
+function familyKey(desc: string, direction: string, account: string | null): string {
+  const prefix = desc.toLowerCase().replace(/\d{4,}/g, "NNNNN").replace(/\s+/g, " ").trim().slice(0, 40)
+  return `${direction}|${account ?? "?"}|${prefix}`
 }
 
 function buildFamilies(classified: ClassifiedMovement[]): Map<string, MovementFamily> {
-  const families = new Map<string, { types: Map<string, { count: number; totalConf: number }>; account: string | null; direction: "inflow" | "outflow"; count: number }>()
+  const families = new Map<string, { types: Map<string, { count: number; totalConf: number }>; account: string | null; direction: "inflow" | "outflow"; count: number; last_seen: string }>()
 
   for (const c of classified) {
-    if (c.confidence < 0.6) continue // only learn from reasonably confident
-    const desc = (c.raw_description ?? "").toLowerCase().replace(/\d{4,}/g, "NNNNN").replace(/\s+/g, " ").trim()
+    if (c.confidence.score < 0.6) continue
+    const desc = c.raw_description ?? ""
     if (desc.length < 5) continue
 
-    // Prefix up to 40 chars as the "family signature"
-    const prefix = desc.slice(0, 40)
-    const key = `${c.direction}|${c.cash_account_name ?? "?"}|${prefix}`
-
+    const key = familyKey(desc, c.direction, c.cash_account_name)
     let fam = families.get(key)
     if (!fam) {
-      fam = { types: new Map(), account: c.cash_account_name, direction: c.direction, count: 0 }
+      fam = { types: new Map(), account: c.cash_account_name, direction: c.direction, count: 0, last_seen: c.date }
       families.set(key, fam)
     }
     fam.count++
+    if (c.date > fam.last_seen) fam.last_seen = c.date
     const typeEntry = fam.types.get(c.movement_type) ?? { count: 0, totalConf: 0 }
     typeEntry.count++
-    typeEntry.totalConf += c.confidence
+    typeEntry.totalConf += c.confidence.score
     fam.types.set(c.movement_type, typeEntry)
   }
 
-  // Only keep families with 3+ members (recurring pattern)
   const result = new Map<string, MovementFamily>()
   for (const [key, fam] of families) {
     if (fam.count < 3) continue
@@ -1238,15 +1267,16 @@ function buildFamilies(classified: ClassifiedMovement[]): Map<string, MovementFa
         bestConf = entry.totalConf / entry.count
       }
     }
-    // Only meaningful if dominant type covers >60% of family
     if (bestCount / fam.count >= 0.6) {
       result.set(key, {
+        family_key: key,
         pattern: key.split("|").slice(2).join("|"),
         account: fam.account,
         direction: fam.direction,
         count: fam.count,
         dominantType: bestType,
-        dominantConfidence: Math.min(0.85, bestConf + 0.05), // slight boost
+        dominantConfidence: Math.min(0.85, bestConf + 0.05),
+        last_seen: fam.last_seen,
       })
     }
   }
@@ -1258,24 +1288,56 @@ function applyFamilyLearning(classified: ClassifiedMovement[], families: Map<str
   let upgraded = 0
 
   for (const c of classified) {
-    if (c.confidence >= 0.7) continue // already confident enough
-    const desc = (c.raw_description ?? "").toLowerCase().replace(/\d{4,}/g, "NNNNN").replace(/\s+/g, " ").trim()
-    const prefix = desc.slice(0, 40)
-    const key = `${c.direction}|${c.cash_account_name ?? "?"}|${prefix}`
+    if (c.confidence.score >= 0.7) continue
+    const desc = c.raw_description ?? ""
+    const key = familyKey(desc, c.direction, c.cash_account_name)
 
     const family = families.get(key)
     if (!family) continue
-    if (family.dominantConfidence > c.confidence) {
+    if (family.dominantConfidence > c.confidence.score) {
       c.movement_type = family.dominantType
       c.pnl_eligible = isPnlEligible(family.dominantType)
-      c.confidence = family.dominantConfidence
-      c.review_needed = family.dominantConfidence < 0.7
+      c.confidence = computeConfidence({
+        ...c.confidence,
+        history: family.dominantConfidence,
+        pattern_strength: Math.max(c.confidence.pattern_strength, 0.6),
+      })
+      c.review_needed = c.confidence.score < 0.7
       c.metadata.family_learned = true
+      c.metadata.family_key = family.family_key
       c.metadata.family_count = family.count
       upgraded++
     }
   }
   return upgraded
+}
+
+async function persistFamilies(userId: string, families: Map<string, MovementFamily>): Promise<void> {
+  if (families.size === 0) return
+  const entries = [...families.values()]
+  const batchSize = 50
+  for (let i = 0; i < entries.length; i += batchSize) {
+    const batch = entries.slice(i, i + batchSize)
+    const values: string[] = []
+    const params: unknown[] = []
+    let idx = 0
+    for (const f of batch) {
+      const offsets = Array.from({ length: 8 }, (_, k) => `$${idx + k + 1}`)
+      values.push(`(${offsets.join(", ")})`)
+      params.push(userId, f.family_key, f.pattern, f.account, f.direction, f.dominantType, f.dominantConfidence, f.count)
+      idx += 8
+    }
+    await query(
+      `INSERT INTO movement_families (user_id, family_key, pattern, account, direction, dominant_type, dominant_confidence, occurrence_count)
+       VALUES ${values.join(", ")}
+       ON CONFLICT (user_id, family_key) DO UPDATE SET
+         dominant_type = EXCLUDED.dominant_type,
+         dominant_confidence = EXCLUDED.dominant_confidence,
+         occurrence_count = EXCLUDED.occurrence_count,
+         updated_at = NOW()`,
+      params,
+    )
+  }
 }
 
 // ─── Step 8: LLM assist ────────────────────────────────────────────
@@ -1439,13 +1501,14 @@ export async function classifyMovements(userId: string): Promise<{
     return stats
   }
 
-  // Step 2a: Build identity context
+  // Step 2a: Build identity context + self context (for owner detection)
   let identityCtx = await buildMovementIdentityContext(userId)
   if (identityCtx.size === 0) {
     log("movements.classify.identity_empty_seeding", { userId }, "movements")
     await seedIdentityGraph(userId)
     identityCtx = await buildMovementIdentityContext(userId)
   }
+  const selfCtx = await getSelfContext(userId)
 
   // Build prefix index for fast fuzzy identity lookups
   const prefixIdx = buildPrefixIndex(identityCtx)
@@ -1499,16 +1562,18 @@ export async function classifyMovements(userId: string): Promise<{
 
   for (const m of movements) {
     const identity = m.counterparty_entity_id ? resolveCounterpartyIdentity(m, identityCtx, prefixIdx) : null
+    const sa = sourceAgreementScore(m.evidence)
 
     // Step 5: Non-P&L first
-    const nonPnl = classifyNonPnl(m, identity)
+    const nonPnl = classifyNonPnl(m, identity, selfCtx)
     if (nonPnl) {
+      const conf = computeConfidence({ ...nonPnl.signals, source_agreement: sa })
       classified.push({
         ...m,
         movement_type: nonPnl.type,
         pnl_eligible: false,
-        confidence: nonPnl.confidence,
-        review_needed: nonPnl.confidence < 0.7,
+        confidence: conf,
+        review_needed: conf.score < 0.7,
       })
       stats.rule_classified++
       continue
@@ -1517,12 +1582,13 @@ export async function classifyMovements(userId: string): Promise<{
     // Step 6: Operating
     const operating = classifyOperating(m, identity)
     if (operating) {
+      const conf = computeConfidence({ ...operating.signals, source_agreement: sa })
       classified.push({
         ...m,
         movement_type: operating.type,
         pnl_eligible: isPnlEligible(operating.type),
-        confidence: operating.confidence,
-        review_needed: operating.confidence < 0.7,
+        confidence: conf,
+        review_needed: conf.score < 0.7,
       })
       stats.rule_classified++
       continue
@@ -1531,11 +1597,12 @@ export async function classifyMovements(userId: string): Promise<{
     // Step 6b: Provisional classes
     const provisional = classifyProvisional(m, identity)
     if (provisional) {
+      const conf = computeConfidence({ ...provisional.signals, source_agreement: sa })
       classified.push({
         ...m,
         movement_type: provisional.type,
         pnl_eligible: isPnlEligible(provisional.type),
-        confidence: provisional.confidence,
+        confidence: conf,
         review_needed: true,
       })
       stats.provisional_classified++
@@ -1544,12 +1611,13 @@ export async function classifyMovements(userId: string): Promise<{
 
     // Step 7: Fallback (but also queue for LLM if we have API key)
     const fallback = classifyFallback(m)
+    const conf = computeConfidence({ ...fallback.signals, source_agreement: sa })
     needsLlm.push({ idx: classified.length, movement: m, identity })
     classified.push({
       ...m,
       movement_type: fallback.type,
       pnl_eligible: false,
-      confidence: fallback.confidence,
+      confidence: conf,
       review_needed: true,
     })
   }
@@ -1562,12 +1630,15 @@ export async function classifyMovements(userId: string): Promise<{
       const globalIdx = llmResult.index
       if (globalIdx < 0 || globalIdx >= needsLlm.length) continue
       const target = needsLlm[globalIdx]
-      if (llmResult.confidence > classified[target.idx].confidence) {
+      if (llmResult.confidence > classified[target.idx].confidence.score) {
         const t = llmResult.movement_type as MovementType
         classified[target.idx].movement_type = t
         classified[target.idx].pnl_eligible = isPnlEligible(t)
-        classified[target.idx].confidence = llmResult.confidence
-        classified[target.idx].review_needed = llmResult.confidence < 0.7
+        classified[target.idx].confidence = computeConfidence({
+          ...classified[target.idx].confidence,
+          pattern_strength: llmResult.confidence,
+        })
+        classified[target.idx].review_needed = classified[target.idx].confidence.score < 0.7
         stats.llm_classified++
       }
     }
@@ -1580,7 +1651,8 @@ export async function classifyMovements(userId: string): Promise<{
   // Step 8b: Direction/type consistency validation
   const INFLOW_TYPES = new Set<string>([
     "cash_in_customer", "cash_in_refund", "cash_in_interest",
-    "loan_funding", "owner_contribution", "unknown_inflow",
+    "loan_funding", "owner_contribution", "owner_contribution_candidate",
+    "merchant_deposit_unresolved", "unknown_inflow",
   ])
   const OUTFLOW_TYPES = new Set<string>([
     "cash_out_vendor", "cash_out_operating_expense", "cash_out_refund",
@@ -1593,20 +1665,11 @@ export async function classifyMovements(userId: string): Promise<{
 
   for (const c of classified) {
     const isInflow = c.direction === "inflow"
-    if (isInflow && OUTFLOW_TYPES.has(c.movement_type)) {
-      // Direction contradicts type — flag for review, downgrade confidence
+    if ((isInflow && OUTFLOW_TYPES.has(c.movement_type)) || (!isInflow && INFLOW_TYPES.has(c.movement_type))) {
       c.review_needed = true
-      c.confidence = Math.min(c.confidence, 0.5)
+      c.confidence = computeConfidence({ ...c.confidence, pattern_strength: Math.min(c.confidence.pattern_strength, 0.3) })
       log("movements.classify.direction_mismatch", {
-        type: c.movement_type, direction: c.direction, amount: c.amount,
-        counterparty: c.counterparty,
-      }, "movements")
-    } else if (!isInflow && INFLOW_TYPES.has(c.movement_type)) {
-      c.review_needed = true
-      c.confidence = Math.min(c.confidence, 0.5)
-      log("movements.classify.direction_mismatch", {
-        type: c.movement_type, direction: c.direction, amount: c.amount,
-        counterparty: c.counterparty,
+        type: c.movement_type, direction: c.direction, amount: c.amount, counterparty: c.counterparty,
       }, "movements")
     }
   }
@@ -1619,66 +1682,85 @@ export async function classifyMovements(userId: string): Promise<{
     if (c.review_needed) stats.review_needed++
   }
 
-  // Step 9: Batch persist
+  // Step 9: Persist families
+  await persistFamilies(userId, families)
+
+  // Step 10: Batch persist — two tables: movements + movement_observations
+  // First delete old data for this user
+  await query("DELETE FROM movements WHERE user_id = $1", [userId])
+
   const BATCH_SIZE = 50
   for (let i = 0; i < classified.length; i += BATCH_SIZE) {
     const batch = classified.slice(i, i + BATCH_SIZE)
 
-    const values: string[] = []
-    const params: unknown[] = []
-    let paramIdx = 0
+    // Insert movements
+    const mvtValues: string[] = []
+    const mvtParams: unknown[] = []
+    let mvtIdx = 0
 
     for (const m of batch) {
-      const evidenceRefs = JSON.stringify(m.evidence.map((e) => ({ source: e.source, source_type: e.source_type, source_id: e.source_id })))
-      // Deterministic hash: sorted source:source_id pairs
-      const evidenceHash = m.evidence.map((e) => `${e.source}:${e.source_id}`).sort().join("|")
-      // Store provenance in metadata alongside other info
-      m.metadata.provenance = m.provenance
-
-      const offsets = Array.from({ length: 17 }, (_, k) => `$${paramIdx + k + 1}`)
-      values.push(`(${offsets.join(", ")})`)
-      params.push(
-        userId,
-        m.direction,
-        m.amount,
-        m.date,
-        m.movement_type,
-        m.pnl_eligible,
-        m.cash_account_name,
-        m.counterparty,
-        m.counterparty_entity_id,
-        m.counterparty_entity_type,
-        m.linked_internal_account_id,
-        m.confidence,
-        m.review_needed,
-        evidenceHash,
-        evidenceRefs,
-        m.raw_description,
-        JSON.stringify(m.metadata),
+      const offsets = Array.from({ length: 16 }, (_, k) => `$${mvtIdx + k + 1}`)
+      mvtValues.push(`(${offsets.join(", ")})`)
+      mvtParams.push(
+        userId, m.direction, m.amount, m.date, m.movement_type, m.pnl_eligible,
+        m.provenance, m.cash_account_name, m.counterparty,
+        m.counterparty_entity_id, m.counterparty_entity_type,
+        m.linked_internal_account_id, JSON.stringify(m.confidence),
+        m.review_needed, m.raw_description, JSON.stringify(m.metadata),
       )
-      paramIdx += 17
+      mvtIdx += 16
     }
 
-    await query(
+    const { rows: insertedMovements } = await query<{ id: string }>(
       `INSERT INTO movements (
         user_id, direction, amount, date, movement_type, pnl_eligible,
-        cash_account_id, counterparty, counterparty_entity_id, counterparty_entity_type,
-        linked_internal_account_id, confidence, review_needed, evidence_hash, evidence_refs,
-        raw_description, metadata
+        provenance, cash_account_id, counterparty,
+        counterparty_entity_id, counterparty_entity_type,
+        linked_internal_account_id, confidence,
+        review_needed, raw_description, metadata
       )
-      VALUES ${values.join(", ")}
-      ON CONFLICT (user_id, evidence_hash) DO UPDATE SET
-        movement_type = EXCLUDED.movement_type,
-        pnl_eligible = EXCLUDED.pnl_eligible,
-        counterparty = EXCLUDED.counterparty,
-        counterparty_entity_id = EXCLUDED.counterparty_entity_id,
-        counterparty_entity_type = EXCLUDED.counterparty_entity_type,
-        confidence = EXCLUDED.confidence,
-        review_needed = EXCLUDED.review_needed,
-        evidence_refs = EXCLUDED.evidence_refs,
-        metadata = EXCLUDED.metadata`,
-      params,
+      VALUES ${mvtValues.join(", ")}
+      RETURNING id`,
+      mvtParams,
     )
+
+    // Insert observations for each movement
+    const obsValues: string[] = []
+    const obsParams: unknown[] = []
+    let obsIdx = 0
+
+    for (let b = 0; b < batch.length; b++) {
+      const m = batch[b]
+      const movementId = insertedMovements[b]?.id
+      if (!movementId) continue
+
+      for (const ev of m.evidence) {
+        const offsets = Array.from({ length: 11 }, (_, k) => `$${obsIdx + k + 1}`)
+        obsValues.push(`(${offsets.join(", ")})`)
+        obsParams.push(
+          movementId, ev.source, ev.source_type, ev.source_id,
+          Math.abs(ev.amount), ev.date, ev.raw_description, ev.counterparty,
+          ev.account_name, ev.account_id, JSON.stringify(ev.metadata),
+        )
+        obsIdx += 11
+      }
+    }
+
+    if (obsValues.length > 0) {
+      await query(
+        `INSERT INTO movement_observations (
+          movement_id, source, source_type, source_id,
+          amount, date, raw_description, counterparty,
+          account_name, account_id, metadata
+        )
+        VALUES ${obsValues.join(", ")}
+        ON CONFLICT (source, source_id) DO UPDATE SET
+          movement_id = EXCLUDED.movement_id,
+          raw_description = EXCLUDED.raw_description,
+          counterparty = EXCLUDED.counterparty`,
+        obsParams,
+      )
+    }
   }
 
   log("movements.classify.done", { userId, ...stats }, "movements")
