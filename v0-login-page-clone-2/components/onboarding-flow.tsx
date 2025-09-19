@@ -2410,16 +2410,11 @@ export function OnboardingFlow({
                   <div className="space-y-3">
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                       <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">State Inclusion Policy</h3>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-2 gap-3">
                         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-4 py-3 text-center">
-                          <div className="text-2xl font-bold text-emerald-400">{stats.policy_include}</div>
+                          <div className="text-2xl font-bold text-emerald-400">{stats.policy_include + stats.policy_provisional}</div>
                           <div className="text-xs text-emerald-300/70 mt-1 font-medium">Include</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">Conf &ge; 80%</div>
-                        </div>
-                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-3 text-center">
-                          <div className="text-2xl font-bold text-amber-400">{stats.policy_provisional}</div>
-                          <div className="text-xs text-amber-300/70 mt-1 font-medium">Provisional</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">55% &le; Conf &lt; 80%</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">Conf &ge; 55%</div>
                         </div>
                         <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-center">
                           <div className="text-2xl font-bold text-red-400">{stats.policy_exclude}</div>
@@ -2429,8 +2424,7 @@ export function OnboardingFlow({
                       </div>
                       {stats.total > 0 && (
                         <div className="mt-3 h-2 rounded-full overflow-hidden flex bg-white/5">
-                          <div className="bg-emerald-500 transition-all" style={{ width: `${(stats.policy_include / stats.total) * 100}%` }} />
-                          <div className="bg-amber-500 transition-all" style={{ width: `${(stats.policy_provisional / stats.total) * 100}%` }} />
+                          <div className="bg-emerald-500 transition-all" style={{ width: `${((stats.policy_include + stats.policy_provisional) / stats.total) * 100}%` }} />
                           <div className="bg-red-500 transition-all" style={{ width: `${(stats.policy_exclude / stats.total) * 100}%` }} />
                         </div>
                       )}
@@ -2549,11 +2543,9 @@ export function OnboardingFlow({
                           const ecMeta = ECLASS_LABELS[ec] ?? { label: ec, color: "bg-zinc-500/80" }
                           const bucketMeta = BUCKET_LABELS[bucket] ?? { label: bucket, color: "text-gray-400" }
                           const policy = m.tag?.state_inclusion_policy ?? "exclude_and_review"
-                          const policyMeta = policy === "include"
-                            ? { label: "Include", cls: "text-emerald-400 bg-emerald-500/15" }
-                            : policy === "include_provisional"
-                              ? { label: "Provisional", cls: "text-amber-400 bg-amber-500/15" }
-                              : { label: "Exclude", cls: "text-red-400 bg-red-500/15" }
+                          const policyMeta = policy === "exclude_and_review"
+                            ? { label: "Exclude", cls: "text-red-400 bg-red-500/15" }
+                            : { label: "Include", cls: "text-emerald-400 bg-emerald-500/15" }
                           const flags: string[] = []
                           if (m.tag?.is_recurring) flags.push("🔁")
                           if (m.tag?.is_anomaly) flags.push("⚠")
