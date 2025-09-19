@@ -1,6 +1,6 @@
 "use client"
 
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { useEffect, useState } from "react"
 import Image from "next/image"
 import { Loader2, Copy, Check, Plus, Trash2 } from "lucide-react"
@@ -53,6 +53,7 @@ function CopyableRow({
 export default function OAuthConnectorPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const integration = params.integration as string
 
   // WhatsApp-specific state
@@ -68,6 +69,10 @@ export default function OAuthConnectorPage() {
   const [gmailNewEmail, setGmailNewEmail] = useState("")
   const [gmailSaveLoading, setGmailSaveLoading] = useState(false)
   const [gmailSaveMessage, setGmailSaveMessage] = useState<string | null>(null)
+  // Gmail inbox connection (single system inbox; only admin can connect)
+  const [gmailConnected, setGmailConnected] = useState<boolean | null>(null)
+  const [gmailConnectedEmail, setGmailConnectedEmail] = useState<string | null>(null)
+  const [gmailCanConnect, setGmailCanConnect] = useState(false)
 
   // Format integration name for display
   const integrationName = integration?.replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
@@ -121,6 +126,16 @@ export default function OAuthConnectorPage() {
           if (data && Array.isArray(data.emails)) setGmailInvoiceSenders(data.emails)
         })
         .catch(() => {})
+      fetch("/api/gmail/status")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { connected?: boolean; email?: string; canConnect?: boolean } | null) => {
+          if (data) {
+            setGmailConnected(!!data.connected)
+            setGmailConnectedEmail(data.email ?? null)
+            setGmailCanConnect(!!data.canConnect)
+          } else setGmailConnected(false)
+        })
+        .catch(() => setGmailConnected(false))
       return
     }
     console.log("[v0] OAuth page loaded for:", integrationName)
@@ -146,6 +161,45 @@ export default function OAuthConnectorPage() {
             <p className="text-gray-400 text-sm">
               Forward invoices, payments, and bills to ProfitWise so we can extract and track them.
             </p>
+          </div>
+
+          {/* Single system inbox: receives all forwards; only admin can connect (once) */}
+          <div className="mb-10 pb-10 border-b border-white/10">
+            <h2 className="text-lg font-semibold text-white mb-2">System inbox (forwarding)</h2>
+            <p className="text-sm text-gray-400 mb-3">
+              One Workspace inbox is connected so we receive all forwarded invoices and can read them on this server. Only the admin can connect or change it.
+            </p>
+            {searchParams.get("connected") === "1" && (
+              <p className="text-sm text-emerald-400 mb-3">Inbox connected successfully.</p>
+            )}
+            {searchParams.get("error") === "admin_only" && (
+              <p className="text-sm text-amber-400 mb-3">Only the admin can connect the inbox.</p>
+            )}
+            {searchParams.get("error") && searchParams.get("error") !== "admin_only" && (
+              <p className="text-sm text-amber-400 mb-3">
+                Connection failed: {searchParams.get("error")}. Try again or check Gmail OAuth config.
+              </p>
+            )}
+            {gmailConnected === null ? (
+              <p className="text-sm text-gray-500">Checking connection…</p>
+            ) : gmailConnected && gmailConnectedEmail ? (
+              <p className="text-sm text-emerald-400">
+                Connected as {gmailConnectedEmail}
+                {!gmailCanConnect && " (only admin can reconnect)."}
+              </p>
+            ) : !gmailCanConnect ? (
+              <p className="text-sm text-gray-500">Inbox connection is managed by admin.</p>
+            ) : (
+              <Button
+                type="button"
+                onClick={() => {
+                  window.location.href = "/api/gmail/oauth/authorize"
+                }}
+                className="bg-white/10 text-white hover:bg-white/20 border border-white/20"
+              >
+                Connect inbox
+              </Button>
+            )}
           </div>
 
           <div className="mb-10 pb-10 border-b border-white/10">

@@ -22,6 +22,9 @@ yarn-error.log*
 # GCP service account keys (use GCP_SERVICE_KEY_JSON env var instead)
 profitwise-mainapp-*.json
 
+# Gmail OAuth tokens (from scripts/gmail-oauth-cli.mjs)
+scripts/gmail-tokens.json
+
 # vercel
 .vercel
 
