@@ -218,6 +218,9 @@ type ClassifiedMovement = CanonicalMovement & {
   pnl_eligible: boolean
   confidence: ConfidenceBreakdown
   review_needed: boolean
+  review_reasons: string[]
+  currency: string
+  coalesced_group_id: string | null
 }
 
 // ─── Known patterns ────────────────────────────────────────────────
@@ -1633,12 +1636,18 @@ export async function classifyMovements(userId: string): Promise<{
     const nonPnl = classifyNonPnl(m, identity, selfCtx)
     if (nonPnl) {
       const conf = computeConfidence({ ...nonPnl.signals, source_agreement: sa })
+      const reasons: string[] = []
+      if (conf.score < 0.55) reasons.push("low_classification_confidence")
+      if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
       classified.push({
         ...m,
         movement_type: nonPnl.type,
         pnl_eligible: false,
         confidence: conf,
-        review_needed: conf.score < 0.55,
+        review_needed: reasons.length > 0,
+        review_reasons: reasons,
+        currency: "USD",
+        coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
       })
       stats.rule_classified++
       continue
@@ -1648,12 +1657,18 @@ export async function classifyMovements(userId: string): Promise<{
     const operating = classifyOperating(m, identity)
     if (operating) {
       const conf = computeConfidence({ ...operating.signals, source_agreement: sa })
+      const reasons: string[] = []
+      if (conf.score < 0.55) reasons.push("low_classification_confidence")
+      if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
       classified.push({
         ...m,
         movement_type: operating.type,
         pnl_eligible: isPnlEligible(operating.type),
         confidence: conf,
-        review_needed: conf.score < 0.55,
+        review_needed: reasons.length > 0,
+        review_reasons: reasons,
+        currency: "USD",
+        coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
       })
       stats.rule_classified++
       continue
@@ -1663,12 +1678,18 @@ export async function classifyMovements(userId: string): Promise<{
     const provisional = classifyProvisional(m, identity)
     if (provisional) {
       const conf = computeConfidence({ ...provisional.signals, source_agreement: sa })
+      const reasons: string[] = ["provisional_classification"]
+      if (conf.score < 0.55) reasons.push("low_classification_confidence")
+      if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
       classified.push({
         ...m,
         movement_type: provisional.type,
         pnl_eligible: isPnlEligible(provisional.type),
         confidence: conf,
         review_needed: true,
+        review_reasons: reasons,
+        currency: "USD",
+        coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
       })
       stats.provisional_classified++
       continue
@@ -1677,6 +1698,8 @@ export async function classifyMovements(userId: string): Promise<{
     // Step 7: Fallback (but also queue for LLM if we have API key)
     const fallback = classifyFallback(m)
     const conf = computeConfidence({ ...fallback.signals, source_agreement: sa })
+    const reasons: string[] = ["low_classification_confidence"]
+    if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
     needsLlm.push({ idx: classified.length, movement: m, identity })
     classified.push({
       ...m,
@@ -1684,6 +1707,9 @@ export async function classifyMovements(userId: string): Promise<{
       pnl_eligible: false,
       confidence: conf,
       review_needed: true,
+      review_reasons: reasons,
+      currency: "USD",
+      coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
     })
   }
 
@@ -1703,6 +1729,10 @@ export async function classifyMovements(userId: string): Promise<{
           ...classified[target.idx].confidence,
           pattern_strength: llmResult.confidence,
         })
+        const newReasons: string[] = ["llm_fallback"]
+        if (classified[target.idx].confidence.score < 0.55) newReasons.push("low_classification_confidence")
+        if (classified[target.idx].confidence.evidence_strength < 0.20) newReasons.push("low_evidence")
+        classified[target.idx].review_reasons = newReasons
         classified[target.idx].review_needed = classified[target.idx].confidence.score < 0.55
         stats.llm_classified++
       }
@@ -1732,6 +1762,9 @@ export async function classifyMovements(userId: string): Promise<{
     const isInflow = c.direction === "inflow"
     if ((isInflow && OUTFLOW_TYPES.has(c.movement_type)) || (!isInflow && INFLOW_TYPES.has(c.movement_type))) {
       c.review_needed = true
+      if (!c.review_reasons.includes("direction_type_mismatch")) {
+        c.review_reasons.push("direction_type_mismatch")
+      }
       c.confidence = computeConfidence({
         ...c.confidence,
         pattern_strength: Math.min(c.confidence.pattern_strength, 0.3),
@@ -1768,16 +1801,18 @@ export async function classifyMovements(userId: string): Promise<{
     let mvtIdx = 0
 
     for (const m of batch) {
-      const offsets = Array.from({ length: 16 }, (_, k) => `$${mvtIdx + k + 1}`)
+      const meta = { ...m.metadata, review_reasons: m.review_reasons }
+      const offsets = Array.from({ length: 18 }, (_, k) => `$${mvtIdx + k + 1}`)
       mvtValues.push(`(${offsets.join(", ")})`)
       mvtParams.push(
         userId, m.direction, m.amount, m.date, m.movement_type, m.pnl_eligible,
         m.provenance, m.cash_account_name, m.counterparty,
         m.counterparty_entity_id, m.counterparty_entity_type,
         m.linked_internal_account_id, JSON.stringify(m.confidence),
-        m.review_needed, m.raw_description, JSON.stringify(m.metadata),
+        m.review_needed, m.raw_description, JSON.stringify(meta),
+        m.currency, m.coalesced_group_id,
       )
-      mvtIdx += 16
+      mvtIdx += 18
     }
 
     const { rows: insertedMovements } = await query<{ id: string }>(
@@ -1786,7 +1821,8 @@ export async function classifyMovements(userId: string): Promise<{
         provenance, cash_account_id, counterparty,
         counterparty_entity_id, counterparty_entity_type,
         linked_internal_account_id, confidence,
-        review_needed, raw_description, metadata
+        review_needed, raw_description, metadata,
+        currency, coalesced_group_id
       )
       VALUES ${mvtValues.join(", ")}
       RETURNING id`,
