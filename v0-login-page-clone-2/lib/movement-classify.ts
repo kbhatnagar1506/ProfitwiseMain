@@ -1352,7 +1352,7 @@ function applyFamilyLearning(classified: ClassifiedMovement[], families: Map<str
   let upgraded = 0
 
   for (const c of classified) {
-    if (c.confidence.score >= 0.7) continue
+    if (c.confidence.score >= 0.55) continue
     const desc = c.raw_description ?? ""
     const key = familyKey(desc, c.direction, c.cash_account_name)
 
@@ -1367,7 +1367,7 @@ function applyFamilyLearning(classified: ClassifiedMovement[], families: Map<str
         history: family.dominantConfidence,
         pattern_strength: Math.max(c.confidence.pattern_strength, familyPatternFloor),
       })
-      c.review_needed = c.confidence.score < 0.7
+      c.review_needed = c.confidence.score < 0.55
       c.metadata.family_learned = true
       c.metadata.family_key = family.family_key
       c.metadata.family_count = family.count
@@ -1638,7 +1638,7 @@ export async function classifyMovements(userId: string): Promise<{
         movement_type: nonPnl.type,
         pnl_eligible: false,
         confidence: conf,
-        review_needed: conf.score < 0.7,
+        review_needed: conf.score < 0.55,
       })
       stats.rule_classified++
       continue
@@ -1653,7 +1653,7 @@ export async function classifyMovements(userId: string): Promise<{
         movement_type: operating.type,
         pnl_eligible: isPnlEligible(operating.type),
         confidence: conf,
-        review_needed: conf.score < 0.7,
+        review_needed: conf.score < 0.55,
       })
       stats.rule_classified++
       continue
@@ -1703,7 +1703,7 @@ export async function classifyMovements(userId: string): Promise<{
           ...classified[target.idx].confidence,
           pattern_strength: llmResult.confidence,
         })
-        classified[target.idx].review_needed = classified[target.idx].confidence.score < 0.7
+        classified[target.idx].review_needed = classified[target.idx].confidence.score < 0.55
         stats.llm_classified++
       }
     }
