@@ -108,3 +108,82 @@ export const PNL_CLASSES = new Set<MovementClass>([
 export function isClassPnlEligible(mc: MovementClass): boolean {
   return PNL_CLASSES.has(mc)
 }
+
+// ─── Phase 1: Structural Tagging Layer ──────────────────────────────
+//
+// Tags convert classified movements into state-readable business semantics.
+// The state engine reads tags, never raw bank text.
+
+export type EconomicClass =
+  | "customer_receipt"
+  | "vendor_payment"
+  | "payroll"
+  | "bank_fee"
+  | "transfer"
+  | "owner_contribution"
+  | "owner_draw"
+  | "processor_fee"
+  | "processor_payout"
+  | "refund"
+  | "tax"
+  | "debt_payment"
+  | "interest"
+  | "adjustment"
+  | "unknown"
+
+export type CashflowBucket =
+  | "revenue_in"
+  | "cogs_out"
+  | "opex_out"
+  | "financing_in"
+  | "financing_out"
+  | "transfer"
+  | "settlement"
+  | "unknown"
+
+export type CounterpartyRole =
+  | "customer"
+  | "vendor"
+  | "owner"
+  | "employee"
+  | "processor"
+  | "bank"
+  | "tax_authority"
+  | "lender"
+  | "marketplace"
+  | "unknown"
+
+export type MovementTag = {
+  movement_id: string
+
+  economic_class: EconomicClass
+  cashflow_bucket: CashflowBucket
+  counterparty_role: CounterpartyRole
+
+  is_operating: boolean
+  is_financing: boolean
+  is_investing: boolean
+  is_owner_related: boolean
+  hits_pnl: boolean
+  hits_working_capital: boolean
+
+  classification_confidence: number
+  evidence_strength: number
+  needs_review: boolean
+  review_reasons: string[]
+
+  entity_id: string | null
+  customer_id: string | null
+  vendor_id: string | null
+  processor_id: string | null
+  account_id: string | null
+  order_id: string | null
+  invoice_id: string | null
+  bill_id: string | null
+
+  recurrence_family_id: string | null
+  is_recurring: boolean
+  is_anomaly: boolean
+  is_large_outlier: boolean
+  is_first_seen_counterparty: boolean
+}

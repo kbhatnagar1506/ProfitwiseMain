@@ -99,6 +99,31 @@ export async function GET() {
 
   const movements: CanonicalMovement[] = dbRows.map((r) => toPublicMovement(r, userId))
 
+  // Load tags (if they exist) and attach to movements
+  type TagRow = { movement_id: string; economic_class: string; cashflow_bucket: string; counterparty_role: string; tag_data: Record<string, unknown> }
+  const tagRows = await query<TagRow>(
+    `SELECT movement_id, economic_class, cashflow_bucket, counterparty_role, tag_data
+     FROM movement_tags WHERE movement_id IN (SELECT id FROM movements WHERE user_id = $1)`,
+    [userId]
+  ).then((r) => r.rows)
+
+  const tagMap = new Map<string, TagRow>()
+  for (const t of tagRows) tagMap.set(t.movement_id, t)
+
+  const movementsWithTags = movements.map((m) => {
+    const tag = tagMap.get(m.id)
+    if (!tag) return m
+    return {
+      ...m,
+      tag: {
+        economic_class: tag.economic_class,
+        cashflow_bucket: tag.cashflow_bucket,
+        counterparty_role: tag.counterparty_role,
+        ...tag.tag_data,
+      },
+    }
+  })
+
   type SummaryDbRow = { movement_type: string; pnl_eligible: boolean; count: number; total_amount: string }
   const summaryRows = await query<SummaryDbRow>(
     `SELECT movement_type, pnl_eligible, COUNT(*)::int as count, SUM(amount)::text as total_amount
@@ -116,5 +141,5 @@ export async function GET() {
     pnl_eligible: row.pnl_eligible,
   }))
 
-  return NextResponse.json({ movements, summary })
+  return NextResponse.json({ movements: movementsWithTags, summary })
 }
