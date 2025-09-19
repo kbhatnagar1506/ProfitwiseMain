@@ -10,7 +10,7 @@
 
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { log } from "@/lib/logger"
-import { toMovementClass } from "@/lib/movement-types"
+import { toMovementClass, computeStatePolicy } from "@/lib/movement-types"
 import type {
   CanonicalMovement,
   MovementTag,
@@ -352,7 +352,7 @@ function extractLinkIds(m: CanonicalMovement, base: BaseTag): {
 
 export async function tagMovements(userId: string): Promise<{
   tags: MovementTag[]
-  stats: { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number }
+  stats: { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number; policy_include: number; policy_provisional: number; policy_exclude: number }
 }> {
   await ensureMovementsSchema()
 
@@ -385,7 +385,7 @@ export async function tagMovements(userId: string): Promise<{
 
   const tags: MovementTag[] = []
   const seenCounterparties = new Set<string>()
-  const stats = { total: 0, deterministic: 0, identity_aware: 0, inferred: 0, recurring: 0, anomalies: 0, first_seen: 0 }
+  const stats = { total: 0, deterministic: 0, identity_aware: 0, inferred: 0, recurring: 0, anomalies: 0, first_seen: 0, policy_include: 0, policy_provisional: 0, policy_exclude: 0 }
 
   for (const m of movements) {
     // DB stores movement_type, not movement_class — map it
@@ -412,6 +412,8 @@ export async function tagMovements(userId: string): Promise<{
 
     const links = extractLinkIds(m, base)
 
+    const policy = computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review)
+
     tags.push({
       movement_id: m.id,
 
@@ -426,6 +428,7 @@ export async function tagMovements(userId: string): Promise<{
       hits_pnl: base.hits_pnl,
       hits_working_capital: base.hits_working_capital,
 
+      state_inclusion_policy: policy,
       classification_confidence: m.confidence,
       evidence_strength: m.evidence_strength,
       needs_review: m.needs_review,
@@ -446,6 +449,10 @@ export async function tagMovements(userId: string): Promise<{
       is_large_outlier: inference.is_large_outlier,
       is_first_seen_counterparty: inference.is_first_seen_counterparty,
     })
+
+    if (policy === "include") stats.policy_include++
+    else if (policy === "include_provisional") stats.policy_provisional++
+    else stats.policy_exclude++
   }
 
   // Persist tags
@@ -478,6 +485,7 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
         t.cashflow_bucket,
         t.counterparty_role,
         JSON.stringify({
+          state_inclusion_policy: t.state_inclusion_policy,
           is_operating: t.is_operating,
           is_financing: t.is_financing,
           is_investing: t.is_investing,
