@@ -11,6 +11,19 @@ Use the in-app flow so tokens are stored on the server:
 2. Set Heroku config: `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET`. Optionally set `GMAIL_ADMIN_EMAIL` (e.g. `krishna@profitwise.app`) so only that user can connect or reconnect the single system inbox; others will see "Inbox connection is managed by admin."
 3. In the app, go to Gmail setup (`/oauth/gmail`) and click **Connect inbox** (only if you are the admin). Sign in with the Workspace email that receives forwards; tokens are saved in the production DB once.
 
+### Hourly sync (extract and store in DB)
+
+Messages are synced into the `gmail_synced_messages` table. To run sync every hour:
+
+1. **Heroku Scheduler**: Add a job that runs every hour.
+   - In Heroku Dashboard → profitwise-login-page → Resources → Heroku Scheduler → Add job → set frequency to "Every hour" and command to:
+     `curl -s -X POST -H "x-clean-db-secret: $CLEAN_DB_SECRET" "https://dashboard.profitwise.app/api/cron/gmail-sync"`
+   - The one-off dyno has access to config vars, so `$CLEAN_DB_SECRET` is expanded. Ensure `CLEAN_DB_SECRET` is set on the app.
+
+2. **Default behavior**: Each run fetches messages from the **last 1 hour** (`newer_than:1h`) and upserts them (up to 200). Optional query params: `?q=newer_than:1d` for last day, `?maxMessages=500`.
+
+3. **Table**: `gmail_synced_messages` stores `message_id`, `thread_id`, `from_email`, `to_emails`, `subject`, `date_sent`, `snippet`, `body_plain`, `labels`, `synced_at`.
+
 ---
 
 ## Terminal (local script)

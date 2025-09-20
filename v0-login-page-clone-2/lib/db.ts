@@ -323,6 +323,21 @@ const GMAIL_CONNECTIONS_SQL = `
   )
 `
 
+const GMAIL_SYNCED_MESSAGES_SQL = `
+  CREATE TABLE IF NOT EXISTS gmail_synced_messages (
+    message_id      TEXT PRIMARY KEY,
+    thread_id       TEXT,
+    from_email      TEXT,
+    to_emails       TEXT,
+    subject         TEXT,
+    date_sent       TIMESTAMPTZ,
+    snippet         TEXT,
+    body_plain      TEXT,
+    labels          JSONB DEFAULT '[]'::jsonb,
+    synced_at       TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
 let xeroSchemaEnsured = false
 let qboSchemaEnsured = false
 let stripeSchemaEnsured = false
@@ -386,6 +401,7 @@ export async function ensureGmailSchema(): Promise<void> {
   if (!p) return
   await ensureAuthSchema()
   await p.query(GMAIL_CONNECTIONS_SQL)
+  await p.query(GMAIL_SYNCED_MESSAGES_SQL)
   gmailSchemaEnsured = true
   log("db.gmail.schema.ensured", undefined, "db")
 }

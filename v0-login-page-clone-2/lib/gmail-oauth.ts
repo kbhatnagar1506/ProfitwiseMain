@@ -109,3 +109,53 @@ export async function getGmailConnection(connectionId: string): Promise<{
   }>("SELECT email, refresh_token, access_token, expires_at FROM gmail_connections WHERE id = $1", [connectionId])
   return rows[0] ?? null
 }
+
+/** Refresh access token using refresh_token; updates DB and returns new access_token. */
+export async function refreshGmailAccessToken(connectionId: string): Promise<string> {
+  const config = getGmailOAuthConfig()
+  if (!config) throw new Error("Gmail OAuth not configured")
+  const conn = await getGmailConnection(connectionId)
+  if (!conn?.refresh_token) throw new Error("No Gmail connection or refresh token")
+  const body = new URLSearchParams({
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    refresh_token: conn.refresh_token,
+    grant_type: "refresh_token",
+  }).toString()
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  })
+  const data = (await res.json()) as {
+    access_token?: string
+    expires_in?: number
+    error?: string
+    error_description?: string
+  }
+  if (data.error) {
+    log("gmail.oauth.refresh_error", { error: data.error, description: data.error_description }, "gmail")
+    throw new Error(data.error_description ?? data.error)
+  }
+  const accessToken = data.access_token ?? ""
+  const expiresIn = data.expires_in ?? 3600
+  const expiresAt = new Date(Date.now() + expiresIn * 1000)
+  await query(
+    `UPDATE gmail_connections SET access_token = $1, expires_at = $2, updated_at = NOW() WHERE id = $3`,
+    [accessToken, expiresAt, connectionId]
+  )
+  log("gmail.oauth.token_refreshed", { connectionId }, "gmail")
+  return accessToken
+}
+
+/** Returns a valid access token for Gmail API; refreshes if expired or missing. */
+export async function getValidGmailAccessToken(connectionId: string = "inbox"): Promise<string> {
+  const conn = await getGmailConnection(connectionId)
+  if (!conn) throw new Error("No Gmail connection")
+  const expiresAt = conn.expires_at ? new Date(conn.expires_at).getTime() : 0
+  const bufferSeconds = 60
+  if (conn.access_token && expiresAt > Date.now() + bufferSeconds * 1000) {
+    return conn.access_token
+  }
+  return refreshGmailAccessToken(connectionId)
+}
