@@ -2667,9 +2667,13 @@ export function OnboardingFlow({
               {stateError && !stateLoading && (
                 <p className="text-red-300 text-sm mb-4">Failed: {stateError}</p>
               )}
+
+              {!stateLoading && !stateData && !stateError && (
+                <p className="text-gray-400 text-sm mb-4">Run classification (step 10) and tagging (step 11) first.</p>
+              )}
             </div>
 
-            {!stateLoading && stateData && (
+            {!stateLoading && (
               <div className="space-y-6">
                 {/* Revenue state */}
                 <div className="bg-white/5 border border-white/10 rounded-xl p-4">
