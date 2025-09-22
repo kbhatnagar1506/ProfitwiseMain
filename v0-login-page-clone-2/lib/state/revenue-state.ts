@@ -72,7 +72,7 @@ function computeRefundAdjustedNet(included: TaggedMovementInput[]): number {
 function computeRevenueVolatilityScore(included: TaggedMovementInput[], now: Date): number {
   const daily = new Map<string, number>()
   for (const m of included) {
-    const d = m.occurred_at.slice(0, 10)
+    const d = typeof m.occurred_at === "string" ? m.occurred_at.slice(0, 10) : new Date(m.occurred_at).toISOString().slice(0, 10)
     const key = d
     daily.set(key, (daily.get(key) ?? 0) + signAmount(m))
   }
