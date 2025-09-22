@@ -20,22 +20,40 @@ function getHeader(headers: Array<{ name: string; value: string }> | undefined, 
   return h?.value ?? null
 }
 
-function extractPlainBody(payload: GmailPayload): string {
+function extractPlainBody(payload: GmailPayload | undefined): string {
   if (!payload) return ""
+  // 1. Direct body
   if (payload.body?.data) return decodeBase64Url(payload.body.data)
-  if (payload.parts) {
-    const textPart = payload.parts.find((p) => p.mimeType === "text/plain")
-    if (textPart?.body?.data) return decodeBase64Url(textPart.body.data)
-    const htmlPart = payload.parts.find((p) => p.mimeType === "text/html")
-    if (htmlPart?.body?.data) return decodeBase64Url(htmlPart.body.data).replace(/<[^>]+>/g, " ").trim()
+  if (!payload.parts || payload.parts.length === 0) return ""
+
+  // 2. Look for text/plain in any level
+  const queue: GmailPayload[] = [...payload.parts]
+  while (queue.length) {
+    const part = queue.shift()!
+    if (part.body?.data && (part as any).mimeType === "text/plain") {
+      return decodeBase64Url(part.body.data)
+    }
+    if (part.parts && part.parts.length) queue.push(...part.parts)
   }
+
+  // 3. Fallback: first text/html we can find, stripped to text
+  const htmlQueue: GmailPayload[] = [...payload.parts]
+  while (htmlQueue.length) {
+    const part = htmlQueue.shift()!
+    if (part.body?.data && (part as any).mimeType === "text/html") {
+      const html = decodeBase64Url(part.body.data)
+      return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+    }
+    if (part.parts && part.parts.length) htmlQueue.push(...part.parts)
+  }
+
   return ""
 }
 
 interface GmailPayload {
   headers?: Array<{ name: string; value: string }>
   body?: { data?: string }
-  parts?: Array<{ mimeType?: string; body?: { data?: string } }>
+  parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: GmailPayload[] }>
 }
 
 interface GmailMessage {
