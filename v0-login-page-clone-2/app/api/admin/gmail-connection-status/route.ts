@@ -34,6 +34,7 @@ export async function GET(req: NextRequest) {
       subject: string | null
       date_sent: string | null
       snippet: string | null
+      body_plain: string | null
       synced_at: string | null
     }> = []
 
@@ -45,9 +46,10 @@ export async function GET(req: NextRequest) {
         subject: string | null
         date_sent: Date | null
         snippet: string | null
+        body_plain: string | null
         synced_at: Date | null
       }>(
-        "SELECT message_id, from_email, to_emails, subject, date_sent, snippet, synced_at FROM gmail_synced_messages ORDER BY synced_at DESC LIMIT 5"
+        "SELECT message_id, from_email, to_emails, subject, date_sent, snippet, body_plain, synced_at FROM gmail_synced_messages ORDER BY synced_at DESC LIMIT 5"
       )
       latestMessages = rows.map((r) => ({
         message_id: r.message_id,
@@ -56,6 +58,7 @@ export async function GET(req: NextRequest) {
         subject: r.subject,
         date_sent: r.date_sent ? r.date_sent.toISOString() : null,
         snippet: r.snippet,
+        body_plain: r.body_plain ?? null,
         synced_at: r.synced_at ? r.synced_at.toISOString() : null,
       }))
     } catch (err) {
