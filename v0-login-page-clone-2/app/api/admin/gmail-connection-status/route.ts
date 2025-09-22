@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { ensureGmailSchema } from "@/lib/db"
+import { ensureGmailSchema, query } from "@/lib/db"
 import { getGmailConnection } from "@/lib/gmail-oauth"
 import { log } from "@/lib/logger"
 
@@ -26,12 +26,53 @@ export async function GET(req: NextRequest) {
     if (!conn) {
       return NextResponse.json({ connected: false, email: null })
     }
+
+    let latestMessages: Array<{
+      message_id: string
+      from_email: string | null
+      to_emails: string | null
+      subject: string | null
+      date_sent: string | null
+      snippet: string | null
+      synced_at: string | null
+    }> = []
+
+    try {
+      const { rows } = await query<{
+        message_id: string
+        from_email: string | null
+        to_emails: string | null
+        subject: string | null
+        date_sent: Date | null
+        snippet: string | null
+        synced_at: Date | null
+      }>(
+        "SELECT message_id, from_email, to_emails, subject, date_sent, snippet, synced_at FROM gmail_synced_messages ORDER BY synced_at DESC LIMIT 5"
+      )
+      latestMessages = rows.map((r) => ({
+        message_id: r.message_id,
+        from_email: r.from_email,
+        to_emails: r.to_emails,
+        subject: r.subject,
+        date_sent: r.date_sent ? r.date_sent.toISOString() : null,
+        snippet: r.snippet,
+        synced_at: r.synced_at ? r.synced_at.toISOString() : null,
+      }))
+    } catch (err) {
+      log(
+        "admin.gmail-status.latest_messages_error",
+        { error: err instanceof Error ? err.message : String(err) },
+        "db"
+      )
+    }
+
     return NextResponse.json({
       connected: true,
       email: conn.email ?? null,
       has_refresh_token: !!conn.refresh_token,
       has_access_token: !!conn.access_token,
       expires_at: conn.expires_at ?? null,
+      latest_messages: latestMessages,
     })
   } catch (e) {
     log("admin.gmail-status.error", { error: e instanceof Error ? e.message : String(e) }, "db")
