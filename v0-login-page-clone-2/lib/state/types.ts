@@ -19,6 +19,15 @@ export type RevenueState = {
   revenue_by_customer: { entity_id: string | null; name: string; total: number; count: number }[]
   provisional_revenue: number
   excluded_revenue: number
+  excluded_contra: number
+}
+
+export type SpendBreakdownEntry = {
+  entity_id: string | null
+  name: string
+  total: number
+  count: number
+  pct_of_spend: number
 }
 
 export type SpendState = {
@@ -27,6 +36,9 @@ export type SpendState = {
 
   total_opex: number
   total_cogs: number
+  direct_cost_candidates: number
+  overhead_candidates: number
+  unresolved_spend_mix: number
   total_spend: number
 
   payroll: number
@@ -38,10 +50,23 @@ export type SpendState = {
   vendor_count: number
   avg_payment: number
   top_vendor_pct: number
+  supplier_concentration_index: number
 
-  spend_by_vendor: { entity_id: string | null; name: string; total: number; count: number }[]
+  spend_by_vendor: SpendBreakdownEntry[]
+  recurring_obligations: number
+  recurring_obligation_count: number
   provisional_spend: number
   excluded_spend: number
+}
+
+export type AccountCash = {
+  account_id: string
+  account_name: string
+  account_type: string
+  net_flow: number
+  inflows: number
+  outflows: number
+  movement_count: number
 }
 
 export type LiquidityState = {
@@ -68,13 +93,20 @@ export type LiquidityState = {
   owner_outflows: number
   net_owner: number
 
+  cash_by_account: AccountCash[]
+  transfer_dependency_ratio: number
+  owner_support_ratio: number
   excluded_cash: number
 }
+
+export type SeverityBand = "low" | "moderate" | "elevated" | "high" | "critical"
 
 export type TransitionSignal = {
   signal: string
   severity: "info" | "warning" | "critical"
   description: string
+  current_band: SeverityBand
+  previous_band: SeverityBand | null
   current_value: number
   previous_value: number | null
   threshold: number
