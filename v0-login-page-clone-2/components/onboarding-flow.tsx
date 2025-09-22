@@ -210,11 +210,11 @@ export function OnboardingFlow({
   const [movementsLoading, setMovementsLoading] = useState(false)
   const [movementsClassifying, setMovementsClassifying] = useState(false)
   const [movementsError, setMovementsError] = useState<string | null>(null)
-  type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; state_scope?: { affects_revenue: boolean; affects_spend: boolean; affects_liquidity: boolean }; state_inclusion_policy?: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
+  type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; state_scope?: { affects_revenue: boolean; affects_spend: boolean; affects_liquidity: boolean; affects_operating_performance: boolean; affects_revenue_quality: boolean }; state_inclusion_policy?: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
   type TagStats = { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number; policy_include: number; policy_provisional: number; policy_exclude: number }
-  type UnresolvedImpact = { unresolved_inflow_total: number; unresolved_outflow_total: number; unresolved_count: number; unresolved_operating_exposure: number }
+  type UnresolvedImpact = { unresolved_inflow_total: number; unresolved_outflow_total: number; unresolved_count: number; unresolved_operating_exposure: number; unresolved_pct_of_inflows: number; unresolved_pct_of_operating_inflows: number; unresolved_pct_of_last_30d: number }
   type OwnerDependency = { owner_inflow_total: number; total_inflow: number; owner_dependency_ratio: number; owner_draw_total: number; net_owner_flow: number; contribution_count: number; draw_count: number }
-  type WorkingCapitalSignals = { avg_settlement_lag_days: number | null; avg_inflow_cadence_days: number | null; avg_outflow_cadence_days: number | null; inflow_regularity: number; outflow_regularity: number }
+  type WorkingCapitalSignals = { avg_settlement_lag_days: number | null; avg_inflow_cadence_days: number | null; avg_outflow_cadence_days: number | null; inflow_regularity: number; outflow_regularity: number; confidence: string; sample_sizes: { settlements: number; revenue_inflows: number; spend_outflows: number }; data_span_days: number }
   const [tagData, setTagData] = useState<{ movements: TaggedMovement[]; stats: TagStats; unresolved_impact?: UnresolvedImpact; owner_dependency?: OwnerDependency; working_capital?: WorkingCapitalSignals } | null>(null)
   const [tagLoading, setTagLoading] = useState(false)
   const [tagRunning, setTagRunning] = useState(false)
@@ -2320,21 +2320,24 @@ export function OnboardingFlow({
         const stats = tagData?.stats
 
         const ECLASS_LABELS: Record<string, { label: string; color: string }> = {
-          customer_receipt:    { label: "Customer Receipt",    color: "bg-emerald-500/80" },
-          vendor_payment:      { label: "Vendor Payment",      color: "bg-orange-500/80" },
-          payroll:             { label: "Payroll",              color: "bg-orange-700/80" },
-          bank_fee:            { label: "Bank Fee",             color: "bg-red-500/80" },
-          transfer:            { label: "Transfer",             color: "bg-slate-500/80" },
-          owner_contribution:  { label: "Owner Contribution",   color: "bg-rose-400/80" },
-          owner_draw:          { label: "Owner Draw",           color: "bg-rose-600/80" },
-          processor_fee:       { label: "Processor Fee",        color: "bg-violet-700/80" },
-          processor_payout:    { label: "Processor Payout",     color: "bg-violet-500/80" },
-          refund:              { label: "Refund",               color: "bg-amber-500/80" },
-          tax:                 { label: "Tax",                  color: "bg-red-700/80" },
-          debt_payment:        { label: "Debt Payment",         color: "bg-indigo-500/80" },
-          interest:            { label: "Interest",             color: "bg-teal-500/80" },
-          adjustment:          { label: "Adjustment",           color: "bg-gray-600/80" },
-          unknown:             { label: "Unknown",              color: "bg-zinc-500/80" },
+          customer_receipt:      { label: "Customer Receipt",      color: "bg-emerald-500/80" },
+          vendor_payment:        { label: "Vendor Payment",        color: "bg-orange-500/80" },
+          payroll:               { label: "Payroll",                color: "bg-orange-700/80" },
+          bank_fee:              { label: "Bank Fee",               color: "bg-red-500/80" },
+          bank_fee_refund:       { label: "Bank Fee Refund",       color: "bg-red-400/70" },
+          transfer:              { label: "Transfer",               color: "bg-slate-500/80" },
+          owner_contribution:    { label: "Owner Contribution",     color: "bg-rose-400/80" },
+          owner_draw:            { label: "Owner Draw",             color: "bg-rose-600/80" },
+          processor_fee:         { label: "Processor Fee",          color: "bg-violet-700/80" },
+          processor_payout:      { label: "Processor Payout",       color: "bg-violet-500/80" },
+          refund:                { label: "Refund",                 color: "bg-amber-500/80" },
+          tax:                   { label: "Tax",                    color: "bg-red-700/80" },
+          debt_payment:          { label: "Debt Payment",           color: "bg-indigo-500/80" },
+          interest:              { label: "Interest",               color: "bg-teal-500/80" },
+          opening_balance:       { label: "Opening Balance",        color: "bg-gray-600/80" },
+          account_verification:  { label: "Account Verification",   color: "bg-gray-500/80" },
+          system_adjustment:     { label: "System Adjustment",      color: "bg-gray-500/70" },
+          unknown:               { label: "Unknown",                color: "bg-zinc-500/80" },
         }
 
         const BUCKET_LABELS: Record<string, { label: string; color: string }> = {
@@ -2476,6 +2479,20 @@ export function OnboardingFlow({
                         <div className="text-[10px] text-gray-500 mt-0.5">Operating Exposure</div>
                       </div>
                     </div>
+                    <div className="grid grid-cols-3 gap-3 mt-3">
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className={`text-lg font-bold ${tagData.unresolved_impact.unresolved_pct_of_inflows > 5 ? "text-red-400" : "text-gray-300"}`}>{tagData.unresolved_impact.unresolved_pct_of_inflows}%</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">% of All Inflows</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className={`text-lg font-bold ${tagData.unresolved_impact.unresolved_pct_of_operating_inflows > 5 ? "text-red-400" : "text-gray-300"}`}>{tagData.unresolved_impact.unresolved_pct_of_operating_inflows}%</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">% of Operating Inflows</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className={`text-lg font-bold ${tagData.unresolved_impact.unresolved_pct_of_last_30d > 5 ? "text-red-400" : "text-gray-300"}`}>{tagData.unresolved_impact.unresolved_pct_of_last_30d}%</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">% of Last 30d Cash</div>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -2510,33 +2527,61 @@ export function OnboardingFlow({
                 )}
 
                 {/* Working Capital Signals */}
-                {tagData?.working_capital && (
-                  <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4">
-                    <h3 className="text-sm font-semibold text-blue-300 mb-3 uppercase tracking-wider">Working Capital Signals</h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-violet-400">{tagData.working_capital.avg_settlement_lag_days !== null ? `${tagData.working_capital.avg_settlement_lag_days}d` : "—"}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Settlement Lag</div>
+                {tagData?.working_capital && (() => {
+                  const wc = tagData.working_capital
+                  const confMeta: Record<string, { label: string; color: string }> = {
+                    high: { label: "High confidence", color: "text-emerald-400" },
+                    medium: { label: "Medium confidence", color: "text-amber-400" },
+                    low: { label: "Low confidence — treat as directional", color: "text-red-400" },
+                    insufficient_data: { label: "Insufficient data", color: "text-gray-500" },
+                  }
+                  const conf = confMeta[wc.confidence] ?? confMeta.insufficient_data
+                  const suppress = wc.confidence === "insufficient_data"
+                  const fmtDays = (v: number | null) => {
+                    if (v === null || suppress) return "—"
+                    return `~${Math.round(v)}d`
+                  }
+                  const fmtPct = (v: number) => {
+                    if (suppress) return "—"
+                    return `~${Math.round(v * 100)}%`
+                  }
+                  return (
+                    <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-blue-300 uppercase tracking-wider">Working Capital Signals</h3>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] font-medium ${conf.color}`}>{conf.label}</span>
+                          <span className="text-[10px] text-gray-600 border border-gray-700 rounded px-1.5 py-0.5">BETA</span>
+                        </div>
                       </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-emerald-400">{tagData.working_capital.avg_inflow_cadence_days !== null ? `${tagData.working_capital.avg_inflow_cadence_days}d` : "—"}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Inflow Cadence</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-violet-400"}`}>{fmtDays(wc.avg_settlement_lag_days)}</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">Settlement Lag</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-emerald-400"}`}>{fmtDays(wc.avg_inflow_cadence_days)}</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">Inflow Cadence</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-red-400"}`}>{fmtDays(wc.avg_outflow_cadence_days)}</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">Outflow Cadence</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-emerald-400"}`}>{fmtPct(wc.inflow_regularity)}</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">Inflow Regularity</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-red-400"}`}>{fmtPct(wc.outflow_regularity)}</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">Outflow Regularity</div>
+                        </div>
                       </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-red-400">{tagData.working_capital.avg_outflow_cadence_days !== null ? `${tagData.working_capital.avg_outflow_cadence_days}d` : "—"}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Outflow Cadence</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-emerald-400">{(tagData.working_capital.inflow_regularity * 100).toFixed(0)}%</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Inflow Regularity</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-red-400">{(tagData.working_capital.outflow_regularity * 100).toFixed(0)}%</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Outflow Regularity</div>
+                      <div className="mt-2 text-[10px] text-gray-600">
+                        {wc.data_span_days}d data span · {wc.sample_sizes.revenue_inflows} revenue inflows · {wc.sample_sizes.spend_outflows} spend outflows · {wc.sample_sizes.settlements} settlements
                       </div>
                     </div>
-                  </div>
-                )}
+                  )
+                })()}
 
                 {/* Structural flags summary */}
                 <div className="bg-white/5 border border-white/10 rounded-xl p-4">

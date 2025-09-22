@@ -134,16 +134,30 @@ export function computeStatePolicy(
   return "include_provisional"
 }
 
-// ─── Phase 1: Structural Tagging Layer ──────────────────────────────
+// ─── FROZEN: Structural Tagging Schema ──────────────────────────────
 //
 // Tags convert classified movements into state-readable business semantics.
 // The state engine reads tags, never raw bank text.
+//
+// SCHEMA FREEZE: The following types are LOCKED. Do not add/remove/rename
+// values without a migration plan. Downstream state engines, transition
+// detectors, and AI context builders depend on these exact values.
+//
+//   - EconomicClass (18 values)
+//   - CashflowBucket (9 values)
+//   - CounterpartyRole (10 values)
+//   - StateInclusionPolicy (3 values)
+//   - StateScope (5 boolean fields)
+//   - MovementTag (full shape)
+//   - Structural flags: is_operating, is_financing, is_investing,
+//     is_owner_related, hits_pnl, hits_working_capital
 
 export type EconomicClass =
   | "customer_receipt"
   | "vendor_payment"
   | "payroll"
   | "bank_fee"
+  | "bank_fee_refund"
   | "transfer"
   | "owner_contribution"
   | "owner_draw"
@@ -153,7 +167,9 @@ export type EconomicClass =
   | "tax"
   | "debt_payment"
   | "interest"
-  | "adjustment"
+  | "opening_balance"
+  | "account_verification"
+  | "system_adjustment"
   | "unknown"
 
 export type CashflowBucket =
@@ -189,6 +205,8 @@ export type StateScope = {
   affects_revenue: boolean
   affects_spend: boolean
   affects_liquidity: boolean
+  affects_operating_performance: boolean
+  affects_revenue_quality: boolean
 }
 
 export function computeStateScope(
@@ -200,11 +218,15 @@ export function computeStateScope(
   const isSpend = cashflowBucket === "opex_out" || cashflowBucket === "cogs_out"
   const isSettlement = cashflowBucket === "settlement"
   const isTransfer = cashflowBucket === "transfer"
+  const isFinancing = cashflowBucket === "financing_in" || cashflowBucket === "financing_out"
+  const isUnknown = economicClass === "unknown"
 
   return {
-    affects_revenue: isRevenue && economicClass !== "unknown",
-    affects_spend: isSpend && economicClass !== "unknown",
-    affects_liquidity: !isTransfer && economicClass !== "unknown",
+    affects_revenue: isRevenue && !isUnknown,
+    affects_spend: isSpend && !isUnknown,
+    affects_liquidity: !isTransfer && !isUnknown,
+    affects_operating_performance: !isSettlement && !isTransfer && !isFinancing && !isUnknown,
+    affects_revenue_quality: isRevenue && !isSettlement && !isUnknown,
   }
 }
 
@@ -215,6 +237,9 @@ export type UnresolvedImpact = {
   unresolved_outflow_total: number
   unresolved_count: number
   unresolved_operating_exposure: number
+  unresolved_pct_of_inflows: number
+  unresolved_pct_of_operating_inflows: number
+  unresolved_pct_of_last_30d: number
 }
 
 // ─── Derived Business Metrics ───────────────────────────────────────
@@ -229,12 +254,17 @@ export type OwnerDependency = {
   draw_count: number
 }
 
+export type SignalConfidence = "high" | "medium" | "low" | "insufficient_data"
+
 export type WorkingCapitalSignals = {
   avg_settlement_lag_days: number | null
   avg_inflow_cadence_days: number | null
   avg_outflow_cadence_days: number | null
   inflow_regularity: number
   outflow_regularity: number
+  confidence: SignalConfidence
+  sample_sizes: { settlements: number; revenue_inflows: number; spend_outflows: number }
+  data_span_days: number
 }
 
 export type MovementTag = {
