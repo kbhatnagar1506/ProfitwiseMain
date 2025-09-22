@@ -10,8 +10,8 @@ export async function POST() {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   try {
-    const { tags, stats } = await tagMovements(user.id)
-    return NextResponse.json({ tagged: tags.length, stats })
+    const { tags, stats, unresolved_impact, owner_dependency, working_capital } = await tagMovements(user.id)
+    return NextResponse.json({ tagged: tags.length, stats, unresolved_impact, owner_dependency, working_capital })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return NextResponse.json({ error: msg }, { status: 500 })

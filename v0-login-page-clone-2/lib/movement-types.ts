@@ -158,6 +158,7 @@ export type EconomicClass =
 
 export type CashflowBucket =
   | "revenue_in"
+  | "contra_revenue"
   | "cogs_out"
   | "opex_out"
   | "financing_in"
@@ -178,6 +179,64 @@ export type CounterpartyRole =
   | "marketplace"
   | "unknown"
 
+// ─── State Scope: per-metric inclusion gate ─────────────────────────
+//
+// Settlement affects liquidity but NOT revenue or spend.
+// Transfer affects nothing. Financing affects liquidity only.
+// This prevents cross-contamination between metric domains.
+
+export type StateScope = {
+  affects_revenue: boolean
+  affects_spend: boolean
+  affects_liquidity: boolean
+}
+
+export function computeStateScope(
+  economicClass: EconomicClass,
+  cashflowBucket: CashflowBucket,
+  hitsWorkingCapital: boolean,
+): StateScope {
+  const isRevenue = cashflowBucket === "revenue_in" || cashflowBucket === "contra_revenue"
+  const isSpend = cashflowBucket === "opex_out" || cashflowBucket === "cogs_out"
+  const isSettlement = cashflowBucket === "settlement"
+  const isTransfer = cashflowBucket === "transfer"
+
+  return {
+    affects_revenue: isRevenue && economicClass !== "unknown",
+    affects_spend: isSpend && economicClass !== "unknown",
+    affects_liquidity: !isTransfer && economicClass !== "unknown",
+  }
+}
+
+// ─── Unresolved Impact: unknown movements are risk, not neutral ─────
+
+export type UnresolvedImpact = {
+  unresolved_inflow_total: number
+  unresolved_outflow_total: number
+  unresolved_count: number
+  unresolved_operating_exposure: number
+}
+
+// ─── Derived Business Metrics ───────────────────────────────────────
+
+export type OwnerDependency = {
+  owner_inflow_total: number
+  total_inflow: number
+  owner_dependency_ratio: number
+  owner_draw_total: number
+  net_owner_flow: number
+  contribution_count: number
+  draw_count: number
+}
+
+export type WorkingCapitalSignals = {
+  avg_settlement_lag_days: number | null
+  avg_inflow_cadence_days: number | null
+  avg_outflow_cadence_days: number | null
+  inflow_regularity: number
+  outflow_regularity: number
+}
+
 export type MovementTag = {
   movement_id: string
 
@@ -192,6 +251,7 @@ export type MovementTag = {
   hits_pnl: boolean
   hits_working_capital: boolean
 
+  state_scope: StateScope
   state_inclusion_policy: StateInclusionPolicy
   classification_confidence: number
   evidence_strength: number

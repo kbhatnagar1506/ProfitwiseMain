@@ -104,11 +104,6 @@ const steps = [
     title: "Business semantics",
     description: "Every movement tagged with economic class, cashflow bucket, counterparty role, and structural flags.",
   },
-  {
-    id: 12,
-    title: "Business state",
-    description: "Revenue, spend, and liquidity state computed from tagged movements.",
-  },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -215,16 +210,15 @@ export function OnboardingFlow({
   const [movementsLoading, setMovementsLoading] = useState(false)
   const [movementsClassifying, setMovementsClassifying] = useState(false)
   const [movementsError, setMovementsError] = useState<string | null>(null)
-  type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; state_inclusion_policy?: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
+  type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; state_scope?: { affects_revenue: boolean; affects_spend: boolean; affects_liquidity: boolean }; state_inclusion_policy?: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
   type TagStats = { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number; policy_include: number; policy_provisional: number; policy_exclude: number }
-  const [tagData, setTagData] = useState<{ movements: TaggedMovement[]; stats: TagStats } | null>(null)
+  type UnresolvedImpact = { unresolved_inflow_total: number; unresolved_outflow_total: number; unresolved_count: number; unresolved_operating_exposure: number }
+  type OwnerDependency = { owner_inflow_total: number; total_inflow: number; owner_dependency_ratio: number; owner_draw_total: number; net_owner_flow: number; contribution_count: number; draw_count: number }
+  type WorkingCapitalSignals = { avg_settlement_lag_days: number | null; avg_inflow_cadence_days: number | null; avg_outflow_cadence_days: number | null; inflow_regularity: number; outflow_regularity: number }
+  const [tagData, setTagData] = useState<{ movements: TaggedMovement[]; stats: TagStats; unresolved_impact?: UnresolvedImpact; owner_dependency?: OwnerDependency; working_capital?: WorkingCapitalSignals } | null>(null)
   const [tagLoading, setTagLoading] = useState(false)
   const [tagRunning, setTagRunning] = useState(false)
   const [tagError, setTagError] = useState<string | null>(null)
-  type StateData = { revenue: Record<string, number>; spend: Record<string, number>; liquidity: Record<string, unknown> }
-  const [stateData, setStateData] = useState<StateData | null>(null)
-  const [stateLoading, setStateLoading] = useState(false)
-  const [stateError, setStateError] = useState<string | null>(null)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -667,15 +661,14 @@ export function OnboardingFlow({
     setTagRunning(true)
     fetch("/api/movements/tag", { method: "POST" })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then((result: { tagged: number; stats: TagStats }) => {
+      .then((result: { tagged: number; stats: TagStats; unresolved_impact?: UnresolvedImpact; owner_dependency?: OwnerDependency; working_capital?: WorkingCapitalSignals }) => {
         if (cancelled) return
         setTagRunning(false)
-        // Now load movements (they'll include tags)
         return fetch("/api/movements")
           .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
           .then((data: { movements: TaggedMovement[]; summary: unknown }) => {
             if (cancelled) return
-            setTagData({ movements: data.movements, stats: result.stats })
+            setTagData({ movements: data.movements, stats: result.stats, unresolved_impact: result.unresolved_impact, owner_dependency: result.owner_dependency, working_capital: result.working_capital })
             setTagLoading(false)
           })
       })
@@ -686,27 +679,6 @@ export function OnboardingFlow({
         setTagRunning(false)
       })
 
-    return () => { cancelled = true }
-  }, [currentStep])
-
-  // Step 12: Business state (revenue, spend, liquidity)
-  useEffect(() => {
-    if (currentStep !== 12) return
-    let cancelled = false
-    setStateLoading(true)
-    setStateError(null)
-    fetch("/api/state")
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then((data: StateData) => {
-        if (cancelled) return
-        setStateData(data)
-        setStateLoading(false)
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setStateError(err instanceof Error ? err.message : "Failed to load state")
-        setStateLoading(false)
-      })
     return () => { cancelled = true }
   }, [currentStep])
 
@@ -2366,14 +2338,15 @@ export function OnboardingFlow({
         }
 
         const BUCKET_LABELS: Record<string, { label: string; color: string }> = {
-          revenue_in:    { label: "Revenue In",     color: "text-emerald-400" },
-          cogs_out:      { label: "COGS Out",       color: "text-orange-400" },
-          opex_out:      { label: "OpEx Out",       color: "text-amber-400" },
-          financing_in:  { label: "Financing In",   color: "text-blue-400" },
-          financing_out: { label: "Financing Out",  color: "text-indigo-400" },
-          transfer:      { label: "Transfer",       color: "text-slate-400" },
-          settlement:    { label: "Settlement",     color: "text-violet-400" },
-          unknown:       { label: "Unknown",        color: "text-zinc-400" },
+          revenue_in:      { label: "Revenue In",      color: "text-emerald-400" },
+          contra_revenue:  { label: "Contra Revenue",  color: "text-amber-400" },
+          cogs_out:        { label: "COGS Out",        color: "text-orange-400" },
+          opex_out:        { label: "OpEx Out",        color: "text-amber-400" },
+          financing_in:    { label: "Financing In",    color: "text-blue-400" },
+          financing_out:   { label: "Financing Out",   color: "text-indigo-400" },
+          transfer:        { label: "Transfer",        color: "text-slate-400" },
+          settlement:      { label: "Settlement",      color: "text-violet-400" },
+          unknown:         { label: "Unknown",         color: "text-zinc-400" },
         }
 
         const ROLE_LABELS: Record<string, string> = {
@@ -2476,6 +2449,90 @@ export function OnboardingFlow({
                       <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
                         <div className="text-2xl font-bold text-amber-400">{stats.recurring}</div>
                         <div className="text-xs text-gray-400 mt-1">Recurring</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Unresolved Impact (Risk) */}
+                {tagData?.unresolved_impact && tagData.unresolved_impact.unresolved_count > 0 && (
+                  <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-red-300 mb-3 uppercase tracking-wider">Unresolved Impact (Risk)</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-red-400">{tagData.unresolved_impact.unresolved_count}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Unresolved</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-emerald-400">${tagData.unresolved_impact.unresolved_inflow_total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Unresolved Inflow</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-red-400">${tagData.unresolved_impact.unresolved_outflow_total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Unresolved Outflow</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-amber-400">${tagData.unresolved_impact.unresolved_operating_exposure.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Operating Exposure</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Owner Dependency */}
+                {tagData?.owner_dependency && tagData.owner_dependency.contribution_count > 0 && (
+                  <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-rose-300 mb-3 uppercase tracking-wider">Owner Dependency</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-rose-400">{(tagData.owner_dependency.owner_dependency_ratio * 100).toFixed(1)}%</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Owner Dependency</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-emerald-400">${tagData.owner_dependency.owner_inflow_total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Owner In ({tagData.owner_dependency.contribution_count}x)</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-red-400">${tagData.owner_dependency.owner_draw_total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Owner Out ({tagData.owner_dependency.draw_count}x)</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-white">${tagData.owner_dependency.net_owner_flow.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Net Owner Flow</div>
+                      </div>
+                    </div>
+                    {tagData.owner_dependency.owner_dependency_ratio > 0.25 && (
+                      <div className="mt-3 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 text-xs text-amber-300">
+                        High owner dependency: {(tagData.owner_dependency.owner_dependency_ratio * 100).toFixed(0)}% of inflows come from the owner. Business may be dependent on personal funding.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Working Capital Signals */}
+                {tagData?.working_capital && (
+                  <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-blue-300 mb-3 uppercase tracking-wider">Working Capital Signals</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-violet-400">{tagData.working_capital.avg_settlement_lag_days !== null ? `${tagData.working_capital.avg_settlement_lag_days}d` : "—"}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Settlement Lag</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-emerald-400">{tagData.working_capital.avg_inflow_cadence_days !== null ? `${tagData.working_capital.avg_inflow_cadence_days}d` : "—"}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Inflow Cadence</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-red-400">{tagData.working_capital.avg_outflow_cadence_days !== null ? `${tagData.working_capital.avg_outflow_cadence_days}d` : "—"}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Outflow Cadence</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-emerald-400">{(tagData.working_capital.inflow_regularity * 100).toFixed(0)}%</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Inflow Regularity</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
+                        <div className="text-xl font-bold text-red-400">{(tagData.working_capital.outflow_regularity * 100).toFixed(0)}%</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Outflow Regularity</div>
                       </div>
                     </div>
                   </div>
@@ -2624,11 +2681,11 @@ export function OnboardingFlow({
                       setTagData(null)
                       fetch("/api/movements/tag", { method: "POST" })
                         .then((res) => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
-                        .then((result: { tagged: number; stats: TagStats }) => {
+                        .then((result: { tagged: number; stats: TagStats; unresolved_impact?: UnresolvedImpact; owner_dependency?: OwnerDependency; working_capital?: WorkingCapitalSignals }) => {
                           return fetch("/api/movements")
                             .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
                             .then((data: { movements: TaggedMovement[]; summary: unknown }) => {
-                              setTagData({ movements: data.movements, stats: result.stats })
+                              setTagData({ movements: data.movements, stats: result.stats, unresolved_impact: result.unresolved_impact, owner_dependency: result.owner_dependency, working_capital: result.working_capital })
                               setTagRunning(false)
                             })
                         })
@@ -2639,126 +2696,6 @@ export function OnboardingFlow({
                     <div className="text-sm font-medium text-white">{tagRunning ? "Tagging\u2026" : "Re-tag"}</div>
                     <div className="text-xs text-gray-400">Re-run tagging engine</div>
                   </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )
-      }
-
-      case 12: {
-        const rev = stateData?.revenue ?? {}
-        const spd = stateData?.spend ?? {}
-        const liq = stateData?.liquidity ?? {}
-
-        return (
-          <div className="space-y-6">
-            <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[11].description}</p>
-
-              {stateLoading && (
-                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
-                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Loading business state…
-                </div>
-              )}
-
-              {stateError && !stateLoading && (
-                <p className="text-red-300 text-sm mb-4">Failed: {stateError}</p>
-              )}
-
-              {!stateLoading && !stateData && !stateError && (
-                <p className="text-gray-400 text-sm mb-4">Run classification (step 10) and tagging (step 11) first.</p>
-              )}
-            </div>
-
-            {!stateLoading && (
-              <div className="space-y-6">
-                {/* Revenue state */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Revenue State</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-emerald-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-emerald-400">{formatBalance(rev.trailing_7d_in)}</div>
-                      <div className="text-[10px] text-gray-500">7d in</div>
-                    </div>
-                    <div className="bg-emerald-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-emerald-400">{formatBalance(rev.trailing_30d_in)}</div>
-                      <div className="text-[10px] text-gray-500">30d in</div>
-                    </div>
-                    <div className="bg-emerald-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-emerald-400">{formatBalance(rev.trailing_90d_in)}</div>
-                      <div className="text-[10px] text-gray-500">90d in</div>
-                    </div>
-                    <div className="bg-emerald-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-emerald-400">{formatBalance(rev.refund_adjusted_net_in)}</div>
-                      <div className="text-[10px] text-gray-500">Net (refund adj)</div>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                    <span className="text-gray-400">Top customer: {(Number(rev.top_customer_share) * 100).toFixed(1)}%</span>
-                    <span className="text-gray-400">Top 3: {(Number(rev.top_3_customer_share) * 100).toFixed(1)}%</span>
-                    <span className="text-gray-400">Repeat: {(Number(rev.repeat_customer_ratio) * 100).toFixed(1)}%</span>
-                    <span className="text-gray-400">Quality: {(Number(rev.revenue_quality_score) * 100).toFixed(0)}%</span>
-                    <span className="text-amber-400">Unresolved: {(Number(rev.unresolved_revenue_share) * 100).toFixed(1)}%</span>
-                  </div>
-                </div>
-
-                {/* Spend state */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Spend State</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-orange-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-orange-400">{formatBalance(spd.trailing_7d_out)}</div>
-                      <div className="text-[10px] text-gray-500">7d out</div>
-                    </div>
-                    <div className="bg-orange-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-orange-400">{formatBalance(spd.trailing_30d_out)}</div>
-                      <div className="text-[10px] text-gray-500">30d out</div>
-                    </div>
-                    <div className="bg-orange-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-orange-400">{formatBalance(spd.trailing_90d_out)}</div>
-                      <div className="text-[10px] text-gray-500">90d out</div>
-                    </div>
-                    <div className="bg-orange-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-orange-400">{formatBalance(spd.recurring_outflow_estimate)}</div>
-                      <div className="text-[10px] text-gray-500">Recurring est (yr)</div>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                    <span className="text-gray-400">Top vendor: {(Number(spd.top_vendor_share) * 100).toFixed(1)}%</span>
-                    <span className="text-gray-400">Fixed: {formatBalance(spd.fixed_cost_estimate)}</span>
-                    <span className="text-gray-400">Variable: {formatBalance(spd.variable_cost_estimate)}</span>
-                    <span className="text-amber-400">Unresolved: {(Number(spd.unresolved_spend_share) * 100).toFixed(1)}%</span>
-                  </div>
-                </div>
-
-                {/* Liquidity state */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Liquidity State</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-blue-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-blue-400">{formatBalance(liq.available_cash as number | null)}</div>
-                      <div className="text-[10px] text-gray-500">Available cash</div>
-                    </div>
-                    <div className="bg-blue-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-blue-400">{(liq.operating_buffer_days as number) ?? 0} days</div>
-                      <div className="text-[10px] text-gray-500">Runway</div>
-                    </div>
-                    <div className="bg-blue-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-blue-400">{(Number(liq.transfer_dependency_ratio) * 100).toFixed(1)}%</div>
-                      <div className="text-[10px] text-gray-500">Transfer dep</div>
-                    </div>
-                    <div className="bg-blue-500/10 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold text-blue-400">{(Number(liq.owner_dependency_ratio) * 100).toFixed(1)}%</div>
-                      <div className="text-[10px] text-gray-500">Owner dep</div>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                    <span className="text-gray-400">Safe floor: {formatBalance(liq.safe_cash_floor as number | null)}</span>
-                    <span className="text-amber-400">Unresolved impact: {(Number(liq.unresolved_cash_impact) * 100).toFixed(1)}%</span>
-                  </div>
                 </div>
               </div>
             )}
@@ -2782,7 +2719,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11
   return (
     <div
       className={
