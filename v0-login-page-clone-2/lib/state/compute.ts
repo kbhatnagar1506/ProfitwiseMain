@@ -11,9 +11,21 @@
 //   - Provisional movements are counted but tracked separately
 
 import type { MovementTag, CanonicalMovement } from "@/lib/movement-types"
-import type { RevenueState, SpendState, LiquidityState, TransitionSignal, SeverityBand, AccountCash, SpendBreakdownEntry, LiquidityRegime } from "./types"
+import type { RevenueState, SpendState, LiquidityState, TransitionSignal, SeverityBand, AccountCash, SpendBreakdownEntry, LiquidityRegime, SettlementLagSignal } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
+
+function parseDate(s: string): number {
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? 0 : d.getTime()
+}
+
+function daysBetween(a: string, b: string): number {
+  const ta = parseDate(a)
+  const tb = parseDate(b)
+  if (!ta || !tb) return 0
+  return Math.round((tb - ta) / (24 * 60 * 60 * 1000))
+}
 
 const SUPPLIER_PATTERNS = [
   /\b(wholesale|supply|inventory|material|shipping|freight|fulfillment|warehouse|merchandise|product\s*cost)\b/i,
@@ -229,6 +241,54 @@ export function computeSpendState(
   }
 }
 
+// ─── Settlement Lag (days between customer payment and settlement) ───
+
+function computeSettlementLag(movements: TaggedMovement[]): SettlementLagSignal {
+  const receiptDates: number[] = []
+  const settlementEntries: { date: string }[] = []
+
+  for (const m of movements) {
+    const t = m.tag
+    if (!t.state_scope.affects_revenue && !t.state_scope.affects_liquidity) continue
+    if (t.state_inclusion_policy === "exclude_and_review") continue
+
+    const d = m.occurred_at
+    if (!d) continue
+
+    if (t.cashflow_bucket === "revenue_in") {
+      const ts = parseDate(d)
+      if (ts) receiptDates.push(ts)
+    }
+    if (t.cashflow_bucket === "settlement" && m.direction === "inflow") {
+      settlementEntries.push({ date: d })
+    }
+  }
+
+  receiptDates.sort((a, b) => a - b)
+
+  const lags: number[] = []
+  for (const s of settlementEntries) {
+    const settleTs = parseDate(s.date)
+    if (!settleTs) continue
+    const priorReceipts = receiptDates.filter((r) => r < settleTs)
+    if (priorReceipts.length === 0) continue
+    const lastReceipt = priorReceipts[priorReceipts.length - 1]
+    const lag = Math.round((settleTs - lastReceipt) / (24 * 60 * 60 * 1000))
+    if (lag >= 0 && lag <= 365) lags.push(lag)
+  }
+
+  const n = lags.length
+  const avg = n > 0 ? lags.reduce((a, b) => a + b, 0) / n : 0
+  const confidence: SettlementLagSignal["confidence"] =
+    n >= 20 ? "high" : n >= 10 ? "medium" : n >= 3 ? "low" : "insufficient"
+
+  return {
+    avg_settlement_lag_days: Math.round(avg * 10) / 10,
+    sample_count: n,
+    confidence,
+  }
+}
+
 // ─── Liquidity State ────────────────────────────────────────────────
 
 export function computeLiquidityState(
@@ -307,6 +367,8 @@ export function computeLiquidityState(
   const opRatio = totalIn > 0 ? (opIn - opOut) / totalIn : 0
   const liquidityRegime: LiquidityRegime = opRatio > 0.4 ? "strong" : opRatio >= 0.2 ? "stable" : "tightening"
 
+  const settlementLag = computeSettlementLag(movements)
+
   return {
     period_start: periodStart,
     period_end: periodEnd,
@@ -322,6 +384,7 @@ export function computeLiquidityState(
     settlement_inflows: r2(settleIn),
     settlement_outflows: r2(settleOut),
     net_settlement: r2(settleIn - settleOut),
+    settlement_lag: settlementLag,
     owner_inflows: r2(ownerIn),
     owner_outflows: r2(ownerOut),
     net_owner: r2(ownerIn - ownerOut),
@@ -419,17 +482,39 @@ function bandDirection(current: SeverityBand, previous: SeverityBand | null): st
   return order.indexOf(current) > order.indexOf(previous) ? "worsened" : "improved"
 }
 
+export type TransitionContext = {
+  prior: { revenue_state: RevenueState; spend_state: SpendState; liquidity_state: LiquidityState } | null
+  rolling: { revenue_state: RevenueState; spend_state: SpendState; liquidity_state: LiquidityState }[]
+}
+
 // ─── Transition Detectors ───────────────────────────────────────────
 
 export function detectTransitions(
   revenue: RevenueState,
   spend: SpendState,
   liquidity: LiquidityState,
-  previousRevenue?: RevenueState | null,
-  previousSpend?: SpendState | null,
-  previousLiquidity?: LiquidityState | null,
+  ctx?: TransitionContext | null,
 ): TransitionSignal[] {
+  const prior = ctx?.prior ?? null
+  const rolling = ctx?.rolling ?? []
+  const previousRevenue = prior?.revenue_state ?? null
+  const previousSpend = prior?.spend_state ?? null
+  const previousLiquidity = prior?.liquidity_state ?? null
+
   const signals: TransitionSignal[] = []
+
+  // Rolling baseline for spend (mean of last N periods)
+  const rollingSpendMean =
+    rolling.length > 0
+      ? rolling.reduce((s, r) => s + r.spend_state.total_spend, 0) / rolling.length
+      : null
+  const rollingSpendStd =
+    rolling.length >= 3 && rollingSpendMean !== null
+      ? Math.sqrt(
+          rolling.reduce((s, r) => s + Math.pow(r.spend_state.total_spend - rollingSpendMean, 2), 0) / rolling.length
+        )
+      : null
+  const spendBaseline = rollingSpendMean ?? previousSpend?.total_spend ?? spend.total_spend
 
   // 1. Revenue concentration
   const concCurrent = concentrationBand(revenue.top_customer_pct)
@@ -453,29 +538,39 @@ export function detectTransitions(
     triggered: concTransitioned || concCurrent === "high" || concCurrent === "critical",
   })
 
-  // 2. Abnormal outflow spike
-  const prevSpend = previousSpend?.total_spend ?? spend.total_spend
-  const spendRatio = prevSpend > 0 ? spend.total_spend / prevSpend : 1
+  // 2. Abnormal outflow spike (uses rolling baseline when available)
+  const spendRatio = spendBaseline > 0 ? spend.total_spend / spendBaseline : 1
   const spikeCurrent = spendSpikeBand(spendRatio)
-  const spikePrev: SeverityBand = "low"
+  const prevSpendRatio = previousSpend && spendBaseline > 0 ? previousSpend.total_spend / spendBaseline : 1
+  const spikePrev = previousSpend ? spendSpikeBand(prevSpendRatio) : null
   const spikeTransitioned = previousSpend && bandTransitioned(spikeCurrent, spikePrev)
+  const outsideVarianceBand =
+    rollingSpendStd !== null && rollingSpendMean !== null && rollingSpendMean > 0
+      ? Math.abs(spend.total_spend - rollingSpendMean) > 2 * rollingSpendStd
+      : false
   signals.push({
     signal: "abnormal_outflow_spike",
-    severity: spikeCurrent === "critical" || spikeCurrent === "high" ? "critical" : spikeCurrent === "elevated" ? "warning" : "info",
+    severity:
+      outsideVarianceBand ? "warning"
+      : spikeCurrent === "critical" || spikeCurrent === "high" ? "critical"
+      : spikeCurrent === "elevated" ? "warning"
+      : "info",
     description: spikeTransitioned
-      ? `Spend moved from stable → ${spikeCurrent} (${Math.round(spendRatio * 100)}% of prior)`
-      : spikeCurrent !== "low"
-        ? `Spend spike ${spikeCurrent} — ${Math.round(spendRatio * 100)}% of prior period`
-        : `Spend is stable at ${Math.round(spendRatio * 100)}% of prior period`,
+      ? `Spend moved from ${spikePrev ?? "stable"} → ${spikeCurrent} (${Math.round(spendRatio * 100)}% of ${rolling.length > 0 ? "rolling avg" : "prior"})`
+      : outsideVarianceBand
+        ? `Spend outside normal range (${Math.round(spendRatio * 100)}% of rolling avg, 2σ band)`
+        : spikeCurrent !== "low"
+          ? `Spend spike ${spikeCurrent} — ${Math.round(spendRatio * 100)}% of baseline`
+          : `Spend is stable at ${Math.round(spendRatio * 100)}% of baseline`,
     current_band: spikeCurrent,
-    previous_band: previousSpend ? spikePrev : null,
+    previous_band: spikePrev,
     current_state: spikeCurrent,
-    previous_state: previousSpend ? spikePrev : null,
-    regime_change: !!spikeTransitioned,
+    previous_state: spikePrev,
+    regime_change: !!spikeTransitioned || !!outsideVarianceBand,
     current_value: Math.round(spendRatio * 100),
-    previous_value: 100,
+    previous_value: previousSpend ? Math.round(prevSpendRatio * 100) : 100,
     threshold: 150,
-    triggered: spikeCurrent !== "low",
+    triggered: spikeCurrent !== "low" || !!outsideVarianceBand,
   })
 
   // 3. Owner support dependency
@@ -524,7 +619,30 @@ export function detectTransitions(
     triggered: regimeChanged || liquidity.liquidity_regime === "tightening",
   })
 
-  // 5. Settlement drag
+  // 5. Settlement lag change (time dimension)
+  const lagNow = liquidity.settlement_lag?.avg_settlement_lag_days ?? 0
+  const lagPrev = (previousLiquidity as LiquidityState & { settlement_lag?: { avg_settlement_lag_days: number } })?.settlement_lag?.avg_settlement_lag_days ?? null
+  const lagIncreased = lagPrev !== null && lagNow > lagPrev * 1.2
+  if (liquidity.settlement_lag?.confidence !== "insufficient" && lagNow > 0) {
+    signals.push({
+      signal: "settlement_lag",
+      severity: lagIncreased ? "warning" : "info",
+      description: lagIncreased && lagPrev !== null
+        ? `Settlement lag increased: ${lagPrev.toFixed(1)}d → ${lagNow.toFixed(1)}d (customer payment to bank)`
+        : `Avg settlement lag: ${lagNow.toFixed(1)} days (customer payment → bank)`,
+      current_band: lagNow > 14 ? "elevated" : lagNow > 7 ? "moderate" : "low",
+      previous_band: lagPrev !== null ? (lagPrev > 14 ? "elevated" : lagPrev > 7 ? "moderate" : "low") : null,
+      current_state: `${lagNow.toFixed(1)}d`,
+      previous_state: lagPrev !== null ? `${lagPrev.toFixed(1)}d` : null,
+      regime_change: !!lagIncreased,
+      current_value: Math.round(lagNow * 10) / 10,
+      previous_value: lagPrev,
+      threshold: 7,
+      triggered: !!lagIncreased,
+    })
+  }
+
+  // 6. Settlement drag (volume %)
   const settlePct = liquidity.total_inflows > 0
     ? (liquidity.settlement_inflows / liquidity.total_inflows) * 100 : 0
   const settleCurrent = settlementBand(settlePct)
@@ -550,7 +668,7 @@ export function detectTransitions(
     triggered: settleTransitioned,
   })
 
-  // 6. Operating dependency (killer metric)
+  // 7. Operating dependency (killer metric)
   const opDepPct = liquidity.operating_dependency_ratio * 100
   const opBand = opDepPct >= 80 ? "low" : opDepPct >= 60 ? "moderate" : opDepPct >= 40 ? "elevated" : "high"
   const prevOpPct = previousLiquidity ? previousLiquidity.operating_dependency_ratio * 100 : null
@@ -605,6 +723,10 @@ export function computeInsightBlock(
 
   if (revenue.repeat_revenue_ratio >= 0.5) {
     parts.push(`${Math.round(revenue.repeat_revenue_ratio * 100)}% of revenue is repeat.`)
+  }
+
+  if (liquidity.settlement_lag?.confidence !== "insufficient" && liquidity.settlement_lag.avg_settlement_lag_days > 0) {
+    parts.push(`Settlement lag averages ${liquidity.settlement_lag.avg_settlement_lag_days.toFixed(1)} days from customer payment to bank.`)
   }
 
   return parts.join(" ")

@@ -71,6 +71,12 @@ export type AccountCash = {
 
 export type LiquidityRegime = "strong" | "stable" | "tightening"
 
+export type SettlementLagSignal = {
+  avg_settlement_lag_days: number
+  sample_count: number
+  confidence: "high" | "medium" | "low" | "insufficient"
+}
+
 export type LiquidityState = {
   period_start: string
   period_end: string
@@ -90,6 +96,7 @@ export type LiquidityState = {
   settlement_inflows: number
   settlement_outflows: number
   net_settlement: number
+  settlement_lag: SettlementLagSignal
 
   owner_inflows: number
   owner_outflows: number
