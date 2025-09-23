@@ -141,10 +141,29 @@ export type Insight = {
   metric: number
 }
 
+export type RiskLevel = "low" | "medium" | "high"
+
+export type RiskDimension = {
+  level: RiskLevel
+  score: number
+  reason: string
+}
+
+export type RiskState = {
+  liquidity_risk: RiskDimension
+  concentration_risk: RiskDimension
+  dependency_risk: RiskDimension
+  anomaly_risk: RiskDimension
+  uncertainty_risk: RiskDimension
+  overall: RiskLevel
+  overall_score: number
+}
+
 export type BusinessState = {
   revenue: RevenueState
   spend: SpendState
   liquidity: LiquidityState
+  risk: RiskState
   transitions: TransitionSignal[]
   insights: Insight[]
   state_confidence: StateConfidence
