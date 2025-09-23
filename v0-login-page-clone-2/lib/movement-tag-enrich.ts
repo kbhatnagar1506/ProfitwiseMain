@@ -135,7 +135,7 @@ const CLASS_TO_BASE: Record<string, BaseTag> = {
     hits_pnl: false, hits_working_capital: false,
   },
   processor_fee: {
-    economic_class: "processor_fee", cashflow_bucket: "settlement", counterparty_role: "processor",
+    economic_class: "processor_fee", cashflow_bucket: "opex_out", counterparty_role: "processor",
     is_operating: true, is_financing: false, is_investing: false, is_owner_related: false,
     hits_pnl: true, hits_working_capital: false,
   },

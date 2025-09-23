@@ -6,7 +6,7 @@
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
-import { computeRevenueState, computeSpendState, computeLiquidityState, detectTransitions } from "./compute"
+import { computeRevenueState, computeSpendState, computeLiquidityState, detectTransitions, computeStateConfidence } from "./compute"
 import type { BusinessState } from "./types"
 
 type TagRow = {
@@ -23,7 +23,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
   await ensureMovementsSchema()
 
   type PlaidAcct = { account_id: string; name: string; type: string; subtype: string }
-  const acctLookup = new Map<string, PlaidAcct>()
+  const acctByName = new Map<string, PlaidAcct>()
   try {
     const acctRows = await query<PlaidAcct>(
       `SELECT pa.account_id, pa.name, pa.type, pa.subtype
@@ -32,7 +32,10 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
        WHERE pi.user_id = $1`,
       [userId]
     ).then((r) => r.rows)
-    for (const a of acctRows) acctLookup.set(a.account_id, a)
+    for (const a of acctRows) {
+      if (a.name) acctByName.set(a.name, a)
+      acctByName.set(a.account_id, a)
+    }
   } catch { /* plaid_accounts may not exist yet */ }
 
   const movementRows = await query<CanonicalMovement & { movement_type: string }>(
@@ -47,7 +50,9 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
   ).then((r) => r.rows.map((row) => {
     const conf = (row.confidence as unknown as Record<string, number>) ?? {}
     const md = (row.metadata ?? {}) as Record<string, unknown>
-    const acctInfo = acctLookup.get(row.account_id ?? "")
+    // cash_account_id in DB stores the account NAME (set during classification)
+    const acctName = row.account_id ?? null
+    const acctInfo = acctByName.get(acctName ?? "")
     return {
       ...row,
       amount: typeof row.amount === "string" ? parseFloat(row.amount) : row.amount,
@@ -59,8 +64,8 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
       review_reasons: (Array.isArray(md.review_reasons) ? md.review_reasons : []) as ReviewReason[],
       metadata: {
         ...md,
-        cash_account_name: acctInfo?.name ?? row.account_id,
-        account_type: acctInfo?.type ?? md.account_type ?? "unknown",
+        cash_account_name: acctName,
+        account_type: acctInfo?.type ?? md.account_type ?? "",
         account_subtype: acctInfo?.subtype ?? md.account_subtype ?? null,
       },
     } as CanonicalMovement
@@ -128,12 +133,14 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
   const spend = computeSpendState(tagged, periodStart, periodEnd)
   const liquidity = computeLiquidityState(tagged, periodStart, periodEnd)
   const transitions = detectTransitions(revenue, spend, liquidity)
+  const state_confidence = computeStateConfidence(tagged)
 
   return {
     revenue,
     spend,
     liquidity,
     transitions,
+    state_confidence,
     computed_at: new Date().toISOString(),
   }
 }
