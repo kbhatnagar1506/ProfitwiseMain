@@ -27,28 +27,24 @@ function extractPlainBody(payload: GmailPayload | undefined): string {
   if (payload.body?.data) return decodeBase64Url(payload.body.data)
   if (!payload.parts || payload.parts.length === 0) return ""
 
-  // 2. Look for text/plain in any level
-  const queue: GmailPayload[] = [...payload.parts]
-  while (queue.length) {
-    const part = queue.shift()!
-    if (part.body?.data && (part as any).mimeType === "text/plain") {
-      return decodeBase64Url(part.body.data)
+  let textPlain = ""
+  let html = ""
+  const walk = (parts: GmailPayload[]) => {
+    for (const part of parts) {
+      if (part.body?.data && (part as { mimeType?: string }).mimeType === "text/plain") {
+        textPlain = decodeBase64Url(part.body.data)
+      }
+      if (part.body?.data && (part as { mimeType?: string }).mimeType === "text/html") {
+        html = decodeBase64Url(part.body.data)
+      }
+      if (part.parts?.length) walk(part.parts)
     }
-    if (part.parts && part.parts.length) queue.push(...part.parts)
   }
+  walk(payload.parts)
 
-  // 3. Fallback: first text/html we can find, convert to clean plain text
-  const htmlQueue: GmailPayload[] = [...payload.parts]
-  while (htmlQueue.length) {
-    const part = htmlQueue.shift()!
-    if (part.body?.data && (part as any).mimeType === "text/html") {
-      const html = decodeBase64Url(part.body.data)
-      return htmlToText(html, { wordwrap: false }).trim()
-    }
-    if (part.parts && part.parts.length) htmlQueue.push(...part.parts)
-  }
-
-  return ""
+  if (textPlain && textPlain.trim().length >= 80) return textPlain
+  if (html) return htmlToText(html, { wordwrap: false }).trim()
+  return textPlain || ""
 }
 
 interface GmailPayload {
