@@ -8,6 +8,7 @@ import type { RevenueState, SpendState, LiquidityState } from "./types"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
 import { computeRevenueState, computeSpendState, computeLiquidityState, detectTransitions, computeStateConfidence, computeInsightBlock } from "./compute"
+import { computeInsights } from "./insight-engine"
 import type { BusinessState } from "./types"
 
 type TagRow = {
@@ -206,6 +207,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
     rolling: rollingSnapshots,
   })
   const state_confidence = computeStateConfidence(tagged)
+  const insights = computeInsights(revenue, spend, liquidity)
   const insight_block = computeInsightBlock(revenue, spend, liquidity)
 
   try {
@@ -219,6 +221,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
     spend,
     liquidity,
     transitions,
+    insights,
     state_confidence,
     insight_block,
     computed_at: new Date().toISOString(),

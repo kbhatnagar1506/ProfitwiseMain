@@ -133,11 +133,20 @@ export type TransitionSignal = {
   triggered: boolean
 }
 
+export type Insight = {
+  id: string
+  type: "revenue" | "spend" | "liquidity" | "risk"
+  severity: "low" | "medium" | "high"
+  message: string
+  metric: number
+}
+
 export type BusinessState = {
   revenue: RevenueState
   spend: SpendState
   liquidity: LiquidityState
   transitions: TransitionSignal[]
+  insights: Insight[]
   state_confidence: StateConfidence
   insight_block: string
   computed_at: string

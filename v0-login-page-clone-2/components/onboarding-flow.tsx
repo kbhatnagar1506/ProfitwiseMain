@@ -233,7 +233,8 @@ export function OnboardingFlow({
   type StateConfidence = { revenue_confidence: number; spend_confidence: number; liquidity_confidence: number }
   type SettlementLagSignal = { avg_settlement_lag_days: number; sample_count: number; confidence: string }
   type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; period_net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; settlement_lag?: SettlementLagSignal; owner_inflows: number; owner_outflows: number; net_owner: number; cash_by_account: AccountCash[]; transfer_dependency_ratio: number; owner_support_ratio: number; operating_dependency_ratio: number; liquidity_regime: "strong" | "stable" | "tightening"; excluded_cash: number }
-  type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; transitions: TransitionSignal[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
+  type Insight = { id: string; type: "revenue" | "spend" | "liquidity" | "risk"; severity: "low" | "medium" | "high"; message: string; metric: number }
+  type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
@@ -2829,6 +2830,21 @@ export function OnboardingFlow({
                   <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
                     <div className="text-xs uppercase tracking-wider text-emerald-400/80 mb-2">Summary</div>
                     <p className="text-sm text-gray-200 leading-relaxed">{stateData.insight_block}</p>
+                  </div>
+                )}
+
+                {/* ─── Insights ─── */}
+                {stateData.insights.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Insights</div>
+                    <div className="space-y-2">
+                      {stateData.insights.map((ins) => (
+                        <div key={ins.id} className="flex items-start gap-2.5">
+                          <span className={`mt-0.5 shrink-0 w-2 h-2 rounded-full ${ins.severity === "high" ? "bg-red-400" : ins.severity === "medium" ? "bg-amber-400" : "bg-blue-400"}`} />
+                          <span className="text-sm text-gray-200">{ins.message}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
