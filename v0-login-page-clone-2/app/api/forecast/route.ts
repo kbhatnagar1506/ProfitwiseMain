@@ -219,12 +219,13 @@ export async function GET() {
       }
     } catch { /* QBO invoices may not be available */ }
 
-    // Xero Invoices
+    // Xero Invoices (xero_entities links via tenant_id → xero_connections)
     try {
       type XeroInvRow = { entity_id: string; data: Record<string, unknown> }
       const xeroRows = await query<XeroInvRow>(
         `SELECT e.entity_id, e.data FROM xero_entities e
-         WHERE e.user_id = $1 AND e.entity_type = 'Invoice'`,
+         JOIN xero_connections xc ON xc.tenant_id = e.tenant_id
+         WHERE xc.user_id = $1 AND e.entity_type = 'Invoice'`,
         [user.id]
       ).then((r) => r.rows)
 
@@ -325,6 +326,8 @@ export async function GET() {
     return NextResponse.json(forecast)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    const stack = e instanceof Error ? e.stack : undefined
+    console.error("❌ [Forecast] forecast.compute.failed", { error: msg, stack })
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }
