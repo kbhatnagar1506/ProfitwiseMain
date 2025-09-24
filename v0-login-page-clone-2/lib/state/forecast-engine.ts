@@ -17,6 +17,7 @@ import type { CanonicalMovement, MovementTag } from "@/lib/movement-types"
 import type {
   CashflowComponent,
   ComponentBehavior,
+  ComponentConfidence,
   CustomerModel,
   VendorModel,
   SettlementModel,
@@ -89,6 +90,29 @@ function toDateStr(d: unknown): string {
   return new Date().toISOString().slice(0, 10)
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function displayName(raw: string): string {
+  if (!raw || raw === "unknown") return "Unknown"
+  if (UUID_RE.test(raw)) return "Unnamed entity"
+  // Clean up common messy patterns
+  let name = raw
+    .replace(/^PREAUTHORIZED ACH CREDIT\s*/i, "")
+    .replace(/^ACH CREDIT\s*/i, "")
+    .replace(/^ACH DEBIT\s*/i, "")
+    .replace(/^WIRE (CREDIT|DEBIT)\s*/i, "")
+    .replace(/\s+ST-[A-Z0-9]+$/i, "")
+    .replace(/\s+\d{6,}$/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+  if (!name || UUID_RE.test(name)) return "Unnamed entity"
+  // Title case if all-caps
+  if (name === name.toUpperCase() && name.length > 3) {
+    name = name.split(/[\s/]+/).map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" ")
+  }
+  return name.slice(0, 40)
+}
+
 // ─── Step 1: Decompose (same as v1) ────────────────────────────────
 
 function categorize(m: TaggedMovement): { category: ComponentCategory; direction: "in" | "out"; label: string } | null {
@@ -131,9 +155,11 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
   for (const m of movements) {
     if (m.tag.economic_class !== "customer_receipt") continue
     if (m.tag.state_inclusion_policy === "exclude_and_review") continue
+    if (m.tag.counterparty_role === "owner") continue
 
     const key = m.entity_id ?? m.raw_description ?? "unknown"
-    const name = (m.metadata?.counterparty as string) ?? key
+    const rawName = (m.metadata?.counterparty as string) ?? key
+    const name = displayName(rawName)
     let entry = byEntity.get(key)
     if (!entry) { entry = { name, payments: [] }; byEntity.set(key, entry) }
     entry.payments.push({ amount: m.amount, date: toDateStr(m.occurred_at) })
@@ -304,7 +330,8 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
     if (m.tag.state_inclusion_policy === "exclude_and_review") continue
 
     const key = m.entity_id ?? m.raw_description ?? "unknown"
-    const name = (m.metadata?.counterparty as string) ?? key
+    const rawName = (m.metadata?.counterparty as string) ?? key
+    const name = displayName(rawName)
     let entry = byEntity.get(key)
     if (!entry) { entry = { name, payments: [] }; byEntity.set(key, entry) }
     entry.payments.push({ amount: m.amount, date: toDateStr(m.occurred_at), recurring: m.tag.is_recurring ?? false })
@@ -485,7 +512,7 @@ function buildRecurringFixed(movements: TaggedMovement[]): BehavioralModels["rec
     if (!isOutflow(m)) continue
     if (m.tag.state_inclusion_policy === "exclude_and_review") continue
 
-    const label = (m.metadata?.counterparty as string) ?? m.raw_description ?? "unknown"
+    const label = displayName((m.metadata?.counterparty as string) ?? m.raw_description ?? "unknown")
     let g = groups.get(label)
     if (!g) { g = { amounts: [], dates: [] }; groups.set(label, g) }
     g.amounts.push(m.amount)
@@ -618,8 +645,10 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
     })
   }
 
-  // Recurring fixed obligation events (monthly)
+  // Recurring fixed obligation events (monthly) — skip if already covered by vendor model
+  const vendorNames = new Set(models.vendors.map((v) => v.name.toLowerCase()))
   for (const rf of models.recurring_fixed) {
+    if (vendorNames.has(rf.label.toLowerCase())) continue
     generateRepeating(rf.last_date, 30, 2, (date, offset) => {
       events.push({
         date, day_offset: offset, type: "recurring_expense",
@@ -1423,6 +1452,57 @@ function computeForecastConfidence(
   const label: ForecastConfidence["label"] = score >= 0.7 ? "high" : score >= 0.45 ? "medium" : "low"
   if (reasons.length === 0) reasons.push("Forecast is based on sufficient data and stable models")
 
+  // Per-component confidence
+  const by_component: ComponentConfidence[] = []
+
+  // Customer forecast confidence
+  const custHigh = models.customers.filter((c) => c.confidence === "high").length
+  const custMed = models.customers.filter((c) => c.confidence === "medium").length
+  const custTotal = models.customers.length
+  const custScore = custTotal > 0 ? (custHigh * 1 + custMed * 0.6) / custTotal : 0
+  const custLabel: ComponentConfidence["label"] = custScore >= 0.7 ? "high" : custScore >= 0.4 ? "medium" : "low"
+  by_component.push({
+    area: "Customer forecasts",
+    score: r2(custScore),
+    label: custLabel,
+    reason: custTotal === 0 ? "No customer models" : `${custHigh} high / ${custMed} medium / ${custTotal - custHigh - custMed} low confidence models`,
+  })
+
+  // Vendor forecast confidence
+  const vendHigh = models.vendors.filter((v) => v.confidence === "high").length
+  const vendMed = models.vendors.filter((v) => v.confidence === "medium").length
+  const vendTotal = models.vendors.length
+  const vendScore = vendTotal > 0 ? (vendHigh * 1 + vendMed * 0.6) / vendTotal : 0
+  const vendLabel: ComponentConfidence["label"] = vendScore >= 0.7 ? "high" : vendScore >= 0.4 ? "medium" : "low"
+  by_component.push({
+    area: "Vendor forecasts",
+    score: r2(vendScore),
+    label: vendLabel,
+    reason: vendTotal === 0 ? "No vendor models" : `${vendHigh} high / ${vendMed} medium / ${vendTotal - vendHigh - vendMed} low confidence models`,
+  })
+
+  // Settlement confidence
+  const settConf = models.settlement.confidence
+  const settScore = settConf === "high" ? 0.9 : settConf === "medium" ? 0.65 : settConf === "low" ? 0.35 : 0.1
+  by_component.push({
+    area: "Settlement timing",
+    score: r2(settScore),
+    label: settConf === "high" ? "high" : settConf === "medium" ? "medium" : "low",
+    reason: models.settlement.sample_count === 0
+      ? "No settlement data — processor payouts not modeled"
+      : `${models.settlement.sample_count} samples, avg ${models.settlement.avg_delay_days.toFixed(1)}d cadence`,
+  })
+
+  // Intervention confidence (derived from model coverage)
+  const intervScore = Math.min(1, (custScore * 0.5 + vendScore * 0.3 + dataCompleteness * 0.2))
+  const intervLabel: ComponentConfidence["label"] = intervScore >= 0.6 ? "high" : intervScore >= 0.35 ? "medium" : "low"
+  by_component.push({
+    area: "Intervention estimates",
+    score: r2(intervScore),
+    label: intervLabel,
+    reason: intervScore < 0.35 ? "Weak underlying models reduce intervention accuracy" : "Based on entity-level behavioral models",
+  })
+
   return {
     score: r2(score),
     label,
@@ -1430,6 +1510,7 @@ function computeForecastConfidence(
     data_completeness: r2(dataCompleteness),
     variance_penalty: r2(variancePenalty),
     reasons,
+    by_component,
   }
 }
 
