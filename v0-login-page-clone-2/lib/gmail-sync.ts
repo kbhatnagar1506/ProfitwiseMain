@@ -23,18 +23,24 @@ function getHeader(headers: Array<{ name: string; value: string }> | undefined, 
 
 function extractPlainBody(payload: GmailPayload | undefined): string {
   if (!payload) return ""
-  // 1. Direct body
-  if (payload.body?.data) return decodeBase64Url(payload.body.data)
+
+  // Direct body — check mimeType before returning
+  if (payload.body?.data && !payload.parts?.length) {
+    const raw = decodeBase64Url(payload.body.data)
+    if (payload.mimeType === "text/html") return htmlToText(raw, { wordwrap: false }).trim()
+    return raw
+  }
+
   if (!payload.parts || payload.parts.length === 0) return ""
 
   let textPlain = ""
   let html = ""
   const walk = (parts: GmailPayload[]) => {
     for (const part of parts) {
-      if (part.body?.data && (part as { mimeType?: string }).mimeType === "text/plain") {
+      if (part.body?.data && part.mimeType === "text/plain") {
         textPlain = decodeBase64Url(part.body.data)
       }
-      if (part.body?.data && (part as { mimeType?: string }).mimeType === "text/html") {
+      if (part.body?.data && part.mimeType === "text/html") {
         html = decodeBase64Url(part.body.data)
       }
       if (part.parts?.length) walk(part.parts)
@@ -48,6 +54,7 @@ function extractPlainBody(payload: GmailPayload | undefined): string {
 }
 
 interface GmailPayload {
+  mimeType?: string
   headers?: Array<{ name: string; value: string }>
   body?: { data?: string }
   parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: GmailPayload[] }>

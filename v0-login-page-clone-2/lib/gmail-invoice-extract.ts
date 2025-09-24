@@ -144,6 +144,18 @@ export async function extractInvoiceFromGmail(
     side: parsed.side,
   }, "gmail")
 
+  const totalVal = typeof parsed.total === "number" ? parsed.total : null
+  const statusVal = typeof parsed.status === "string" ? parsed.status : "unknown"
+  if ((totalVal === null || totalVal === 0) && (statusVal === "unknown" || !statusVal)) {
+    log("gmail.invoice_extract.low_confidence_skip", {
+      messageId: msg.message_id,
+      total: totalVal,
+      status: statusVal,
+      invoice_number: parsed.invoice_number,
+    }, "gmail")
+    return null
+  }
+
   const side = (parsed.side === "AP" || parsed.side === "AR" ? parsed.side : "unknown") as "AP" | "AR" | "unknown"
   const kind = (["invoice", "bill", "other"].includes(parsed.kind as string) ? parsed.kind : "other") as "invoice" | "bill" | "other"
   const status = (["open", "paid", "partially_paid", "void", "cancelled", "draft", "unknown"].includes(parsed.status as string)
