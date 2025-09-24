@@ -6,6 +6,7 @@ import { ensureGmailSchema, query } from "./db"
 import { upsertApArFromInvoice } from "./ap-ar"
 import { extractInvoiceFromGmail, type GmailMessageRow } from "./gmail-invoice-extract"
 import { log } from "./logger"
+import { gcpReadGmailInvoiceSenders } from "./entity-store-gcp"
 
 async function getInboxUserId(): Promise<string | null> {
   const envUserId = process.env.GMAIL_INBOX_USER_ID
@@ -38,6 +39,8 @@ export async function runGmailInvoicePipeline(options: { limit?: number } = {}):
     return { processed: 0, extracted: 0, errors: 0 }
   }
 
+  const invoiceSenderHints = await gcpReadGmailInvoiceSenders(userId).catch(() => [] as string[])
+
   const { rows } = await query<{
     message_id: string
     thread_id: string | null
@@ -66,7 +69,7 @@ export async function runGmailInvoicePipeline(options: { limit?: number } = {}):
       body_plain: r.body_plain,
     }
     try {
-      const normalized = await extractInvoiceFromGmail(msg, userId)
+      const normalized = await extractInvoiceFromGmail(msg, userId, invoiceSenderHints)
       if (normalized) {
         await upsertApArFromInvoice(normalized, "gmail", r.message_id, { subject: r.subject, from: r.from_email, to: r.to_emails })
         extracted++

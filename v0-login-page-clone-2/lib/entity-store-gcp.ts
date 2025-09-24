@@ -288,23 +288,3 @@ export async function gcpWriteGmailInvoiceSenders(userId: string, emails: string
   })
   log("entity_store_gcp.gmail_senders.saved", { userId, count: emails.length }, "gcp")
 }
-
-const EMAIL_INBOUND_PREFIX = "email/inbound"
-
-/**
- * Store a raw inbound email payload in GCP for later processing.
- * Uses a simple key under email/inbound/{key}.json.
- */
-export async function gcpSaveInboundEmail(key: string, payload: unknown): Promise<void> {
-  const client = getStorage()
-  if (!client) return
-  const bucket = client.bucket(BUCKET_NAME)
-  const safeKey = key.replace(/[^a-zA-Z0-9/_-]/g, "_")
-  const path = `${EMAIL_INBOUND_PREFIX}/${safeKey}.json`
-  const file = bucket.file(path)
-  await file.save(JSON.stringify(payload ?? {}), {
-    contentType: "application/json",
-    metadata: { cacheControl: "private, max-age=0" },
-  })
-  log("entity_store_gcp.email_inbound.saved", { path }, "gcp")
-}

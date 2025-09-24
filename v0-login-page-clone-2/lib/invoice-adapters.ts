@@ -203,3 +203,145 @@ export function normalizeQboInvoice(
     },
   }
 }
+
+export function normalizeXeroInvoice(
+  item: Record<string, unknown>,
+  userId: string,
+  tenantId?: string
+): NormalizedInvoiceJSON {
+  const id = item.InvoiceID != null ? String(item.InvoiceID) : item.Id != null ? String(item.Id) : ""
+  const number = item.InvoiceNumber != null ? String(item.InvoiceNumber) : ""
+  const issueDate = item.Date != null ? String(item.Date) : null
+  const dueDate = item.DueDate != null ? String(item.DueDate) : null
+
+  const total =
+    typeof item.Total === "number"
+      ? item.Total
+      : item.Total != null
+        ? Number(item.Total)
+        : null
+  const amountPaid =
+    typeof item.AmountPaid === "number"
+      ? item.AmountPaid
+      : item.AmountPaid != null
+        ? Number(item.AmountPaid)
+        : null
+  const amountDue =
+    typeof item.AmountDue === "number"
+      ? item.AmountDue
+      : item.AmountDue != null
+        ? Number(item.AmountDue)
+        : total
+
+  const currency =
+    item.CurrencyCode != null ? String(item.CurrencyCode).toUpperCase() : "USD"
+  const status = mapStatusToNormalized(item.Status as string | undefined)
+
+  const contact = item.Contact as { Name?: string; EmailAddress?: string } | undefined
+  const contactName = contact?.Name != null ? String(contact.Name) : null
+  const contactEmail = contact?.EmailAddress != null ? String(contact.EmailAddress) : null
+
+  const type = item.Type != null ? String(item.Type).toUpperCase() : "ACCREC"
+  const side: NormalizedInvoiceJSON["side"] =
+    type === "ACCPAY" ? "AP" : "AR"
+  const kind: NormalizedInvoiceJSON["kind"] =
+    side === "AP" ? "bill" : "invoice"
+  const counterpartyType: NormalizedInvoiceJSON["counterparty_type"] =
+    side === "AP" ? "vendor" : "customer"
+
+  const lines: NormalizedInvoiceJSON["lines"] = []
+  const lineItems = item.LineItems as Array<Record<string, unknown>>
+  if (Array.isArray(lineItems) && lineItems.length > 0) {
+    for (const line of lineItems) {
+      const desc = (line.Description as string) ?? ""
+      const qty =
+        typeof line.Quantity === "number"
+          ? line.Quantity
+          : line.Quantity != null
+            ? Number(line.Quantity)
+            : 1
+      const lineAmount =
+        typeof line.LineAmount === "number"
+          ? line.LineAmount
+          : line.LineAmount != null
+            ? Number(line.LineAmount)
+            : null
+      const unitAmount =
+        typeof line.UnitAmount === "number"
+          ? line.UnitAmount
+          : line.UnitAmount != null
+            ? Number(line.UnitAmount)
+            : null
+      const amount =
+        lineAmount != null
+          ? lineAmount
+          : unitAmount != null
+            ? unitAmount * qty
+            : null
+      const sku = (line.ItemCode as string) ?? null
+      const accountCode = (line.AccountCode as string) ?? null
+
+      if (desc || amount != null) {
+        lines.push({
+          description: desc,
+          quantity: qty,
+          unit_price: unitAmount,
+          amount,
+          sku,
+          account_code: accountCode,
+        })
+      }
+    }
+  }
+
+  if (lines.length === 0 && total != null && total > 0) {
+    lines.push({
+      description: kind === "bill" ? "Bill" : "Invoice",
+      quantity: 1,
+      unit_price: total,
+      amount: total,
+      sku: null,
+      account_code: null,
+    })
+  }
+
+  const amountOutstanding =
+    amountDue != null
+      ? amountDue
+      : total != null && amountPaid != null
+        ? Math.max(0, total - amountPaid)
+        : total
+
+  return {
+    version: 1,
+    user_id: userId,
+    side,
+    kind,
+    invoice_number: number || null,
+    issue_date: issueDate,
+    due_date: dueDate,
+    currency,
+    total,
+    amount_outstanding: amountOutstanding,
+    status,
+    counterparty_type: counterpartyType,
+    counterparty_name: contactName,
+    counterparty_email: contactEmail,
+    lines,
+    meta: {
+      source_system: "xero" as InvoiceProvider,
+      source_system_hint: "other",
+      provider_invoice_id: id || null,
+      provider_data: { tenant_id: tenantId ?? (item.tenantId as string) ?? null },
+      gmail_message_id: null,
+      gmail_thread_id: null,
+      gmail_subject: null,
+      gmail_body_excerpt: null,
+      stripe_invoice_id: null,
+      stripe_customer_id: null,
+      qbo_invoice_id: null,
+      xero_invoice_id: id || null,
+      raw_payload: {},
+    },
+  }
+}

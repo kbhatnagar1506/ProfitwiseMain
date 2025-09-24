@@ -4,6 +4,8 @@
 
 import { ensureXeroSchema, query } from "./db"
 import { log } from "./logger"
+import { upsertApArFromInvoice } from "./ap-ar"
+import { normalizeXeroInvoice } from "./invoice-adapters"
 import {
   isGcpEntityStoreEnabled,
   gcpUpsertEntities,
@@ -65,6 +67,17 @@ export async function upsertEntities(
       totalInserted = Math.max(totalInserted, insertedGcp)
       if (entityType === "Invoice" && userId) {
         await upsertUnifiedInvoices(userId, "xero", tenantId, items)
+        for (const item of items) {
+          const obj = item as Record<string, unknown>
+          const id = obj.InvoiceID ?? obj.Id
+          if (!id) continue
+          try {
+            const normalized = normalizeXeroInvoice(obj, userId, tenantId)
+            await upsertApArFromInvoice(normalized, "xero", String(id), item)
+          } catch (e) {
+            log("xero.ap_ar.upsert.failed", { tenantId, entityId: String(id), error: e instanceof Error ? e.message : String(e) }, "xero")
+          }
+        }
       }
     } catch (err) {
       log("entity_store.upsert.failed", { tenantId, entityType, error: err instanceof Error ? err.message : String(err) }, "xero")
@@ -98,6 +111,17 @@ export async function upsertEntities(
         log("entity_store.upsert.succeeded", { tenantId, entityType, count: inserted }, "xero")
         if (entityType === "Invoice") {
           await upsertUnifiedInvoices(userId, "xero", tenantId, items)
+          for (const item of items) {
+            const obj = item as Record<string, unknown>
+            const id = obj.InvoiceID ?? obj.Id
+            if (!id) continue
+            try {
+              const normalized = normalizeXeroInvoice(obj, userId, tenantId)
+              await upsertApArFromInvoice(normalized, "xero", String(id), item)
+            } catch (e) {
+              log("xero.ap_ar.upsert.failed", { tenantId, entityId: String(id), error: e instanceof Error ? e.message : String(e) }, "xero")
+            }
+          }
         }
       }
       totalInserted = Math.max(totalInserted, inserted)
