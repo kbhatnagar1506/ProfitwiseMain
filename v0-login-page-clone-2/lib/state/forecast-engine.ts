@@ -70,6 +70,12 @@ function std(values: number[]): number {
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 
+function toDateStr(d: unknown): string {
+  if (d instanceof Date) return d.toISOString().slice(0, 10)
+  if (typeof d === "string") return d.slice(0, 10)
+  return new Date().toISOString().slice(0, 10)
+}
+
 // ─── Step 1: Decompose (same as v1) ────────────────────────────────
 
 function categorize(m: TaggedMovement): { category: ComponentCategory; direction: "in" | "out"; label: string } | null {
@@ -117,7 +123,7 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     const name = (m.metadata?.counterparty as string) ?? key
     let entry = byEntity.get(key)
     if (!entry) { entry = { name, payments: [] }; byEntity.set(key, entry) }
-    entry.payments.push({ amount: m.amount, date: m.occurred_at })
+    entry.payments.push({ amount: m.amount, date: toDateStr(m.occurred_at) })
   }
 
   const models: CustomerModel[] = []
@@ -288,7 +294,7 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
     const name = (m.metadata?.counterparty as string) ?? key
     let entry = byEntity.get(key)
     if (!entry) { entry = { name, payments: [] }; byEntity.set(key, entry) }
-    entry.payments.push({ amount: m.amount, date: m.occurred_at, recurring: m.tag.is_recurring ?? false })
+    entry.payments.push({ amount: m.amount, date: toDateStr(m.occurred_at), recurring: m.tag.is_recurring ?? false })
   }
 
   const models: VendorModel[] = []
@@ -400,7 +406,7 @@ function buildTransferModel(movements: TaggedMovement[]): TransferBehaviorModel 
   for (const m of movements) {
     if (m.tag.economic_class !== "transfer") continue
     if (m.tag.state_inclusion_policy === "exclude_and_review") continue
-    transfers.push({ amount: m.amount, date: m.occurred_at, account: m.account_id ?? null })
+    transfers.push({ amount: m.amount, date: toDateStr(m.occurred_at), account: m.account_id ?? null })
   }
 
   if (transfers.length === 0) {
@@ -470,7 +476,7 @@ function buildRecurringFixed(movements: TaggedMovement[]): BehavioralModels["rec
     let g = groups.get(label)
     if (!g) { g = { amounts: [], dates: [] }; groups.set(label, g) }
     g.amounts.push(m.amount)
-    g.dates.push(m.occurred_at)
+    g.dates.push(toDateStr(m.occurred_at))
   }
 
   const result: BehavioralModels["recurring_fixed"] = []
@@ -679,7 +685,7 @@ function decomposeMovements(movements: TaggedMovement[]): ComponentBucket[] {
     let bucket = buckets.get(key)
     if (!bucket) { bucket = { ...cat, movements: [] }; buckets.set(key, bucket) }
     bucket.movements.push({
-      amount: m.amount, date: m.occurred_at,
+      amount: m.amount, date: toDateStr(m.occurred_at),
       entity: m.entity_id ?? m.raw_description ?? "unknown",
       is_recurring: m.tag.is_recurring ?? false,
     })
@@ -1363,9 +1369,9 @@ export function computeCashflowForecast(
   horizonMonths: number = 6,
   invoices: OutstandingInvoice[] = [],
 ): CashflowForecast {
-  const dates = movements.map((m) => m.occurred_at).filter(Boolean).sort()
-  const periodStart = dates[0] ?? new Date().toISOString()
-  const periodEnd = dates[dates.length - 1] ?? new Date().toISOString()
+  const dates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
+  const periodStart = dates[0] ?? new Date().toISOString().slice(0, 10)
+  const periodEnd = dates[dates.length - 1] ?? new Date().toISOString().slice(0, 10)
   const dataSpanDays = daysBetween(periodStart, periodEnd)
 
   // Aggregate component models (for non-entity categories)
