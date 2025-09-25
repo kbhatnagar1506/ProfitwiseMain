@@ -609,6 +609,10 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
 
   for (const [, custInvs] of byCustomer) {
     const totalDue = custInvs.reduce((s, i) => s + i.amount_due, 0)
+    // Skip trivially small invoice-only customers (< $100 total due) to avoid
+    // creating dozens of noise low_data models that dilute confidence scoring
+    if (totalDue < 100) continue
+
     const earliest = custInvs.filter((i) => i.due_date).sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
     const overdueCount = custInvs.filter((i) => i.status === "overdue").length
 
@@ -674,14 +678,18 @@ function classifyRecurrence(
     }
   }
 
-  // Detect monthly/quarterly clusters (seasonal pattern)
-  if (n >= 4) {
-    const months = payments.map((p) => new Date(p.date).getMonth())
+  // Detect seasonal pattern: payments concentrate in specific months AND skip others.
+  // Requires enough data span to distinguish seasonal from sparse — need at least 6
+  // distinct calendar months of data to avoid false positives on short histories.
+  if (n >= 6) {
+    const allMonths = payments.map((p) => new Date(p.date).getMonth())
     const monthCounts = new Array(12).fill(0)
-    months.forEach((m) => monthCounts[m]++)
+    allMonths.forEach((m) => monthCounts[m]++)
     const activeMonths = monthCounts.filter((c) => c > 0).length
     const peakMonth = Math.max(...monthCounts)
-    if (activeMonths <= 6 && peakMonth >= 2 && n >= 4) {
+    const dataSpanMonths = new Set(payments.map((p) => p.date.slice(0, 7))).size
+    // Only flag seasonal if we have 6+ months of data AND payments skip at least 3 months
+    if (dataSpanMonths >= 6 && activeMonths <= dataSpanMonths - 3 && peakMonth >= 2) {
       return {
         recurrence_type: "seasonal",
         recurrence_confidence: r2(Math.min(0.85, 0.4 + n * 0.05)),
@@ -1258,9 +1266,12 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
 
     if (!v.is_recurring && v.payment_count < 3) continue
     const recConf = v.recurrence.recurrence_confidence
-    const prob = v.recurrence.recurrence_type === "hard" ? Math.min(0.95, 0.85 + recConf * 0.1)
-      : v.recurrence.recurrence_type === "soft" ? Math.min(0.85, 0.6 + recConf * 0.2)
-      : v.is_recurring ? 0.75 : 0.5
+    const recType = v.recurrence.recurrence_type
+    const prob = recType === "hard" ? Math.min(0.95, 0.85 + recConf * 0.1)
+      : recType === "soft" ? Math.min(0.85, 0.6 + recConf * 0.2)
+      : recType === "episodic" ? Math.min(0.6, 0.3 + recConf * 0.3)
+      : recType === "seasonal" ? Math.min(0.7, 0.4 + recConf * 0.2)
+      : v.is_recurring ? 0.65 : 0.4
 
     generateRepeating(v.last_payment_date, v.cadence_interval_days, 5, (date, offset) => {
       events.push({
@@ -1533,16 +1544,24 @@ function simulateMonthFromModels(
   let outflows = 0
   const componentAmounts: { component_id: string; amount: number }[] = []
 
-  // Customer receipts: simulate from entity models
+  // Customer receipts: simulate from entity models, weighted by probability and archetype
   let customerTotal = 0
   for (const c of models.customers) {
     if (!c.next_expected_date) continue
-    if (c.next_expected_date >= monthStart && c.next_expected_date < monthEnd) {
+    // For future months beyond the first, apply decay based on archetype
+    const isFirstMonth = c.next_expected_date >= monthStart && c.next_expected_date < monthEnd
+    if (isFirstMonth) {
       customerTotal += c.avg_amount * c.probability_of_next
     } else if (c.payment_interval_days > 0 && c.payment_interval_days <= 31) {
-      // High-frequency: might pay multiple times in the month
+      // Archetype-adjusted repeat probability for outer months
+      const archDecay = c.archetype === "clockwork" ? 0.9
+        : c.archetype === "slow_reliable" ? 0.8
+        : c.archetype === "bursty" ? 0.5
+        : c.archetype === "episodic" ? 0.3
+        : c.archetype === "volatile" ? 0.25
+        : 0.2
       const paymentsInMonth = 30 / c.payment_interval_days
-      customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth
+      customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth * archDecay
     }
   }
   if (customerTotal > 0) {
@@ -1551,19 +1570,25 @@ function simulateMonthFromModels(
     componentAmounts.push({ component_id: "customer_receipts_in", amount: r2(customerTotal) })
   }
 
-  // Vendor payments: simulate from entity models
+  // Vendor payments: simulate from entity models, weighted by recurrence confidence
   let vendorTotal = 0
   for (const v of models.vendors) {
+    const recConf = v.recurrence?.recurrence_confidence ?? 0.3
+    const recType = v.recurrence?.recurrence_type ?? "unknown"
+
     if (!v.next_expected_date) {
-      if (v.is_recurring && v.cadence_interval_days > 0 && v.cadence_interval_days <= 45) {
-        vendorTotal += v.avg_amount * (30 / v.cadence_interval_days)
+      // Only project vendors with at least soft recurrence and reasonable confidence
+      if (recType === "hard" || recType === "soft") {
+        if (v.cadence_interval_days > 0 && v.cadence_interval_days <= 45) {
+          vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * recConf
+        }
       }
       continue
     }
     if (v.next_expected_date >= monthStart && v.next_expected_date < monthEnd) {
-      vendorTotal += v.avg_amount
-    } else if (v.is_recurring && v.cadence_interval_days > 0 && v.cadence_interval_days <= 31) {
-      vendorTotal += v.avg_amount * (30 / v.cadence_interval_days)
+      vendorTotal += v.avg_amount * Math.max(0.5, recConf)
+    } else if ((recType === "hard" || recType === "soft") && v.cadence_interval_days > 0 && v.cadence_interval_days <= 31) {
+      vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * recConf
     }
   }
   if (vendorTotal > 0) {
@@ -2279,7 +2304,8 @@ function computeForecastConfidence(
   })
 
   // ── 8. Backtest confidence (weight: 0.10) ──
-  const backtestScore = backtest ? backtest.accuracy_score : 0
+  // accuracy_score is 0-100, normalize to 0-1 for the composite
+  const backtestScore = backtest ? Math.min(1, backtest.accuracy_score / 100) : 0
   by_component.push({
     area: "Backtest accuracy", score: r2(backtestScore),
     label: backtestScore >= 0.7 ? "high" : backtestScore >= 0.4 ? "medium" : "low",
@@ -2623,7 +2649,9 @@ function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cuto
     { range: "80-100%", lo: 0.8, hi: 1.01, predicted: 0, actual: 0, count: 0 },
   ]
 
-  // Build actual daily entity events for matching
+  // Build actual daily entity events for matching.
+  // Store both the resolved display name AND the entity ID so we can match
+  // forecast events (which use display names) against actual movements.
   const actualByDay = new Map<string, Set<string>>()
   for (const m of testSet) {
     const d = toDateStr(m.occurred_at)
@@ -2631,10 +2659,21 @@ function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cuto
     if (offset < 1 || offset > testDays) continue
     const key = `${offset}`
     if (!actualByDay.has(key)) actualByDay.set(key, new Set())
-    const entity = resolveEntityId(m).toLowerCase()
-    actualByDay.get(key)!.add(entity)
+    const daySet = actualByDay.get(key)!
+
+    const entityId = resolveEntityId(m)
+    daySet.add(entityId.toLowerCase().replace(/[^a-z0-9]/g, ""))
+
     const cp = observedCounterparty(m)
-    if (cp) actualByDay.get(key)!.add(cp.toLowerCase())
+    if (cp) daySet.add(cp.toLowerCase().replace(/[^a-z0-9]/g, ""))
+
+    // Also add the display name (what forecast events use)
+    const displayName = resolveEntityName(entityId, cp, m.raw_description, "unknown")
+    daySet.add(displayName.toLowerCase().replace(/[^a-z0-9]/g, ""))
+
+    // Add the economic class direction as a matchable key
+    const dir = isInflow(m) ? "in" : "out"
+    daySet.add(`${displayName.toLowerCase().replace(/[^a-z0-9]/g, "")}_${dir}`)
   }
 
   let totalEvents = 0
@@ -2649,13 +2688,21 @@ function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cuto
 
     // Check if an event with similar entity actually occurred within ±1 day
     const entityKey = e.entity.toLowerCase().replace(/[^a-z0-9]/g, "")
+    const dirKey = `${entityKey}_${e.direction}`
     let occurred = false
     for (let delta = -1; delta <= 1; delta++) {
       const checkDay = `${e.day_offset + delta}`
       const dayEntities = actualByDay.get(checkDay)
-      if (dayEntities) {
+      if (!dayEntities) continue
+      // Prefer direction-aware match, then name-only match
+      if (dayEntities.has(dirKey) || dayEntities.has(entityKey)) {
+        occurred = true
+        break
+      }
+      // Fuzzy: check if any actual entity contains the forecast entity name (3+ chars)
+      if (entityKey.length >= 3) {
         for (const ae of dayEntities) {
-          if (ae.includes(entityKey) || entityKey.includes(ae.replace(/[^a-z0-9]/g, ""))) {
+          if (ae.length >= 3 && (ae.includes(entityKey) || entityKey.includes(ae))) {
             occurred = true
             break
           }
@@ -2677,15 +2724,13 @@ function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cuto
       count: b.count,
     }))
 
-  // Expected Calibration Error (ECE)
+  // Expected Calibration Error (ECE): weighted average of |predicted - actual| per bucket
   let ece = 0
-  let totalWeight = 0
   for (const b of calibrationBuckets) {
     const weight = b.count / totalEvents
     ece += weight * Math.abs(b.predicted_prob - b.actual_rate)
-    totalWeight += weight
   }
-  const calibrationError = totalWeight > 0 ? r2(ece / totalWeight) : 0
+  const calibrationError = r2(ece)
 
   const avgPredicted = calibrationBuckets.reduce((s, b) => s + b.predicted_prob * b.count, 0) / totalEvents
   const avgActual = calibrationBuckets.reduce((s, b) => s + b.actual_rate * b.count, 0) / totalEvents
