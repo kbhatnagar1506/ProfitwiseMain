@@ -1,6 +1,7 @@
 /**
- * AP/AR: core truth for payables and receivables.
- * findApArMatch + upsertApArFromInvoice link invoice documents (Stripe, QBO, Gmail) to canonical AP/AR rows.
+ * AP/AR ledger: canonical accounting truth for payables and receivables (what we owe, what’s owed to us).
+ * Distinct from the document layer (bills, invoices, payments). Documents feed into this via the resolver.
+ * All providers use insertInvoiceDocument + resolveInvoiceCandidate; upsertApArFromInvoice is for backfill only.
  */
 
 import { ensureApArSchema, ensureInvoiceDocumentsSchema, query } from "./db"

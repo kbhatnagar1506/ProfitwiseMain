@@ -1,6 +1,8 @@
 /**
- * Invoice documents: per-provider invoice/bill documents that feed into AP/AR (ap_ar table).
- * Each document is a normalized view of a source invoice (Stripe, QBO, Gmail, etc.), plus the raw payload.
+ * Document layer: bills, invoices, and payments (source documents).
+ * These are NOT the accounting ledger. Each document is a normalized view of a source
+ * (Stripe, QBO, Xero, Gmail, etc.) and may later be linked to the AP/AR ledger (ap_ar)
+ * by the resolver. Documents → candidates → resolver → AP/AR ledger.
  */
 
 import crypto from "crypto"
@@ -13,7 +15,8 @@ export type NormalizedInvoiceJSON = {
   version: 1
   user_id: string
   side: "AP" | "AR" | "unknown"
-  kind: "invoice" | "bill" | "other"
+  /** invoice = AR doc (we sent); bill = AP doc (we receive); payment = payment applied; other = statement, receipt, etc. */
+  kind: "invoice" | "bill" | "payment" | "other"
   invoice_number: string | null
   issue_date: string | null
   due_date: string | null

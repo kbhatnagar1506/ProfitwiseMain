@@ -4,7 +4,6 @@
 
 import { ensureQBOSchema, query } from "./db"
 import { log } from "./logger"
-import { upsertApArFromInvoice } from "./ap-ar"
 import {
   isGcpEntityStoreEnabled,
   gcpUpsertEntities,
@@ -13,6 +12,8 @@ import {
 } from "./entity-store-gcp"
 import { normalizeQboInvoice } from "./invoice-adapters"
 import { upsertUnifiedInvoices, deleteUnifiedInvoice } from "./unified-invoices"
+import { insertInvoiceDocument } from "./invoice-documents"
+import { resolveInvoiceCandidate } from "./ap-ar-resolver"
 
 function getEntityId(item: unknown): string | null {
   if (item == null || typeof item !== "object") return null
@@ -73,7 +74,8 @@ export async function upsertEntities(
           if (id) {
             try {
               const normalized = normalizeQboInvoice(obj, userId, realmId)
-              await upsertApArFromInvoice(normalized, "qbo", id, item)
+              const versionId = await insertInvoiceDocument(normalized, "qbo", id, null, item)
+              if (versionId) await resolveInvoiceCandidate(versionId, { shadowMode: false })
             } catch (e) {
               log("qbo.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "qbo")
             }
@@ -115,7 +117,8 @@ export async function upsertEntities(
               if (id) {
                 try {
                   const normalized = normalizeQboInvoice(obj, userId, realmId)
-                  await upsertApArFromInvoice(normalized, "qbo", id, item)
+                  const versionId = await insertInvoiceDocument(normalized, "qbo", id, null, item)
+                  if (versionId) await resolveInvoiceCandidate(versionId, { shadowMode: false })
                 } catch (e) {
                   log("qbo.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "qbo")
                 }
@@ -151,7 +154,8 @@ export async function upsertEntities(
           if (id) {
             try {
               const normalized = normalizeQboInvoice(obj, userId, realmId)
-              await upsertApArFromInvoice(normalized, "qbo", id, item)
+              const versionId = await insertInvoiceDocument(normalized, "qbo", id, null, item)
+              if (versionId) await resolveInvoiceCandidate(versionId, { shadowMode: false })
             } catch (e) {
               log("qbo.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "qbo")
             }
