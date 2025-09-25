@@ -2304,8 +2304,8 @@ function computeForecastConfidence(
   })
 
   // ── 8. Backtest confidence (weight: 0.10) ──
-  // accuracy_score is 0-1 (normalized)
-  const backtestScore = backtest ? Math.min(1, Math.max(0, backtest.accuracy_score)) : 0
+  // accuracy_score is 0-100, normalize to 0-1 for the composite
+  const backtestScore = backtest ? Math.min(1, backtest.accuracy_score / 100) : 0
   by_component.push({
     area: "Backtest accuracy", score: r2(backtestScore),
     label: backtestScore >= 0.7 ? "high" : backtestScore >= 0.4 ? "medium" : "low",
@@ -2810,10 +2810,9 @@ function runBacktest(movements: TaggedMovement[], invoices: OutstandingInvoice[]
   const totalScale = Math.max(Math.abs(totalActual), 1)
   const relativeError = Math.abs(totalPredicted - totalActual) / totalScale
 
-  // Normalize to 0-1 so it composes cleanly with other confidence scores
-  const score01 = r2(
-    Math.max(0, Math.min(1,
-      (directionAccuracy * 0.6) + ((1 - Math.min(1, relativeError)) * 0.4)
+  const score = Math.round(
+    Math.max(0, Math.min(100,
+      (directionAccuracy * 60) + ((1 - Math.min(1, relativeError)) * 40)
     ))
   )
 
@@ -2821,8 +2820,8 @@ function runBacktest(movements: TaggedMovement[], invoices: OutstandingInvoice[]
   const calibration = runCalibration(events, testSet, cutoffDate, testDays)
 
   let details: string
-  if (score01 >= 0.75) details = `Strong backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
-  else if (score01 >= 0.5) details = `Moderate backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
+  if (score >= 75) details = `Strong backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
+  else if (score >= 50) details = `Moderate backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
   else details = `Weak backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)} — forecast may be unreliable`
 
   if (calibration) {
@@ -2830,7 +2829,7 @@ function runBacktest(movements: TaggedMovement[], invoices: OutstandingInvoice[]
   }
 
   return {
-    accuracy_score: score01,
+    accuracy_score: score,
     days_tested: activeDays,
     mean_absolute_error: r2(mae),
     direction_accuracy: r2(directionAccuracy),
