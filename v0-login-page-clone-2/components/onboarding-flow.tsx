@@ -257,11 +257,14 @@ export function OnboardingFlow({
   type CustomerModel = { entity_id: string; name: string; archetype: CustomerArchetype; features: CustomerFeatures; avg_amount: number; payment_interval_days: number; interval_variance: number; last_payment_date: string; payment_count: number; probability_of_next: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_invoices: OutstandingInvoice[]; invoice_forecasts: InvoiceForecast[] }
   type OutstandingBill = { bill_id: string; source: string; vendor_name: string; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: string }
   type RecurrenceModel = { recurrence_type: string; recurrence_confidence: number; expected_interval_days: number | null; interval_std_days: number | null; amount_mean: number | null; amount_std: number | null }
-  type VendorModel = { entity_id: string; name: string; avg_amount: number; cadence: string; cadence_interval_days: number; is_recurring: boolean; recurrence: RecurrenceModel; last_payment_date: string; payment_count: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_bills?: OutstandingBill[] }
+  type VendorCluster = "fixed_obligation" | "variable_recurring" | "project_based" | "one_off" | "bill_driven"
+  type VendorModel = { entity_id: string; name: string; avg_amount: number; cadence: string; cadence_interval_days: number; is_recurring: boolean; recurrence: RecurrenceModel; cluster?: VendorCluster; flexibility_score?: number; last_payment_date: string; payment_count: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_bills?: OutstandingBill[] }
+  type CalibrationAdjustment = { bucket_range: string; predicted_avg: number; actual_rate: number; adjustment_factor: number }
+  type CustomerCohort = { archetype: CustomerArchetype; member_count: number; total_revenue: number; avg_payment_count: number; avg_amount: number; avg_interval_days: number; avg_probability: number; cohort_confidence: "high" | "medium" | "low" }
   type ProcessorSettlementProfile = { processor: string; avg_delay_days: number; delay_std: number; sample_count: number; weekday_pattern: Record<number, number> | null; fee_rate: number | null }
   type SettlementModel = { avg_delay_days: number; delay_std: number; sample_count: number; confidence: string; by_processor?: ProcessorSettlementProfile[] }
   type TransferBehaviorModel = { avg_transfer_amount: number; transfer_count: number; trigger_pattern: string; avg_interval_days: number | null; primary_account: string | null; secondary_account: string | null; confidence: string }
-  type BehavioralModels = { customers: CustomerModel[]; vendors: VendorModel[]; settlement: SettlementModel; transfers: TransferBehaviorModel; recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]; invoice_signal: InvoiceSignal }
+  type BehavioralModels = { customers: CustomerModel[]; vendors: VendorModel[]; settlement: SettlementModel; transfers: TransferBehaviorModel; recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]; invoice_signal: InvoiceSignal; calibration_adjustments?: CalibrationAdjustment[]; customer_cohorts?: CustomerCohort[] }
   type ForecastMonth = { month: string; inflows: number; outflows: number; net: number; cumulative_net: number; components: { component_id: string; amount: number }[] }
   type ScenarioResult = { scenario: "base" | "optimistic" | "pessimistic"; label: string; months: ForecastMonth[]; runway_months: number | null; ending_cash: number }
   type EventReasoning = { basis: string; payment_history?: string; interval_info?: string; amount_range?: string; recurrence_info?: string; invoice_info?: string; risk_factors?: string[] }
@@ -3695,6 +3698,39 @@ export function OnboardingFlow({
                   )
                 })()}
 
+                {/* ─── Customer Cohorts ─── */}
+                {forecastData.behavioral_models.customer_cohorts && forecastData.behavioral_models.customer_cohorts.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-3">Customer Cohorts</h3>
+                    <p className="text-[11px] text-gray-500 mb-3">Individual customers clustered into behavioral archetypes for stronger signal</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      {forecastData.behavioral_models.customer_cohorts.map((co) => {
+                        const cohortColors: Record<string, string> = {
+                          clockwork: "border-emerald-500/30",
+                          bursty: "border-amber-500/30",
+                          episodic: "border-blue-500/30",
+                          slow_reliable: "border-purple-500/30",
+                          volatile: "border-red-500/30",
+                          low_data: "border-gray-500/30",
+                        }
+                        return (
+                          <div key={co.archetype} className={`bg-white/5 border ${cohortColors[co.archetype] ?? "border-gray-500/30"} rounded-lg p-3`}>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-semibold text-white">{co.archetype.replace("_", " ")}</span>
+                              <span className={`text-[9px] ${co.cohort_confidence === "high" ? "text-emerald-400" : co.cohort_confidence === "medium" ? "text-amber-400" : "text-gray-500"}`}>{co.cohort_confidence}</span>
+                            </div>
+                            <div className="text-[10px] text-gray-400 space-y-0.5">
+                              <div>{co.member_count} customers · {money(co.total_revenue)} total rev</div>
+                              <div>avg {money(co.avg_amount)} · {Math.round(co.avg_payment_count)} payments</div>
+                              <div>P(next) = {Math.round(co.avg_probability * 100)}%{co.avg_interval_days > 0 ? ` · ~${co.avg_interval_days}d` : ""}</div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {/* ─── Customer Models ─── */}
                 {forecastData.behavioral_models.customers.length > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-5">
@@ -3773,7 +3809,16 @@ export function OnboardingFlow({
                           invoice_triggered: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30",
                           unknown: "bg-gray-500/20 text-gray-300 border-gray-500/30",
                         }
+                        const clusterColors: Record<string, string> = {
+                          fixed_obligation: "bg-red-500/20 text-red-300 border-red-500/30",
+                          bill_driven: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+                          variable_recurring: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+                          project_based: "bg-purple-500/20 text-purple-300 border-purple-500/30",
+                          one_off: "bg-gray-500/20 text-gray-300 border-gray-500/30",
+                        }
                         const recType = v.recurrence?.recurrence_type ?? "unknown"
+                        const cluster = v.cluster ?? "project_based"
+                        const flex = v.flexibility_score ?? 0.5
                         return (
                         <div key={v.entity_id} className="bg-white/5 rounded-lg px-3 py-2.5">
                           <div className="flex items-center justify-between">
@@ -3781,7 +3826,7 @@ export function OnboardingFlow({
                               <span className={`shrink-0 w-2 h-2 rounded-full ${confDot(v.confidence)}`} />
                               <span className="text-sm text-white truncate">{v.name}</span>
                               <span className={`text-[9px] border rounded px-1.5 py-0.5 ${recColors[recType] ?? recColors.unknown}`}>{recType.replace("_", " ")}</span>
-                              {v.recurrence && <span className="text-[10px] text-gray-500">{Math.round(v.recurrence.recurrence_confidence * 100)}% rec.conf</span>}
+                              <span className={`text-[9px] border rounded px-1.5 py-0.5 ${clusterColors[cluster] ?? clusterColors.project_based}`}>{cluster.replace(/_/g, " ")}</span>
                               {v.outstanding_bills && v.outstanding_bills.length > 0 && (
                                 <span className="text-[10px] text-red-300 border border-red-500/30 rounded px-1 py-0.5">{v.outstanding_bills.length} bill{v.outstanding_bills.length > 1 ? "s" : ""} due</span>
                               )}
@@ -3793,6 +3838,8 @@ export function OnboardingFlow({
                           <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
                             <span>every ~{v.cadence_interval_days}d</span>
                             <span>{v.payment_count} payments</span>
+                            {v.recurrence && <span>{Math.round(v.recurrence.recurrence_confidence * 100)}% rec</span>}
+                            <span className={flex < 0.3 ? "text-red-400" : flex < 0.6 ? "text-amber-400" : "text-emerald-400"}>flex: {Math.round(flex * 100)}%</span>
                             {v.next_expected_date && <span className="text-blue-400">next ≈ {v.next_expected_date}</span>}
                             <span>last: {v.last_payment_date.slice(0, 10)}</span>
                             {v.outstanding_bills && v.outstanding_bills.length > 0 && (
@@ -4171,6 +4218,27 @@ export function OnboardingFlow({
                         <div className="flex gap-3 mt-1 text-[9px] text-gray-600">
                           <span><span className="inline-block w-2 h-2 bg-blue-500/40 rounded mr-1" />predicted</span>
                           <span><span className="inline-block w-2 h-2 bg-emerald-500/60 rounded mr-1" />actual</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Calibration Adjustments Applied */}
+                    {forecastData.behavioral_models.calibration_adjustments && forecastData.behavioral_models.calibration_adjustments.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-white/5">
+                        <span className="text-[11px] text-gray-400 font-semibold">Auto-Corrections Applied</span>
+                        <p className="text-[10px] text-gray-600 mt-0.5 mb-2">Event probabilities adjusted based on backtest accuracy</p>
+                        <div className="space-y-1">
+                          {forecastData.behavioral_models.calibration_adjustments.map((adj, i) => (
+                            <div key={i} className="flex items-center gap-2 text-[10px]">
+                              <span className="text-gray-500 w-14 shrink-0">{adj.bucket_range}</span>
+                              <span className="text-blue-400 w-10 text-right font-mono">{Math.round(adj.predicted_avg * 100)}%</span>
+                              <span className="text-gray-600">→</span>
+                              <span className="text-emerald-400 w-10 text-right font-mono">{Math.round(adj.actual_rate * 100)}%</span>
+                              <span className={`font-mono w-14 text-right ${adj.adjustment_factor < 0.9 ? "text-red-400" : adj.adjustment_factor > 1.1 ? "text-emerald-400" : "text-gray-400"}`}>
+                                ×{adj.adjustment_factor.toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
