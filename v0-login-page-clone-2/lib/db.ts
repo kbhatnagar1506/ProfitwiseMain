@@ -563,7 +563,7 @@ export async function ensureApArSchema(): Promise<void> {
   await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS match_confidence REAL")
   await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS canonical_confidence REAL")
   await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE")
-  await p.query(\"ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS resolution_status TEXT NOT NULL DEFAULT 'auto'\")
+  await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS resolution_status TEXT NOT NULL DEFAULT 'auto'")
   await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS winning_sources JSONB NOT NULL DEFAULT '{}'::jsonb")
   await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS source_authority_score REAL")
   await p.query("ALTER TABLE ap_ar ADD COLUMN IF NOT EXISTS counterparty_id UUID")
