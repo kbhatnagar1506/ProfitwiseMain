@@ -270,7 +270,13 @@ export type RecurrenceModel = {
   amount_std: number | null
 }
 
-export type VendorCluster = "fixed_obligation" | "variable_recurring" | "project_based" | "one_off" | "bill_driven"
+export type VendorObligationType =
+  | "hard_obligation"
+  | "soft_recurring"
+  | "invoice_linked"
+  | "inventory_purchase"
+  | "opportunistic"
+  | "unknown"
 
 export type VendorModel = {
   entity_id: string
@@ -280,7 +286,7 @@ export type VendorModel = {
   cadence_interval_days: number
   is_recurring: boolean
   recurrence: RecurrenceModel
-  cluster: VendorCluster
+  obligation: VendorObligationType
   flexibility_score: number
   last_payment_date: string
   payment_count: number
@@ -289,11 +295,23 @@ export type VendorModel = {
   outstanding_bills: OutstandingBill[]
 }
 
-export type CalibrationAdjustment = {
-  bucket_range: string
-  predicted_avg: number
-  actual_rate: number
-  adjustment_factor: number
+// ─── Calibration System ─────────────────────────────────────────────
+
+export type CalibrationFamily =
+  | "customer_payment" | "vendor_payment" | "recurring_expense"
+  | "settlement" | "transfer" | "other"
+
+export type CalibrationPoint = {
+  predicted: number
+  actual: number
+  count: number
+}
+
+export type CalibrationTable = {
+  family: CalibrationFamily
+  points: CalibrationPoint[]
+  ece: number
+  sample_count: number
 }
 
 export type CustomerCohort = {
@@ -341,7 +359,7 @@ export type BehavioralModels = {
   transfers: TransferBehaviorModel
   recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]
   invoice_signal: InvoiceSignal
-  calibration_adjustments: CalibrationAdjustment[]
+  calibration_tables: CalibrationTable[]
   customer_cohorts: CustomerCohort[]
 }
 
@@ -467,6 +485,7 @@ export type CalibrationResult = {
   is_overconfident: boolean
   is_underconfident: boolean
   details: string
+  by_family: CalibrationTable[]
 }
 
 // ─── Cash Runway ─────────────────────────────────────────────────────
@@ -569,6 +588,29 @@ export type BacktestResult = {
   calibration: CalibrationResult | null
 }
 
+// ─── Forecast Audit Layer ────────────────────────────────────────────
+
+export type ContributionBucket = {
+  label: string
+  amount: number
+  direction: "in" | "out"
+  confidence_tier: "high" | "medium" | "low"
+  pct_of_total: number
+}
+
+export type ForecastAudit = {
+  high_confidence_floor_14d: number
+  high_confidence_floor_30d: number
+  expected_case_14d: number
+  expected_case_30d: number
+  low_confidence_upside_14d: number
+  low_confidence_upside_30d: number
+  contribution_waterfall: ContributionBucket[]
+  confidence_mix: { high_pct: number; medium_pct: number; low_pct: number }
+  explainability_ratio: number
+  top_assumptions: string[]
+}
+
 export type CashflowForecast = {
   period_start: string
   forecast_horizon_months: number
@@ -587,6 +629,7 @@ export type CashflowForecast = {
   interventions: Intervention[]
   context: ForecastContext
   backtest: BacktestResult | null
+  audit: ForecastAudit
 }
 
 export type BusinessState = {
