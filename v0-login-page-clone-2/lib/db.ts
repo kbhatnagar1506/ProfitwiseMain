@@ -571,7 +571,6 @@ export async function ensureApArSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_ap_ar_user_side ON ap_ar (user_id, side)")
   await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_ap_ar_unique_invnum ON ap_ar (user_id, side, invoice_number) WHERE invoice_number IS NOT NULL")
   await p.query(COUNTERPARTIES_SQL)
-  await p.query(AP_AR_MATCH_CANDIDATES_SQL)
   apArSchemaEnsured = true
   log("db.ap_ar.schema.ensured", undefined, "db")
 }
@@ -591,6 +590,9 @@ export async function ensureInvoiceDocumentsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_doc_versions_fingerprint_invoice ON invoice_document_versions (fingerprint_invoice)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_doc_versions_fingerprint_binary ON invoice_document_versions (fingerprint_binary)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_invoice_documents_ap_ar_id ON invoice_documents (ap_ar_id) WHERE ap_ar_id IS NOT NULL")
+  await p.query(AP_AR_MATCH_CANDIDATES_SQL)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_match_candidates_doc ON ap_ar_match_candidates (invoice_document_version_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_match_candidates_ap_ar ON ap_ar_match_candidates (ap_ar_id)")
   invoiceDocumentsSchemaEnsured = true
   log("db.invoice_documents.schema.ensured", undefined, "db")
 }
