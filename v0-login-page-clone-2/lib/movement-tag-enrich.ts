@@ -280,6 +280,22 @@ function tagLevel2(m: CanonicalMovement, ctx: TagContext): BaseTag {
   }
 }
 
+function expenseSubtype(m: CanonicalMovement, bucket: string): string | null {
+  if (bucket !== "opex_out" && bucket !== "cogs_out") return null
+  const desc = ((m.raw_description ?? "") + " " + ((m.metadata?.counterparty as string) ?? "")).toLowerCase()
+  const saas = /\b(google workspace|zapier|docu?sign|salesforce|hubspot|slack|notion|asana|monday|atlassian|microsoft 365|adobe|intuit|quickbooks)\b/i
+  const gov = /\b(georgia|state of|secretary of state|corporate registration|filing fee|irs|tax)\b/i
+  const marketplace = /\b(amazon|shopify|ebay|etsy|walmart)\b/i
+  const admin = /\b(lawyer|attorney|cpa|accountant|consultant|professional)\b/i
+  const inventory = /\b(wholesale|supplier|inventory|ship|freight|fulfillment|warehouse)\b/i
+  if (saas.test(desc)) return "saas_software"
+  if (gov.test(desc)) return "government_filing"
+  if (marketplace.test(desc)) return "marketplace_misc"
+  if (admin.test(desc)) return "admin_professional"
+  if (inventory.test(desc)) return "inventory_supplier"
+  return "admin_professional" // default for uncategorized opex
+}
+
 function settlementSubtype(m: CanonicalMovement, bucket: string): string | null {
   if (bucket !== "settlement") return null
   const desc = ((m.raw_description ?? "") + " " + ((m.metadata?.counterparty as string) ?? "")).toLowerCase()
@@ -403,6 +419,7 @@ export async function tagMovements(userId: string): Promise<{
 
   // Phase 3.1: First-seen from canonical entity + analysis window (plan #14)
   const byDateAsc = [...movements].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime())
+  const earliestDate = byDateAsc.length > 0 ? byDateAsc[0].occurred_at : ""
   const firstSeenKeys = new Set<string>()
   const seenInWindow = new Set<string>()
   for (const m of byDateAsc) {
@@ -439,8 +456,14 @@ export async function tagMovements(userId: string): Promise<{
     if (inference.is_anomaly) stats.anomalies++
     if (inference.is_first_seen_counterparty) stats.first_seen++
 
+    // Opening balance in middle of stream → system_adjustment (not normal cash event)
+    if (base.economic_class === "opening_balance" && earliestDate && m.occurred_at > earliestDate) {
+      base = { ...base, economic_class: "system_adjustment", cashflow_bucket: "system_setup" }
+    }
+
     const links = extractLinkIds(m, base)
     const settlement_subtype = settlementSubtype(m, base.cashflow_bucket)
+    const expense_subtype = expenseSubtype(m, base.cashflow_bucket)
 
     const policy = computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review)
     const scope = computeStateScope(base.economic_class, base.cashflow_bucket, base.hits_working_capital)
@@ -482,6 +505,7 @@ export async function tagMovements(userId: string): Promise<{
       is_first_seen_counterparty: inference.is_first_seen_counterparty,
 
       settlement_subtype,
+      expense_subtype,
     })
 
     if (policy === "include") stats.policy_include++
@@ -550,6 +574,7 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
           is_large_outlier: t.is_large_outlier,
           is_first_seen_counterparty: t.is_first_seen_counterparty,
           settlement_subtype: t.settlement_subtype ?? null,
+          expense_subtype: t.expense_subtype ?? null,
         }),
       )
       idx += 5
