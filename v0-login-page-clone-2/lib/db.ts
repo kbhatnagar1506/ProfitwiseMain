@@ -699,6 +699,7 @@ export async function ensureMovementsSchema(): Promise<void> {
   // Phase 0 freeze: add currency and coalesced_group_id
   await p.query("ALTER TABLE movements ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'USD'")
   await p.query("ALTER TABLE movements ADD COLUMN IF NOT EXISTS coalesced_group_id TEXT")
+  await p.query("ALTER TABLE movements ADD COLUMN IF NOT EXISTS duplicate_of UUID REFERENCES movements(id) ON DELETE SET NULL")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_user ON movements (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_type ON movements (user_id, movement_type)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_pnl ON movements (user_id, pnl_eligible)")

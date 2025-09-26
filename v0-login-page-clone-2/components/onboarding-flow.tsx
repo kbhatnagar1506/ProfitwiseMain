@@ -215,7 +215,8 @@ export function OnboardingFlow({
     metadata: Record<string, unknown>;
   }
   type MovementSummary = { movement_class: string; movement_type_detail: string; pnl_eligible: boolean; count: number; total_amount: string }
-  type MovementsData = { movements: MovementRow[]; summary: MovementSummary[] }
+  type SummaryFromTags = { pnl_count: number; non_pnl_count: number; excluded_for_review: number; unresolved: number; coalesced_count: number; class_counts: Record<string, { count: number; total_amount: number }> }
+  type MovementsData = { movements: MovementRow[]; summary: MovementSummary[]; summary_from_tags?: SummaryFromTags | null }
   const [movementsData, setMovementsData] = useState<MovementsData | null>(null)
   const [movementsLoading, setMovementsLoading] = useState(false)
   const [movementsClassifying, setMovementsClassifying] = useState(false)
@@ -687,6 +688,14 @@ export function OnboardingFlow({
           setMovementsData(data)
           setMovementsLoading(false)
           setMovementsClassifying(false)
+          // Run tagging in background if no tag-based summary yet (ensures accurate counts)
+          if (!data.summary_from_tags) {
+            fetch("/api/movements/tag", { method: "POST" })
+              .then((res) => (res.ok ? fetch("/api/movements") : null))
+              .then((r) => (r && r.ok ? r.json() : null))
+              .then((d: MovementsData | null) => { if (!cancelled && d) setMovementsData(d) })
+              .catch(() => {})
+          }
           return
         }
 
@@ -2127,6 +2136,7 @@ export function OnboardingFlow({
       case 10: {
         const mvts = movementsData?.movements ?? []
         const mvtSummary = movementsData?.summary ?? []
+        const summaryFromTags = movementsData?.summary_from_tags ?? null
 
         const CLASS_META: Record<string, { label: string; color: string; group: "pnl" | "non_pnl" | "review" }> = {
           customer_cash_in:  { label: "Customer Cash In",    color: "bg-emerald-500/80 border-emerald-400/50", group: "pnl" },
@@ -2135,9 +2145,9 @@ export function OnboardingFlow({
           bank_fee_refund:   { label: "Bank Fee Refund",     color: "bg-red-400/60 border-red-300/40",         group: "pnl" },
           refund:            { label: "Refund",              color: "bg-amber-500/80 border-amber-400/50",     group: "pnl" },
           interest:          { label: "Interest",            color: "bg-teal-500/80 border-teal-400/50",       group: "pnl" },
+          processor_fee:     { label: "Processor Fee",       color: "bg-violet-700/80 border-violet-600/50",   group: "pnl" },
           internal_transfer: { label: "Internal Transfer",   color: "bg-slate-500/80 border-slate-400/50",     group: "non_pnl" },
           processor_payout:  { label: "Processor Payout",    color: "bg-violet-500/80 border-violet-400/50",   group: "non_pnl" },
-          processor_fee:     { label: "Processor Fee",       color: "bg-violet-700/80 border-violet-600/50",   group: "non_pnl" },
           credit_card_payment: { label: "Credit Card Payment", color: "bg-indigo-500/80 border-indigo-400/50", group: "non_pnl" },
           owner_contribution:  { label: "Owner Contribution",  color: "bg-rose-400/80 border-rose-300/50",     group: "non_pnl" },
           owner_draw:          { label: "Owner Draw",          color: "bg-rose-600/80 border-rose-500/50",     group: "non_pnl" },
@@ -2150,17 +2160,31 @@ export function OnboardingFlow({
         const classAmounts: Record<string, number> = {}
         let pnlCount = 0
         let nonPnlCount = 0
-        let reviewCount = 0
+        let excludedForReview = 0
+        let unresolved = 0
         let coalescedCount = 0
-        for (const s of mvtSummary) {
-          classCounts[s.movement_class] = (classCounts[s.movement_class] ?? 0) + s.count
-          classAmounts[s.movement_class] = (classAmounts[s.movement_class] ?? 0) + parseFloat(s.total_amount)
-          if (s.pnl_eligible) pnlCount += s.count
-          else nonPnlCount += s.count
-        }
-        for (const m of mvts) {
-          if (m.needs_review) reviewCount++
-          if (m.provenance === "coalesced") coalescedCount++
+
+        if (summaryFromTags) {
+          pnlCount = summaryFromTags.pnl_count
+          nonPnlCount = summaryFromTags.non_pnl_count
+          excludedForReview = summaryFromTags.excluded_for_review
+          unresolved = summaryFromTags.unresolved
+          coalescedCount = summaryFromTags.coalesced_count
+          for (const [mc, data] of Object.entries(summaryFromTags.class_counts)) {
+            classCounts[mc] = data.count
+            classAmounts[mc] = data.total_amount
+          }
+        } else {
+          for (const s of mvtSummary) {
+            classCounts[s.movement_class] = (classCounts[s.movement_class] ?? 0) + s.count
+            classAmounts[s.movement_class] = (classAmounts[s.movement_class] ?? 0) + parseFloat(s.total_amount)
+            if (s.pnl_eligible) pnlCount += s.count
+            else nonPnlCount += s.count
+          }
+          for (const m of mvts) {
+            if (m.needs_review) excludedForReview++
+            if (m.provenance === "coalesced") coalescedCount++
+          }
         }
 
         const provenanceLabel = (p: string) =>
@@ -2262,10 +2286,10 @@ export function OnboardingFlow({
                                 <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
                               ) })()}
                             </td>
-                            <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap">
+                            <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap" title={`Class: ${Math.round(m.confidence * 100)}% · Evidence: ${Math.round(m.evidence_strength * 100)}`}>
                               {m.needs_review && <span className="text-yellow-400 mr-1" title={m.review_reasons?.join(", ") ?? "Needs review"}>!</span>}
-                              <span className="text-white font-medium" title="Classification confidence">{Math.round(m.confidence * 100)}%</span>
-                              <span className="text-gray-600 ml-0.5" title="Evidence strength">/{Math.round(m.evidence_strength * 100)}</span>
+                              <span className="text-white font-medium">Class {Math.round(m.confidence * 100)}%</span>
+                              <span className="text-gray-600 ml-0.5">/ Ev {Math.round(m.evidence_strength * 100)}</span>
                             </td>
                           </tr>
                         )
@@ -2291,8 +2315,8 @@ export function OnboardingFlow({
                         <tr key={m.id} className={`hover:bg-white/5 ${m.needs_review ? "bg-yellow-500/5" : ""}`}>
                           <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.occurred_at?.split("T")[0]}</td>
                           <td className="px-3 py-1.5 text-xs text-center">
-                            <span className={`inline-block w-4 text-center font-bold ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
-                              {m.direction === "inflow" ? "\u2191" : "\u2193"}
+                            <span className={`inline-block w-8 text-center font-bold ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                              {m.direction === "inflow" ? "↑ In" : "↓ Out"}
                             </span>
                           </td>
                           <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
@@ -2310,10 +2334,10 @@ export function OnboardingFlow({
                               <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
                             ) })()}
                           </td>
-                          <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap">
+                          <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap" title={`Class: ${Math.round(m.confidence * 100)}% · Evidence: ${Math.round(m.evidence_strength * 100)}`}>
                             {m.needs_review && <span className="text-yellow-400 mr-1" title={m.review_reasons?.join(", ") ?? "Needs review"}>!</span>}
-                            <span className="text-white font-medium" title="Classification confidence">{Math.round(m.confidence * 100)}%</span>
-                            <span className="text-gray-600 ml-0.5" title="Evidence strength">/{Math.round(m.evidence_strength * 100)}</span>
+                            <span className="text-white font-medium">Class {Math.round(m.confidence * 100)}%</span>
+                            <span className="text-gray-600 ml-0.5">/ Ev {Math.round(m.evidence_strength * 100)}</span>
                           </td>
                         </tr>
                       ))}
@@ -2370,10 +2394,16 @@ export function OnboardingFlow({
                       <div className="text-xs text-green-400/70">Coalesced</div>
                     </div>
                   )}
-                  {reviewCount > 0 && (
+                  {excludedForReview > 0 && (
                     <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
-                      <div className="text-2xl font-bold text-yellow-400">{reviewCount}</div>
-                      <div className="text-xs text-yellow-400/70">Needs review</div>
+                      <div className="text-2xl font-bold text-yellow-400">{excludedForReview}</div>
+                      <div className="text-xs text-yellow-400/70">Excluded for review</div>
+                    </div>
+                  )}
+                  {unresolved > 0 && (
+                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
+                      <div className="text-2xl font-bold text-red-400">{unresolved}</div>
+                      <div className="text-xs text-red-400/70">Unresolved</div>
                     </div>
                   )}
                   <button
@@ -2471,10 +2501,13 @@ export function OnboardingFlow({
           contra_revenue:  { label: "Contra Revenue",  color: "text-amber-400" },
           cogs_out:        { label: "COGS Out",        color: "text-orange-400" },
           opex_out:        { label: "OpEx Out",        color: "text-amber-400" },
+          other_operating_in: { label: "Other Operating In", color: "text-teal-400" },
+          other_income:    { label: "Other Income",    color: "text-cyan-400" },
           financing_in:    { label: "Financing In",    color: "text-blue-400" },
           financing_out:   { label: "Financing Out",   color: "text-indigo-400" },
           transfer:        { label: "Transfer",        color: "text-slate-400" },
           settlement:      { label: "Settlement",      color: "text-violet-400" },
+          system_setup:    { label: "System / Setup",  color: "text-gray-500" },
           unknown:         { label: "Unknown",         color: "text-zinc-400" },
         }
 
@@ -2816,7 +2849,7 @@ export function OnboardingFlow({
                               <td className="px-3 py-2 text-gray-300 whitespace-nowrap">{m.occurred_at?.slice(0, 10)}</td>
                               <td className="px-3 py-2">
                                 <span className={m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
-                                  {m.direction === "inflow" ? "↓ In" : "↑ Out"}
+                                  {m.direction === "inflow" ? "↑ In" : "↓ Out"}
                                 </span>
                               </td>
                               <td className="px-3 py-2 text-right font-mono text-white">${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td>

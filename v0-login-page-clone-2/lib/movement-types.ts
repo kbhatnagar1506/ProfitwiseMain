@@ -98,7 +98,7 @@ export const MOVEMENT_CLASS_META: Record<MovementClass, { label: string; color: 
   interest:          { label: "Interest",            color: "bg-teal-500/80 border-teal-400/50",       group: "pnl" },
   internal_transfer: { label: "Internal Transfer",   color: "bg-slate-500/80 border-slate-400/50",     group: "non_pnl" },
   processor_payout:  { label: "Processor Payout",    color: "bg-violet-500/80 border-violet-400/50",   group: "non_pnl" },
-  processor_fee:     { label: "Processor Fee",       color: "bg-violet-700/80 border-violet-600/50",   group: "non_pnl" },
+  processor_fee:     { label: "Processor Fee",       color: "bg-violet-700/80 border-violet-600/50",   group: "pnl" },
   credit_card_payment: { label: "Credit Card Payment", color: "bg-indigo-500/80 border-indigo-400/50", group: "non_pnl" },
   owner_contribution:  { label: "Owner Contribution",  color: "bg-rose-400/80 border-rose-300/50",     group: "non_pnl" },
   owner_draw:          { label: "Owner Draw",          color: "bg-rose-600/80 border-rose-500/50",     group: "non_pnl" },
@@ -108,7 +108,7 @@ export const MOVEMENT_CLASS_META: Record<MovementClass, { label: string; color: 
 }
 
 export const PNL_CLASSES = new Set<MovementClass>([
-  "customer_cash_in", "vendor_cash_out", "bank_fee", "bank_fee_refund", "refund", "interest",
+  "customer_cash_in", "vendor_cash_out", "bank_fee", "bank_fee_refund", "refund", "interest", "processor_fee",
 ])
 
 export function isClassPnlEligible(mc: MovementClass): boolean {
@@ -177,10 +177,13 @@ export type CashflowBucket =
   | "contra_revenue"
   | "cogs_out"
   | "opex_out"
+  | "other_operating_in"
+  | "other_income"
   | "financing_in"
   | "financing_out"
   | "transfer"
   | "settlement"
+  | "system_setup"
   | "unknown"
 
 export type CounterpartyRole =
@@ -215,18 +218,20 @@ export function computeStateScope(
   hitsWorkingCapital: boolean,
 ): StateScope {
   const isRevenue = cashflowBucket === "revenue_in" || cashflowBucket === "contra_revenue"
+  const isOperatingInflow = cashflowBucket === "other_operating_in" || cashflowBucket === "other_income"
   const isSpend = cashflowBucket === "opex_out" || cashflowBucket === "cogs_out"
   const isSettlement = cashflowBucket === "settlement"
   const isTransfer = cashflowBucket === "transfer"
+  const isSystemSetup = cashflowBucket === "system_setup"
   const isFinancing = cashflowBucket === "financing_in" || cashflowBucket === "financing_out"
   const isUnknown = economicClass === "unknown"
 
   return {
-    affects_revenue: isRevenue && !isUnknown,
-    affects_spend: isSpend && !isUnknown,
-    affects_liquidity: !isTransfer && !isUnknown,
-    affects_operating_performance: !isSettlement && !isTransfer && !isFinancing && !isUnknown,
-    affects_revenue_quality: isRevenue && !isSettlement && !isUnknown,
+    affects_revenue: (isRevenue || isOperatingInflow) && !isUnknown && !isSystemSetup,
+    affects_spend: isSpend && !isUnknown && !isSystemSetup,
+    affects_liquidity: !isTransfer && !isUnknown && !isSystemSetup,
+    affects_operating_performance: !isSettlement && !isTransfer && !isFinancing && !isUnknown && !isSystemSetup,
+    affects_revenue_quality: isRevenue && !isSettlement && !isUnknown && !isSystemSetup,
   }
 }
 
@@ -302,4 +307,7 @@ export type MovementTag = {
   is_anomaly: boolean
   is_large_outlier: boolean
   is_first_seen_counterparty: boolean
+
+  /** Settlement subtype: shopify_payout | merchant_bank_deposit | processor_payout (default) */
+  settlement_subtype?: string | null
 }

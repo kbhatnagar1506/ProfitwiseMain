@@ -130,7 +130,7 @@ const CLASS_TO_BASE: Record<string, BaseTag> = {
     hits_pnl: false, hits_working_capital: false,
   },
   opening_balance: {
-    economic_class: "opening_balance", cashflow_bucket: "unknown", counterparty_role: "bank",
+    economic_class: "opening_balance", cashflow_bucket: "system_setup", counterparty_role: "bank",
     is_operating: false, is_financing: false, is_investing: false, is_owner_related: false,
     hits_pnl: false, hits_working_capital: false,
   },
@@ -168,7 +168,7 @@ function tagLevel1(m: CanonicalMovement): BaseTag | null {
   const tag = { ...base }
 
   if (m.movement_class === "interest") {
-    tag.cashflow_bucket = m.direction === "inflow" ? "revenue_in" : "opex_out"
+    tag.cashflow_bucket = m.direction === "inflow" ? "other_income" : "opex_out"
   }
   if (m.movement_class === "refund") {
     if (m.direction === "outflow") {
@@ -180,13 +180,15 @@ function tagLevel1(m: CanonicalMovement): BaseTag | null {
     }
   }
   if (m.movement_class === "bank_fee_refund") {
-    tag.cashflow_bucket = "opex_out"
+    tag.cashflow_bucket = m.direction === "inflow" ? "other_operating_in" : "opex_out"
   }
   if (m.movement_class === "opening_balance") {
     if (m.movement_type_detail === "account_verification") {
       tag.economic_class = "account_verification"
+      tag.cashflow_bucket = "system_setup"
     } else if (m.movement_type_detail === "balance_adjustment") {
       tag.economic_class = "system_adjustment"
+      tag.cashflow_bucket = "system_setup"
     }
   }
 
@@ -278,6 +280,15 @@ function tagLevel2(m: CanonicalMovement, ctx: TagContext): BaseTag {
   }
 }
 
+function settlementSubtype(m: CanonicalMovement, bucket: string): string | null {
+  if (bucket !== "settlement") return null
+  const desc = ((m.raw_description ?? "") + " " + ((m.metadata?.counterparty as string) ?? "")).toLowerCase()
+  if (/\bshopify\b/.test(desc)) return "shopify_payout"
+  if (/\b(stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree)\b/.test(desc)) return "processor_payout"
+  if (/\b(merchant|bankcd|bank\s*card|deposit)\b/.test(desc)) return "merchant_bank_deposit"
+  return "processor_payout"
+}
+
 function resolveRole(m: CanonicalMovement, ctx: TagContext, fallback: CounterpartyRole): CounterpartyRole {
   if (m.entity_id) {
     const entity = ctx.entities.get(m.entity_id)
@@ -313,7 +324,7 @@ type InferenceFlags = {
 function tagLevel3(
   m: CanonicalMovement,
   ctx: TagContext,
-  seenCounterparties: Set<string>,
+  firstSeenKeys: Set<string>,
 ): InferenceFlags {
   const key = familyKeyFromMovement(m)
   const family = ctx.families.get(key)
@@ -325,15 +336,8 @@ function tagLevel3(
   const is_large_outlier = stddev > 0 && m.amount > mean + 3 * stddev
   const is_anomaly = stddev > 0 && m.amount > mean + 2.5 * stddev
 
-  const cp = (m.metadata?.counterparty as string) ?? null
-  let is_first_seen_counterparty = false
-  if (cp) {
-    const cpKey = cp.toLowerCase()
-    if (!seenCounterparties.has(cpKey)) {
-      is_first_seen_counterparty = true
-      seenCounterparties.add(cpKey)
-    }
-  }
+  const entityKey = (m.entity_id ?? (m.metadata?.counterparty as string)?.toLowerCase() ?? "").trim()
+  const is_first_seen_counterparty = !!entityKey && firstSeenKeys.has(entityKey)
 
   return { recurrence_family_id, is_recurring, is_anomaly, is_large_outlier, is_first_seen_counterparty }
 }
@@ -376,7 +380,7 @@ export async function tagMovements(userId: string): Promise<{
             m.counterparty_entity_id AS entity_id, m.cash_account_id AS account_id,
             m.pnl_eligible, m.confidence, m.review_needed AS needs_review,
             m.provenance, m.coalesced_group_id, m.metadata
-     FROM movements m WHERE m.user_id = $1
+     FROM movements m WHERE m.user_id = $1 AND m.duplicate_of IS NULL
      ORDER BY m.date DESC`,
     [userId]
   ).then((r) => r.rows.map((row) => {
@@ -397,8 +401,19 @@ export async function tagMovements(userId: string): Promise<{
 
   const ctx = await loadTagContext(userId, movements)
 
+  // Phase 3.1: First-seen from canonical entity + analysis window (plan #14)
+  const byDateAsc = [...movements].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime())
+  const firstSeenKeys = new Set<string>()
+  const seenInWindow = new Set<string>()
+  for (const m of byDateAsc) {
+    const key = (m.entity_id ?? (m.metadata?.counterparty as string)?.toLowerCase() ?? "").trim()
+    if (key && !seenInWindow.has(key)) {
+      firstSeenKeys.add(key)
+      seenInWindow.add(key)
+    }
+  }
+
   const tags: MovementTag[] = []
-  const seenCounterparties = new Set<string>()
   const stats = { total: 0, deterministic: 0, identity_aware: 0, inferred: 0, recurring: 0, anomalies: 0, first_seen: 0, policy_include: 0, policy_provisional: 0, policy_exclude: 0 }
 
   for (const m of movements) {
@@ -418,13 +433,14 @@ export async function tagMovements(userId: string): Promise<{
     }
 
     // Level 3: inference
-    const inference = tagLevel3(m, ctx, seenCounterparties)
+    const inference = tagLevel3(m, ctx, firstSeenKeys)
     stats.inferred++
     if (inference.is_recurring) stats.recurring++
     if (inference.is_anomaly) stats.anomalies++
     if (inference.is_first_seen_counterparty) stats.first_seen++
 
     const links = extractLinkIds(m, base)
+    const settlement_subtype = settlementSubtype(m, base.cashflow_bucket)
 
     const policy = computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review)
     const scope = computeStateScope(base.economic_class, base.cashflow_bucket, base.hits_working_capital)
@@ -464,6 +480,8 @@ export async function tagMovements(userId: string): Promise<{
       is_anomaly: inference.is_anomaly,
       is_large_outlier: inference.is_large_outlier,
       is_first_seen_counterparty: inference.is_first_seen_counterparty,
+
+      settlement_subtype,
     })
 
     if (policy === "include") stats.policy_include++
@@ -531,6 +549,7 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
           is_anomaly: t.is_anomaly,
           is_large_outlier: t.is_large_outlier,
           is_first_seen_counterparty: t.is_first_seen_counterparty,
+          settlement_subtype: t.settlement_subtype ?? null,
         }),
       )
       idx += 5

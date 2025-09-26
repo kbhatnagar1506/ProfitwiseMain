@@ -52,7 +52,7 @@ export async function GET() {
               ) AS account_id,
               m.pnl_eligible, m.confidence, m.review_needed AS needs_review,
               m.provenance, m.coalesced_group_id, m.metadata
-       FROM movements m WHERE m.user_id = $1
+       FROM movements m WHERE m.user_id = $1 AND m.duplicate_of IS NULL
        ORDER BY m.date ASC`,
       [user.id]
     ).then((r) => r.rows.map((row) => {
@@ -88,9 +88,11 @@ export async function GET() {
     const tagMap = new Map<string, TagRow>()
     for (const t of tagRows) tagMap.set(t.movement_id, t)
 
+    const SYSTEM_MOVEMENT_TYPES = new Set(["opening_balance", "account_verification", "balance_adjustment"])
     type TaggedMovement = CanonicalMovement & { tag: MovementTag }
     const tagged: TaggedMovement[] = []
     for (const m of movementRows) {
+      if (SYSTEM_MOVEMENT_TYPES.has(m.movement_type ?? "")) continue
       const tr = tagMap.get(m.id)
       if (!tr) continue
       const td = tr.tag_data ?? {}
