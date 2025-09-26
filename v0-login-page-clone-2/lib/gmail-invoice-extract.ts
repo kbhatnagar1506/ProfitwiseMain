@@ -17,26 +17,35 @@ export type GmailMessageRow = {
   body_plain: string | null
 }
 
-const SYSTEM_PROMPT = `You are a financial document parser. Your job is to read raw email text (invoices, bills, payments, and payment requests) and output a single JSON object.
+const SYSTEM_PROMPT = `You are a financial document classifier. You read one email and output exactly one JSON object. No markdown, no code fences, no explanation — only the JSON.
 
-Rules:
-- If the email is NOT an invoice, bill, payment, or payment request, set "is_invoice_or_bill": false and output minimal other fields.
-- Otherwise set "is_invoice_or_bill": true and fill ALL fields you can.
-- VERY IMPORTANT: Do NOT assume everything is an "invoice". Many documents are BILLS (company owes vendor) or PAYMENTS (payment made/received).
-- "kind":
-  - Use "invoice" when the sender is charging the recipient as a customer (AR document sent to be paid by someone else).
-  - Use "bill" when the sender is a vendor/supplier charging the recipient (AP document that the recipient must pay).
-  - Use "payment" when the email is a payment confirmation, receipt for payment made, or evidence that a payment was applied (e.g. "we received your payment", "payment of $X applied", "your payment has been received").
-  - Use "other" for statements, generic receipts, quotes, or things that are not clearly an invoice, bill, or payment.
-- "side":
-  - AP = the company (email account owner) must pay someone else (bills, vendor invoices).
-  - AR = someone else must pay the company (invoices to customers, payment requests from the company).
-  - For "payment" kind: use AP if the company made the payment (reducing what we owe); use AR if the company received the payment (reducing what's owed to us).
-- If unsure but clearly a vendor charging the company, prefer side="AP" and kind="bill".
-- If unsure but clearly the company charging a customer, prefer side="AR" and kind="invoice".
-- Extract amounts as numbers (e.g. 78.0 not "$78"). Use YYYY-MM-DD for dates. For payments, "total" is the payment amount.
-- For source_system_hint: use "stripe" if Stripe, "qbo" if QuickBooks/Intuit, else "other" or null.
-- Output ONLY valid JSON, no markdown, no explanations.`
+## In scope vs out of scope
+- Set "is_invoice_or_bill": true only when the email is clearly one of: a request for payment (invoice or bill), a payment confirmation, or a receipt that shows a payment was made/received. If it's marketing, shipping only, newsletter, or has no amount/due/payment context, set "is_invoice_or_bill": false and output minimal other fields.
+- When "is_invoice_or_bill": true, fill every field you can infer; use null for unknown. Never omit required keys.
+
+## Document type ("kind") — pick one
+- "invoice" — The email is asking the recipient to pay the sender (e.g. "Please pay us", "Amount due", "Your invoice is attached"). The email account owner is the one who will receive the money → receivables.
+- "bill" — The email is asking the recipient (the company) to pay the sender (vendor/supplier). The email account owner owes money → payables.
+- "payment" — The email confirms that a payment happened: "We received your payment", "Payment of $X has been applied", "Your payment was successful", "Receipt for your payment". Use this for payment confirmations and payment receipts, not for new requests to pay.
+- "other" — Statements (balance summary with no single due amount), quotes, estimates, or unclear. Not a clear invoice, bill, or payment.
+
+## Side (AP vs AR) — from the email account owner's perspective
+- "AR" — Money is (or will be) owed TO the company. Invoices the company sent, or payment confirmations that the company received payment.
+- "AP" — Money is (or was) owed BY the company. Bills from vendors, or payment confirmations that the company made a payment.
+- For "payment" kind: company made the payment → side "AP"; company received the payment → side "AR".
+- If you truly cannot tell, use "unknown".
+
+## Amounts and dates
+- "total": The single main amount in the document. For invoices/bills use the total due or amount due. For payments use the payment amount. Number only (e.g. 78.5), not a string.
+- "amount_outstanding": For unpaid or partially paid items, the remaining amount due; otherwise null or same as total. For payments, usually null or 0.
+- Dates: YYYY-MM-DD only. "issue_date" = document/issue date; "due_date" = when payment is due (null if not stated or for payment confirmations).
+
+## Other
+- "status": "paid" for payment confirmations or when the document says paid; "open" when amount is still due; "partially_paid" when partial payment mentioned; otherwise "unknown".
+- "source_system_hint": "stripe" only if the email clearly comes from Stripe; "qbo" only if QuickBooks/Intuit; otherwise "other" or null.
+- "counterparty_name" / "counterparty_email": The other party (vendor for bills, customer for invoices, payer/payee for payments).
+- "lines": Array of line items if the document has them; use one summary line or empty array for simple payments.
+- Output ONLY valid JSON.`
 
 const OUTPUT_SCHEMA = `{
   "is_invoice_or_bill": boolean,
@@ -60,7 +69,7 @@ function buildUserPrompt(msg: GmailMessageRow, invoiceSenderHints: string[]): st
   const body = (msg.body_plain ?? "").slice(0, BODY_TRUNCATE)
   const hints =
     invoiceSenderHints.length > 0
-      ? `Known invoice/bill senders for this company (email addresses or domains):\n${invoiceSenderHints
+      ? `Known vendor/billing senders for this company (if FROM matches one of these, treat as bill to the company → side="AP", kind="bill" unless the body clearly says it's a payment confirmation):\n${invoiceSenderHints
           .map((e) => `- ${e}`)
           .join("\n")}\n\n`
       : ""
@@ -72,9 +81,8 @@ Subject: ${msg.subject ?? ""}
 Body:
 ${body}
 
-${hints}Use the known senders above as a strong signal: if the FROM address matches one of them (by exact email or domain), it is very likely a vendor or billing system sending a bill to the company (AP, kind="bill").
-
-Output JSON with this schema (only the JSON, nothing else):
+${hints}Classify this email and output one JSON object with the exact schema below. No other text.
+Schema:
 ${OUTPUT_SCHEMA}`
 }
 
@@ -110,7 +118,7 @@ function candidateKeywords(subject: string | null, body: string | null): boolean
   const s = (subject ?? "").toLowerCase()
   const b = (body ?? "").toLowerCase()
   const combined = s + " " + b
-  const words = ["invoice", "bill", "payment request", "amount due", "balance due", "statement", "receipt"]
+  const words = ["invoice", "bill", "payment", "payment received", "payment request", "amount due", "balance due", "statement", "receipt", "paid", "we received your payment"]
   return words.some((w) => combined.includes(w))
 }
 
