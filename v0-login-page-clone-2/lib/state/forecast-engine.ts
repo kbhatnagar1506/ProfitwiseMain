@@ -1591,7 +1591,7 @@ function simulateMonthFromModels(
   // Time decay: further-out months are less certain, but not dramatically
   const monthDecay = 1 / (1 + monthIndex * 0.08)
 
-  // Customer receipts: simulate from entity models, weighted by probability and archetype
+  // Customer receipts: bottom-up from entity models
   let customerTotal = 0
   for (const c of models.customers) {
     const archDecay = c.archetype === "clockwork" ? 0.92
@@ -1607,16 +1607,29 @@ function simulateMonthFromModels(
       const paymentsInMonth = Math.min(4, 30 / c.payment_interval_days)
       customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth * archDecay * monthDecay
     } else if (c.archetype === "low_data" && c.outstanding_invoices.length > 0) {
-      // Low-data invoice customers: contribute a discounted amount in near-term months
-      // Decay sharply after month 1 since we have no repeat evidence
       const lowDataDecay = monthIndex === 0 ? 0.5 : monthIndex <= 2 ? 0.2 : 0.08
       customerTotal += c.avg_amount * c.probability_of_next * lowDataDecay
     } else if (c.payment_count >= 2 && c.avg_amount > 0) {
-      // Customers with history but no interval (e.g. 2 payments far apart): 
-      // contribute a small recurring baseline
       customerTotal += c.avg_amount * c.probability_of_next * archDecay * monthDecay * 0.3
     }
   }
+
+  // Portfolio floor: individually unreliable customers are collectively reliable.
+  // The historical monthly average from the component aggregate sets a floor
+  // that decays gently, preventing the bottom-up model from cliff-dropping.
+  const custComp = components.find((c) => c.category === "customer_receipts" && c.direction === "in")
+  if (custComp && custComp.monthly_avg > 0) {
+    const historicalAvg = custComp.monthly_avg
+    // Floor decays: month 0 = 80% of historical, month 5 = ~55%
+    const floorDecay = 0.8 / (1 + monthIndex * 0.1)
+    const portfolioFloor = historicalAvg * floorDecay
+    if (customerTotal < portfolioFloor) {
+      // Blend: use the higher of bottom-up or floor, weighted toward floor when bottom-up is weak
+      const blendWeight = Math.min(1, customerTotal / portfolioFloor)
+      customerTotal = customerTotal * blendWeight + portfolioFloor * (1 - blendWeight)
+    }
+  }
+
   if (customerTotal > 0) {
     customerTotal *= scenarioMult.inflow
     inflows += customerTotal
@@ -1646,18 +1659,34 @@ function simulateMonthFromModels(
       projectedVendorNames.add(v.name.toLowerCase())
     }
   }
-  if (vendorTotal > 0) {
-    vendorTotal *= scenarioMult.outflow
-    outflows += vendorTotal
-    componentAmounts.push({ component_id: "vendor_payments_out", amount: r2(vendorTotal) })
-  }
-
   // Recurring fixed obligations — exclude those already counted via vendor models
   let recurringTotal = 0
   for (const rf of models.recurring_fixed) {
     if (projectedVendorNames.has(rf.label.toLowerCase())) continue
     recurringTotal += rf.monthly_amount
   }
+
+  // Portfolio floor for vendor outflows: many "episodic" vendors are actually monthly
+  // but have too few data points to classify as recurring. Use historical average as floor.
+  const vendComp = components.find((c) => c.category === "vendor_payments" && c.direction === "out")
+  const combinedVendorProjection = vendorTotal + recurringTotal
+  if (vendComp && vendComp.monthly_avg > 0) {
+    const historicalVendorAvg = vendComp.monthly_avg
+    const vendorFloorDecay = 0.85 / (1 + monthIndex * 0.06)
+    const vendorFloor = historicalVendorAvg * vendorFloorDecay
+    if (combinedVendorProjection < vendorFloor) {
+      // Scale up vendor projection to meet the floor
+      const gap = vendorFloor - combinedVendorProjection
+      vendorTotal += gap
+    }
+  }
+
+  if (vendorTotal > 0) {
+    vendorTotal *= scenarioMult.outflow
+    outflows += vendorTotal
+    componentAmounts.push({ component_id: "vendor_payments_out", amount: r2(vendorTotal) })
+  }
+
   if (recurringTotal > 0) {
     recurringTotal *= scenarioMult.outflow
     outflows += recurringTotal
