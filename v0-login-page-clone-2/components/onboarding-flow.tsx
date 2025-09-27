@@ -2306,15 +2306,18 @@ export function OnboardingFlow({
                         <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Dir</th>
                         <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
-                        {classKey === "unknown" && <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[110px]">Detail</th>}
+                        {(classKey === "unknown" || classKey === "merchant_deposit") && <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[110px]">Detail</th>}
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Prov</th>
                         <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[60px]" title="Classification / Evidence">Conf</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                      {classMvts.slice(0, 200).map((m) => (
-                        <tr key={m.id} className={`hover:bg-white/5 ${m.needs_review ? "bg-yellow-500/5" : ""}`}>
+                      {classMvts.slice(0, 200).map((m) => {
+                        const isDeterministicTransfer = classKey === "internal_transfer" && (m.confidence >= 0.85 || m.provenance === "coalesced")
+                        const showReviewStyle = m.needs_review && !isDeterministicTransfer
+                        return (
+                        <tr key={m.id} className={`hover:bg-white/5 ${showReviewStyle ? "bg-yellow-500/5" : ""}`}>
                           <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.occurred_at?.split("T")[0]}</td>
                           <td className="px-3 py-1.5 text-xs text-center">
                             <span className={`inline-block w-8 text-center font-bold ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
@@ -2325,9 +2328,13 @@ export function OnboardingFlow({
                             ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
                           <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]" title={(m.metadata?.counterparty as string) ?? undefined}>{displayLabelForCounterparty(m.metadata?.counterparty as string)}</td>
-                          {classKey === "unknown" && (
+                          {(classKey === "unknown" || classKey === "merchant_deposit") && (
                             <td className="px-3 py-1.5 text-xs">
-                              <span className="text-[10px] text-gray-500 bg-white/5 rounded px-1.5 py-0.5">{DETAIL_LABELS[m.movement_type_detail] ?? m.movement_type_detail}</span>
+                              <span className="text-[10px] text-gray-500 bg-white/5 rounded px-1.5 py-0.5">
+                                {classKey === "merchant_deposit" && (m as { tag?: { settlement_subtype?: string } }).tag?.settlement_subtype === "merchant_adjustment"
+                                  ? "Merchant Adjustment"
+                                  : DETAIL_LABELS[m.movement_type_detail] ?? m.movement_type_detail}
+                              </span>
                             </td>
                           )}
                           <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[200px]">{m.raw_description ?? "\u2014"}</td>
@@ -2337,12 +2344,12 @@ export function OnboardingFlow({
                             ) })()}
                           </td>
                           <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap" title={`Class: ${Math.round(m.confidence * 100)}% · Evidence: ${Math.round(m.evidence_strength * 100)}`}>
-                            {m.needs_review && <span className="text-yellow-400 mr-1" title={m.review_reasons?.join(", ") ?? "Needs review"}>!</span>}
+                            {showReviewStyle && <span className="text-yellow-400 mr-1" title={m.review_reasons?.join(", ") ?? "Needs review"}>!</span>}
                             <span className="text-white font-medium">Class {Math.round(m.confidence * 100)}%</span>
                             <span className="text-gray-600 ml-0.5">/ Ev {Math.round(m.evidence_strength * 100)}</span>
                           </td>
                         </tr>
-                      ))}
+                      )})}
                     </tbody>
                   </table>
                 )}
@@ -2376,38 +2383,50 @@ export function OnboardingFlow({
 
             {!movementsLoading && !movementsClassifying && mvts.length > 0 && (
               <div className="space-y-6">
-                {/* Summary stats */}
+                {/* Summary: explicit state model — two dimensions */}
+                <div className="space-y-4">
+                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Classification (what it is)</div>
+                  <div className="flex flex-wrap gap-3 items-end">
+                    <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
+                      <div className="text-2xl font-bold text-white">{mvts.length}</div>
+                      <div className="text-xs text-gray-400">Total movements</div>
+                    </div>
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
+                      <div className="text-2xl font-bold text-emerald-400">{pnlCount}</div>
+                      <div className="text-xs text-emerald-400/70">P&L eligible</div>
+                    </div>
+                    <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
+                      <div className="text-2xl font-bold text-gray-400">{nonPnlCount}</div>
+                      <div className="text-xs text-gray-500">Non-P&L</div>
+                    </div>
+                    {unresolved > 0 && (
+                      <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
+                        <div className="text-2xl font-bold text-red-400">{unresolved}</div>
+                        <div className="text-xs text-red-400/70">Unresolved</div>
+                      </div>
+                    )}
+                    {coalescedCount > 0 && (
+                      <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
+                        <div className="text-2xl font-bold text-green-400">{coalescedCount}</div>
+                        <div className="text-xs text-green-400/70">Coalesced (multi-source)</div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mt-4">Policy (included in state vs excluded for review)</div>
+                  <div className="flex flex-wrap gap-3 items-end">
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
+                      <div className="text-2xl font-bold text-emerald-400">{summaryFromTags ? summaryFromTags.included_count : Math.max(0, pnlCount + nonPnlCount - excludedForReview)}</div>
+                      <div className="text-xs text-emerald-400/70">Included in state</div>
+                    </div>
+                    {excludedForReview > 0 && (
+                      <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
+                        <div className="text-2xl font-bold text-yellow-400">{excludedForReview}</div>
+                        <div className="text-xs text-yellow-400/70">Excluded for review</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <div className="flex flex-wrap gap-3 items-end">
-                  <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
-                    <div className="text-2xl font-bold text-white">{mvts.length}</div>
-                    <div className="text-xs text-gray-400">Cash movements</div>
-                  </div>
-                  <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
-                    <div className="text-2xl font-bold text-emerald-400">{pnlCount}</div>
-                    <div className="text-xs text-emerald-400/70">P&L eligible</div>
-                  </div>
-                  <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
-                    <div className="text-2xl font-bold text-gray-400">{nonPnlCount}</div>
-                    <div className="text-xs text-gray-500">Non-P&L</div>
-                  </div>
-                  {coalescedCount > 0 && (
-                    <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
-                      <div className="text-2xl font-bold text-green-400">{coalescedCount}</div>
-                      <div className="text-xs text-green-400/70">Coalesced</div>
-                    </div>
-                  )}
-                  {excludedForReview > 0 && (
-                    <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
-                      <div className="text-2xl font-bold text-yellow-400">{excludedForReview}</div>
-                      <div className="text-xs text-yellow-400/70">Excluded for review</div>
-                    </div>
-                  )}
-                  {unresolved > 0 && (
-                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
-                      <div className="text-2xl font-bold text-red-400">{unresolved}</div>
-                      <div className="text-xs text-red-400/70">Unresolved</div>
-                    </div>
-                  )}
                   <button
                     type="button"
                     disabled={movementsClassifying}

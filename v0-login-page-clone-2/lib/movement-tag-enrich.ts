@@ -299,6 +299,10 @@ function expenseSubtype(m: CanonicalMovement, bucket: string): string | null {
 function settlementSubtype(m: CanonicalMovement, bucket: string): string | null {
   if (bucket !== "settlement") return null
   const desc = ((m.raw_description ?? "") + " " + ((m.metadata?.counterparty as string) ?? "")).toLowerCase()
+  const amt = Math.abs(m.amount)
+  const isTiny = amt < 5
+  const isReversal = m.amount < 0 || /\b(adjustment|reversal)\b/.test(desc)
+  if (isTiny || isReversal) return "merchant_adjustment"
   if (/\bshopify\b/.test(desc)) return "shopify_payout"
   if (/\b(stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree)\b/.test(desc)) return "processor_payout"
   if (/\b(merchant|bankcd|bank\s*card|deposit)\b/.test(desc)) return "merchant_bank_deposit"

@@ -149,6 +149,9 @@ export async function GET() {
     excluded_for_review: number
     unresolved: number
     coalesced_count: number
+    included_pnl: number
+    included_non_pnl: number
+    included_count: number
     class_counts: Record<string, { count: number; total_amount: number }>
   } | null = null
 
@@ -159,6 +162,8 @@ export async function GET() {
     let excludedForReview = 0
     let unresolved = 0
     let coalescedCount = 0
+    let includedPnl = 0
+    let includedNonPnl = 0
 
     for (const m of movementsWithTags as TaggedMovement[]) {
       const tag = m.tag
@@ -168,6 +173,7 @@ export async function GET() {
       const hitsPnl = tag.hits_pnl ?? false
       const policy = tag.state_inclusion_policy ?? "exclude_and_review"
       const needsReview = tag.needs_review ?? false
+      const isExcluded = policy === "exclude_and_review" || needsReview
 
       const mc = m.movement_class
       if (!classCounts[mc]) classCounts[mc] = { count: 0, total_amount: 0 }
@@ -178,7 +184,12 @@ export async function GET() {
       else if (ec !== "unknown") nonPnlCount++
 
       if (ec === "unknown") unresolved++
-      else if (policy === "exclude_and_review" || needsReview) excludedForReview++
+      else if (isExcluded) excludedForReview++
+
+      if (ec !== "unknown" && !isExcluded) {
+        if (hitsPnl) includedPnl++
+        else includedNonPnl++
+      }
 
       if (m.provenance === "coalesced") coalescedCount++
     }
@@ -189,6 +200,9 @@ export async function GET() {
       excluded_for_review: excludedForReview,
       unresolved,
       coalesced_count: coalescedCount,
+      included_pnl: includedPnl,
+      included_non_pnl: includedNonPnl,
+      included_count: includedPnl + includedNonPnl,
       class_counts: classCounts,
     }
   }

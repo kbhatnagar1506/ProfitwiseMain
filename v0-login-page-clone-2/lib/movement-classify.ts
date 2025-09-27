@@ -1383,9 +1383,9 @@ function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEnt
   const isOwnerLinked = identity?.role === "owner" || identity?.role === "internal" ||
     (selfCtx.ownerNames.length > 0 && (m.counterparty ?? "").toLowerCase().split(/\s+/).some((t) => t.length >= 3 && selfCtx.ownerNames.some((on) => normKey(on).includes(normKey(t)) || normKey(t).includes(normKey(on)))))
 
-  // Merchant deposit with owner-linked identity but no strong processor evidence → collision review
+  // Merchant deposit with owner-linked identity but no strong processor evidence → collision review (do not promote to owner contribution)
   if (m.direction === "inflow" && isMerchantDepositDesc && isOwnerLinked && !hasStrongProcessorEvidence) {
-    return { type: "owner_contribution_candidate", signals: { pattern_strength: 0.45, source_authority: srcAuth } }
+    return { type: "review_candidate_revenue", signals: { pattern_strength: 0.35, source_authority: srcAuth } }
   }
 
   // Merchant deposit: recurring BANKCD/DEPOSIT patterns — recognized economic class

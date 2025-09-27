@@ -40,18 +40,27 @@ export function heuristicAliasMatch(a: string, b: string): boolean {
   return prefixMatch >= Math.min(na.length, nb.length) * 0.85
 }
 
-// Strip test-like suffixes from display (e.g. "foo test" -> "foo")
-const TEST_SUFFIX = /\s+test$/i
+// Hide test aliases from display (e.g. "foo test" -> "—")
+const TEST_ALIAS_PATTERN = /\s+test$/i
+
+// Common product/brand spacing fixes (avoid "Quick Books", "Docu Sign")
+const CANONICAL_SPACING: Array<[RegExp, string]> = [
+  [/\bQuick\s+Books\b/gi, "QuickBooks"],
+  [/\bDocu\s*Sign\b/gi, "DocuSign"],
+  [/\bMac\s+Lean\b/gi, "MacLean"],
+  [/\bHuman\s+N\s+Professional\b/gi, "Human N Professional"],
+]
 
 /**
- * Display label: split concatenated tokens (e.g. "Arizona CardinalsPerformance Nutrition" -> "Arizona Cardinals Performance Nutrition").
- * Strip test suffixes for display. Preserve raw for audit; use this for canonical UI display only.
+ * Display label: split concatenated tokens, fix canonical spacing, hide test aliases.
+ * Preserve raw for audit; use this for canonical UI display only.
  */
 export function displayLabelForCounterparty(raw: string | null | undefined): string {
   if (!raw || typeof raw !== "string") return "—"
-  const withoutTest = raw.replace(TEST_SUFFIX, "").trim()
-  const cleaned = withoutTest || raw
-  return splitCamelCase(cleaned)
+  if (TEST_ALIAS_PATTERN.test(raw.trim())) return "—"
+  let out = splitCamelCase(raw)
+  for (const [re, repl] of CANONICAL_SPACING) out = out.replace(re, repl)
+  return out
     .replace(/\s+/g, " ")
     .replace(/\b([a-z])([A-Z][a-z])/g, "$1 $2")
     .replace(/\b([A-Z][a-z]+)([A-Z][a-z])/g, "$1 $2")
