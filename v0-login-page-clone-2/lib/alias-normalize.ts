@@ -40,10 +40,17 @@ export function heuristicAliasMatch(a: string, b: string): boolean {
   return prefixMatch >= Math.min(na.length, nb.length) * 0.85
 }
 
-// Hide test aliases from display (e.g. "foo test" -> "—")
+// Hide test aliases: ends with " test" or contains "test" as whole word
 const TEST_ALIAS_PATTERN = /\s+test$/i
+const TEST_WORD_PATTERN = /\btest\b/i
 
-// Common product/brand spacing fixes (avoid "Quick Books", "Docu Sign")
+// Invoice sludge: raw invoice strings, payment-for-invoice — exclude from primary display
+const INVOICE_SLUDGE = /^(INV-\d+|Payment\s+for\s+invoice|Invoice\s+#?\d*)$/i
+
+// Email: avoid unless no other option
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+// Common product/brand spacing: known compound words (no personal names)
 const CANONICAL_SPACING: Array<[RegExp, string]> = [
   [/\bQuick\s+Books\b/gi, "QuickBooks"],
   [/\bDocu\s*Sign\b/gi, "DocuSign"],
@@ -51,20 +58,47 @@ const CANONICAL_SPACING: Array<[RegExp, string]> = [
   [/\bHuman\s+N\s+Professional\b/gi, "Human N Professional"],
 ]
 
-/**
- * Display label: split concatenated tokens, fix canonical spacing, hide test aliases.
- * Preserve raw for audit; use this for canonical UI display only.
- */
-export function displayLabelForCounterparty(raw: string | null | undefined): string {
-  if (!raw || typeof raw !== "string") return "—"
-  if (TEST_ALIAS_PATTERN.test(raw.trim())) return "—"
-  let out = splitCamelCase(raw)
+function cleanDisplay(s: string): string {
+  let out = splitCamelCase(s)
   for (const [re, repl] of CANONICAL_SPACING) out = out.replace(re, repl)
   return out
     .replace(/\s+/g, " ")
     .replace(/\b([a-z])([A-Z][a-z])/g, "$1 $2")
     .replace(/\b([A-Z][a-z]+)([A-Z][a-z])/g, "$1 $2")
     .trim()
+}
+
+function isTestLabel(s: string): boolean {
+  const t = s.trim()
+  if (TEST_ALIAS_PATTERN.test(t)) return true
+  if (TEST_WORD_PATTERN.test(t)) return true
+  return false
+}
+
+function isCleanLabel(s: string): boolean {
+  if (!s || s.length < 2) return false
+  if (EMAIL_PATTERN.test(s)) return false
+  if (INVOICE_SLUDGE.test(s)) return false
+  if (isTestLabel(s)) return false
+  return true
+}
+
+/**
+ * Display label: (1) entity canonical_name if resolved and clean, (2) normalized display, (3) raw.
+ * Excludes email, invoice sludge, test labels from primary display.
+ */
+export function displayLabelForCounterparty(
+  raw: string | null | undefined,
+  preferredLabel?: string | null,
+): string {
+  if (preferredLabel && typeof preferredLabel === "string" && isCleanLabel(preferredLabel)) {
+    return cleanDisplay(preferredLabel)
+  }
+  if (!raw || typeof raw !== "string") return "—"
+  if (isTestLabel(raw)) return "—"
+  if (INVOICE_SLUDGE.test(raw.trim())) return "—"
+  // Prefer non-email when we have preferredLabel; otherwise show raw (including email as last resort)
+  return cleanDisplay(raw)
 }
 
 /**

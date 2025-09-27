@@ -110,15 +110,28 @@ export async function GET() {
   const tagMap = new Map<string, TagRow>()
   for (const t of tagRows) tagMap.set(t.movement_id, t)
 
+  // Fetch entity canonical names for resolved counterparties (Phase 7 display)
+  const entityIds = [...new Set(movements.map((m) => m.entity_id).filter(Boolean))] as string[]
+  const entityNames = new Map<string, string>()
+  if (entityIds.length > 0) {
+    const entityRows = await query<{ id: string; canonical_name: string }>(
+      `SELECT id, canonical_name FROM entities WHERE id = ANY($1)`,
+      [entityIds]
+    ).then((r) => r.rows)
+    for (const e of entityRows) entityNames.set(e.id, e.canonical_name)
+  }
+
   const movementsWithTags = movements.map((m) => {
     const tag = tagMap.get(m.id)
-    if (!tag) return m
+    const entityCanonicalName = m.entity_id ? entityNames.get(m.entity_id) ?? null : null
+    if (!tag) return { ...m, tag: entityCanonicalName ? { entity_canonical_name: entityCanonicalName } : undefined }
     return {
       ...m,
       tag: {
         economic_class: tag.economic_class,
         cashflow_bucket: tag.cashflow_bucket,
         counterparty_role: tag.counterparty_role,
+        entity_canonical_name: entityCanonicalName ?? undefined,
         ...tag.tag_data,
       },
     }
@@ -142,7 +155,7 @@ export async function GET() {
   }))
 
   // When tags exist, compute authoritative summary from tagged movements (plan #1, #6)
-  type TaggedMovement = (typeof movementsWithTags)[number] & { tag?: { hits_pnl?: boolean; economic_class?: string; state_inclusion_policy?: string; needs_review?: boolean } }
+  type TaggedMovement = (typeof movementsWithTags)[number] & { tag?: { hits_pnl?: boolean; economic_class?: string; state_inclusion_policy?: string; policy_status?: string; needs_review?: boolean } }
   let summaryFromTags: {
     pnl_count: number
     non_pnl_count: number
@@ -165,15 +178,21 @@ export async function GET() {
     let includedPnl = 0
     let includedNonPnl = 0
 
+    // Coalesced hidden: movements with duplicate_of (not in tag flow)
+    const { rows: coalescedRows } = await query<{ count: string }>(
+      `SELECT COUNT(*)::text FROM movements WHERE user_id = $1 AND duplicate_of IS NOT NULL`,
+      [userId]
+    )
+    coalescedCount = parseInt(coalescedRows[0]?.count ?? "0", 10)
+
     for (const m of movementsWithTags as TaggedMovement[]) {
       const tag = m.tag
       if (!tag) continue
 
       const ec = tag.economic_class ?? "unknown"
       const hitsPnl = tag.hits_pnl ?? false
-      const policy = tag.state_inclusion_policy ?? "exclude_and_review"
-      const needsReview = tag.needs_review ?? false
-      const isExcluded = policy === "exclude_and_review" || needsReview
+      const policyStatus = (tag.policy_status as "included" | "excluded_for_review" | "unresolved" | "coalesced_hidden") ??
+        (tag.state_inclusion_policy === "exclude_and_review" || tag.needs_review ? "excluded_for_review" : ec === "unknown" ? "unresolved" : "included")
 
       const mc = m.movement_class
       if (!classCounts[mc]) classCounts[mc] = { count: 0, total_amount: 0 }
@@ -183,15 +202,12 @@ export async function GET() {
       if (hitsPnl) pnlCount++
       else if (ec !== "unknown") nonPnlCount++
 
-      if (ec === "unknown") unresolved++
-      else if (isExcluded) excludedForReview++
-
-      if (ec !== "unknown" && !isExcluded) {
+      if (policyStatus === "unresolved") unresolved++
+      else if (policyStatus === "excluded_for_review") excludedForReview++
+      else if (policyStatus === "included") {
         if (hitsPnl) includedPnl++
         else includedNonPnl++
       }
-
-      if (m.provenance === "coalesced") coalescedCount++
     }
 
     summaryFromTags = {

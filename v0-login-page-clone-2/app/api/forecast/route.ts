@@ -112,7 +112,7 @@ export async function GET() {
           tr.cashflow_bucket as MovementTag["cashflow_bucket"],
           (td.hits_working_capital as boolean) ?? false,
         ),
-        state_inclusion_policy: (td.state_inclusion_policy as MovementTag["state_inclusion_policy"]) ?? computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review),
+        state_inclusion_policy: (td.state_inclusion_policy as MovementTag["state_inclusion_policy"]) ?? computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review, tr.economic_class),
         classification_confidence: m.confidence,
         evidence_strength: m.evidence_strength,
         needs_review: m.needs_review,

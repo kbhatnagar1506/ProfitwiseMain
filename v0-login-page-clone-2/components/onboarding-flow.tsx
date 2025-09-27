@@ -216,7 +216,7 @@ export function OnboardingFlow({
     metadata: Record<string, unknown>;
   }
   type MovementSummary = { movement_class: string; movement_type_detail: string; pnl_eligible: boolean; count: number; total_amount: string }
-  type SummaryFromTags = { pnl_count: number; non_pnl_count: number; excluded_for_review: number; unresolved: number; coalesced_count: number; class_counts: Record<string, { count: number; total_amount: number }> }
+  type SummaryFromTags = { pnl_count: number; non_pnl_count: number; excluded_for_review: number; unresolved: number; coalesced_count: number; included_pnl: number; included_non_pnl: number; included_count: number; class_counts: Record<string, { count: number; total_amount: number }> }
   type MovementsData = { movements: MovementRow[]; summary: MovementSummary[]; summary_from_tags?: SummaryFromTags | null }
   const [movementsData, setMovementsData] = useState<MovementsData | null>(null)
   const [movementsLoading, setMovementsLoading] = useState(false)
@@ -2153,8 +2153,18 @@ export function OnboardingFlow({
           owner_contribution:  { label: "Owner Contribution",  color: "bg-rose-400/80 border-rose-300/50",     group: "non_pnl" },
           owner_draw:          { label: "Owner Draw",          color: "bg-rose-600/80 border-rose-500/50",     group: "non_pnl" },
           merchant_deposit:    { label: "Merchant Deposit",    color: "bg-cyan-600/80 border-cyan-500/50",     group: "non_pnl" },
+          settlement_in:       { label: "Merchant Deposit",    color: "bg-cyan-600/80 border-cyan-500/50",     group: "non_pnl" },
+          settlement_adjustment: { label: "Merchant Adjustment", color: "bg-cyan-700/60 border-cyan-600/40",   group: "non_pnl" },
           opening_balance:     { label: "Opening Balance",     color: "bg-gray-600/80 border-gray-500/50",     group: "non_pnl" },
           unknown:             { label: "Needs Review",        color: "bg-zinc-500/80 border-zinc-400/50",     group: "review" },
+        }
+
+        const getDisplayClass = (m: { movement_class: string; tag?: { economic_class?: string; settlement_subtype?: string } }) => {
+          if (m.movement_class === "merchant_deposit") {
+            if (m.tag?.economic_class === "settlement_adjustment" || m.tag?.settlement_subtype === "merchant_adjustment") return "settlement_adjustment"
+            return "settlement_in"
+          }
+          return m.movement_class
         }
 
         const classCounts: Record<string, number> = {}
@@ -2172,8 +2182,18 @@ export function OnboardingFlow({
           unresolved = summaryFromTags.unresolved
           coalescedCount = summaryFromTags.coalesced_count
           for (const [mc, data] of Object.entries(summaryFromTags.class_counts)) {
-            classCounts[mc] = data.count
-            classAmounts[mc] = data.total_amount
+            if (mc === "merchant_deposit") {
+              for (const m of mvts) {
+                if (m.movement_class === "merchant_deposit") {
+                  const dc = getDisplayClass(m as { movement_class: string; tag?: { economic_class?: string; settlement_subtype?: string } })
+                  classCounts[dc] = (classCounts[dc] ?? 0) + 1
+                  classAmounts[dc] = (classAmounts[dc] ?? 0) + m.amount
+                }
+              }
+            } else {
+              classCounts[mc] = data.count
+              classAmounts[mc] = data.total_amount
+            }
           }
         } else {
           for (const s of mvtSummary) {
@@ -2201,6 +2221,8 @@ export function OnboardingFlow({
           cash_out_refund: "Refund Out", cash_in_refund: "Refund In",
           cash_in_interest: "Interest In", cash_out_interest: "Interest Out",
           merchant_deposit_unresolved: "Merchant Deposit?",
+          settlement_in: "Settlement In",
+          settlement_adjustment: "Merchant Adjustment",
           owner_contribution_candidate: "Owner Contribution?",
           unknown_inflow: "Unknown Inflow", unknown_outflow: "Unknown Outflow",
           unknown_transfer_candidate: "Unknown Transfer?",
@@ -2209,15 +2231,21 @@ export function OnboardingFlow({
           other_operating: "Other Operating",
         }
 
+        const hasSettlementSplit = (classCounts["settlement_in"] ?? 0) > 0 || (classCounts["settlement_adjustment"] ?? 0) > 0
         const pnlClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "pnl").map(([k]) => k).filter((k) => (classCounts[k] ?? 0) > 0)
-        const nonPnlClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "non_pnl").map(([k]) => k).filter((k) => (classCounts[k] ?? 0) > 0)
+        const nonPnlClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "non_pnl").map(([k]) => k).filter((k) => {
+          if (k === "merchant_deposit" && hasSettlementSplit) return false
+          return (classCounts[k] ?? 0) > 0
+        })
         const reviewClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "review").map(([k]) => k).filter((k) => (classCounts[k] ?? 0) > 0)
 
         const isTransferClass = (cls: string) => cls === "internal_transfer"
 
         const renderClassTable = (classKey: string) => {
           const meta = CLASS_META[classKey] ?? { label: classKey, color: "bg-zinc-500/80 border-zinc-400/50", group: "review" }
-          const classMvts = mvts.filter((m) => m.movement_class === classKey)
+          const classMvts = (classKey === "settlement_in" || classKey === "settlement_adjustment")
+            ? mvts.filter((m) => getDisplayClass(m as { movement_class: string; tag?: { economic_class?: string; settlement_subtype?: string } }) === classKey)
+            : mvts.filter((m) => m.movement_class === classKey)
           const isPnl = meta.group === "pnl"
           const isTransfer = isTransferClass(classKey)
           return (
@@ -2267,8 +2295,10 @@ export function OnboardingFlow({
                         const fromType = (md.from_account_subtype as string) ?? (md.from_account_type as string) ?? ""
                         const toName = (md.to_account_name as string) ?? (md.linked_internal_account_id as string) ?? "\u2014"
                         const toType = (md.to_account_subtype as string) ?? (md.to_account_type as string) ?? ""
+                        const isConfidentIncluded = (m as { tag?: { policy_status?: string } }).tag?.policy_status === "included" && m.confidence >= 0.85
+                        const showReviewStyle = m.needs_review && !isConfidentIncluded
                         return (
-                          <tr key={m.id} className={`hover:bg-white/5 ${m.needs_review ? "bg-yellow-500/5" : ""}`}>
+                          <tr key={m.id} className={`hover:bg-white/5 ${showReviewStyle ? "bg-yellow-500/5" : ""}`}>
                             <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.occurred_at?.split("T")[0]}</td>
                             <td className="px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap text-white">
                               ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -2289,7 +2319,7 @@ export function OnboardingFlow({
                               ) })()}
                             </td>
                             <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap" title={`Class: ${Math.round(m.confidence * 100)}% · Evidence: ${Math.round(m.evidence_strength * 100)}`}>
-                              {m.needs_review && <span className="text-yellow-400 mr-1" title={m.review_reasons?.join(", ") ?? "Needs review"}>!</span>}
+                              {showReviewStyle && <span className="text-yellow-400 mr-1" title={m.review_reasons?.join(", ") ?? "Needs review"}>!</span>}
                               <span className="text-white font-medium">Class {Math.round(m.confidence * 100)}%</span>
                               <span className="text-gray-600 ml-0.5">/ Ev {Math.round(m.evidence_strength * 100)}</span>
                             </td>
@@ -2306,7 +2336,7 @@ export function OnboardingFlow({
                         <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Dir</th>
                         <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
-                        {(classKey === "unknown" || classKey === "merchant_deposit") && <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[110px]">Detail</th>}
+                        {(classKey === "unknown" || classKey === "merchant_deposit" || classKey === "settlement_in" || classKey === "settlement_adjustment") && <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[110px]">Detail</th>}
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Prov</th>
                         <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[60px]" title="Classification / Evidence">Conf</th>
@@ -2314,8 +2344,9 @@ export function OnboardingFlow({
                     </thead>
                     <tbody className="divide-y divide-white/5">
                       {classMvts.slice(0, 200).map((m) => {
-                        const isDeterministicTransfer = classKey === "internal_transfer" && (m.confidence >= 0.85 || m.provenance === "coalesced")
-                        const showReviewStyle = m.needs_review && !isDeterministicTransfer
+                        // Phase 14: ! = low-confidence/review; do not show on confident included rows
+                        const isConfidentIncluded = (m as { tag?: { policy_status?: string } }).tag?.policy_status === "included" && m.confidence >= 0.85
+                        const showReviewStyle = m.needs_review && !isConfidentIncluded
                         return (
                         <tr key={m.id} className={`hover:bg-white/5 ${showReviewStyle ? "bg-yellow-500/5" : ""}`}>
                           <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.occurred_at?.split("T")[0]}</td>
@@ -2327,13 +2358,11 @@ export function OnboardingFlow({
                           <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
                             ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
-                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]" title={(m.metadata?.counterparty as string) ?? undefined}>{displayLabelForCounterparty(m.metadata?.counterparty as string)}</td>
-                          {(classKey === "unknown" || classKey === "merchant_deposit") && (
+                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]" title={(m.metadata?.counterparty as string) ?? undefined}>{displayLabelForCounterparty(m.metadata?.counterparty as string, (m as { tag?: { entity_canonical_name?: string } }).tag?.entity_canonical_name)}</td>
+                          {(classKey === "unknown" || classKey === "merchant_deposit" || classKey === "settlement_in" || classKey === "settlement_adjustment") && (
                             <td className="px-3 py-1.5 text-xs">
                               <span className="text-[10px] text-gray-500 bg-white/5 rounded px-1.5 py-0.5">
-                                {classKey === "merchant_deposit" && (m as { tag?: { settlement_subtype?: string } }).tag?.settlement_subtype === "merchant_adjustment"
-                                  ? "Merchant Adjustment"
-                                  : DETAIL_LABELS[m.movement_type_detail] ?? m.movement_type_detail}
+                                {classKey === "settlement_adjustment" ? "Merchant Adjustment" : classKey === "settlement_in" ? "Settlement In" : DETAIL_LABELS[m.movement_type_detail] ?? m.movement_type_detail}
                               </span>
                             </td>
                           )}
@@ -2383,22 +2412,28 @@ export function OnboardingFlow({
 
             {!movementsLoading && !movementsClassifying && mvts.length > 0 && (
               <div className="space-y-6">
-                {/* Summary: explicit state model — two dimensions */}
+                {/* Summary: true partition — each movement in exactly one bucket */}
                 <div className="space-y-4">
-                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Classification (what it is)</div>
+                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">State partition (Included P&L + Included Non-P&L + Excluded + Unresolved + Coalesced = Total)</div>
                   <div className="flex flex-wrap gap-3 items-end">
                     <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
-                      <div className="text-2xl font-bold text-white">{mvts.length}</div>
+                      <div className="text-2xl font-bold text-white">{mvts.length + coalescedCount}</div>
                       <div className="text-xs text-gray-400">Total movements</div>
                     </div>
                     <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
-                      <div className="text-2xl font-bold text-emerald-400">{pnlCount}</div>
-                      <div className="text-xs text-emerald-400/70">P&L eligible</div>
+                      <div className="text-2xl font-bold text-emerald-400">{summaryFromTags?.included_pnl ?? 0}</div>
+                      <div className="text-xs text-emerald-400/70">Included P&L</div>
                     </div>
-                    <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
-                      <div className="text-2xl font-bold text-gray-400">{nonPnlCount}</div>
-                      <div className="text-xs text-gray-500">Non-P&L</div>
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+                      <div className="text-2xl font-bold text-emerald-300">{summaryFromTags?.included_non_pnl ?? 0}</div>
+                      <div className="text-xs text-emerald-400/60">Included Non-P&L</div>
                     </div>
+                    {excludedForReview > 0 && (
+                      <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
+                        <div className="text-2xl font-bold text-yellow-400">{excludedForReview}</div>
+                        <div className="text-xs text-yellow-400/70">Excluded for review</div>
+                      </div>
+                    )}
                     {unresolved > 0 && (
                       <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
                         <div className="text-2xl font-bold text-red-400">{unresolved}</div>
@@ -2408,20 +2443,7 @@ export function OnboardingFlow({
                     {coalescedCount > 0 && (
                       <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
                         <div className="text-2xl font-bold text-green-400">{coalescedCount}</div>
-                        <div className="text-xs text-green-400/70">Coalesced (multi-source)</div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mt-4">Policy (included in state vs excluded for review)</div>
-                  <div className="flex flex-wrap gap-3 items-end">
-                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
-                      <div className="text-2xl font-bold text-emerald-400">{summaryFromTags ? summaryFromTags.included_count : Math.max(0, pnlCount + nonPnlCount - excludedForReview)}</div>
-                      <div className="text-xs text-emerald-400/70">Included in state</div>
-                    </div>
-                    {excludedForReview > 0 && (
-                      <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
-                        <div className="text-2xl font-bold text-yellow-400">{excludedForReview}</div>
-                        <div className="text-xs text-yellow-400/70">Excluded for review</div>
+                        <div className="text-xs text-green-400/70">Coalesced hidden</div>
                       </div>
                     )}
                   </div>

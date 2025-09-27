@@ -25,10 +25,17 @@ export type Provenance = "bank_observed" | "accounting_observed" | "coalesced"
 
 export type ReviewReason =
   | "low_classification_confidence"
+  | "weak_classification"
+  | "weak_entity_match"
   | "direction_type_mismatch"
   | "provisional_classification"
   | "llm_fallback"
   | "low_evidence"
+  | "owner_vs_processor_conflict"
+  | "transfer_endpoint_unknown"
+  | "duplicate_candidate"
+  | "synthetic_label"
+  | "settlement_adjustment_ambiguous"
 
 export type CanonicalMovement = {
   id: string
@@ -125,11 +132,16 @@ export function isClassPnlEligible(mc: MovementClass): boolean {
 
 export type StateInclusionPolicy = "include" | "include_provisional" | "exclude_and_review"
 
+/** One final state per transaction. Drives summary partition. */
+export type PolicyStatus = "included" | "excluded_for_review" | "unresolved" | "coalesced_hidden"
+
 export function computeStatePolicy(
   classificationConfidence: number,
   evidenceStrength: number,
   needsReview: boolean,
+  economicClass?: string,
 ): StateInclusionPolicy {
+  if (economicClass === "unknown") return "exclude_and_review" // Never include unknowns until resolved
   if (needsReview || classificationConfidence < 0.55) return "exclude_and_review"
   if (classificationConfidence >= 0.80 && evidenceStrength >= 0.15) return "include"
   return "include_provisional"
@@ -164,6 +176,8 @@ export type EconomicClass =
   | "owner_draw"
   | "processor_fee"
   | "processor_payout"
+  | "settlement_in"
+  | "settlement_adjustment"
   | "refund"
   | "tax"
   | "debt_payment"
@@ -184,6 +198,7 @@ export type CashflowBucket =
   | "financing_out"
   | "transfer"
   | "settlement"
+  | "settlement_adjustment"
   | "system_setup"
   | "unknown"
 
@@ -221,7 +236,7 @@ export function computeStateScope(
   const isRevenue = cashflowBucket === "revenue_in" || cashflowBucket === "contra_revenue"
   const isOperatingInflow = cashflowBucket === "other_operating_in" || cashflowBucket === "other_income"
   const isSpend = cashflowBucket === "opex_out" || cashflowBucket === "cogs_out"
-  const isSettlement = cashflowBucket === "settlement"
+  const isSettlement = cashflowBucket === "settlement" || cashflowBucket === "settlement_adjustment"
   const isTransfer = cashflowBucket === "transfer"
   const isSystemSetup = cashflowBucket === "system_setup"
   const isFinancing = cashflowBucket === "financing_in" || cashflowBucket === "financing_out"
@@ -289,6 +304,8 @@ export type MovementTag = {
 
   state_scope: StateScope
   state_inclusion_policy: StateInclusionPolicy
+  /** One final state per transaction. Drives summary partition. */
+  policy_status: PolicyStatus
   classification_confidence: number
   evidence_strength: number
   needs_review: boolean

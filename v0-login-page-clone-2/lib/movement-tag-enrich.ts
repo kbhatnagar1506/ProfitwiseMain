@@ -10,6 +10,7 @@
 
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { log } from "@/lib/logger"
+import { normalizeForMatch } from "@/lib/alias-normalize"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type {
   CanonicalMovement,
@@ -17,6 +18,7 @@ import type {
   EconomicClass,
   CashflowBucket,
   CounterpartyRole,
+  PolicyStatus,
   ReviewReason,
   UnresolvedImpact,
   OwnerDependency,
@@ -44,6 +46,8 @@ type TagContext = {
   families: Map<string, FamilyRow>
   allCounterparties: Set<string>
   amountStats: { mean: number; stddev: number }
+  /** Normalized counterparty/alias -> entity_id for first-seen dedup */
+  aliasToEntityId: Map<string, string>
 }
 
 async function loadTagContext(userId: string, movements: CanonicalMovement[]): Promise<TagContext> {
@@ -67,6 +71,17 @@ async function loadTagContext(userId: string, movements: CanonicalMovement[]): P
     familyMap.set(f.family_key, f)
   }
 
+  const aliasToEntityId = new Map<string, string>()
+  const aliasRows = await query<{ entity_id: string; alias: string }>(
+    `SELECT ea.entity_id, ea.alias FROM entity_aliases ea
+     JOIN entities e ON e.id = ea.entity_id WHERE e.user_id = $1`,
+    [userId]
+  ).then((r) => r.rows)
+  for (const a of aliasRows) {
+    const norm = normalizeForMatch(a.alias)
+    if (norm) aliasToEntityId.set(norm, a.entity_id)
+  }
+
   const allCp = new Set<string>()
   const amounts: number[] = []
   for (const m of movements) {
@@ -81,7 +96,7 @@ async function loadTagContext(userId: string, movements: CanonicalMovement[]): P
     : 0
   const stddev = Math.sqrt(variance)
 
-  return { entities: entityMap, families: familyMap, allCounterparties: allCp, amountStats: { mean, stddev } }
+  return { entities: entityMap, families: familyMap, allCounterparties: allCp, amountStats: { mean, stddev }, aliasToEntityId }
 }
 
 // ─── Level 1: Deterministic tagging ─────────────────────────────────
@@ -285,15 +300,19 @@ function expenseSubtype(m: CanonicalMovement, bucket: string): string | null {
   const desc = ((m.raw_description ?? "") + " " + ((m.metadata?.counterparty as string) ?? "")).toLowerCase()
   const saas = /\b(google workspace|zapier|docu?sign|salesforce|hubspot|slack|notion|asana|monday|atlassian|microsoft 365|adobe|intuit|quickbooks)\b/i
   const gov = /\b(georgia|state of|secretary of state|corporate registration|filing fee|irs|tax)\b/i
+  const adminFiling = /\b(filing fee|corporate registration|annual report|state filing)\b/i
   const marketplace = /\b(amazon|shopify|ebay|etsy|walmart)\b/i
   const admin = /\b(lawyer|attorney|cpa|accountant|consultant|professional)\b/i
-  const inventory = /\b(wholesale|supplier|inventory|ship|freight|fulfillment|warehouse)\b/i
+  const inventory = /\b(wholesale|supplier|inventory|fulfillment|warehouse)\b/i
+  const shipping = /\b(ship|freight|ups|fedex|usps|dhl|logistics)\b/i
   if (saas.test(desc)) return "saas_software"
+  if (adminFiling.test(desc)) return "admin_filing"
   if (gov.test(desc)) return "government_filing"
   if (marketplace.test(desc)) return "marketplace_misc"
-  if (admin.test(desc)) return "admin_professional"
+  if (shipping.test(desc)) return "shipping_logistics"
+  if (admin.test(desc)) return "professional_services"
   if (inventory.test(desc)) return "inventory_supplier"
-  return "admin_professional" // default for uncategorized opex
+  return "professional_services" // default for uncategorized opex
 }
 
 function settlementSubtype(m: CanonicalMovement, bucket: string): string | null {
@@ -356,7 +375,9 @@ function tagLevel3(
   const is_large_outlier = stddev > 0 && m.amount > mean + 3 * stddev
   const is_anomaly = stddev > 0 && m.amount > mean + 2.5 * stddev
 
-  const entityKey = (m.entity_id ?? (m.metadata?.counterparty as string)?.toLowerCase() ?? "").trim()
+  const cp = (m.metadata?.counterparty as string) ?? ""
+  const entityIdFromAlias = cp ? ctx.aliasToEntityId.get(normalizeForMatch(cp)) : undefined
+  const entityKey = (m.entity_id ?? entityIdFromAlias ?? cp.toLowerCase()).trim()
   const is_first_seen_counterparty = !!entityKey && firstSeenKeys.has(entityKey)
 
   return { recurrence_family_id, is_recurring, is_anomaly, is_large_outlier, is_first_seen_counterparty }
@@ -421,13 +442,15 @@ export async function tagMovements(userId: string): Promise<{
 
   const ctx = await loadTagContext(userId, movements)
 
-  // Phase 3.1: First-seen from canonical entity + analysis window (plan #14)
+  // Phase 3.1 + Phase 8: First-seen on canonical entity ID (avoid overcount: Jack/JACK/jack test -> one first-seen)
   const byDateAsc = [...movements].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime())
   const earliestDate = byDateAsc.length > 0 ? byDateAsc[0].occurred_at : ""
   const firstSeenKeys = new Set<string>()
   const seenInWindow = new Set<string>()
   for (const m of byDateAsc) {
-    const key = (m.entity_id ?? (m.metadata?.counterparty as string)?.toLowerCase() ?? "").trim()
+    const cp = (m.metadata?.counterparty as string) ?? ""
+    const entityIdFromAlias = cp ? ctx.aliasToEntityId.get(normalizeForMatch(cp)) : undefined
+    const key = (m.entity_id ?? entityIdFromAlias ?? cp.toLowerCase()).trim()
     if (key && !seenInWindow.has(key)) {
       firstSeenKeys.add(key)
       seenInWindow.add(key)
@@ -469,8 +492,40 @@ export async function tagMovements(userId: string): Promise<{
     const settlement_subtype = settlementSubtype(m, base.cashflow_bucket)
     const expense_subtype = expenseSubtype(m, base.cashflow_bucket)
 
-    const policy = computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review)
+    // Split settlement deposit vs adjustment (Phase 5)
+    if (base.cashflow_bucket === "settlement") {
+      if (settlement_subtype === "merchant_adjustment") {
+        base = { ...base, economic_class: "settlement_adjustment", cashflow_bucket: "settlement_adjustment" }
+      } else {
+        base = { ...base, economic_class: "settlement_in" }
+      }
+    }
+
+    const policy = computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review, base.economic_class)
     const scope = computeStateScope(base.economic_class, base.cashflow_bucket, base.hits_working_capital)
+
+    // Synthetic label detection: compound phrase with generic product (e.g. "X Performance Nutrition")
+    const cp = ((m.metadata?.counterparty as string) ?? "").toLowerCase()
+    const desc = ((m.raw_description ?? "") + " " + cp).toLowerCase()
+    const hasGenericProductPhrase = /\b(performance\s+nutrition|nutrition\s+center)\b/.test(cp)
+    const isCompoundPhrase = cp.split(/\s+/).filter(Boolean).length >= 3
+    const isSyntheticLabel = base.economic_class === "customer_receipt" && hasGenericProductPhrase && isCompoundPhrase
+
+    // Owner vs settlement collision: owner_contribution with merchant-bank deposit narrative → review
+    const hasMerchantDepositNarrative = /\b(merchant|bankcd|bank\s*card|deposit)\b/.test(desc)
+    const isOwnerVsSettlementCollision = base.economic_class === "owner_contribution" && hasMerchantDepositNarrative
+
+    // One final state per transaction: policy_status drives summary partition
+    let policy_status: PolicyStatus
+    if (base.economic_class === "transfer" && (m.metadata?.transfer_type as string) === "cross_account") {
+      policy_status = "included" // High-confidence owned-account transfer: deterministic, always include
+    } else if (base.economic_class === "unknown") {
+      policy_status = "unresolved"
+    } else if (isSyntheticLabel || isOwnerVsSettlementCollision || policy === "exclude_and_review") {
+      policy_status = "excluded_for_review"
+    } else {
+      policy_status = "included"
+    }
 
     tags.push({
       movement_id: m.id,
@@ -488,10 +543,11 @@ export async function tagMovements(userId: string): Promise<{
 
       state_scope: scope,
       state_inclusion_policy: policy,
+      policy_status,
       classification_confidence: m.confidence,
       evidence_strength: m.evidence_strength,
-      needs_review: m.needs_review,
-      review_reasons: m.review_reasons,
+      needs_review: isSyntheticLabel || isOwnerVsSettlementCollision ? true : m.needs_review,
+      review_reasons: isSyntheticLabel ? [...m.review_reasons, "synthetic_label"] : isOwnerVsSettlementCollision ? [...m.review_reasons, "owner_vs_processor_conflict"] : m.review_reasons,
 
       entity_id: m.entity_id,
       customer_id: links.customer_id,
@@ -554,6 +610,7 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
         JSON.stringify({
           state_scope: t.state_scope,
           state_inclusion_policy: t.state_inclusion_policy,
+          policy_status: t.policy_status,
           is_operating: t.is_operating,
           is_financing: t.is_financing,
           is_investing: t.is_investing,
