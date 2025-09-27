@@ -1389,24 +1389,48 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
 }
 
 // ─── Step 6b: Provisional classes ───────────────────────────────────
+//
+// Merchant deposit is a BANK DESCRIPTOR, not accounting truth. Classify by evidence:
+// - Settlement (processor): counterparty is processor, narrative is payout/batch, sales recorded elsewhere
+// - Customer receipt (revenue): deposit is first/only evidence, ties to customer/invoice/order
+
+function hasDirectRevenueEvidence(m: CanonicalMovement): boolean {
+  for (const e of m.evidence) {
+    const md = e.metadata ?? {}
+    if (md.order_id ?? md.invoice_id ?? md.payment_intent_id) return true
+  }
+  const merged = m.metadata ?? {}
+  return !!(merged.order_id ?? merged.invoice_id ?? merged.payment_intent_id)
+}
 
 function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEntry | null, selfCtx: SelfContext): ClassifyResult | null {
   const desc = (m.raw_description ?? "").toLowerCase()
+  const cp = ((m.counterparty ?? "") + " " + desc).toLowerCase()
   const srcAuth = getSourceAuthority(m.evidence)
   const isMerchantDepositDesc = MERCHANT_DEPOSIT_PATTERNS.some((p) => p.test(desc))
   const hasStrongProcessorEvidence = PROCESSOR_PAYOUT_DESC_PATTERNS.some((p) => p.test(desc)) ||
-    /\b(shopify|stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree)\b/i.test(desc)
+    /\b(shopify|stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree)\b.*\b(payout|settlement|ach|batch|deposit)\b/i.test(cp) ||
+    /\b(shopify|stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree)\b/i.test(m.counterparty ?? "") ||
+    identity?.role === "processor"
+  const hasCustomerEvidence = (identity?.role === "customer" && (identity?.confidence ?? 0) >= 0.6) ||
+    hasDirectRevenueEvidence(m)
+  const cpWords = (m.counterparty ?? "").toLowerCase().split(/\s+/).filter((t) => t.length >= 3)
   const isOwnerLinked = identity?.role === "owner" || identity?.role === "internal" ||
-    (selfCtx.ownerNames.length > 0 && (m.counterparty ?? "").toLowerCase().split(/\s+/).some((t) => t.length >= 3 && selfCtx.ownerNames.some((on) => normKey(on).includes(normKey(t)) || normKey(t).includes(normKey(on)))))
+    (selfCtx.ownerNames.length > 0 && cpWords.some((t) => selfCtx.ownerNames.some((on) => normKey(on).includes(normKey(t)) || normKey(t).includes(normKey(on)))))
 
-  // Merchant deposit with owner-linked identity but no strong processor evidence → collision review (do not promote to owner contribution)
-  if (m.direction === "inflow" && isMerchantDepositDesc && isOwnerLinked && !hasStrongProcessorEvidence) {
-    return { type: "review_candidate_revenue", signals: { pattern_strength: 0.35, source_authority: srcAuth } }
-  }
-
-  // Merchant deposit: recurring BANKCD/DEPOSIT patterns — recognized economic class
+  // Merchant deposit descriptor: classify by evidence, not label
   if (m.direction === "inflow" && isMerchantDepositDesc) {
-    return { type: "merchant_deposit_unresolved", signals: { pattern_strength: 0.65, source_authority: srcAuth } }
+    if (hasStrongProcessorEvidence) {
+      return { type: "processor_payout", signals: { pattern_strength: 0.90, source_authority: srcAuth } }
+    }
+    if (hasCustomerEvidence) {
+      return { type: "cash_in_customer", signals: { pattern_strength: 0.80, entity_confidence: identity?.confidence ?? 0.7, source_authority: srcAuth } }
+    }
+    if (isOwnerLinked && !hasStrongProcessorEvidence) {
+      return { type: "review_candidate_revenue", signals: { pattern_strength: 0.35, source_authority: srcAuth } }
+    }
+    // Ambiguous: no processor or customer evidence — send to review, do not assume settlement
+    return { type: "review_candidate_revenue", signals: { pattern_strength: 0.45, source_authority: srcAuth } }
   }
 
   // Inflows from owner-linked entities without strong signals — NEVER if merchant deposit descriptor
