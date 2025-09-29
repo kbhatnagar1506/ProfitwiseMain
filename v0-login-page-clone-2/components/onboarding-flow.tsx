@@ -1313,6 +1313,267 @@ export function OnboardingFlow({
       }
 
       case 8: {
+        const plaidTxns = Array.isArray(rawData?.plaid.transactions) ? rawData?.plaid.transactions ?? [] : []
+        const plaidAccounts = Array.isArray(rawData?.plaid.accounts) ? rawData?.plaid.accounts ?? [] : []
+        const qboEntities = rawData?.qbo ?? {}
+        const xeroEntities = rawData?.xero ?? {}
+        const stripeEntities = rawData?.stripe ?? {}
+        const gmailExtracts = rawData?.gmail.extracted ?? []
+
+        // New Step 8: raw data review only. Old tagging UI below is now unreachable.
+        if (true) {
+          return (
+            <div className="pt-0 pb-2 w-full">
+              <h2 className="text-3xl font-bold tracking-tight text-white mb-2">{steps[7].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[7].description}</p>
+
+              {rawDataLoading && (
+                <div className="flex items-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Loading raw data…
+                </div>
+              )}
+
+              {rawDataError && !rawDataLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed to load raw data: {rawDataError}</p>
+              )}
+
+              {!rawDataLoading && !rawData && !rawDataError && (
+                <p className="text-gray-400 text-sm mb-4">
+                  No raw data found yet. Connect integrations and run syncs to see data here.
+                </p>
+              )}
+
+              {rawData && (
+                <div className="space-y-6">
+                  <div className="rounded-xl border border-white/20 bg-white/5 p-4">
+                    <h3 className="text-lg font-semibold text-white mb-2">
+                      Plaid — Bank transactions (last 2 years)
+                    </h3>
+                    <p className="text-gray-400 text-sm mb-3">
+                      Showing up to 200 most recent transactions from Plaid.
+                    </p>
+                    {plaidTxns.length === 0 ? (
+                      <p className="text-gray-400 text-sm">No Plaid transactions yet.</p>
+                    ) : (
+                      <div className="rounded-lg border border-white/20 bg-black/40 overflow-x-auto max-h-[40vh]">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="border-white/20 hover:bg-transparent">
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                Date
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                Account
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                Name
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap text-right">
+                                Amount
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                Raw JSON
+                              </TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {plaidTxns.slice(0, 200).map((tx: any, idx: number) => {
+                              const account = plaidAccounts.find((a: any) => a.account_id === tx.account_id)
+                              return (
+                                <TableRow
+                                  key={tx.transaction_id ?? idx}
+                                  className="border-white/20 hover:bg-white/5 align-top"
+                                >
+                                  <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-sm">
+                                    {tx.date ?? "—"}
+                                  </TableCell>
+                                  <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-sm">
+                                    {account?.name ?? tx.account_id ?? "—"}
+                                  </TableCell>
+                                  <TableCell className="text-white border-white/20 px-3 py-2 whitespace-nowrap text-sm">
+                                    {tx.name ?? "—"}
+                                  </TableCell>
+                                  <TableCell className="text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap text-right text-sm">
+                                    {typeof tx.amount === "number"
+                                      ? formatBalance(tx.amount)
+                                      : String(tx.amount ?? "—")}
+                                  </TableCell>
+                                  <TableCell className="text-gray-400 border-white/20 px-3 py-2 text-xs max-w-[260px]">
+                                    <code className="block whitespace-pre overflow-x-auto">
+                                      {JSON.stringify(tx, null, 2)}
+                                    </code>
+                                  </TableCell>
+                                </TableRow>
+                              )
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-white/20 bg-white/5 p-4">
+                    <h3 className="text-lg font-semibold text-white mb-2">QuickBooks Online — raw entities</h3>
+                    <p className="text-gray-400 text-sm mb-3">
+                      Every synced QBO entity type is shown as JSON, grouped by type.
+                    </p>
+                    {Object.keys(qboEntities).length === 0 ? (
+                      <p className="text-gray-400 text-sm">No QBO entities synced yet.</p>
+                    ) : (
+                      <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-1">
+                        {Object.entries(qboEntities).map(([entityType, list]) => (
+                          <div
+                            key={entityType}
+                            className="rounded-lg border border-white/15 bg-black/40 p-3"
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-sm font-medium text-white">{entityType}</span>
+                              <span className="text-xs text-gray-400">
+                                {Array.isArray(list) ? list.length : 0} records
+                              </span>
+                            </div>
+                            <pre className="text-xs text-gray-300 bg-black/60 rounded-md p-2 overflow-x-auto max-h-40">
+                              {JSON.stringify(list, null, 2)}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-white/20 bg-white/5 p-4">
+                    <h3 className="text-lg font-semibold text-white mb-2">Xero — raw entities</h3>
+                    <p className="text-gray-400 text-sm mb-3">
+                      Raw synced objects from Xero, grouped by type.
+                    </p>
+                    {Object.keys(xeroEntities).length === 0 ? (
+                      <p className="text-gray-400 text-sm">No Xero entities synced yet.</p>
+                    ) : (
+                      <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-1">
+                        {Object.entries(xeroEntities).map(([entityType, list]) => (
+                          <div
+                            key={entityType}
+                            className="rounded-lg border border-white/15 bg-black/40 p-3"
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-sm font-medium text-white">{entityType}</span>
+                              <span className="text-xs text-gray-400">
+                                {Array.isArray(list) ? list.length : 0} records
+                              </span>
+                            </div>
+                            <pre className="text-xs text-gray-300 bg-black/60 rounded-md p-2 overflow-x-auto max-h-40">
+                              {JSON.stringify(list, null, 2)}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-white/20 bg-white/5 p-4">
+                    <h3 className="text-lg font-semibold text-white mb-2">Stripe — raw entities</h3>
+                    <p className="text-gray-400 text-sm mb-3">
+                      Invoices, customers, payments, and other Stripe records in raw form.
+                    </p>
+                    {Object.keys(stripeEntities).length === 0 ? (
+                      <p className="text-gray-400 text-sm">No Stripe entities synced yet.</p>
+                    ) : (
+                      <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-1">
+                        {Object.entries(stripeEntities).map(([entityType, list]) => (
+                          <div
+                            key={entityType}
+                            className="rounded-lg border border-white/15 bg-black/40 p-3"
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-sm font-medium text-white">{entityType}</span>
+                              <span className="text-xs text-gray-400">
+                                {Array.isArray(list) ? list.length : 0} records
+                              </span>
+                            </div>
+                            <pre className="text-xs text-gray-300 bg-black/60 rounded-md p-2 overflow-x-auto max-h-40">
+                              {JSON.stringify(list, null, 2)}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-white/20 bg-white/5 p-4">
+                    <h3 className="text-lg font-semibold text-white mb-2">
+                      Gmail — messages with extracted invoices
+                    </h3>
+                    <p className="text-gray-400 text-sm mb-3">
+                      Raw Gmail metadata plus the LLM-extracted invoice JSON we now store on each
+                      message.
+                    </p>
+                    {gmailExtracts.length === 0 ? (
+                      <p className="text-gray-400 text-sm">No Gmail invoice messages yet.</p>
+                    ) : (
+                      <div className="rounded-lg border border-white/20 bg-black/40 overflow-x-auto max-h-[40vh]">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="border-white/20 hover:bg-transparent">
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                Message ID
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                From
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                To
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                Date
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                Subject
+                              </TableHead>
+                              <TableHead className="text-gray-300 font-semibold border-white/20 bg-white/10 px-3 py-2 whitespace-nowrap">
+                                Extracted invoice JSON
+                              </TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {gmailExtracts.map((m: any) => (
+                              <TableRow
+                                key={m.message_id}
+                                className="border-white/20 hover:bg-white/5 align-top"
+                              >
+                                <TableCell className="text-xs text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">
+                                  {m.message_id}
+                                </TableCell>
+                                <TableCell className="text-xs text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">
+                                  {m.from_email ?? "—"}
+                                </TableCell>
+                                <TableCell className="text-xs text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">
+                                  {m.to_emails ?? "—"}
+                                </TableCell>
+                                <TableCell className="text-xs text-gray-300 border-white/20 px-3 py-2 whitespace-nowrap">
+                                  {m.date_sent ?? "—"}
+                                </TableCell>
+                                <TableCell className="text-xs text-white border-white/20 px-3 py-2 whitespace-nowrap max-w-[220px] truncate">
+                                  {m.subject ?? "—"}
+                                </TableCell>
+                                <TableCell className="text-xs text-gray-300 border-white/20 px-3 py-2 max-w-[260px]">
+                                  <code className="block whitespace-pre overflow-x-auto">
+                                    {JSON.stringify(m.extracted_invoice, null, 2)}
+                                  </code>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        }
+
         const reloadTableFromDb = () => {
           setSelectedAccountingTransaction(null)
           setMerchantsNormalizeError(null)
