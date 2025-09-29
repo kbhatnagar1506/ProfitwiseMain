@@ -10,10 +10,6 @@ import {
   gcpGetEntities,
   gcpDeleteEntity,
 } from "./entity-store-gcp"
-import { normalizeQboInvoice } from "./invoice-adapters"
-import { upsertUnifiedInvoices, deleteUnifiedInvoice } from "./unified-invoices"
-import { insertInvoiceDocument } from "./invoice-documents"
-import { resolveInvoiceCandidate } from "./ap-ar-resolver"
 
 function getEntityId(item: unknown): string | null {
   if (item == null || typeof item !== "object") return null
@@ -66,22 +62,6 @@ export async function upsertEntities(
       const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
       const insertedGcp = await gcpUpsertEntities("qbo", realmId, entityType, items, getEntityId, userId)
       totalInserted = Math.max(totalInserted, insertedGcp)
-      if (entityType === "Invoice" && userId) {
-        await upsertUnifiedInvoices(userId, "qbo", realmId, items)
-        for (const item of items) {
-          const obj = item as Record<string, unknown>
-          const id = obj.Id != null ? String(obj.Id) : null
-          if (id) {
-            try {
-              const normalized = normalizeQboInvoice(obj, userId, realmId)
-              const versionId = await insertInvoiceDocument(normalized, "qbo", id, null, item)
-              if (versionId) await resolveInvoiceCandidate(versionId, { shadowMode: false })
-            } catch (e) {
-              log("qbo.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "qbo")
-            }
-          }
-        }
-      }
     } catch (err) {
       log("entity_store.upsert.failed", { realmId, entityType, error: err instanceof Error ? err.message : String(err) }, "qbo")
       throw err
@@ -107,25 +87,6 @@ export async function upsertEntities(
       }
       if (inserted > 0) {
         log("entity_store.upsert.succeeded", { realmId, entityType, count: inserted }, "qbo")
-        if (entityType === "Invoice") {
-          const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
-          if (userId) {
-            await upsertUnifiedInvoices(userId, "qbo", realmId, items)
-            for (const item of items) {
-              const obj = item as Record<string, unknown>
-              const id = obj.Id != null ? String(obj.Id) : null
-              if (id) {
-                try {
-                  const normalized = normalizeQboInvoice(obj, userId, realmId)
-                  const versionId = await insertInvoiceDocument(normalized, "qbo", id, null, item)
-                  if (versionId) await resolveInvoiceCandidate(versionId, { shadowMode: false })
-                } catch (e) {
-                  log("qbo.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "qbo")
-                }
-              }
-            }
-          }
-        }
       }
       totalInserted = Math.max(totalInserted, inserted)
       return totalInserted
@@ -177,7 +138,6 @@ export async function deleteEntity(
     try {
       const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
       const ok = await gcpDeleteEntity("qbo", realmId, entityType, entityId, getEntityId, userId)
-      if (ok && entityType === "Invoice" && userId) await deleteUnifiedInvoice(userId, "qbo", realmId, entityId)
       return ok
     } catch (err) {
       log("entity_store.delete.failed", { realmId, entityType, entityId, error: String(err) }, "qbo")
@@ -191,10 +151,6 @@ export async function deleteEntity(
         "DELETE FROM qbo_entities WHERE realm_id = $1 AND entity_type = $2 AND entity_id = $3",
         [realmId, entityType, entityId]
       )
-      if (entityType === "Invoice") {
-        const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
-        if (userId) await deleteUnifiedInvoice(userId, "qbo", realmId, entityId)
-      }
       log("entity_store.delete.succeeded", { realmId, entityType, entityId }, "qbo")
       return true
     } catch (err) {
@@ -206,10 +162,6 @@ export async function deleteEntity(
   if (!byRealm) return true
   const byType = byRealm.get(entityType) as Map<string, unknown> | undefined
   if (byType) byType.delete(entityId)
-  if (entityType === "Invoice") {
-    const userId = options?.userId ?? (await getUserIdByRealmId(realmId))
-    if (userId) await deleteUnifiedInvoice(userId, "qbo", realmId, entityId)
-  }
   log("entity_store.delete.succeeded", { realmId, entityType, entityId }, "qbo")
   return true
 }

@@ -1,8 +1,7 @@
 /**
- * Gmail invoice/bill extraction via LLM. Produces NormalizedInvoiceJSON from email content.
+ * Gmail invoice/bill extraction via LLM. Produces a standalone extracted-invoice JSON object from email content.
  */
 
-import type { NormalizedInvoiceJSON, InvoiceProvider } from "./invoice-documents"
 import { log } from "./logger"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
@@ -15,6 +14,31 @@ export type GmailMessageRow = {
   to_emails: string | null
   subject: string | null
   body_plain: string | null
+}
+
+export type ExtractedInvoice = {
+  is_invoice_or_bill: boolean
+  side: "AP" | "AR" | "unknown"
+  kind: "invoice" | "bill" | "payment" | "other"
+  invoice_number: string | null
+  issue_date: string | null
+  due_date: string | null
+  currency: string | null
+  total: number | null
+  amount_outstanding: number | null
+  status: "open" | "paid" | "partially_paid" | "void" | "cancelled" | "draft" | "unknown"
+  counterparty_type: "customer" | "vendor" | "other" | "unknown"
+  counterparty_name: string | null
+  counterparty_email: string | null
+  lines: {
+    description: string
+    quantity: number
+    unit_price: number | null
+    amount: number | null
+    sku: string | null
+    account_code: string | null
+  }[]
+  source_system_hint: "stripe" | "qbo" | "other" | null
 }
 
 const SYSTEM_PROMPT = `You are a financial document classifier. You read one email and output exactly one JSON object. No markdown, no code fences, no explanation — only the JSON.
@@ -124,9 +148,9 @@ function candidateKeywords(subject: string | null, body: string | null): boolean
 
 export async function extractInvoiceFromGmail(
   msg: GmailMessageRow,
-  userId: string,
+  _userId: string,
   invoiceSenderHints: string[] = []
-): Promise<NormalizedInvoiceJSON | null> {
+): Promise<ExtractedInvoice | null> {
   if (!candidateKeywords(msg.subject, msg.body_plain)) {
     log("gmail.invoice_extract.skipped_no_keywords", { messageId: msg.message_id, subject: msg.subject?.slice(0, 80), bodyLen: (msg.body_plain ?? "").length }, "gmail")
     return null
@@ -199,15 +223,15 @@ export async function extractInvoiceFromGmail(
     return null
   }
 
-  const side = (parsed.side === "AP" || parsed.side === "AR" ? parsed.side : "unknown") as "AP" | "AR" | "unknown"
-  const kind = (["invoice", "bill", "payment", "other"].includes(parsed.kind as string) ? parsed.kind : "other") as "invoice" | "bill" | "payment" | "other"
+  const side = (parsed.side === "AP" || parsed.side === "AR" ? parsed.side : "unknown") as ExtractedInvoice["side"]
+  const kind = (["invoice", "bill", "payment", "other"].includes(parsed.kind as string) ? parsed.kind : "other") as ExtractedInvoice["kind"]
   const status = (["open", "paid", "partially_paid", "void", "cancelled", "draft", "unknown"].includes(parsed.status as string)
     ? parsed.status
-    : "unknown") as NormalizedInvoiceJSON["status"]
+    : "unknown") as ExtractedInvoice["status"]
   const counterpartyType = (["customer", "vendor", "other", "unknown"].includes(parsed.counterparty_type as string)
     ? parsed.counterparty_type
-    : "unknown") as NormalizedInvoiceJSON["counterparty_type"]
-  const hint = (["stripe", "qbo", "other"].includes(parsed.source_system_hint as string) ? parsed.source_system_hint : null) as "stripe" | "qbo" | "other" | null
+    : "unknown") as ExtractedInvoice["counterparty_type"]
+  const hint = (["stripe", "qbo", "other"].includes(parsed.source_system_hint as string) ? parsed.source_system_hint : null) as ExtractedInvoice["source_system_hint"]
 
   const lines = Array.isArray(parsed.lines)
     ? (parsed.lines as Array<Record<string, unknown>>).map((l) => ({
@@ -250,9 +274,8 @@ export async function extractInvoiceFromGmail(
             ? "AR"
             : "unknown"
 
-  const normalized: NormalizedInvoiceJSON = {
-    version: 1,
-    user_id: userId,
+  const normalized: ExtractedInvoice = {
+    is_invoice_or_bill: true,
     side: inferredSide,
     kind: inferredKind,
     invoice_number: typeof parsed.invoice_number === "string" ? parsed.invoice_number : null,
@@ -266,21 +289,7 @@ export async function extractInvoiceFromGmail(
     counterparty_name: typeof parsed.counterparty_name === "string" ? parsed.counterparty_name : null,
     counterparty_email: typeof parsed.counterparty_email === "string" ? parsed.counterparty_email : null,
     lines,
-    meta: {
-      source_system: "gmail" as InvoiceProvider,
-      source_system_hint: hint,
-      provider_invoice_id: msg.message_id,
-      provider_data: {},
-      gmail_message_id: msg.message_id,
-      gmail_thread_id: msg.thread_id,
-      gmail_subject: msg.subject,
-      gmail_body_excerpt: (msg.body_plain ?? "").slice(0, 500),
-      stripe_invoice_id: null,
-      stripe_customer_id: null,
-      qbo_invoice_id: null,
-      xero_invoice_id: null,
-      raw_payload: {},
-    },
+    source_system_hint: hint,
   }
   return normalized
 }

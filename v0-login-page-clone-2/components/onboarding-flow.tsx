@@ -86,10 +86,9 @@ const steps = [
   { id: 7, title: "Company profile", description: "Fill in key details about how your business is set up." },
   {
     id: 8,
-    title: "Review transaction tagging",
-    description: "Verify merchants, tags, and subscription types on your recent transactions.",
+    title: "Review your data",
+    description: "Inspect the raw data we’ve pulled in from your banks, accounting tools, and Gmail.",
   },
-  { id: 9, title: "Invoice preview", description: "Confirm we’re seeing the invoices you expect." },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -151,45 +150,20 @@ export function OnboardingFlow({
   const [companyFormSaveLoading, setCompanyFormSaveLoading] = useState(false)
   const [companyFormAutofillLoading, setCompanyFormAutofillLoading] = useState(false)
   const [step7BankAccounts, setStep7BankAccounts] = useState<{ name: string; mask: string | null }[]>([])
-  const [merchantEditDraft, setMerchantEditDraft] = useState<{ normalized_name: string; tag: string; transaction_type: string }>({
-    normalized_name: "",
-    tag: "",
-    transaction_type: "One-time",
-  })
-  const [merchantSaveLoading, setMerchantSaveLoading] = useState(false)
-  const [merchantsNormalizeError, setMerchantsNormalizeError] = useState<string | null>(null)
-  type InvoiceRow = { unique_id: string; id: string; number: string; date: string | null; total: number | null; customer: string | null; email: string | null; source: "qbo" | "xero" | "stripe"; amount_paid?: number | null; amount_due?: number | null; status?: string | null; paid?: boolean; updated_at?: string | null }
-  const [step9Invoices, setStep9Invoices] = useState<InvoiceRow[]>([])
-  const [step9InvoicesLoading, setStep9InvoicesLoading] = useState(false)
-  type ApArRow = { id: string; side: string; status: string; invoice_number: string | null; issue_date: string | null; due_date: string | null; currency: string | null; amount_total: number; amount_outstanding: number; counterparty_name: string | null; counterparty_email: string | null; source_summary: Record<string, unknown>; created_at: string; updated_at: string; needs_review?: boolean; resolution_status?: string; classification_confidence?: number | null; match_confidence?: number | null; document_type?: string }
-  const [step9ArItems, setStep9ArItems] = useState<ApArRow[]>([])
-  const [step9ApItems, setStep9ApItems] = useState<ApArRow[]>([])
-  const [step9ApArLoading, setStep9ApArLoading] = useState(false)
-  type ReviewItem = { version_id: string; provider: string; provider_invoice_id: string; document_type: string; candidate_side: string; classification_confidence: number | null; extraction_confidence: number | null; source_authority: number | null; review_reason: string | null; normalized: Record<string, unknown> }
-  const [step9ReviewItems, setStep9ReviewItems] = useState<ReviewItem[]>([])
-  const [step9ReviewLoading, setStep9ReviewLoading] = useState(false)
-  const [step9ReviewCounts, setStep9ReviewCounts] = useState<Record<string, number>>({})
-  const [step9ReviewActionLoading, setStep9ReviewActionLoading] = useState<string | null>(null)
-  type AccountingTx = {
-    transaction_id: string
-    account_id: string
-    date: string
-    created_at: string
-    amount: number
-    account_name: string
-    raw_name: string
-    normalized_name: string
-    tag: string
-    transaction_type: string
-    confidence: number
+  type RawDataResponse = {
+    plaid: {
+      items: string[]
+      accounts: { item_id: string; account_id: string; name: string; type: string; subtype: string | null; mask: string | null; current_balance: number | null; available_balance: number | null; currency_code: string | null }[]
+      transactions: { item_id: string; account_id: string; transaction_id: string; amount: number; date: string; name: string; merchant_name: string | null; category: string[] | null; pending: boolean }[]
+    }
+    qbo: Record<string, unknown[]>
+    xero: Record<string, unknown[]>
+    stripe: Record<string, unknown[]>
+    gmail: { extracted: { message_id: string; from_email: string | null; to_emails: string | null; subject: string | null; date_sent: string | null; snippet: string | null; extracted_invoice: unknown }[] }
   }
-  const [accountingTransactions, setAccountingTransactions] = useState<AccountingTx[]>([])
-  const [accountingTransactionsLoading, setAccountingTransactionsLoading] = useState(false)
-  const [selectedAccountingTransaction, setSelectedAccountingTransaction] = useState<AccountingTx | null>(null)
-  const [accountFilter, setAccountFilter] = useState<string | null>(null)
-  const [aiSuggestMessage, setAiSuggestMessage] = useState("")
-  const [aiSuggestLoading, setAiSuggestLoading] = useState(false)
-  const [rerunAiLoading, setRerunAiLoading] = useState(false)
+  const [rawData, setRawData] = useState<RawDataResponse | null>(null)
+  const [rawDataLoading, setRawDataLoading] = useState(false)
+  const [rawDataError, setRawDataError] = useState<string | null>(null)
   const [whatsappStatus, setWhatsappStatus] = useState<{ phone: string | null; verified: boolean } | null>(null)
   const [whatsappPhoneInput, setWhatsappPhoneInput] = useState("")
   const [whatsappOtpSent, setWhatsappOtpSent] = useState(false)
@@ -505,57 +479,16 @@ export function OnboardingFlow({
 
   useEffect(() => {
     if (currentStep !== 8) return
-    setMerchantsNormalizeError(null)
-    setAccountingTransactionsLoading(true)
-    const loadAccounting = () =>
-      fetch("/api/onboarding/merchants/transactions?limit=200")
-        .then((res) => (res.ok ? res.json() : { transactions: [] }))
-        .then((data: { transactions?: AccountingTx[] }) => setAccountingTransactions(data.transactions ?? []))
-        .catch(() => setAccountingTransactions([]))
-        .finally(() => setAccountingTransactionsLoading(false))
-    loadAccounting()
-    fetch("/api/onboarding/merchants/normalize-and-tag")
-      .then((res) => (res.ok ? res.json() : { rows: [] }))
-      .then((data: { rows?: unknown[] }) => {
-        const rows = data.rows ?? []
-        if (rows.length === 0) {
-          return fetch("/api/onboarding/merchants/normalize-and-tag", { method: "POST" })
-            .then((r) => (r.ok ? loadAccounting() : Promise.reject(new Error(r.statusText))))
-        }
+    setRawDataLoading(true)
+    setRawDataError(null)
+    fetch("/api/raw-data")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((data: RawDataResponse) => setRawData(data))
+      .catch((err) => {
+        setRawData(null)
+        setRawDataError(err instanceof Error ? err.message : "Failed to load raw data")
       })
-      .catch((err) => setMerchantsNormalizeError(err instanceof Error ? err.message : "Failed to generate tags"))
-  }, [currentStep])
-
-  useEffect(() => {
-    if (currentStep !== 9) return
-    setStep9InvoicesLoading(true)
-    fetch("/api/onboarding/invoices")
-      .then((res) => (res.ok ? res.json() : { invoices: [] }))
-      .then((data: { invoices?: InvoiceRow[] }) => setStep9Invoices(data.invoices ?? []))
-      .catch(() => setStep9Invoices([]))
-      .finally(() => setStep9InvoicesLoading(false))
-
-    setStep9ApArLoading(true)
-    Promise.all([
-      fetch("/api/ap-ar?side=AR").then((r) => (r.ok ? r.json() : { items: [] })),
-      fetch("/api/ap-ar?side=AP").then((r) => (r.ok ? r.json() : { items: [] })),
-    ])
-      .then(([arData, apData]) => {
-        setStep9ArItems((arData as { items?: ApArRow[] }).items ?? [])
-        setStep9ApItems((apData as { items?: ApArRow[] }).items ?? [])
-      })
-      .catch(() => { setStep9ArItems([]); setStep9ApItems([]) })
-      .finally(() => setStep9ApArLoading(false))
-
-    setStep9ReviewLoading(true)
-    fetch("/api/ap-ar/review-queue")
-      .then((r) => (r.ok ? r.json() : { items: [], queues: {} }))
-      .then((data: { items?: ReviewItem[]; queues?: Record<string, number> }) => {
-        setStep9ReviewItems(data.items ?? [])
-        setStep9ReviewCounts(data.queues ?? {})
-      })
-      .catch(() => { setStep9ReviewItems([]); setStep9ReviewCounts({}) })
-      .finally(() => setStep9ReviewLoading(false))
+      .finally(() => setRawDataLoading(false))
   }, [currentStep])
 
   const onPlaidSuccess = useCallback(

@@ -146,13 +146,13 @@ export default function OAuthConnectorPage() {
     const GMAIL_FWD_URL = "https://mail.google.com/mail/u/0/#settings/fwdandpop"
     const FORWARD_EMAIL = "invoice@profitwise.app"
     const SUBJECT_FILTER = "invoice OR payment OR bill"
-    return (
+  return (
       <div className="min-h-screen bg-black flex flex-col items-center px-6 py-10">
         <div className="w-full max-w-7xl">
           <div className="text-center mb-10">
-            <Image
+          <Image
               src="/profitwise-logo.png"
-              alt="ProfitWise"
+            alt="ProfitWise"
               width={220}
               height={60}
               className="object-contain mx-auto mb-6"
@@ -299,7 +299,7 @@ export default function OAuthConnectorPage() {
                 )}
               </div>
             </div>
-          </div>
+        </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
             <div className="space-y-4">
@@ -534,20 +534,20 @@ export default function OAuthConnectorPage() {
                   </p>
                 </div>
               )}
-            </div>
-          </div>
-
-          <div className="mt-10 flex justify-center">
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-white hover:underline"
-            >
-              <span>←</span>
-              <span>Back to onboarding</span>
-            </button>
           </div>
         </div>
+
+          <div className="mt-10 flex justify-center">
+          <button
+            type="button"
+            onClick={() => router.back()}
+              className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-white hover:underline"
+          >
+              <span>←</span>
+              <span>Back to onboarding</span>
+          </button>
+        </div>
+      </div>
       </div>
     )
   }

@@ -4,10 +4,6 @@
 
 import { ensureStripeSchema, query } from "./db"
 import { log } from "./logger"
-import { normalizeStripeInvoice } from "./invoice-adapters"
-import { upsertUnifiedInvoices, deleteUnifiedInvoice } from "./unified-invoices"
-import { insertInvoiceDocument } from "./invoice-documents"
-import { resolveInvoiceCandidate } from "./ap-ar-resolver"
 
 function getEntityId(item: unknown): string | null {
   if (item == null || typeof item !== "object") return null
@@ -91,24 +87,6 @@ export async function upsertStripeEntities(
           entityType,
           count: inserted,
         }, "stripe")
-        if (entityType === "invoice") {
-          await upsertUnifiedInvoices(userId, "stripe", stripeAccountId, items)
-          for (const item of items) {
-            const obj = item as Record<string, unknown>
-            const id = obj.id != null ? String(obj.id) : null
-            if (id) {
-              try {
-                const normalized = normalizeStripeInvoice(obj, userId)
-                const versionId = await insertInvoiceDocument(normalized, "stripe", id, null, item)
-                if (versionId) {
-                  await resolveInvoiceCandidate(versionId, { shadowMode: false })
-                }
-              } catch (e) {
-                log("stripe.ap_ar.upsert.failed", { entityId: id, error: String(e) }, "stripe")
-              }
-            }
-          }
-        }
       }
       totalInserted = Math.max(totalInserted, inserted)
       return totalInserted
@@ -159,10 +137,6 @@ export async function deleteStripeEntity(
       const deleted = rows.length > 0
       if (deleted) {
         log("stripe.entity_store.delete.succeeded", { stripeAccountId, entityType, entityId }, "stripe")
-        if (entityType === "invoice") {
-          const userId = await getUserIdByStripeAccountId(stripeAccountId)
-          if (userId) await deleteUnifiedInvoice(userId, "stripe", stripeAccountId, entityId)
-        }
       }
       return deleted
     } catch (err) {
