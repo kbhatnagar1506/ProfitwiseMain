@@ -747,12 +747,23 @@ function computeOwnerDependency(movements: CanonicalMovement[], tags: MovementTa
 }
 
 // ─── Derived: Working Capital Signals ───────────────────────────────
+//
+// Confidence is driven by SOURCE QUALITY and ENTITY MAPPING, not just sample count.
+// - Outflow: If vendors are clearly mapped (vendor_id/entity_id/bill_id), outflow is reliable
+//   even with fewer raw bank transactions — accounting (QBO/Xero) > bank-only.
+// - Inflow: Same for customer-mapped revenue.
+// - low_data = weak source or unmapped entities, not "few sources".
 
 function computeWorkingCapitalSignals(movements: CanonicalMovement[], tags: MovementTag[]): WorkingCapitalSignals {
   const settlementDates: number[] = []
   const customerReceiptDates: number[] = []
   const inflowDates: number[] = []
   const outflowDates: number[] = []
+  let inflowMappedCount = 0
+  let inflowTotal = 0
+  let outflowMappedCount = 0
+  let outflowTotal = 0
+  let hasAccountingSource = false
 
   for (let i = 0; i < movements.length; i++) {
     const m = movements[i]
@@ -762,10 +773,22 @@ function computeWorkingCapitalSignals(movements: CanonicalMovement[], tags: Move
     const ts = new Date(m.occurred_at).getTime()
     if (isNaN(ts)) continue
 
+    const prov = (m.provenance ?? "bank_observed") as string
+    if (prov === "accounting_observed" || prov === "coalesced") hasAccountingSource = true
+
     if (t.cashflow_bucket === "settlement") settlementDates.push(ts)
     if (t.economic_class === "customer_receipt") customerReceiptDates.push(ts)
-    if (m.direction === "inflow" && t.state_scope.affects_revenue) inflowDates.push(ts)
-    if (m.direction === "outflow" && t.state_scope.affects_spend) outflowDates.push(ts)
+    if (m.direction === "inflow" && t.state_scope.affects_revenue) {
+      inflowDates.push(ts)
+      inflowTotal++
+      if (t.customer_id || t.entity_id || t.invoice_id) inflowMappedCount++
+    }
+    if (m.direction === "outflow" && t.state_scope.affects_spend) {
+      outflowDates.push(ts)
+      outflowTotal++
+      // Vendor clearly mapped: entity_id, vendor_id, or bill_id (AP from QBO/Xero)
+      if (t.vendor_id || t.entity_id || t.bill_id) outflowMappedCount++
+    }
   }
 
   const sortAsc = (a: number, b: number) => a - b
@@ -779,11 +802,33 @@ function computeWorkingCapitalSignals(movements: CanonicalMovement[], tags: Move
     ? Math.round((Math.max(...allDates) - Math.min(...allDates)) / (1000 * 60 * 60 * 24))
     : 0
 
-  const minSample = Math.min(inflowDates.length, outflowDates.length, settlementDates.length)
+  // Source quality + entity mapping — not just sample count
+  const outflowMappedPct = outflowTotal > 0 ? outflowMappedCount / outflowTotal : 0
+  const inflowMappedPct = inflowTotal > 0 ? inflowMappedCount / inflowTotal : 0
+  const vendorsClearlyMapped = outflowMappedPct >= 0.6
+  const customersClearlyMapped = inflowMappedPct >= 0.6
+
+  // Outflow: if vendors clearly mapped, outflow is reliable even with fewer samples
+  const outflowSampleScore = outflowDates.length >= 10 ? 1 : outflowDates.length >= 5 ? 0.7 : outflowDates.length >= 3 ? 0.4 : 0
+  const outflowSourceBoost = vendorsClearlyMapped ? 0.5 : hasAccountingSource ? 0.25 : 0
+  const outflowScore = Math.min(1, outflowSampleScore + outflowSourceBoost)
+
+  // Inflow: same logic for customer mapping
+  const inflowSampleScore = inflowDates.length >= 10 ? 1 : inflowDates.length >= 5 ? 0.7 : inflowDates.length >= 3 ? 0.4 : 0
+  const inflowSourceBoost = customersClearlyMapped ? 0.5 : hasAccountingSource ? 0.25 : 0
+  const inflowScore = Math.min(1, inflowSampleScore + inflowSourceBoost)
+
+  // Settlement: still sample-driven (no entity mapping)
+  const settlementScore = settlementDates.length >= 10 ? 1 : settlementDates.length >= 5 ? 0.7 : settlementDates.length >= 3 ? 0.4 : 0
+
+  const combinedScore = (outflowScore + inflowScore + settlementScore) / 3
+  const dataSpanBoost = dataSpanDays >= 60 ? 0.15 : dataSpanDays >= 30 ? 0.08 : 0
+  const finalScore = Math.min(1, combinedScore + dataSpanBoost)
+
   const confidence: SignalConfidence =
-    dataSpanDays >= 60 && minSample >= 10 ? "high" :
-    dataSpanDays >= 30 && minSample >= 5 ? "medium" :
-    minSample >= 3 ? "low" : "insufficient_data"
+    finalScore >= 0.75 ? "high" :
+    finalScore >= 0.5 ? "medium" :
+    finalScore >= 0.25 ? "low" : "insufficient_data"
 
   const avgSettlementLag = computeAvgLag(customerReceiptDates, settlementDates)
   const inflowCadence = computeCadence(inflowDates)

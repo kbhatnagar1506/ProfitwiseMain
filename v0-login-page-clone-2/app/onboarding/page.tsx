@@ -13,7 +13,7 @@ function OnboardingContent() {
     fetch("/api/onboarding/progress")
       .then((res) => (res.ok ? res.json() : { step: 1 }))
       .then((data: { step?: number }) =>
-        setInitialStep(Math.min(Math.max(data.step ?? 1, 1), 11))
+        setInitialStep(Math.min(Math.max(data.step ?? 1, 1), 14))
       )
       .catch(() => setInitialStep(1))
   }, [])
