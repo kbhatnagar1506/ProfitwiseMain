@@ -143,6 +143,9 @@ export function computeSpendState(
   let excludedSpend = 0
   let recurringObligations = 0
   let recurringObligationCount = 0
+  let recurringFixedContractual = 0
+  let recurringSoft = 0
+  let recurringDiscretionary = 0
   let nonRecurringSpend = 0
 
   const vendorTotals = new Map<string, { name: string; total: number; count: number }>()
@@ -183,6 +186,14 @@ export function computeSpendState(
     if (t.is_recurring) {
       recurringObligations += m.amount
       recurringObligationCount++
+      const ec = t.economic_class
+      if (ec === "payroll" || ec === "bank_fee" || ec === "bank_fee_refund" || ec === "tax" || ec === "processor_fee") {
+        recurringFixedContractual += m.amount
+      } else if (ec === "vendor_payment") {
+        recurringSoft += m.amount
+      } else {
+        recurringDiscretionary += m.amount
+      }
     } else {
       nonRecurringSpend += m.amount
     }
@@ -234,6 +245,9 @@ export function computeSpendState(
     processor_fees: r2(processorFees),
     recurring_obligations: r2(recurringObligations),
     recurring_obligation_count: recurringObligationCount,
+    recurring_fixed_contractual: r2(recurringFixedContractual),
+    recurring_soft: r2(recurringSoft),
+    recurring_discretionary: r2(recurringDiscretionary),
     non_recurring_spend: r2(nonRecurringSpend),
     vendor_count: vendorCount,
     avg_payment: r2(avgPayment),

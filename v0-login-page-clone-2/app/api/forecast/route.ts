@@ -8,6 +8,7 @@ import type { OutstandingInvoice, OutstandingBill, AccountBalance, ForecastConte
 import { computeCashflowForecast } from "@/lib/state/forecast-engine"
 import type { IdentityContext } from "@/lib/state/forecast-engine"
 import { computeBusinessState } from "@/lib/state"
+import { generateNarrativeWithLLM, canonicalizeEntitiesBatch } from "@/lib/forecast-llm"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -529,6 +530,7 @@ export async function GET() {
     // ── Load state/risk context for scenario biases ──
     let forecastCtx: ForecastContext = {
       risk_score: 0, risk_level: "low",
+      risk_decomposition: undefined,
       concentration_risk_score: 0, dependency_risk_score: 0, liquidity_risk_score: 0,
       top_customer_pct: 0, repeat_revenue_ratio: 0,
       operating_dependency_ratio: 1, transfer_dependency_ratio: 0,
@@ -538,12 +540,20 @@ export async function GET() {
     }
     try {
       const state = await computeBusinessState(user.id)
+      const risk = state.risk
       forecastCtx = {
-        risk_score: state.risk?.overall_score ?? 0,
-        risk_level: state.risk?.overall ?? "low",
-        concentration_risk_score: state.risk?.concentration_risk?.score ?? 0,
-        dependency_risk_score: state.risk?.dependency_risk?.score ?? 0,
-        liquidity_risk_score: state.risk?.liquidity_risk?.score ?? 0,
+        risk_score: risk?.overall_score ?? 0,
+        risk_level: risk?.overall ?? "low",
+        risk_decomposition: risk ? {
+          liquidity: risk.liquidity_risk?.score ?? 0,
+          concentration: risk.concentration_risk?.score ?? 0,
+          dependency: risk.dependency_risk?.score ?? 0,
+          anomaly: risk.anomaly_risk?.score ?? 0,
+          uncertainty: risk.uncertainty_risk?.score ?? 0,
+        } : undefined,
+        concentration_risk_score: risk?.concentration_risk?.score ?? 0,
+        dependency_risk_score: risk?.dependency_risk?.score ?? 0,
+        liquidity_risk_score: risk?.liquidity_risk?.score ?? 0,
         top_customer_pct: state.revenue?.top_customer_pct ?? 0,
         repeat_revenue_ratio: state.revenue?.repeat_revenue_ratio ?? 0,
         operating_dependency_ratio: state.liquidity?.operating_dependency_ratio ?? 1,
@@ -617,7 +627,30 @@ export async function GET() {
       }
     } catch { /* movement_families may not exist */ }
 
-    const forecast = computeCashflowForecast(tagged, startingCash, 6, outstandingInvoices, identityCtx, outstandingBills, forecastCtx)
+    let forecast = computeCashflowForecast(tagged, startingCash, 6, outstandingInvoices, identityCtx, outstandingBills, forecastCtx)
+
+    // LLM enrichment when enabled (Heroku: set FORECAST_LLM_ENABLED=1)
+    if (process.env.FORECAST_LLM_ENABLED) {
+      try {
+        const enrichedForecast = await generateNarrativeWithLLM(forecast.narrative, forecast.context)
+        if (enrichedForecast) forecast = { ...forecast, narrative: { ...forecast.narrative, forecast: enrichedForecast } }
+
+        const rawEntities = [...new Set(forecast.events_30d.map((e) => e.entity).filter(Boolean))] as string[]
+        const canonicalMap = await canonicalizeEntitiesBatch(rawEntities)
+        if (canonicalMap.size > 0) {
+          forecast = {
+            ...forecast,
+            events_30d: forecast.events_30d.map((e) => {
+              const canonical = canonicalMap.get(e.entity)
+              return canonical ? { ...e, entity: canonical } : e
+            }),
+          }
+        }
+      } catch (err) {
+        console.warn("[Forecast] LLM enrichment failed:", err instanceof Error ? err.message : err)
+      }
+    }
+
     return NextResponse.json(forecast)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

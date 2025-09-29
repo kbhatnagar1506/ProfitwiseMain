@@ -19,6 +19,7 @@ const TAGGING_VERSION = "1.0"
 const CALIBRATION_VERSION = "1.0"
 const POLICY_VERSION = "1.0"
 
+import { extractEntityFromRawDescriptor } from "@/lib/alias-normalize"
 import type { CanonicalMovement, MovementTag } from "@/lib/movement-types"
 import type {
   BacktestByHorizon,
@@ -61,6 +62,7 @@ import type {
   CashflowForecast,
   ForecastConfidence,
   ForecastMetadata,
+  IdentityBreakdown,
   ForecastContext,
   CashRunway,
   SensitivityDriver,
@@ -195,19 +197,23 @@ function resolveEntityName(entityId: string | undefined | null, counterparty: st
     if (resolved && _ctx.entityNames.has(resolved)) return _ctx.entityNames.get(resolved)!
   }
 
-  // 3. Counterparty from observation/metadata (if clean)
+  // 3. Extract from raw descriptor patterns (TEAM1234/Payment 30280, etc.)
+  const extracted = extractEntityFromRawDescriptor(counterparty ?? rawDesc ?? "")
+  if (extracted) return extracted
+
+  // 4. Counterparty from observation/metadata (if clean)
   if (counterparty && !UUID_RE.test(counterparty)) {
     const cleaned = cleanDescriptor(counterparty)
     if (cleaned.length >= 2) return cleaned
   }
 
-  // 4. Cleaned descriptor
+  // 5. Cleaned descriptor
   if (rawDesc && !UUID_RE.test(rawDesc)) {
     const cleaned = cleanDescriptor(rawDesc)
     if (cleaned.length >= 2) return cleaned
   }
 
-  // 5. Role-based fallback with short ID fragment (never "Unnamed entity")
+  // 6. Role-based fallback with short ID fragment (never "Unnamed entity")
   const shortId = (entityId ?? "").slice(0, 4).toUpperCase() || Math.random().toString(36).slice(2, 6).toUpperCase()
   const roleLabel = role === "customer" ? "Customer" : role === "vendor" ? "Vendor" : role === "processor" ? "Processor" : "Entity"
   return `${roleLabel} #${shortId}`
@@ -770,9 +776,14 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
 
     const invoiceForecasts = buildInvoiceForecasts(custInvs, features, "low_data", now)
 
+    const invCustomerName = custInvs[0].customer_name
+    const canonicalName = extractEntityFromRawDescriptor(invCustomerName)
+      ?? (invCustomerName && invCustomerName.length >= 2 ? cleanDescriptor(invCustomerName) : null)
+      ?? `Customer (${custInvs.length} invoice${custInvs.length > 1 ? "s" : ""})`
+
     models.push({
       entity_id: custInvs[0].entity_id ?? `inv_${custInvs[0].invoice_id}`,
-      name: custInvs[0].customer_name,
+      name: canonicalName,
       archetype: "low_data",
       inflow_event_class: custInvs.some((i) => i.status === "overdue") ? "overdue_receivable" : "sporadic_receivable",
       features,
@@ -1475,6 +1486,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
           direction: "in", probability: r2(prob),
           confidence: c.confidence === "low" ? "medium" : c.confidence,
           source_model: "customer",
+          invoice_id: inv.invoice_id,
           reasoning: {
             ...baseReasoning,
             invoice_info: `Invoice $${inv.amount_due.toLocaleString()}, ${inv.status}${inv.days_overdue ? ` (${inv.days_overdue}d overdue)` : inv.days_until_due != null ? ` (due in ${inv.days_until_due}d)` : ""}`,
@@ -1530,6 +1542,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
           entity: v.name, amount: r2(bill.amount_due),
           direction: "out", probability: bill.status === "overdue" ? 0.8 : 0.7,
           confidence: "high", source_model: "vendor",
+          bill_id: bill.bill_id,
           reasoning: {
             ...vendReasoning,
             invoice_info: `Bill $${bill.amount_due.toLocaleString()}, ${bill.status}${bill.days_overdue ? ` (${bill.days_overdue}d overdue)` : ""}`,
@@ -1679,24 +1692,43 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
     }
   }
 
-  // Deduplicate events: merge events with same entity, day, direction, and source model
+  // Deduplicate 1: same entity, day, direction, source, amount
   const deduped: ForecastEvent[] = []
   const seen = new Map<string, number>()
   for (const e of events) {
     const key = `${e.entity}|${e.day_offset}|${e.direction}|${e.source_model}|${r2(e.amount)}`
     const existing = seen.get(key)
     if (existing != null) {
-      // Keep the one with higher probability
-      if (e.probability > deduped[existing].probability) {
-        deduped[existing] = e
-      }
+      if (e.probability > deduped[existing].probability) deduped[existing] = e
       continue
     }
     seen.set(key, deduped.length)
     deduped.push(e)
   }
 
-  return deduped.sort((a, b) => a.day_offset - b.day_offset || b.amount - a.amount)
+  // Deduplicate 2: same invoice/bill must appear once (one event with time distribution)
+  // Merge duplicate events for same invoice_id or bill_id — keep highest-probability day
+  const byLogicalPayment = new Map<string, ForecastEvent>()
+  for (const e of deduped) {
+    const invId = "invoice_id" in e ? (e as ForecastEvent & { invoice_id?: string }).invoice_id : undefined
+    const billId = "bill_id" in e ? (e as ForecastEvent & { bill_id?: string }).bill_id : undefined
+    if (e.type === "customer_payment" && invId) {
+      const key = `inv:${invId}`
+      const existing = byLogicalPayment.get(key)
+      if (!existing || e.probability > existing.probability) byLogicalPayment.set(key, e)
+      continue
+    }
+    if (e.type === "vendor_payment" && billId) {
+      const key = `bill:${billId}`
+      const existing = byLogicalPayment.get(key)
+      if (!existing || e.probability > existing.probability) byLogicalPayment.set(key, e)
+      continue
+    }
+    byLogicalPayment.set(`${e.entity}|${e.day_offset}|${e.direction}|${r2(e.amount)}`, e)
+  }
+
+  const final = [...byLogicalPayment.values()]
+  return final.sort((a, b) => a.day_offset - b.day_offset || b.amount - a.amount)
 }
 
 // ─── Step 4: Aggregate component models (for scenario simulation) ───
@@ -2667,14 +2699,31 @@ function computeForecastConfidence(
 
   // ── 4. Identity coverage confidence (weight: 0.10) ──
   const totalEntities = models.customers.length + models.vendors.length
-  const namedEntities = [...models.customers, ...models.vendors]
-    .filter((e) => !e.name.startsWith("Unknown") && !e.name.includes("unnamed")).length
-  const identityScore = totalEntities > 0 ? namedEntities / totalEntities : 0
+  const allEntities = [...models.customers, ...models.vendors]
+  const highConf = allEntities.filter((e) =>
+    !e.name.startsWith("Customer #") && !e.name.startsWith("Vendor #") && !e.name.startsWith("Entity #")
+    && !e.name.startsWith("Unknown") && !e.name.includes("unnamed")
+  ).length
+  const weakInferred = allEntities.filter((e) =>
+    e.name.startsWith("Customer #") || e.name.startsWith("Vendor #") || e.name.startsWith("Entity #")
+  ).length
+  const unresolved = allEntities.filter((e) =>
+    e.name.startsWith("Unknown") || e.name.includes("unnamed")
+  ).length
+  const identityScore = totalEntities > 0 ? highConf / totalEntities : 0
+  const identity_breakdown: IdentityBreakdown | undefined = totalEntities > 0 ? {
+    high_confidence_canonical_pct: r2((highConf / totalEntities) * 100),
+    weak_inferred_pct: r2((weakInferred / totalEntities) * 100),
+    unresolved_pct: r2((unresolved / totalEntities) * 100),
+  } : undefined
   if (identityScore < 0.7) reasons.push("Many entities unresolved — identity coverage gaps")
+  const identityReason = identity_breakdown
+    ? `High-confidence: ${highConf} · Weak/inferred: ${weakInferred} · Unresolved: ${unresolved}`
+    : `${highConf}/${totalEntities} entities resolved`
   by_component.push({
     area: "Identity coverage", score: r2(identityScore),
     label: identityScore >= 0.8 ? "high" : identityScore >= 0.6 ? "medium" : "low",
-    reason: `${namedEntities}/${totalEntities} entities resolved to named counterparties`,
+    reason: identityReason,
   })
 
   // ── 5. Recurrence confidence (weight: 0.10) ──
@@ -2766,7 +2815,7 @@ function computeForecastConfidence(
     model_coverage: r2(modelCoverage),
     data_completeness: r2(dataCompleteness),
     variance_penalty: r2(variancePenalty),
-    reasons, by_component, components: componentsOut, diagnosis,
+    reasons, by_component, components: componentsOut, identity_breakdown, diagnosis,
   }
 }
 
@@ -2939,6 +2988,10 @@ function computeInterventions(
       impact_cash_30d: impact30,
       impact_risk_reduction: riskReduction,
       description: `If ${c.name} pays 3 days earlier, expected cash improves by ~$${Math.round(impact14).toLocaleString()} at day 14`,
+      plausible_range_low: r2(impact14 * 0.6),
+      plausible_range_high: r2(impact14 * 1.2),
+      confidence_band: c.confidence === "high" ? "medium" : "low-medium",
+      assumptions: ["Customer agrees to accelerate payment", "No discount required"],
     })
   }
 
@@ -2990,6 +3043,10 @@ function computeInterventions(
       impact_cash_30d: savings,
       impact_risk_reduction: baseRisk30 > 0 ? r2(Math.min(40, (savings / Math.max(1, startingCash)) * 100)) : 0,
       description: `A 10% spend reduction saves ~$${Math.round(savings).toLocaleString()} over 30 days`,
+      plausible_range_low: r2(savings * 0.5 * 0.7),
+      plausible_range_high: r2(savings * 0.5 * 1.3),
+      confidence_band: "low-medium",
+      assumptions: ["Spend reduction is achievable without affecting operations"],
     })
   }
 
@@ -3541,6 +3598,7 @@ export function computeCashflowForecast(
   // Build context for downstream (default if not provided from state API)
   const context: ForecastContext = forecastCtx ?? {
     risk_score: 0, risk_level: "low",
+    risk_decomposition: undefined,
     concentration_risk_score: 0, dependency_risk_score: 0, liquidity_risk_score: 0,
     top_customer_pct: 0, repeat_revenue_ratio: 0,
     operating_dependency_ratio: 1, transfer_dependency_ratio: 0,

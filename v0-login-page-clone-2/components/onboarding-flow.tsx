@@ -235,7 +235,7 @@ export function OnboardingFlow({
   type TransitionSignal = { signal: string; severity: "info" | "warning" | "critical"; description: string; current_band: SeverityBand; previous_band: SeverityBand | null; current_state: string; previous_state: string | null; regime_change: boolean; current_value: number; previous_value: number | null; threshold: number; triggered: boolean }
   type RevenueState = { period_start: string; period_end: string; gross_revenue: number; contra_revenue: number; net_revenue: number; customer_count: number; avg_receipt: number; top_customer_pct: number; concentration_index: number; repeat_revenue_ratio: number; revenue_by_customer: { entity_id: string | null; name: string; total: number; count: number }[]; provisional_revenue: number; excluded_revenue: number }
   type SpendBreakdownEntry = { entity_id: string | null; name: string; total: number; count: number; pct_of_spend: number }
-  type SpendState = { period_start: string; period_end: string; total_opex: number; total_cogs: number; direct_cost_candidates: number; total_spend: number; payroll: number; vendor_payments: number; bank_fees: number; taxes: number; processor_fees: number; recurring_obligations: number; recurring_obligation_count: number; non_recurring_spend: number; vendor_count: number; avg_payment: number; top_vendor_pct: number; supplier_concentration_index: number; spend_by_vendor: SpendBreakdownEntry[]; provisional_spend: number; excluded_spend: number }
+  type SpendState = { period_start: string; period_end: string; total_opex: number; total_cogs: number; direct_cost_candidates: number; total_spend: number; payroll: number; vendor_payments: number; bank_fees: number; taxes: number; processor_fees: number; recurring_obligations: number; recurring_obligation_count: number; recurring_fixed_contractual?: number; recurring_soft?: number; recurring_discretionary?: number; non_recurring_spend: number; vendor_count: number; avg_payment: number; top_vendor_pct: number; supplier_concentration_index: number; spend_by_vendor: SpendBreakdownEntry[]; provisional_spend: number; excluded_spend: number }
   type AccountCash = { account_id: string; account_name: string; account_type: string; net_flow: number; inflows: number; outflows: number; movement_count: number }
   type StateConfidence = { revenue_confidence: number; spend_confidence: number; liquidity_confidence: number }
   type SettlementLagSignal = { avg_settlement_lag_days: number; sample_count: number; confidence: string }
@@ -279,11 +279,12 @@ export function OnboardingFlow({
   type CashRunway = { base_months: number | null; pessimistic_months: number | null; monthly_burn_rate: number; months_of_data: number }
   type SensitivityDriver = { entity: string; type: string; impact_pct: number; direction: "positive" | "negative"; description: string }
   type SensitivityAnalysis = { drivers: SensitivityDriver[]; top_risk_driver: string; top_opportunity_driver: string }
-  type Intervention = { id: string; label: string; type: string; entity: string | null; parameter_days: number | null; parameter_pct: number | null; impact_cash_14d: number; impact_cash_30d: number; impact_risk_reduction: number; description: string }
+  type Intervention = { id: string; label: string; type: string; entity: string | null; parameter_days: number | null; parameter_pct: number | null; impact_cash_14d: number; impact_cash_30d: number; impact_risk_reduction: number; description: string; plausible_range_low?: number; plausible_range_high?: number; confidence_band?: string; assumptions?: string[] }
   type ScenarioDriver = { factor: string; impact_amount: number; direction: "positive" | "negative" }
   type ScenarioResultV2 = ScenarioResult & { drivers?: ScenarioDriver[] }
   type AccountBalance = { account_id: string; name: string; type: string; subtype: string | null; balance: number }
-  type ForecastContext = { risk_score: number; risk_level: string; concentration_risk_score: number; dependency_risk_score: number; liquidity_risk_score: number; top_customer_pct: number; repeat_revenue_ratio: number; operating_dependency_ratio: number; transfer_dependency_ratio: number; recurring_spend_ratio: number; liquidity_regime: string; balance_source: string; account_balances: AccountBalance[]; transitions: { signal: string; severity: string; description: string; regime_change: boolean }[] }
+  type RiskDecomposition = { liquidity: number; concentration: number; dependency: number; anomaly: number; uncertainty: number }
+  type ForecastContext = { risk_score: number; risk_level: string; risk_decomposition?: RiskDecomposition; concentration_risk_score: number; dependency_risk_score: number; liquidity_risk_score: number; top_customer_pct: number; repeat_revenue_ratio: number; operating_dependency_ratio: number; transfer_dependency_ratio: number; recurring_spend_ratio: number; liquidity_regime: string; balance_source: string; account_balances: AccountBalance[]; transitions: { signal: string; severity: string; description: string; regime_change: boolean }[] }
   type CalibrationBucket = { range: string; predicted_prob: number; actual_rate: number; count: number }
   type CalibrationResult = { total_events_evaluated: number; buckets: CalibrationBucket[]; calibration_error: number; is_overconfident: boolean; is_underconfident: boolean; details: string }
   type BacktestResult = { accuracy_score: number; days_tested: number; mean_absolute_error: number; direction_accuracy: number; details: string; calibration?: CalibrationResult | null }
@@ -3169,6 +3170,19 @@ export function OnboardingFlow({
                     <div className="flex justify-between"><span className="text-gray-400">Bank fees</span><span className="text-white font-mono">{money(stateData.spend.bank_fees)}</span></div>
                     <div className="flex justify-between"><span className="text-gray-400">Taxes</span><span className="text-white font-mono">{money(stateData.spend.taxes)}</span></div>
                     <div className="flex justify-between"><span className="text-gray-400">Recurring ({stateData.spend.recurring_obligation_count})</span><span className="text-white font-mono">{money(stateData.spend.recurring_obligations)}</span></div>
+                    {(stateData.spend.recurring_fixed_contractual != null || stateData.spend.recurring_soft != null || stateData.spend.recurring_discretionary != null) && (
+                      <div className="grid grid-cols-2 gap-x-6 gap-y-1 pl-2 border-l-2 border-white/10">
+                        {stateData.spend.recurring_fixed_contractual != null && stateData.spend.recurring_fixed_contractual > 0 && (
+                          <div className="flex justify-between"><span className="text-gray-500 text-[11px]">Fixed contractual</span><span className="text-gray-400 font-mono text-[11px]">{money(stateData.spend.recurring_fixed_contractual)}</span></div>
+                        )}
+                        {stateData.spend.recurring_soft != null && stateData.spend.recurring_soft > 0 && (
+                          <div className="flex justify-between"><span className="text-gray-500 text-[11px]">Soft recurring</span><span className="text-gray-400 font-mono text-[11px]">{money(stateData.spend.recurring_soft)}</span></div>
+                        )}
+                        {stateData.spend.recurring_discretionary != null && stateData.spend.recurring_discretionary > 0 && (
+                          <div className="flex justify-between"><span className="text-gray-500 text-[11px]">Discretionary recurring</span><span className="text-gray-400 font-mono text-[11px]">{money(stateData.spend.recurring_discretionary)}</span></div>
+                        )}
+                      </div>
+                    )}
                     <div className="flex justify-between"><span className="text-gray-400">Non-recurring</span><span className="text-white font-mono">{money(stateData.spend.non_recurring_spend)}</span></div>
                   </div>
 
@@ -3375,10 +3389,11 @@ export function OnboardingFlow({
                 </div>
                 {/* ─── Context: Risk & Account Balances ─── */}
                 {forecastData.context && (forecastData.context.risk_score > 0 || forecastData.context.account_balances.length > 0) && (
-                  <div className="flex flex-wrap gap-3 text-[10px] text-gray-400 mt-1">
-                    {forecastData.context.risk_score > 0 && (
-                      <span>Risk: <span className={forecastData.context.risk_level === "high" ? "text-red-400 font-semibold" : forecastData.context.risk_level === "medium" ? "text-amber-400" : "text-emerald-400"}>{forecastData.context.risk_level} ({forecastData.context.risk_score})</span></span>
-                    )}
+                  <div className="flex flex-col gap-1 text-[10px] text-gray-400 mt-1">
+                    <div className="flex flex-wrap gap-3">
+                      {forecastData.context.risk_score > 0 && (
+                        <span>Risk: <span className={forecastData.context.risk_level === "high" ? "text-red-400 font-semibold" : forecastData.context.risk_level === "medium" ? "text-amber-400" : "text-emerald-400"}>{forecastData.context.risk_level} ({forecastData.context.risk_score})</span></span>
+                      )}
                     {forecastData.context.liquidity_regime !== "stable" && (
                       <span>Regime: <span className={forecastData.context.liquidity_regime === "tightening" ? "text-red-400" : "text-emerald-400"}>{forecastData.context.liquidity_regime}</span></span>
                     )}
@@ -3386,11 +3401,21 @@ export function OnboardingFlow({
                       <span>Top risk: <span className="text-red-300">{forecastData.sensitivity.top_risk_driver}</span></span>
                     )}
                     {forecastData.sensitivity?.top_opportunity_driver && (
-                      <span>Top opportunity: <span className="text-emerald-300">{forecastData.sensitivity.top_opportunity_driver}</span></span>
+                      <span>Largest near-term expected inflow: <span className="text-emerald-300">{forecastData.sensitivity.top_opportunity_driver}</span></span>
                     )}
                     {forecastData.context.account_balances.length > 0 && forecastData.context.account_balances.map((ab) => (
                       <span key={ab.account_id}>{ab.name}: <span className="text-white font-mono">${Math.round(ab.balance).toLocaleString()}</span></span>
                     ))}
+                    </div>
+                    {forecastData.context.risk_decomposition && (
+                      <div className="text-[9px] text-gray-500 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                        <span title="Liquidity risk (30% weight)">+{Math.round(forecastData.context.risk_decomposition.liquidity * 0.30)} liquidity</span>
+                        <span title="Concentration risk (20% weight)">+{Math.round(forecastData.context.risk_decomposition.concentration * 0.20)} concentration</span>
+                        <span title="Dependency risk (25% weight)">+{Math.round(forecastData.context.risk_decomposition.dependency * 0.25)} dependency</span>
+                        <span title="Anomaly risk (10% weight)">+{Math.round(forecastData.context.risk_decomposition.anomaly * 0.10)} anomaly</span>
+                        <span title="Uncertainty risk (15% weight)">+{Math.round(forecastData.context.risk_decomposition.uncertainty * 0.15)} data coverage</span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -3495,33 +3520,57 @@ export function OnboardingFlow({
                         </>
                       )}
 
-                      {/* Top 10 Drivers (by expected impact) */}
+                      {/* Top 10 Drivers (by expected impact, grouped by entity) */}
                       <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-2">Top 10 drivers (30d)</h3>
                       <div className="space-y-1 mb-3">
-                        {topByImpact.map((evt, i) => {
-                          const typeColor = evt.direction === "in" ? "text-emerald-400" : "text-red-400"
-                          const cDot = evt.confidence === "high" ? "bg-emerald-500" : evt.confidence === "medium" ? "bg-amber-500" : "bg-red-500"
-                          const r = evt.reasoning
-                          const tooltipParts = [r?.basis, r?.payment_history, r?.interval_info, r?.invoice_info, r?.recurrence_info].filter(Boolean)
-                          const tooltip = tooltipParts.join(" | ")
-                          return (
-                            <div key={`top-${evt.date}-${evt.entity}-${i}`}>
-                              <div className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02]" title={tooltip}>
-                                <span className="text-xs font-mono text-gray-500 w-8 shrink-0">D+{evt.day_offset}</span>
-                                <span className={`w-1.5 h-1.5 rounded-full ${cDot} shrink-0`} />
-                                <span className={`text-xs truncate flex-1 ${typeColor}`}>{evt.entity}</span>
-                                <span className="text-[10px] text-gray-600 shrink-0">{evt.type.replace(/_/g, " ")}</span>
-                                <span className="text-[10px] text-gray-600 shrink-0">{Math.round(evt.probability * 100)}%</span>
-                                <span className={`text-sm font-mono font-semibold shrink-0 w-20 text-right ${typeColor}`}>
-                                  {evt.direction === "in" ? "+" : "-"}{money(evt.amount)}
-                                </span>
+                        {(() => {
+                          const entityKey = (e: typeof allEvents[0]) => e.entity.trim().toLowerCase()
+                          const byEntity = new Map<string, { entity: string; direction: "in" | "out"; events: typeof allEvents; expectedImpact: number }>()
+                          for (const evt of allEvents) {
+                            const key = entityKey(evt)
+                            const existing = byEntity.get(key)
+                            const impact = evt.amount * evt.probability
+                            if (existing) {
+                              existing.events.push(evt)
+                              existing.expectedImpact += impact
+                            } else {
+                              byEntity.set(key, { entity: evt.entity, direction: evt.direction, events: [evt], expectedImpact: impact })
+                            }
+                          }
+                          const grouped = [...byEntity.values()]
+                            .sort((a, b) => Math.abs(b.expectedImpact) - Math.abs(a.expectedImpact))
+                            .slice(0, 10)
+                          return grouped.map((g, i) => {
+                            const evt = g.events[0]
+                            const typeColor = g.direction === "in" ? "text-emerald-400" : "text-red-400"
+                            const cDot = evt.confidence === "high" ? "bg-emerald-500" : evt.confidence === "medium" ? "bg-amber-500" : "bg-red-500"
+                            const r = evt.reasoning
+                            const tooltipParts = [r?.basis, r?.payment_history, r?.interval_info, r?.invoice_info, r?.recurrence_info].filter(Boolean)
+                            const tooltip = tooltipParts.join(" | ")
+                            const dayRange = g.events.length > 1
+                              ? `D+${Math.min(...g.events.map((e) => e.day_offset))}–${Math.max(...g.events.map((e) => e.day_offset))}`
+                              : `D+${evt.day_offset}`
+                            return (
+                              <div key={`top-${g.entity}-${i}`}>
+                                <div className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02]" title={tooltip}>
+                                  <span className="text-xs font-mono text-gray-500 w-12 shrink-0">{dayRange}</span>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${cDot} shrink-0`} />
+                                  <span className={`text-xs truncate flex-1 ${typeColor}`}>
+                                    {g.entity}{g.events.length > 1 ? ` (${g.events.length} payments)` : ""}
+                                  </span>
+                                  <span className="text-[10px] text-gray-600 shrink-0">{evt.type.replace(/_/g, " ")}</span>
+                                  <span className={`text-sm font-mono font-semibold shrink-0 w-24 text-right ${typeColor}`}>
+                                    {g.direction === "in" ? "+" : "-"}{money(g.expectedImpact)}
+                                    {g.events.length > 1 && <span className="text-[9px] text-gray-500 font-normal ml-0.5">exp</span>}
+                                  </span>
+                                </div>
+                                {r && (
+                                  <div className="text-[9px] text-gray-600 px-2 pb-0.5">{r.basis}{r.invoice_info ? ` · ${r.invoice_info}` : ""}</div>
+                                )}
                               </div>
-                              {r && (
-                                <div className="text-[9px] text-gray-600 px-2 pb-0.5">{r.basis}{r.invoice_info ? ` · ${r.invoice_info}` : ""}</div>
-                              )}
-                            </div>
-                          )
-                        })}
+                            )
+                          })
+                        })()}
                       </div>
 
                       {/* Expand all events */}
@@ -3569,7 +3618,7 @@ export function OnboardingFlow({
 
                       {sim.min_cash < sim.starting_cash * 0.5 && (
                         <div className="mb-3 flex items-center gap-2 text-xs">
-                          <span className="text-amber-400 font-semibold">LOW POINT</span>
+                          <span className="text-amber-400 font-semibold">Expected path low</span>
                           <span className="text-gray-400">Day {sim.min_cash_day}: {money(sim.min_cash)}</span>
                         </div>
                       )}
@@ -3617,7 +3666,7 @@ export function OnboardingFlow({
                             <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">30-Day Breakdown</h4>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                               {(sf.operating_30d_in > 0 || sf.operating_30d_out > 0) && (
-                                <div className="bg-white/5 rounded-lg p-2">
+                                <div className="bg-white/5 rounded-lg p-2" title="Business-generated cash (customer receipts, vendor payments). Excludes transfers, owner injections, processor settlement timing.">
                                   <div className="text-gray-500">Operating</div>
                                   <div className="text-emerald-400">+{money(sf.operating_30d_in)}</div>
                                   <div className="text-red-400">-{money(sf.operating_30d_out)}</div>
@@ -3738,7 +3787,7 @@ export function OnboardingFlow({
                           <div className="text-white font-mono font-semibold">{money(mc.expected_cash_30d)}</div>
                         </div>
                         <div>
-                          <div className="text-gray-500">Worst case (5th %ile)</div>
+                          <div className="text-gray-500">Probabilistic downside (5th %ile)</div>
                           <div className={`font-mono font-semibold ${mc.worst_case_cash_30d < 0 ? "text-red-400" : "text-amber-400"}`}>{money(mc.worst_case_cash_30d)}</div>
                         </div>
                         <div>
@@ -3759,7 +3808,9 @@ export function OnboardingFlow({
                               const textCls = `text-${color}-400`
                               return (
                                 <div key={sc.scenario} className={`border rounded-lg p-3 ${sc.scenario === "aggressive" ? "border-emerald-500/20 bg-emerald-500/10" : sc.scenario === "conservative" ? "border-red-500/20 bg-red-500/10" : "border-blue-500/20 bg-blue-500/10"}`}>
-                                  <div className={`text-xs font-bold uppercase mb-1 ${sc.scenario === "aggressive" ? "text-emerald-400" : sc.scenario === "conservative" ? "text-red-400" : "text-blue-400"}`}>{sc.scenario}</div>
+                                  <div className={`text-xs font-bold uppercase mb-1 ${sc.scenario === "aggressive" ? "text-emerald-400" : sc.scenario === "conservative" ? "text-red-400" : "text-blue-400"}`}>
+                                {sc.scenario === "conservative" ? "Stress scenario" : sc.scenario === "base" ? "Expected path" : sc.scenario}
+                              </div>
                                   <div className="text-[10px] text-gray-500 mb-2">{sc.label}</div>
                                   <div className="space-y-1">
                                     <div className="flex justify-between text-xs">
@@ -4204,26 +4255,34 @@ export function OnboardingFlow({
                     <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wider mb-1">Top Control Levers</h3>
                     <p className="text-xs text-gray-500 mb-4">Highest-impact actions you can take now</p>
                     <div className="space-y-2">
-                      {forecastData.interventions.slice(0, 3).map((iv) => (
-                        <div key={iv.id} className="bg-white/5 rounded-lg px-4 py-3">
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="text-sm text-white font-medium">{iv.label}</div>
-                            <div className="text-emerald-400 font-mono font-bold text-sm">
-                              +{money(iv.impact_cash_14d)}
-                              <span className="text-[10px] text-gray-500 font-normal ml-1">@14d</span>
+                      {forecastData.interventions.slice(0, 3).map((iv) => {
+                        const hasRange = iv.plausible_range_low != null && iv.plausible_range_high != null
+                        const rangeStr = hasRange ? `${money(iv.plausible_range_low!)} – ${money(iv.plausible_range_high!)}` : money(iv.impact_cash_14d)
+                        const confLabel = iv.confidence_band ? ` (${iv.confidence_band} confidence)` : ""
+                        return (
+                          <div key={iv.id} className="bg-white/5 rounded-lg px-4 py-3">
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="text-sm text-white font-medium">{iv.label}</div>
+                              <div className="text-emerald-400 font-mono font-bold text-sm">
+                                +{hasRange ? rangeStr : money(iv.impact_cash_14d)}
+                                <span className="text-[10px] text-gray-500 font-normal ml-1">@14d{confLabel}</span>
+                              </div>
+                            </div>
+                            <div className="text-xs text-gray-400 mb-2">{iv.description}</div>
+                            {iv.assumptions && iv.assumptions.length > 0 && (
+                              <div className="text-[10px] text-amber-600/80 mb-2 italic">Assumes: {iv.assumptions.slice(0, 2).join("; ")}</div>
+                            )}
+                            <div className="flex items-center gap-4 text-[10px] text-gray-500">
+                              <span>30d impact: <span className="text-emerald-400 font-mono">+{money(iv.impact_cash_30d)}</span></span>
+                              {iv.impact_risk_reduction > 0 && (
+                                <span>Risk reduction: <span className="text-cyan-400 font-mono">~{iv.impact_risk_reduction.toFixed(0)}%</span></span>
+                              )}
+                              {iv.parameter_days && <span>Shift: {iv.parameter_days}d</span>}
+                              {iv.parameter_pct && <span>Change: {iv.parameter_pct}%</span>}
                             </div>
                           </div>
-                          <div className="text-xs text-gray-400 mb-2">{iv.description}</div>
-                          <div className="flex items-center gap-4 text-[10px] text-gray-500">
-                            <span>30d impact: <span className="text-emerald-400 font-mono">+{money(iv.impact_cash_30d)}</span></span>
-                            {iv.impact_risk_reduction > 0 && (
-                              <span>Risk reduction: <span className="text-cyan-400 font-mono">-{iv.impact_risk_reduction.toFixed(1)}%</span></span>
-                            )}
-                            {iv.parameter_days && <span>Shift: {iv.parameter_days}d</span>}
-                            {iv.parameter_pct && <span>Change: {iv.parameter_pct}%</span>}
-                          </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -4236,6 +4295,24 @@ export function OnboardingFlow({
                     {/* Diagnosis sentence */}
                     {forecastData.forecast_confidence.diagnosis && (
                       <p className="text-xs text-gray-300 mb-3 italic">{forecastData.forecast_confidence.diagnosis}</p>
+                    )}
+
+                    {/* Identity breakdown (high / weak / unresolved) */}
+                    {forecastData.forecast_confidence.identity_breakdown && (
+                      <div className="grid grid-cols-3 gap-2 mb-4 text-[10px]">
+                        <div className="bg-emerald-500/10 rounded px-2 py-1.5">
+                          <div className="text-gray-500">High-confidence canonical</div>
+                          <div className="font-mono text-emerald-400">{forecastData.forecast_confidence.identity_breakdown.high_confidence_canonical_pct}%</div>
+                        </div>
+                        <div className="bg-amber-500/10 rounded px-2 py-1.5">
+                          <div className="text-gray-500">Weak / inferred</div>
+                          <div className="font-mono text-amber-400">{forecastData.forecast_confidence.identity_breakdown.weak_inferred_pct}%</div>
+                        </div>
+                        <div className="bg-red-500/10 rounded px-2 py-1.5">
+                          <div className="text-gray-500">Unresolved</div>
+                          <div className="font-mono text-red-400">{forecastData.forecast_confidence.identity_breakdown.unresolved_pct}%</div>
+                        </div>
+                      </div>
                     )}
 
                     {/* 8-component confidence breakdown */}
@@ -4282,10 +4359,10 @@ export function OnboardingFlow({
                         {forecastData.backtest.accuracy_score}%
                       </span>
                     </div>
-                    <div className="flex gap-4 text-[11px] text-gray-400 mb-2">
-                      <span>Days tested: {forecastData.backtest.days_tested}</span>
-                      <span>Direction accuracy: {Math.round(forecastData.backtest.direction_accuracy * 100)}%</span>
-                      <span>MAE: ${Math.round(forecastData.backtest.mean_absolute_error).toLocaleString()}</span>
+                    <div className="flex flex-col gap-1 text-[11px] text-gray-400 mb-2">
+                      <span className="font-medium text-gray-300">{forecastData.backtest.days_tested}-day backtest</span>
+                      <span>{Math.round(forecastData.backtest.direction_accuracy * 100)}% direction accuracy</span>
+                      <span>MAE ${Math.round(forecastData.backtest.mean_absolute_error).toLocaleString()}</span>
                     </div>
                     <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
                       <div
@@ -4316,7 +4393,9 @@ export function OnboardingFlow({
                               </div>
                               <span className="text-blue-400 w-8 text-right font-mono">{Math.round(b.predicted_prob * 100)}%</span>
                               <span className="text-emerald-400 w-8 text-right font-mono">{Math.round(b.actual_rate * 100)}%</span>
-                              <span className="text-gray-600 w-6 text-right">n={b.count}</span>
+                              <span className={`w-10 text-right font-mono ${b.count < 5 ? "text-amber-400" : "text-gray-600"}`} title={b.count < 5 ? "Low sample — interpret with caution" : undefined}>
+                                n={b.count}{b.count < 5 ? " ⚠" : ""}
+                              </span>
                             </div>
                           ))}
                         </div>
