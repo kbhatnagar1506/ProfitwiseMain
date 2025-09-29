@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import Image from "next/image"
+import { Sparkles, Loader2 } from "lucide-react"
 import { displayLabelForCounterparty } from "@/lib/alias-normalize"
 import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
 import { useRouter } from "next/navigation"
@@ -227,6 +228,9 @@ export function OnboardingFlow({
   const [movementsLoading, setMovementsLoading] = useState(false)
   const [movementsClassifying, setMovementsClassifying] = useState(false)
   const [movementsError, setMovementsError] = useState<string | null>(null)
+  const [movementEditIntent, setMovementEditIntent] = useState("")
+  const [movementEditLoading, setMovementEditLoading] = useState(false)
+  const [movementEditMessage, setMovementEditMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
   type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; state_scope?: { affects_revenue: boolean; affects_spend: boolean; affects_liquidity: boolean; affects_operating_performance: boolean; affects_revenue_quality: boolean }; state_inclusion_policy?: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
   type TagStats = { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number; policy_include: number; policy_provisional: number; policy_exclude: number }
   type UnresolvedImpact = { unresolved_inflow_total: number; unresolved_outflow_total: number; unresolved_count: number; unresolved_operating_exposure: number; unresolved_pct_of_inflows: number; unresolved_pct_of_operating_inflows: number; unresolved_pct_of_last_30d: number }
@@ -2405,6 +2409,70 @@ export function OnboardingFlow({
             <h2 className="text-3xl font-bold tracking-tight text-white mb-2">{steps[9].title}</h2>
             <p className="text-gray-400 text-lg mb-5">{steps[9].description}</p>
 
+            {/* AI-powered edit bar: user asks to change X → AI applies universal edits */}
+            {mvts.length > 0 && (
+              <div className="mb-6 rounded-xl border border-white/20 bg-white/5 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <span className="text-sm font-medium text-gray-300">AI Edit</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">Ask to change transactions in bulk, e.g. &quot;Change all Gusto to payroll&quot; or &quot;Recategorize Acme Corp as vendor payment&quot;</p>
+                <form
+                  className="flex gap-2"
+                  onSubmit={async (e) => {
+                    e.preventDefault()
+                    if (!movementEditIntent.trim() || movementEditLoading) return
+                    setMovementEditLoading(true)
+                    setMovementEditMessage(null)
+                    try {
+                      const res = await fetch("/api/movements/edit", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ intent: movementEditIntent.trim() }),
+                      })
+                      const data = await res.json().catch(() => ({}))
+                      if (res.ok) {
+                        setMovementEditMessage({ type: "success", text: data.plan ?? `Updated ${data.updated ?? 0} transaction(s)` })
+                        setMovementEditIntent("")
+                        fetch("/api/movements")
+                          .then((r) => r.json())
+                          .then((d) => { setMovementsData(d); return fetch("/api/movements/tag", { method: "POST" }) })
+                          .then((r) => (r.ok ? fetch("/api/movements") : null))
+                          .then((r) => r?.json())
+                          .then((d) => { if (d) setMovementsData(d) })
+                      } else {
+                        setMovementEditMessage({ type: "error", text: data.error ?? "Edit failed" })
+                      }
+                    } catch {
+                      setMovementEditMessage({ type: "error", text: "Request failed" })
+                    } finally {
+                      setMovementEditLoading(false)
+                    }
+                  }}
+                >
+                  <Input
+                    value={movementEditIntent}
+                    onChange={(e) => setMovementEditIntent(e.target.value)}
+                    placeholder="e.g. Change all Gusto to payroll"
+                    className="flex-1 bg-black/40 border-white/20 text-white placeholder:text-gray-500"
+                    disabled={movementEditLoading || movementsClassifying || movementsLoading}
+                  />
+                  <Button
+                    type="submit"
+                    disabled={!movementEditIntent.trim() || movementEditLoading || movementsClassifying || movementsLoading}
+                    className="shrink-0"
+                  >
+                    {movementEditLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Apply changes"}
+                  </Button>
+                </form>
+                {movementEditMessage && (
+                  <p className={`mt-2 text-sm ${movementEditMessage.type === "success" ? "text-emerald-400" : "text-red-400"}`}>
+                    {movementEditMessage.text}
+                  </p>
+                )}
+              </div>
+            )}
+
             {(movementsClassifying || movementsLoading) && (
               <div className="flex items-center gap-2 py-6 text-gray-400">
                 <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -2605,7 +2673,7 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[10].title}</h2>
+              <h2 className="text-2xl font-semibold text-white mb-1">Tagged Money Movement</h2>
               <p className="text-gray-400 text-lg mb-5">{steps[10].description}</p>
 
               {(tagLoading || tagRunning) && (
@@ -2817,9 +2885,11 @@ export function OnboardingFlow({
                   </div>
                 </div>
 
-                {/* Cashflow buckets */}
+                {/* Money movement (ground truth) */}
                 <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Cashflow Buckets</h3>
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider flex items-center gap-2">
+                    <span className="text-emerald-400">✓</span> Money Movement (ground truth)
+                  </h3>
                   <div className="space-y-2">
                     {Object.entries(bucketAgg)
                       .sort((a, b) => b[1].total - a[1].total)
