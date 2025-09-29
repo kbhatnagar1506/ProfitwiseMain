@@ -45,7 +45,11 @@ const TEST_ALIAS_PATTERN = /\s+test$/i
 const TEST_WORD_PATTERN = /\btest\b/i
 
 // Invoice sludge: raw invoice strings, payment-for-invoice — exclude from primary display
-const INVOICE_SLUDGE = /^(INV-\d+|Payment\s+for\s+invoice|Invoice\s+#?\d*)$/i
+export const INVOICE_SLUDGE = /^(INV-\d+|Payment\s+for\s+invoice|Invoice\s+#?\d*)$/i
+
+export function isInvoiceSludge(s: string | null | undefined): boolean {
+  return !!(s && typeof s === "string" && INVOICE_SLUDGE.test(s.trim()))
+}
 
 // Email: avoid unless no other option
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -84,20 +88,37 @@ function isCleanLabel(s: string): boolean {
 }
 
 /**
+ * Check if a label should be hidden as owner (for privacy/clean display).
+ * Pass ownerNames when known; matches normalized.
+ */
+export function isOwnerLabel(raw: string | null | undefined, ownerNames: string[] = []): boolean {
+  if (!raw || typeof raw !== "string") return false
+  const n = normalizeForMatch(raw)
+  if (n.length < 2) return false
+  return ownerNames.some((o) => {
+    const on = normalizeForMatch(o)
+    return on && (n.includes(on) || on.includes(n))
+  })
+}
+
+/**
  * Display label: (1) entity canonical_name if resolved and clean, (2) normalized display, (3) raw.
  * Excludes email, invoice sludge, test labels from primary display.
+ * When ownerNames provided and raw matches, returns "Owner" for privacy.
  */
 export function displayLabelForCounterparty(
   raw: string | null | undefined,
   preferredLabel?: string | null,
+  ownerNames: string[] = [],
 ): string {
   if (preferredLabel && typeof preferredLabel === "string" && isCleanLabel(preferredLabel)) {
+    if (ownerNames.length > 0 && isOwnerLabel(preferredLabel, ownerNames)) return "Owner"
     return cleanDisplay(preferredLabel)
   }
   if (!raw || typeof raw !== "string") return "—"
   if (isTestLabel(raw)) return "—"
   if (INVOICE_SLUDGE.test(raw.trim())) return "—"
-  // Prefer non-email when we have preferredLabel; otherwise show raw (including email as last resort)
+  if (ownerNames.length > 0 && isOwnerLabel(raw, ownerNames)) return "Owner"
   return cleanDisplay(raw)
 }
 
