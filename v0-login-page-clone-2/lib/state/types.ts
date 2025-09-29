@@ -525,6 +525,12 @@ export type ForecastConfidence = {
   components: ForecastConfidenceComponents
   identity_breakdown?: IdentityBreakdown
   diagnosis: string
+  /** Why confidence is low (weakest components) */
+  why_confidence_low?: string[]
+  /** What to do to increase confidence */
+  how_to_improve?: string[]
+  /** Reframe: what would make this prediction wrong */
+  what_would_make_wrong?: string
 }
 
 export type CalibrationResult = {
@@ -535,6 +541,10 @@ export type CalibrationResult = {
   is_underconfident: boolean
   details: string
   by_segment?: { segment: string; calibration_error: number; count: number }[]
+  /** When overconfident: suggested interpretation of predicted probabilities */
+  suggested_interpretation?: string
+  /** Temperature for probability scaling: p_adj = p^temperature. Use when > 1 (overconfident). */
+  probability_temperature?: number
 }
 
 // ─── Cash Runway ─────────────────────────────────────────────────────
@@ -564,6 +574,14 @@ export type SensitivityAnalysis = {
 
 // ─── Intervention Engine ─────────────────────────────────────────────
 
+export type ActionSimulationImpact = {
+  low_point_before: number
+  low_point_after: number
+  stress_prob_before: number
+  stress_prob_after: number
+  runway_months_change?: number
+}
+
 export type Intervention = {
   id: string
   label: string
@@ -584,6 +602,33 @@ export type Intervention = {
   plausible_range_high?: number
   confidence_band?: string
   assumptions?: string[]
+  /** Simulation: impact on cash distribution */
+  simulation_impact?: ActionSimulationImpact
+  /** Rank by impact (1 = top) */
+  rank?: number
+  /** Second-order effects: late fee, relationship, next-period compression */
+  second_order_risks?: {
+    late_fee?: string
+    relationship?: string
+    next_period?: string
+  }
+}
+
+export type CombinedStrategy = {
+  id: string
+  actions: Intervention[]
+  low_point: number
+  stress_prob: number
+  risk_level: "low" | "medium" | "high"
+  summary: string
+}
+
+export type ExecutionSuggestion = {
+  action_id: string
+  action_label: string
+  type: "reminder" | "draft" | "trigger"
+  label: string
+  content?: string
 }
 
 // ─── Scenario Drivers ────────────────────────────────────────────────
@@ -735,6 +780,8 @@ export type CashflowForecast = {
   cash_runway: CashRunway
   sensitivity: SensitivityAnalysis
   interventions: Intervention[]
+  combined_strategies?: CombinedStrategy[]
+  execution_suggestions?: ExecutionSuggestion[]
   context: ForecastContext
   backtest: BacktestResult | null
   separated_forecast: SeparatedForecast

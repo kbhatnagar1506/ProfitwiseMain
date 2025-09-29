@@ -275,21 +275,24 @@ export function OnboardingFlow({
   type MonteCarloResult = { simulations: number; percentiles: MonteCarloPercentile[]; prob_below_zero_14d: number; prob_below_zero_30d: number; prob_above_starting_30d: number; expected_cash_30d: number; worst_case_cash_30d: number; best_case_cash_30d: number; day_scenarios: DayScenarioSnapshot[] }
   type ForecastNarrative = { forecast: string; risk: string; insight: string; action: string; severity: "healthy" | "caution" | "danger" }
   type ComponentConfidence = { area: string; score: number; label: "high" | "medium" | "low"; reason: string }
-  type ForecastConfidence = { score: number; label: "high" | "medium" | "low"; model_coverage: number; data_completeness: number; variance_penalty: number; reasons: string[]; by_component: ComponentConfidence[]; diagnosis?: string }
+  type ForecastConfidence = { score: number; label: string; model_coverage: number; data_completeness: number; variance_penalty: number; reasons: string[]; by_component: ComponentConfidence[]; diagnosis?: string; why_confidence_low?: string[]; how_to_improve?: string[]; what_would_make_wrong?: string }
   type CashRunway = { base_months: number | null; pessimistic_months: number | null; monthly_burn_rate: number; months_of_data: number }
   type SensitivityDriver = { entity: string; type: string; impact_pct: number; direction: "positive" | "negative"; description: string }
   type SensitivityAnalysis = { drivers: SensitivityDriver[]; top_risk_driver: string; top_opportunity_driver: string }
-  type Intervention = { id: string; label: string; type: string; entity: string | null; parameter_days: number | null; parameter_pct: number | null; impact_cash_14d: number; impact_cash_30d: number; impact_risk_reduction: number; description: string; plausible_range_low?: number; plausible_range_high?: number; confidence_band?: string; assumptions?: string[] }
+  type ActionSimImpact = { low_point_before: number; low_point_after: number; stress_prob_before: number; stress_prob_after: number; runway_months_change?: number }
+  type Intervention = { id: string; label: string; type: string; entity: string | null; parameter_days: number | null; parameter_pct: number | null; impact_cash_14d: number; impact_cash_30d: number; impact_risk_reduction: number; description: string; plausible_range_low?: number; plausible_range_high?: number; confidence_band?: string; assumptions?: string[]; simulation_impact?: ActionSimImpact; rank?: number; second_order_risks?: { late_fee?: string; relationship?: string; next_period?: string } }
+  type CombinedStrategy = { id: string; actions: { label: string; entity: string | null }[]; low_point: number; stress_prob: number; risk_level: string; summary: string }
+  type ExecutionSuggestion = { action_id: string; action_label: string; type: string; label: string; content?: string }
   type ScenarioDriver = { factor: string; impact_amount: number; direction: "positive" | "negative" }
   type ScenarioResultV2 = ScenarioResult & { drivers?: ScenarioDriver[] }
   type AccountBalance = { account_id: string; name: string; type: string; subtype: string | null; balance: number }
   type RiskDecomposition = { liquidity: number; concentration: number; dependency: number; anomaly: number; uncertainty: number }
   type ForecastContext = { risk_score: number; risk_level: string; risk_decomposition?: RiskDecomposition; concentration_risk_score: number; dependency_risk_score: number; liquidity_risk_score: number; top_customer_pct: number; repeat_revenue_ratio: number; operating_dependency_ratio: number; transfer_dependency_ratio: number; recurring_spend_ratio: number; liquidity_regime: string; balance_source: string; account_balances: AccountBalance[]; transitions: { signal: string; severity: string; description: string; regime_change: boolean }[] }
   type CalibrationBucket = { range: string; predicted_prob: number; actual_rate: number; count: number }
-  type CalibrationResult = { total_events_evaluated: number; buckets: CalibrationBucket[]; calibration_error: number; is_overconfident: boolean; is_underconfident: boolean; details: string }
+  type CalibrationResult = { total_events_evaluated: number; buckets: CalibrationBucket[]; calibration_error: number; is_overconfident: boolean; is_underconfident: boolean; details: string; suggested_interpretation?: string; probability_temperature?: number }
   type BacktestResult = { accuracy_score: number; days_tested: number; mean_absolute_error: number; direction_accuracy: number; details: string; calibration?: CalibrationResult | null }
   type SeparatedForecast = { days: { day: number; date: string; operating_in: number; operating_out: number; settlement_in: number; settlement_out: number; treasury_in: number; treasury_out: number; owner_in: number; owner_out: number }[]; operating_30d_in: number; operating_30d_out: number; settlement_30d_in: number; settlement_30d_out: number; treasury_30d_in: number; treasury_30d_out: number; owner_30d_in: number; owner_30d_out: number }
-  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[]; context?: ForecastContext; backtest?: BacktestResult | null; separated_forecast?: SeparatedForecast }
+  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[]; combined_strategies?: CombinedStrategy[]; execution_suggestions?: ExecutionSuggestion[]; context?: ForecastContext; backtest?: BacktestResult | null; separated_forecast?: SeparatedForecast }
   const [forecastData, setForecastData] = useState<CashflowForecast | null>(null)
   const [forecastLoading, setForecastLoading] = useState(false)
   const [forecastError, setForecastError] = useState<string | null>(null)
@@ -3465,6 +3468,8 @@ export function OnboardingFlow({
                 {forecastData.events_30d.length > 0 && (() => {
                   const allEvents = forecastData.events_30d
                   const events7d = allEvents.filter((e) => e.day_offset <= 7)
+                  const probTemp = forecastData.backtest?.calibration?.probability_temperature
+                  const adjProb = (p: number) => (probTemp && probTemp > 1 ? Math.pow(p, probTemp) : p)
                   const topByImpact = [...allEvents].sort((a, b) => (b.amount * b.probability) - (a.amount * a.probability)).slice(0, 10)
                   const totalIn = allEvents.filter((e) => e.direction === "in").reduce((s, e) => s + e.amount * e.probability, 0)
                   const totalOut = allEvents.filter((e) => e.direction === "out").reduce((s, e) => s + e.amount * e.probability, 0)
@@ -3509,7 +3514,9 @@ export function OnboardingFlow({
                                   <span className="text-xs font-mono text-gray-500 w-8 shrink-0">D+{evt.day_offset}</span>
                                   <span className={`w-1.5 h-1.5 rounded-full ${confDot} shrink-0`} title={`${evt.confidence} confidence (${evt.source_model})`} />
                                   <span className={`text-xs truncate flex-1 ${typeColor}`}>{evt.entity}</span>
-                                  <span className="text-[10px] text-gray-600 shrink-0">{Math.round(evt.probability * 100)}%</span>
+                                  <span className="text-[10px] text-gray-600 shrink-0" title={probTemp ? "Calibration-adjusted probability" : undefined}>
+                                    {Math.round(adjProb(evt.probability) * 100)}%
+                                  </span>
                                   <span className={`text-sm font-mono font-semibold shrink-0 w-20 text-right ${typeColor}`}>
                                     {evt.direction === "in" ? "+" : "-"}{money(evt.amount)}
                                   </span>
@@ -4249,33 +4256,56 @@ export function OnboardingFlow({
                   </div>
                 )}
 
-                {/* ─── Control Levers (Top 3) ─── */}
+                {/* ─── Decision Layer: Top Actions (ranked by impact) ─── */}
                 {forecastData.interventions && forecastData.interventions.length > 0 && (
                   <div className="bg-white/5 border border-cyan-500/20 rounded-xl p-5">
-                    <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wider mb-1">Top Control Levers</h3>
-                    <p className="text-xs text-gray-500 mb-4">Highest-impact actions you can take now</p>
+                    <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wider mb-1">Top Actions (by risk reduction)</h3>
+                    <p className="text-xs text-gray-500 mb-4">If I do X, what happens to my cash distribution?</p>
                     <div className="space-y-2">
-                      {forecastData.interventions.slice(0, 3).map((iv) => {
+                      {forecastData.interventions.slice(0, 5).map((iv) => {
                         const hasRange = iv.plausible_range_low != null && iv.plausible_range_high != null
                         const rangeStr = hasRange ? `${money(iv.plausible_range_low!)} – ${money(iv.plausible_range_high!)}` : money(iv.impact_cash_14d)
                         const confLabel = iv.confidence_band ? ` (${iv.confidence_band} confidence)` : ""
+                        const sim = iv.simulation_impact
                         return (
                           <div key={iv.id} className="bg-white/5 rounded-lg px-4 py-3">
                             <div className="flex items-center justify-between mb-1">
-                              <div className="text-sm text-white font-medium">{iv.label}</div>
+                              <div className="flex items-center gap-2">
+                                {iv.rank != null && <span className="text-[10px] text-cyan-400 font-bold">#{iv.rank}</span>}
+                                <div className="text-sm text-white font-medium">{iv.label}</div>
+                              </div>
                               <div className="text-emerald-400 font-mono font-bold text-sm">
                                 +{hasRange ? rangeStr : money(iv.impact_cash_14d)}
                                 <span className="text-[10px] text-gray-500 font-normal ml-1">@14d{confLabel}</span>
                               </div>
                             </div>
+                            {sim && (
+                              <div className="flex flex-wrap gap-3 text-[10px] text-gray-400 mb-2">
+                                <span>Low point: ${Math.round(sim.low_point_before).toLocaleString()} → <span className="text-emerald-400">${Math.round(sim.low_point_after).toLocaleString()}</span></span>
+                                <span>Stress prob: {(sim.stress_prob_before * 100).toFixed(0)}% → <span className="text-emerald-400">{(sim.stress_prob_after * 100).toFixed(0)}%</span></span>
+                                {sim.runway_months_change != null && sim.runway_months_change > 0 && (
+                                  <span>Runway: <span className="text-emerald-400">+{sim.runway_months_change.toFixed(1)} mo</span></span>
+                                )}
+                              </div>
+                            )}
                             <div className="text-xs text-gray-400 mb-2">{iv.description}</div>
                             {iv.assumptions && iv.assumptions.length > 0 && (
                               <div className="text-[10px] text-amber-600/80 mb-2 italic">Assumes: {iv.assumptions.slice(0, 2).join("; ")}</div>
                             )}
+                            {iv.second_order_risks && (iv.second_order_risks.late_fee || iv.second_order_risks.relationship || iv.second_order_risks.next_period) && (
+                              <div className="mb-2 p-2 bg-amber-500/5 rounded border border-amber-500/20">
+                                <div className="text-[10px] text-amber-400/90 font-semibold mb-1">Second-order effects</div>
+                                <ul className="space-y-0.5 text-[10px] text-gray-400">
+                                  {iv.second_order_risks.late_fee && <li>• {iv.second_order_risks.late_fee}</li>}
+                                  {iv.second_order_risks.relationship && <li>• {iv.second_order_risks.relationship}</li>}
+                                  {iv.second_order_risks.next_period && <li>• {iv.second_order_risks.next_period}</li>}
+                                </ul>
+                              </div>
+                            )}
                             <div className="flex items-center gap-4 text-[10px] text-gray-500">
                               <span>30d impact: <span className="text-emerald-400 font-mono">+{money(iv.impact_cash_30d)}</span></span>
                               {iv.impact_risk_reduction > 0 && (
-                                <span>Risk reduction: <span className="text-cyan-400 font-mono">~{iv.impact_risk_reduction.toFixed(0)}%</span></span>
+                                <span>↓ downside risk: <span className="text-cyan-400 font-mono">~{iv.impact_risk_reduction.toFixed(0)}%</span></span>
                               )}
                               {iv.parameter_days && <span>Shift: {iv.parameter_days}d</span>}
                               {iv.parameter_pct && <span>Change: {iv.parameter_pct}%</span>}
@@ -4284,17 +4314,95 @@ export function OnboardingFlow({
                         )
                       })}
                     </div>
+
+                    {/* Best 2-action strategy */}
+                    {forecastData.combined_strategies && forecastData.combined_strategies.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-white/10">
+                        <h4 className="text-xs font-semibold text-cyan-400/90 uppercase mb-2">Best 2-action strategy</h4>
+                        <div className="space-y-2">
+                          {forecastData.combined_strategies.map((s) => (
+                            <div key={s.id} className="bg-cyan-500/10 rounded-lg px-3 py-2 border border-cyan-500/20">
+                              <div className="text-xs text-white font-medium mb-1">{s.summary}</div>
+                              <div className="flex gap-2 text-[10px]">
+                                <span className={`${s.risk_level === "low" ? "text-emerald-400" : s.risk_level === "medium" ? "text-amber-400" : "text-red-400"}`}>
+                                  Risk: {s.risk_level.toUpperCase()}
+                                </span>
+                                <span className="text-gray-500">Low point: ${Math.round(s.low_point).toLocaleString()}</span>
+                                <span className="text-gray-500">Stress prob: {(s.stress_prob * 100).toFixed(0)}%</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* ─── Forecast Confidence Details ─── */}
+                {/* ─── Control Layer: Execution (reminders, drafts) ─── */}
+                {forecastData.execution_suggestions && forecastData.execution_suggestions.length > 0 && (
+                  <div className="bg-white/5 border border-violet-500/20 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-violet-400 uppercase tracking-wider mb-1">Execution</h3>
+                    <p className="text-xs text-gray-500 mb-4">Turn advice into doing: reminders, drafts, triggers</p>
+                    <div className="space-y-3">
+                      {forecastData.execution_suggestions.map((es, i) => (
+                        <div key={i} className="bg-white/5 rounded-lg px-4 py-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-violet-300">{es.label}</span>
+                            <span className="text-[10px] text-gray-500 uppercase">{es.type}</span>
+                          </div>
+                          <div className="text-[10px] text-gray-500 mb-1">For: {es.action_label}</div>
+                          {es.content && (
+                            <div className="text-xs text-gray-300 mt-2 p-2 bg-white/5 rounded border border-white/10 font-mono">
+                              {es.content}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Forecast Confidence (Trust Engine) ─── */}
                 {forecastData.forecast_confidence && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-2">Forecast Confidence</h3>
+                    <p className="text-[10px] text-gray-500 mb-2">What would make this prediction wrong? How to improve trust.</p>
 
                     {/* Diagnosis sentence */}
                     {forecastData.forecast_confidence.diagnosis && (
                       <p className="text-xs text-gray-300 mb-3 italic">{forecastData.forecast_confidence.diagnosis}</p>
+                    )}
+
+                    {/* What would make wrong */}
+                    {forecastData.forecast_confidence.what_would_make_wrong && (
+                      <div className="mb-3 p-2 bg-amber-500/10 rounded border border-amber-500/20">
+                        <div className="text-[10px] text-amber-400/90 font-semibold uppercase mb-1">What could make this wrong</div>
+                        <p className="text-xs text-gray-300">{forecastData.forecast_confidence.what_would_make_wrong}</p>
+                      </div>
+                    )}
+
+                    {/* Why confidence is low */}
+                    {forecastData.forecast_confidence.why_confidence_low && forecastData.forecast_confidence.why_confidence_low.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-[10px] text-gray-500 font-semibold uppercase mb-1">Why</div>
+                        <ul className="space-y-0.5 text-xs text-gray-400">
+                          {forecastData.forecast_confidence.why_confidence_low.map((r, i) => (
+                            <li key={i}>• {r}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* How to improve */}
+                    {forecastData.forecast_confidence.how_to_improve && forecastData.forecast_confidence.how_to_improve.length > 0 && (
+                      <div className="mb-3 p-2 bg-emerald-500/10 rounded border border-emerald-500/20">
+                        <div className="text-[10px] text-emerald-400/90 font-semibold uppercase mb-1">How to improve</div>
+                        <ul className="space-y-0.5 text-xs text-gray-300">
+                          {forecastData.forecast_confidence.how_to_improve.map((r, i) => (
+                            <li key={i}>• {r}</li>
+                          ))}
+                        </ul>
+                      </div>
                     )}
 
                     {/* Identity breakdown (high / weak / unresolved) */}
@@ -4383,6 +4491,16 @@ export function OnboardingFlow({
                             {forecastData.backtest.calibration.is_underconfident && " (underconfident)"}
                           </span>
                         </div>
+                        {forecastData.backtest.calibration.suggested_interpretation && (
+                          <div className="mt-2 p-2 bg-amber-500/10 rounded border border-amber-500/20 text-[10px] text-amber-200/90">
+                            {forecastData.backtest.calibration.suggested_interpretation}
+                          </div>
+                        )}
+                        {forecastData.backtest.calibration.probability_temperature && forecastData.backtest.calibration.probability_temperature > 1 && (
+                          <div className="mt-1 text-[10px] text-gray-500">
+                            Probabilities scaled by T={forecastData.backtest.calibration.probability_temperature.toFixed(1)} to reduce overconfidence
+                          </div>
+                        )}
                         <div className="space-y-1">
                           {forecastData.backtest.calibration.buckets.map((b, i) => (
                             <div key={i} className="flex items-center gap-2 text-[10px]">

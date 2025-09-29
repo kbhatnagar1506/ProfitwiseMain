@@ -68,9 +68,11 @@ import type {
   SensitivityDriver,
   SensitivityAnalysis,
   Intervention,
+  ActionSimulationImpact,
   ScenarioDriver,
   BacktestResult,
   CalibrationResult,
+  CombinedStrategy,
 } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
@@ -2810,12 +2812,31 @@ function computeForecastConfidence(
     ? `Forecast is ${label} confidence because ${weakest.area.toLowerCase()} is weak (${(weakest.score * 100).toFixed(0)}%) — ${weakest.reason}`
     : `Forecast is ${label} confidence — strongest: ${strongest.area.toLowerCase()} (${(strongest.score * 100).toFixed(0)}%), weakest: ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%)`
 
+  // Trust engine: why low, how to improve, what would make wrong
+  const weakComponents = by_component.filter((c) => c.score < 0.5).sort((a, b) => a.score - b.score)
+  const why_confidence_low = weakComponents.slice(0, 4).map((c) => `${c.area}: ${(c.score * 100).toFixed(0)}% — ${c.reason}`)
+  const how_to_improve: string[] = []
+  if (dataSpanScore < 0.5) how_to_improve.push("Track 2+ more months of transaction history")
+  if (identityScore < 0.7) how_to_improve.push("Resolve entity names — confirm top 5 receivables/payables manually")
+  if (recurrenceScore < 0.4) how_to_improve.push("Track 2 more cycles of vendor payments for recurrence patterns")
+  if (inflowScore < 0.5) how_to_improve.push("Add invoice due dates or confirm customer payment cadence")
+  if (outflowScore < 0.5) how_to_improve.push("Link AP or confirm vendor payment schedules")
+  if (backtestScore < 0.5) how_to_improve.push("More historical data needed for reliable backtest")
+  if (how_to_improve.length === 0) how_to_improve.push("Forecast is already well-supported by data")
+
+  const what_would_make_wrong = score < 0.6
+    ? `Prediction could be wrong if: ${weakComponents.slice(0, 2).map((c) => c.area.toLowerCase()).join(" worsens, or ")} — or if a key customer/vendor deviates from pattern`
+    : "Main risk: key customer delays payment or vendor demands earlier payment than modeled"
+
   return {
     score: r2(score), label,
     model_coverage: r2(modelCoverage),
     data_completeness: r2(dataCompleteness),
     variance_penalty: r2(variancePenalty),
     reasons, by_component, components: componentsOut, identity_breakdown, diagnosis,
+    why_confidence_low: why_confidence_low.length > 0 ? why_confidence_low : undefined,
+    how_to_improve: how_to_improve.length > 0 ? how_to_improve : undefined,
+    what_would_make_wrong,
   }
 }
 
@@ -2962,11 +2983,14 @@ function computeInterventions(
   models: BehavioralModels,
   mc: MonteCarloResult,
   startingCash: number,
+  dailySim?: DailySimulation,
 ): Intervention[] {
   const interventions: Intervention[] = []
   const baseCash14 = mc.day_scenarios.find((s) => s.scenario === "base")?.cash_14d ?? mc.expected_cash_30d
   const baseCash30 = mc.expected_cash_30d
   const baseRisk30 = mc.prob_below_zero_30d
+  const baseLowPoint = dailySim?.min_cash ?? baseCash14 * 0.85
+  const stressProb = mc.prob_below_zero_14d > 0.05 ? mc.prob_below_zero_14d : mc.prob_below_zero_30d
 
   // Accelerate top customer collections (3 days earlier)
   for (const c of models.customers.slice(0, 3)) {
@@ -2977,6 +3001,12 @@ function computeInterventions(
     const impact30 = r2(expectedCash * 0.5)
     const riskReduction = baseRisk30 > 0 ? r2(Math.min(50, (expectedCash / Math.max(1, startingCash)) * 100)) : 0
 
+    const simImpact: ActionSimulationImpact = {
+      low_point_before: baseLowPoint,
+      low_point_after: r2(baseLowPoint + impact14 * 0.6),
+      stress_prob_before: stressProb,
+      stress_prob_after: r2(Math.max(0, stressProb - riskReduction / 100)),
+    }
     interventions.push({
       id: `accel_${c.entity_id}`,
       label: `Accelerate ${c.name} by 3 days`,
@@ -2992,6 +3022,7 @@ function computeInterventions(
       plausible_range_high: r2(impact14 * 1.2),
       confidence_band: c.confidence === "high" ? "medium" : "low-medium",
       assumptions: ["Customer agrees to accelerate payment", "No discount required"],
+      simulation_impact: simImpact,
     })
   }
 
@@ -3004,6 +3035,15 @@ function computeInterventions(
     const impact30 = r2(monthlyCash * 0.3)
     const riskReduction = baseRisk30 > 0 ? r2(Math.min(30, (monthlyCash / Math.max(1, startingCash)) * 80)) : 0
 
+    const simImpact: ActionSimulationImpact = {
+      low_point_before: baseLowPoint,
+      low_point_after: r2(baseLowPoint + impact14 * 0.5),
+      stress_prob_before: stressProb,
+      stress_prob_after: r2(Math.max(0, stressProb - riskReduction / 100)),
+    }
+    const lateFeeP = v.outstanding_bills.length > 0 ? 0.2 : 0.05
+    const relRisk = v.recurrence.recurrence_type === "hard" ? 0.15 : 0.08
+    const nextTrough = r2(-monthlyCash * 0.4)
     interventions.push({
       id: `delay_${v.entity_id}`,
       label: `Delay ${v.name} by 5 days`,
@@ -3015,15 +3055,21 @@ function computeInterventions(
       impact_cash_30d: impact30,
       impact_risk_reduction: riskReduction,
       description: `Delaying ${v.name} payments by 5 days frees ~$${Math.round(impact14).toLocaleString()} in the near term`,
-      vendor_relationship_risk: v.recurrence.recurrence_type === "hard" ? 0.15 : 0.08,
-      late_fee_probability: v.outstanding_bills.length > 0 ? 0.2 : 0.05,
-      impact_on_next_month_trough: r2(-monthlyCash * 0.4),
+      vendor_relationship_risk: relRisk,
+      late_fee_probability: lateFeeP,
+      impact_on_next_month_trough: nextTrough,
       cascade_crunch_probability: startingCash < monthlyCash * 2 ? 0.12 : 0.03,
       expected_impact: impact14,
       plausible_range_low: r2(impact14 * 0.6),
       plausible_range_high: r2(impact14 * 1.2),
       confidence_band: "medium",
       assumptions: ["Vendor accepts 5-day delay", "No late fees incurred", "AP load shifts to next month"],
+      simulation_impact: simImpact,
+      second_order_risks: {
+        late_fee: lateFeeP > 0.1 ? `~${Math.round(lateFeeP * 100)}% chance of late fee if terms are strict` : undefined,
+        relationship: relRisk > 0.1 ? `Vendor relationship risk (${v.recurrence.recurrence_type === "hard" ? "tight recurring" : "regular"})` : undefined,
+        next_period: `Next-period trough: ${nextTrough < 0 ? `-$${Math.abs(nextTrough).toLocaleString()} compressed` : "neutral"}`,
+      },
     })
   }
 
@@ -3032,6 +3078,14 @@ function computeInterventions(
   const totalOutflow30 = totalOutflowEvents.reduce((s, e) => s + e.amount * e.probability, 0)
   if (totalOutflow30 > 0) {
     const savings = r2(totalOutflow30 * 0.1)
+    const riskRed = baseRisk30 > 0 ? r2(Math.min(40, (savings / Math.max(1, startingCash)) * 100)) : 0
+    const simImpact: ActionSimulationImpact = {
+      low_point_before: baseLowPoint,
+      low_point_after: r2(baseLowPoint + savings * 0.4),
+      stress_prob_before: stressProb,
+      stress_prob_after: r2(Math.max(0, stressProb - riskRed / 100)),
+      runway_months_change: startingCash > 0 && savings > 0 ? r2((savings / 30) / (startingCash / 90)) : undefined,
+    }
     interventions.push({
       id: "reduce_spend_10",
       label: "Reduce overall spend by 10%",
@@ -3041,18 +3095,89 @@ function computeInterventions(
       parameter_pct: 10,
       impact_cash_14d: r2(savings * 0.5),
       impact_cash_30d: savings,
-      impact_risk_reduction: baseRisk30 > 0 ? r2(Math.min(40, (savings / Math.max(1, startingCash)) * 100)) : 0,
+      impact_risk_reduction: riskRed,
       description: `A 10% spend reduction saves ~$${Math.round(savings).toLocaleString()} over 30 days`,
       plausible_range_low: r2(savings * 0.5 * 0.7),
       plausible_range_high: r2(savings * 0.5 * 1.3),
       confidence_band: "low-medium",
       assumptions: ["Spend reduction is achievable without affecting operations"],
+      simulation_impact: simImpact,
     })
   }
 
-  // Sort by impact
-  interventions.sort((a, b) => b.impact_cash_14d - a.impact_cash_14d)
-  return interventions.slice(0, 6)
+  // Sort by risk reduction first (when stress prob > 0), else by cash impact; assign rank
+  interventions.sort((a, b) => {
+    if (baseRisk30 > 0.05 && Math.abs(a.impact_risk_reduction - b.impact_risk_reduction) > 2) {
+      return b.impact_risk_reduction - a.impact_risk_reduction
+    }
+    return b.impact_cash_14d - a.impact_cash_14d
+  })
+  const top = interventions.slice(0, 6)
+  top.forEach((iv, i) => { iv.rank = i + 1 })
+  return top
+}
+
+// ─── Step 12b: Combined Strategies (best 2-action combos) ─────────────
+
+function computeCombinedStrategies(
+  interventions: Intervention[],
+  baseLowPoint: number,
+  stressProb: number,
+): CombinedStrategy[] {
+  const strategies: CombinedStrategy[] = []
+  const accel = interventions.filter((i) => i.type === "accelerate_collection")
+  const delay = interventions.filter((i) => i.type === "delay_payment")
+  const reduce = interventions.filter((i) => i.type === "reduce_spend")
+
+  // Strategy A: delay + accelerate (most common founder combo)
+  if (delay.length > 0 && accel.length > 0) {
+    const d = delay[0]
+    const a = accel[0]
+    const combinedLow = r2(baseLowPoint + (d.impact_cash_14d + a.impact_cash_14d) * 0.5)
+    const newStress = Math.max(0, stressProb - (d.impact_risk_reduction + a.impact_risk_reduction) / 100)
+    strategies.push({
+      id: "strat_delay_accel",
+      actions: [d, a],
+      low_point: combinedLow,
+      stress_prob: r2(newStress),
+      risk_level: newStress < 0.15 ? "low" : newStress < 0.35 ? "medium" : "high",
+      summary: `Delay ${d.entity} 5d + accelerate ${a.entity} 3d → low point $${Math.round(combinedLow).toLocaleString()}, stress prob ${(newStress * 100).toFixed(0)}%`,
+    })
+  }
+
+  // Strategy B: delay + reduce spend
+  if (delay.length > 0 && reduce.length > 0) {
+    const d = delay[0]
+    const r = reduce[0]
+    const combinedLow = r2(baseLowPoint + d.impact_cash_14d * 0.5 + r.impact_cash_14d * 0.5)
+    const newStress = Math.max(0, stressProb - (d.impact_risk_reduction + r.impact_risk_reduction) / 100)
+    strategies.push({
+      id: "strat_delay_reduce",
+      actions: [d, r],
+      low_point: combinedLow,
+      stress_prob: r2(newStress),
+      risk_level: newStress < 0.15 ? "low" : newStress < 0.35 ? "medium" : "high",
+      summary: `Delay ${d.entity} 5d + reduce spend 10% → low point $${Math.round(combinedLow).toLocaleString()}, stress prob ${(newStress * 100).toFixed(0)}%`,
+    })
+  }
+
+  // Strategy C: accelerate + accelerate (two top customers)
+  if (accel.length >= 2) {
+    const a1 = accel[0]
+    const a2 = accel[1]
+    const combinedLow = r2(baseLowPoint + (a1.impact_cash_14d + a2.impact_cash_14d) * 0.5)
+    const newStress = Math.max(0, stressProb - (a1.impact_risk_reduction + a2.impact_risk_reduction) / 100)
+    strategies.push({
+      id: "strat_accel_accel",
+      actions: [a1, a2],
+      low_point: combinedLow,
+      stress_prob: r2(newStress),
+      risk_level: newStress < 0.15 ? "low" : newStress < 0.35 ? "medium" : "high",
+      summary: `Accelerate ${a1.entity} + ${a2.entity} → low point $${Math.round(combinedLow).toLocaleString()}, stress prob ${(newStress * 100).toFixed(0)}%`,
+    })
+  }
+
+  return strategies.slice(0, 3)
 }
 
 // ─── Step 13: Scenario Drivers (WHY pessimistic is bad) ──────────────
@@ -3191,6 +3316,39 @@ function runBaselineLastCycleRepeat(
   return prevCycleNet
 }
 
+function mergeLowSampleBuckets(
+  buckets: { range: string; predicted_prob: number; actual_rate: number; count: number }[],
+  minCount: number,
+): { range: string; predicted_prob: number; actual_rate: number; count: number }[] {
+  if (buckets.length <= 1) return buckets
+  const result: { range: string; predicted_prob: number; actual_rate: number; count: number }[] = []
+  let i = 0
+  while (i < buckets.length) {
+    const b = buckets[i]
+    if (b.count >= minCount) {
+      result.push(b)
+      i++
+      continue
+    }
+    let merged = { ...b }
+    let j = i + 1
+    while (j < buckets.length && merged.count < minCount) {
+      const next = buckets[j]
+      const totalCount = merged.count + next.count
+      merged = {
+        range: `${merged.range.split("-")[0]}-${next.range.split("-")[1]}`,
+        predicted_prob: r2((merged.predicted_prob * merged.count + next.predicted_prob * next.count) / totalCount),
+        actual_rate: r2((merged.actual_rate * merged.count + next.actual_rate * next.count) / totalCount),
+        count: totalCount,
+      }
+      j++
+    }
+    result.push(merged)
+    i = j
+  }
+  return result
+}
+
 function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cutoffDate: string, testDays: number): CalibrationResult | null {
   // Group forecast events into probability buckets and check if they actually occurred
   const buckets = [
@@ -3295,7 +3453,21 @@ function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cuto
   else if (isUnderconfident) details += " — probabilities are underconfident (actual > predicted)"
   else details += " — probabilities are reasonably calibrated"
 
-  return { total_events_evaluated: totalEvents, buckets: calibrationBuckets, calibration_error: calibrationError, is_overconfident: isOverconfident, is_underconfident: isUnderconfident, details }
+  const suggested_interpretation = isOverconfident && calibrationError > 0.25
+    ? "Model is overconfident: interpret a 70% prediction as ~50–55% in practice. Use ranges, not point estimates."
+    : isOverconfident
+      ? "Slight overconfidence: treat high probabilities (80%+) with some caution."
+      : undefined
+
+  // Temperature scaling: p_adj = p^T with T>1 pulls high probs down (reduces overconfidence)
+  const probability_temperature = isOverconfident && calibrationError > 0.2
+    ? r2(1 + calibrationError * 1.5)
+    : undefined
+
+  // Merge low-sample buckets (n < 5) with adjacent buckets for more stable display
+  const mergedBuckets = mergeLowSampleBuckets(calibrationBuckets, 5)
+
+  return { total_events_evaluated: totalEvents, buckets: mergedBuckets, calibration_error: calibrationError, is_overconfident: isOverconfident, is_underconfident: isUnderconfident, details, suggested_interpretation, probability_temperature }
 }
 
 const BACKTEST_HORIZONS = [7, 14, 30, 60, 90] as const
@@ -3583,7 +3755,12 @@ export function computeCashflowForecast(
   const sensitivity = computeSensitivity(events_30d, behavioral_models, monte_carlo, startingCash)
 
   // Intervention engine
-  const interventions = computeInterventions(events_30d, behavioral_models, monte_carlo, startingCash)
+  const interventions = computeInterventions(events_30d, behavioral_models, monte_carlo, startingCash, daily_simulation)
+  const combined_strategies = computeCombinedStrategies(
+    interventions,
+    daily_simulation.min_cash,
+    monte_carlo.prob_below_zero_14d > 0.05 ? monte_carlo.prob_below_zero_14d : monte_carlo.prob_below_zero_30d,
+  )
 
   // Scenario drivers (WHY the pessimistic scenario is bad)
   const baseScenario = scenarios.find((s) => s.scenario === "base")
@@ -3641,6 +3818,7 @@ export function computeCashflowForecast(
     cash_runway,
     sensitivity,
     interventions,
+    combined_strategies,
     context,
     backtest,
     separated_forecast,

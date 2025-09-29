@@ -145,3 +145,67 @@ Rules:
   } catch { /* ignore parse errors */ }
   return result
 }
+
+// ─── Control Layer: Execution suggestions (reminders, drafts) ─────────
+
+export type ExecutionSuggestionOut = {
+  action_id: string
+  action_label: string
+  type: "reminder" | "draft" | "trigger"
+  label: string
+  content?: string
+}
+
+type InterventionForExecution = {
+  id: string
+  label: string
+  type: string
+  entity: string | null
+}
+
+/**
+ * Generate execution suggestions: reminder text, email draft, etc.
+ * Turns "Accelerate Sarah Katz" into "Send reminder", "Draft payment reminder email".
+ */
+export async function generateExecutionSuggestions(
+  interventions: InterventionForExecution[],
+): Promise<ExecutionSuggestionOut[]> {
+  if (!process.env.FORECAST_LLM_ENABLED || !API_KEY || interventions.length === 0) return []
+  const top = interventions.slice(0, 4)
+  const list = top.map((i, idx) => `${idx + 1}. id="${i.id}" ${i.label} (${i.type}, entity: ${i.entity ?? "N/A"})`).join("\n")
+  const systemPrompt = `You are a CFO assistant. For each cashflow action below, output ONE execution suggestion.
+
+Rules:
+- accelerate_collection → type "reminder", label "Send payment reminder", content = 2-3 sentence email draft
+- delay_payment → type "draft", label "Draft extension request", content = 2-3 sentence message to vendor
+- reduce_spend → type "trigger", label "Review discretionary spend", content = null
+
+Output a JSON array with one object per action, in the same order. Each object: {"action_id": "exact id from input", "type": "reminder"|"draft"|"trigger", "label": "short label", "content": "draft or null"}`
+
+  const content = await callLLM([
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Actions:\n${list}\n\nFor each, output execution suggestions as JSON array.` },
+  ], 600)
+  if (!content) return []
+  const suggestions: ExecutionSuggestion[] = []
+  try {
+    const jsonStr = content.replace(/```json?\s*/gi, "").replace(/```/g, "").trim()
+    const parsed = JSON.parse(jsonStr) as Array<{ action_id?: string; action_label?: string; type?: string; label?: string; content?: string }>
+    if (Array.isArray(parsed)) {
+      for (let idx = 0; idx < parsed.length && idx < top.length; idx++) {
+        const item = parsed[idx]
+        const iv = top[idx]
+        if (iv && item && item.type && item.label) {
+          suggestions.push({
+            action_id: item.action_id ?? iv.id,
+            action_label: iv.label,
+            type: item.type as "reminder" | "draft" | "trigger",
+            label: item.label,
+            content: item.content ?? undefined,
+          })
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return suggestions
+}
