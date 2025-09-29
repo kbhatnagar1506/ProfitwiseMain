@@ -3025,6 +3025,7 @@ export function OnboardingFlow({
                       const label = key.replace(/_risk$/, "").replace(/_/g, " ")
                       const barColor = dim.level === "high" ? "bg-red-400" : dim.level === "medium" ? "bg-amber-400" : "bg-emerald-400"
                       const textColor = dim.level === "high" ? "text-red-400" : dim.level === "medium" ? "text-amber-400" : "text-emerald-400"
+                      const bufferTooltip = key === "liquidity_risk" ? "Based on period net cash flow and average daily outflows. Excludes transfers and owner inflows from burn calculation." : undefined
                       return (
                         <div key={key}>
                           <div className="flex items-center justify-between mb-1">
@@ -3034,19 +3035,46 @@ export function OnboardingFlow({
                           <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mb-1">
                             <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${Math.min(dim.score, 100)}%` }} />
                           </div>
-                          <div className="text-[11px] text-gray-500">{dim.reason}</div>
+                          <div className="text-[11px] text-gray-500" title={bufferTooltip}>{dim.reason}</div>
                         </div>
                       )
                     })}
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-white/10 text-center">
-                    <span className="text-xs text-gray-500">Overall risk score: </span>
-                    <span className={`text-sm font-bold ${
-                      stateData.risk.overall === "high" ? "text-red-400" : stateData.risk.overall === "medium" ? "text-amber-400" : "text-emerald-400"
-                    }`}>{stateData.risk.overall_score}/100</span>
+                  <div className="mt-4 pt-3 border-t border-white/10">
+                    <div className="text-center mb-2">
+                      <span className="text-xs text-gray-500">Overall risk score: </span>
+                      <span className={`text-sm font-bold ${
+                        stateData.risk.overall === "high" ? "text-red-400" : stateData.risk.overall === "medium" ? "text-amber-400" : "text-emerald-400"
+                      }`}>{stateData.risk.overall_score}/100</span>
+                    </div>
+                    <div className="text-[10px] text-gray-500 text-center flex flex-wrap justify-center gap-x-3 gap-y-1">
+                      <span>Liquidity 30% → {Math.round(stateData.risk.liquidity_risk.score * 0.30)}</span>
+                      <span>Concentration 20% → {Math.round(stateData.risk.concentration_risk.score * 0.20)}</span>
+                      <span>Dependency 25% → {Math.round(stateData.risk.dependency_risk.score * 0.25)}</span>
+                      <span>Anomaly 10% → {Math.round(stateData.risk.anomaly_risk.score * 0.10)}</span>
+                      <span>Uncertainty 15% → {Math.round(stateData.risk.uncertainty_risk.score * 0.15)}</span>
+                    </div>
                   </div>
                 </div>
+
+                {/* ─── Excluded & Unresolved ─── */}
+                {(stateData.revenue.excluded_revenue > 0 || stateData.spend.excluded_spend > 0 || stateData.liquidity.excluded_cash > 0) && (
+                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+                    <div className="text-xs uppercase tracking-wider text-amber-400/90 mb-2">Excluded from state</div>
+                    <div className="text-xs text-gray-300 space-y-1">
+                      {stateData.revenue.excluded_revenue > 0 && (
+                        <div>Revenue: {money(stateData.revenue.excluded_revenue)} ({stateData.revenue.gross_revenue > 0 ? Math.round((stateData.revenue.excluded_revenue / stateData.revenue.gross_revenue) * 100) : 0}% of gross)</div>
+                      )}
+                      {stateData.spend.excluded_spend > 0 && (
+                        <div>Spend: {money(stateData.spend.excluded_spend)} ({stateData.spend.total_spend > 0 ? Math.round((stateData.spend.excluded_spend / stateData.spend.total_spend) * 100) : 0}% of total)</div>
+                      )}
+                      {stateData.liquidity.excluded_cash > 0 && (
+                        <div>Liquidity: {money(stateData.liquidity.excluded_cash)} ({(stateData.liquidity.total_inflows + stateData.liquidity.total_outflows) > 0 ? Math.round((stateData.liquidity.excluded_cash / (stateData.liquidity.total_inflows + stateData.liquidity.total_outflows)) * 100) : 0}% of total flow)</div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* ─── State Confidence ─── */}
                 <div className="flex items-center justify-center gap-6 text-xs">
@@ -3085,11 +3113,11 @@ export function OnboardingFlow({
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className="text-sm font-semibold text-white">{stateData.revenue.top_customer_pct}%</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Top cust %</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of revenue from the single largest customer.">Top cust %</div>
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className="text-sm font-semibold text-white">{Math.round(stateData.revenue.repeat_revenue_ratio * 100)}%</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Repeat revenue</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of revenue in this period from customers who also paid in a prior period.">Repeat revenue</div>
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className="text-sm font-semibold text-white">{stateData.revenue.concentration_index}</div>
@@ -3124,9 +3152,14 @@ export function OnboardingFlow({
                     <div className="text-3xl font-bold text-amber-400">{money(stateData.spend.total_spend)}</div>
                     <div className="text-xs text-gray-500">total</div>
                   </div>
-                  <div className="text-xs text-gray-500 mb-4">
-                    OpEx {money(stateData.spend.total_opex)} · COGS {money(stateData.spend.total_cogs)} · Direct cost est. {money(stateData.spend.direct_cost_candidates)}
+                  <div className={`text-xs text-gray-500 ${stateData.spend.direct_cost_candidates > 0 ? "mb-2" : "mb-4"}`}>
+                    Booked: OpEx {money(stateData.spend.total_opex)} · COGS {money(stateData.spend.total_cogs)}
                   </div>
+                  {stateData.spend.direct_cost_candidates > 0 && (
+                    <div className="text-xs text-gray-500 mb-4" title="Direct cost estimate is inferred from supplier patterns, not from accounting records.">
+                      Analytical: Estimated direct-cost share {money(stateData.spend.direct_cost_candidates)} (not in COGS)
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs mb-4">
                     <div className="flex justify-between"><span className="text-gray-400">Vendor payments</span><span className="text-white font-mono">{money(stateData.spend.vendor_payments)}</span></div>
@@ -3145,7 +3178,7 @@ export function OnboardingFlow({
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className="text-sm font-semibold text-white">{stateData.spend.top_vendor_pct}%</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Top vendor %</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of spend with the single largest vendor.">Top vendor %</div>
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className="text-sm font-semibold text-white">{stateData.spend.supplier_concentration_index}</div>
@@ -3180,12 +3213,12 @@ export function OnboardingFlow({
                   </div>
 
                   <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs mb-4">
-                    <div className="flex justify-between"><span className="text-gray-400">Net operating</span><span className="text-white font-mono">{money(stateData.liquidity.net_operating)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Net financing</span><span className="text-white font-mono">{money(stateData.liquidity.net_financing)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Net settlement</span><span className="text-white font-mono">{money(stateData.liquidity.net_settlement)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Net owner</span><span className="text-white font-mono">{money(stateData.liquidity.net_owner)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400" title="Business-generated net cash">Net operating</span><span className="text-white font-mono">{money(stateData.liquidity.net_operating)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400" title="Debt, credit, owner contributions">Net financing</span><span className="text-white font-mono">{money(stateData.liquidity.net_financing)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400" title="Timing-related processor inflows/outflows">Net settlement</span><span className="text-white font-mono">{money(stateData.liquidity.net_settlement)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400" title="Owner/personal support (subset of financing)">Net owner</span><span className="text-white font-mono">{money(stateData.liquidity.net_owner)}</span></div>
                     {stateData.liquidity.settlement_lag && stateData.liquidity.settlement_lag.confidence !== "insufficient" && (
-                      <div className="flex justify-between"><span className="text-gray-400">Settlement lag (payment → bank)</span><span className="text-white font-mono">~{stateData.liquidity.settlement_lag.avg_settlement_lag_days.toFixed(1)}d ({stateData.liquidity.settlement_lag.sample_count} samples)</span></div>
+                      <div className="flex justify-between"><span className="text-gray-400" title="Average days from customer payment (e.g. card charge) to funds arriving in your bank.">Settlement lag (payment → bank)</span><span className="text-white font-mono">~{stateData.liquidity.settlement_lag.avg_settlement_lag_days.toFixed(1)}d ({stateData.liquidity.settlement_lag.sample_count} samples)</span></div>
                     )}
                   </div>
 
@@ -3196,11 +3229,11 @@ export function OnboardingFlow({
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className={`text-sm font-semibold ${stateData.liquidity.operating_dependency_ratio >= 0.7 ? "text-emerald-400" : stateData.liquidity.operating_dependency_ratio >= 0.5 ? "text-yellow-300" : "text-red-400"}`}>{pct(stateData.liquidity.operating_dependency_ratio)}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Operating driven</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of total inflows from operating activities (customer receipts, vendor refunds, etc.), excluding transfers and financing.">Operating driven</div>
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className="text-sm font-semibold text-white">{pct(stateData.liquidity.transfer_dependency_ratio)}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Transfer dep.</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of total cash flow that is internal transfers between accounts (reallocation, not new cash).">Transfer dep.</div>
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className={`text-sm font-semibold ${stateData.liquidity.owner_support_ratio > 0.25 ? "text-amber-400" : "text-white"}`}>{pct(stateData.liquidity.owner_support_ratio)}</div>

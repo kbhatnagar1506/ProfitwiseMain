@@ -1,4 +1,5 @@
 import type { RevenueState, SpendState, LiquidityState } from "./types"
+import { CONCENTRATION, concentrationAdverb } from "./constants"
 
 export type Insight = {
   id: string
@@ -17,12 +18,13 @@ export function computeInsights(
 
   // ── Revenue ──
 
-  if (revenue.top_customer_pct > 15) {
+  if (revenue.top_customer_pct > CONCENTRATION.LOW_MAX) {
+    const band = revenue.top_customer_pct > CONCENTRATION.HIGH_MAX ? "critical" : revenue.top_customer_pct > CONCENTRATION.MODERATE_MAX ? "high" : "moderate"
     insights.push({
       id: "rev_concentration",
       type: "revenue",
-      severity: revenue.top_customer_pct > 50 ? "high" : "medium",
-      message: `Revenue is ${revenue.top_customer_pct > 50 ? "highly" : "moderately"} concentrated — top customer is ${revenue.top_customer_pct}% of revenue`,
+      severity: band === "critical" || band === "high" ? "high" : "medium",
+      message: `Revenue is ${concentrationAdverb(band)} concentrated — top customer is ${Math.round(revenue.top_customer_pct)}% of revenue`,
       metric: revenue.top_customer_pct,
     })
   }
@@ -32,19 +34,20 @@ export function computeInsights(
       id: "rev_retention",
       type: "revenue",
       severity: revenue.repeat_revenue_ratio < 0.2 ? "high" : "medium",
-      message: `Revenue is driven by new customers — only ${Math.round(revenue.repeat_revenue_ratio * 100)}% is repeat`,
+      message: `${Math.round(revenue.repeat_revenue_ratio * 100)}% of revenue in this window came from repeat customers`,
       metric: revenue.repeat_revenue_ratio,
     })
   }
 
   // ── Spend ──
 
-  if (spend.top_vendor_pct > 20) {
+  if (spend.top_vendor_pct > CONCENTRATION.LOW_MAX) {
+    const band = spend.top_vendor_pct > CONCENTRATION.HIGH_MAX ? "critical" : spend.top_vendor_pct > CONCENTRATION.MODERATE_MAX ? "high" : "moderate"
     insights.push({
       id: "spend_vendor_conc",
       type: "spend",
-      severity: spend.top_vendor_pct > 40 ? "high" : "medium",
-      message: `Vendor concentration risk is elevated — top supplier is ${spend.top_vendor_pct}% of spend`,
+      severity: band === "critical" || band === "high" ? "high" : "medium",
+      message: `Vendor concentration risk is elevated — top supplier is ${Math.round(spend.top_vendor_pct)}% of spend`,
       metric: spend.top_vendor_pct,
     })
   }
@@ -67,7 +70,7 @@ export function computeInsights(
       id: "liq_transfer_dep",
       type: "liquidity",
       severity: liquidity.transfer_dependency_ratio > 0.4 ? "high" : "medium",
-      message: `Liquidity depends on internal transfers (${Math.round(liquidity.transfer_dependency_ratio * 100)}% of cash flow)`,
+      message: `${Math.round(liquidity.transfer_dependency_ratio * 100)}% of net cash movement came from internal transfers`,
       metric: liquidity.transfer_dependency_ratio,
     })
   }

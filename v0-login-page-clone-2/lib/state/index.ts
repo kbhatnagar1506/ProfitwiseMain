@@ -85,8 +85,22 @@ async function storeStateSnapshot(
   )
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function computeBusinessState(userId: string): Promise<BusinessState> {
   await ensureMovementsSchema()
+
+  type EntityRow = { id: string; canonical_name: string; display_name: string | null }
+  const entityIdToName = new Map<string, string>()
+  try {
+    const entityRows = await query<EntityRow>(
+      `SELECT id::text, canonical_name, display_name FROM entities WHERE user_id = $1`,
+      [userId]
+    ).then((r) => r.rows)
+    for (const e of entityRows) {
+      entityIdToName.set(e.id, (e.display_name && e.display_name.trim()) ? e.display_name.trim() : e.canonical_name)
+    }
+  } catch { /* entities table may not exist yet */ }
 
   type PlaidAcct = { account_id: string; name: string; type: string; subtype: string }
   const acctByName = new Map<string, PlaidAcct>()
@@ -218,9 +232,27 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
     // Non-fatal: state computation succeeded, snapshot storage failed
   }
 
+  // Resolve entity_id to canonical name for top customers/vendors (avoid showing UUIDs)
+  const resolvedRevenue = {
+    ...revenue,
+    revenue_by_customer: revenue.revenue_by_customer.map((c) => {
+      const resolved = c.entity_id && entityIdToName.has(c.entity_id) ? entityIdToName.get(c.entity_id)! : null
+      const name = resolved ?? (UUID_RE.test(c.name) ? "Unknown customer" : c.name)
+      return { ...c, name }
+    }),
+  }
+  const resolvedSpend = {
+    ...spend,
+    spend_by_vendor: spend.spend_by_vendor.map((v) => {
+      const resolved = v.entity_id && entityIdToName.has(v.entity_id) ? entityIdToName.get(v.entity_id)! : null
+      const name = resolved ?? (UUID_RE.test(v.name) ? "Unknown vendor" : v.name)
+      return { ...v, name }
+    }),
+  }
+
   return {
-    revenue,
-    spend,
+    revenue: resolvedRevenue,
+    spend: resolvedSpend,
     liquidity,
     risk,
     transitions,

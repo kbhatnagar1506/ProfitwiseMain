@@ -102,6 +102,46 @@ export function displayLabelForCounterparty(
 }
 
 /**
+ * Normalize raw bank account names for dashboard display.
+ * Maps Plaid-style names (e.g. "Chase Parent Account:J. RUBENSTEIN (6515) - 2") to readable labels.
+ */
+export function normalizeAccountDisplayName(
+  raw: string | null | undefined,
+  accountType?: string | null,
+  accountSubtype?: string | null,
+): string {
+  if (!raw || typeof raw !== "string") return "External / unlinked account"
+  const s = raw.trim()
+  if (!s) return "External / unlinked account"
+
+  const type = (accountType ?? "").toLowerCase()
+  const subtype = (accountSubtype ?? "").toLowerCase()
+  const combined = `${s} ${type} ${subtype}`.toLowerCase()
+
+  if (/\bparent\s*account\b/i.test(s) || (type === "credit" && /parent|personal/i.test(s))) {
+    return "Owner credit card"
+  }
+  if (type === "credit" || subtype === "credit card") {
+    return "Credit card"
+  }
+  if (subtype === "checking" || (type === "depository" && /checking|check/i.test(combined))) {
+    return "Business checking"
+  }
+  if (subtype === "savings" || subtype === "money market" || /savings|money\s*market|mma/i.test(combined)) {
+    return "Business MMA"
+  }
+  if (type === "depository") {
+    return "Business checking"
+  }
+
+  // Try to shorten ugly names: "Chase Parent Account:J. RUBENSTEIN (6515) - 2" -> "Chase (6515)"
+  const match = s.match(/^([^:]+)(?::.*?)?\s*\((\d{4})\)/)
+  if (match) return `${match[1].trim()} (${match[2]})`
+  if (s.length > 40) return s.slice(0, 37) + "..."
+  return s
+}
+
+/**
  * Generate normalized variants for lookup (preserve original as primary).
  */
 export function normalizedVariants(raw: string): string[] {
