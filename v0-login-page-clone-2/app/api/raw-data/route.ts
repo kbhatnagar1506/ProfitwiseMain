@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { query } from "@/lib/db"
+import { query, ensureGmailSchema } from "@/lib/db"
 import { listPlaidItemIds } from "@/lib/plaid-item-store"
 import { listRealmIdsByUserId } from "@/lib/quickbooks-token-store"
 import { listTenantIdsByUserId } from "@/lib/xero-token-store"
@@ -75,13 +75,21 @@ export async function GET() {
   }
 
   // Gmail extracted docs (where extracted_invoice is present)
-  const gmailExtracted = await query(
-    `SELECT message_id, thread_id, from_email, to_emails, subject, date_sent, snippet, extracted_invoice
-     FROM gmail_synced_messages
-     WHERE extracted_invoice IS NOT NULL
-     ORDER BY date_sent DESC NULLS LAST, synced_at DESC
-     LIMIT 500`
-  ).then((r) => r.rows)
+  let gmailExtracted: unknown[] = []
+  try {
+    // Ensure the gmail_synced_messages table has the extracted_invoice column before querying.
+    await ensureGmailSchema()
+    gmailExtracted = await query(
+      `SELECT message_id, thread_id, from_email, to_emails, subject, date_sent, snippet, extracted_invoice
+       FROM gmail_synced_messages
+       WHERE extracted_invoice IS NOT NULL
+       ORDER BY date_sent DESC NULLS LAST, synced_at DESC
+       LIMIT 500`
+    ).then((r) => r.rows)
+  } catch {
+    // If the column or table does not exist yet in this environment, just return an empty list
+    gmailExtracted = []
+  }
 
   return NextResponse.json({
     plaid: {
