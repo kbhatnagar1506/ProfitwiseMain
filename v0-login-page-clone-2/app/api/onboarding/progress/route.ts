@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     "SELECT COALESCE(onboarding_step, 1) AS onboarding_step FROM users WHERE id = $1",
     [user.id]
   )
-  const step = Math.min(Math.max(rows[0]?.onboarding_step ?? 1, 1), 11)
+  const step = Math.min(Math.max(rows[0]?.onboarding_step ?? 1, 1), 15)
   return NextResponse.json({ step })
 }
 
@@ -40,10 +40,10 @@ export async function PATCH(request: NextRequest) {
     log("onboarding.progress.rejected", { reason: "invalid_json" }, "auth")
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 })
   }
-  const step = typeof body.step === "number" ? Math.min(Math.max(Math.floor(body.step), 1), 11) : null
+  const step = typeof body.step === "number" ? Math.min(Math.max(Math.floor(body.step), 1), 15) : null
   if (step === null) {
     log("onboarding.progress.rejected", { reason: "invalid_step" }, "auth")
-    return NextResponse.json({ error: "step must be a number between 1 and 11" }, { status: 400 })
+    return NextResponse.json({ error: "step must be a number between 1 and 15" }, { status: 400 })
   }
   await query("UPDATE users SET onboarding_step = $1 WHERE id = $2", [step, user.id])
   log("onboarding.progress.updated", { userId: user.id, step }, "auth")
