@@ -5,7 +5,7 @@ import { seedIdentityGraph } from "@/lib/identity-seed"
 import { query, ensureIdentitySchema } from "@/lib/db"
 import { log } from "@/lib/logger"
 
-export async function POST() {
+export async function POST(req: Request) {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
@@ -19,12 +19,18 @@ export async function POST() {
     "SELECT COUNT(*)::int AS count FROM entities WHERE user_id = $1",
     [user.id]
   )
-  const alreadySeeded = (existing[0]?.count ?? 0) > 0
+  const entityCount = existing[0]?.count ?? 0
 
-  // Fire-and-forget: kick off the seed in the background so we don't hit Heroku's 30s timeout.
+  const url = new URL(req.url)
+  const force = url.searchParams.get("force") === "true"
+
+  if (entityCount > 0 && !force) {
+    return NextResponse.json({ ok: true, status: "already_seeded", entityCount })
+  }
+
   seedIdentityGraph(user.id).catch((err) => {
     log("identity.seed.background_error", { userId: user.id, error: err instanceof Error ? err.message : String(err) }, "identity")
   })
 
-  return NextResponse.json({ ok: true, status: alreadySeeded ? "reseeding" : "seeding" })
+  return NextResponse.json({ ok: true, status: entityCount > 0 ? "reseeding" : "seeding" })
 }
