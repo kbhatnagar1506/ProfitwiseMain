@@ -492,6 +492,112 @@ export async function ensureSlackSchema(): Promise<void> {
   log("db.slack.schema.ensured", undefined, "db")
 }
 
+// ─── Identity Layer ────────────────────────────────────────────────
+
+const ENTITIES_SQL = `
+  CREATE TABLE IF NOT EXISTS entities (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    entity_type     TEXT NOT NULL,
+    canonical_name  TEXT NOT NULL,
+    display_name    TEXT,
+    domain          TEXT,
+    tax_id          TEXT,
+    confidence      REAL DEFAULT 0,
+    metadata        JSONB DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, canonical_name, entity_type)
+  )
+`
+
+const ENTITY_ALIASES_SQL = `
+  CREATE TABLE IF NOT EXISTS entity_aliases (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id       UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    alias           TEXT NOT NULL,
+    alias_type      TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    source_id       TEXT,
+    confidence      REAL DEFAULT 0.5,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(entity_id, alias, alias_type, source)
+  )
+`
+
+const ENTITY_RELATIONSHIPS_SQL = `
+  CREATE TABLE IF NOT EXISTS entity_relationships (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_entity_id  UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    to_entity_id    UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    relationship    TEXT NOT NULL,
+    confidence      REAL DEFAULT 0.5,
+    evidence        JSONB DEFAULT '[]'::jsonb,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(from_entity_id, to_entity_id, relationship)
+  )
+`
+
+const ACCOUNT_OWNERSHIP_SQL = `
+  CREATE TABLE IF NOT EXISTS account_ownership (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id       UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    account_type    TEXT NOT NULL,
+    account_ref     TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    confidence      REAL DEFAULT 0.5,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(entity_id, account_type, account_ref)
+  )
+`
+
+const IDENTITY_ASSERTIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS identity_assertions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id       UUID REFERENCES entities(id) ON DELETE SET NULL,
+    assertion_type  TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    source_record   JSONB,
+    value           TEXT,
+    score           REAL DEFAULT 0.5,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
+const IDENTITY_RESOLUTION_DECISIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS identity_resolution_decisions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    entity_id       UUID REFERENCES entities(id) ON DELETE SET NULL,
+    merged_from     UUID[],
+    decision_type   TEXT NOT NULL,
+    reason          TEXT,
+    assertions_used UUID[],
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
+let identitySchemaEnsured = false
+
+export async function ensureIdentitySchema(): Promise<void> {
+  if (identitySchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(ENTITIES_SQL)
+  await p.query(ENTITY_ALIASES_SQL)
+  await p.query(ENTITY_RELATIONSHIPS_SQL)
+  await p.query(ACCOUNT_OWNERSHIP_SQL)
+  await p.query(IDENTITY_ASSERTIONS_SQL)
+  await p.query(IDENTITY_RESOLUTION_DECISIONS_SQL)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_entities_user ON entities (user_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity ON entity_aliases (entity_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_entity_aliases_alias ON entity_aliases (alias, alias_type)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_identity_assertions_entity ON identity_assertions (entity_id)")
+  identitySchemaEnsured = true
+  log("identity.schema.ensured", undefined, "db")
+}
+
 export async function query<T = unknown>(
   text: string,
   params?: unknown[]
