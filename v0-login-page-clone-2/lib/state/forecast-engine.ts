@@ -140,7 +140,7 @@ let _ctx: IdentityContext = {
   familyMembers: new Map(),
 }
 
-function setIdentityContext(ctx: IdentityContext) { _ctx = ctx }
+export function setIdentityContext(ctx: IdentityContext) { _ctx = ctx }
 
 function cleanDescriptor(raw: string): string {
   let name = raw
@@ -1394,7 +1394,7 @@ function buildInvoiceSignal(invoices: OutstandingInvoice[]): InvoiceSignal {
   }
 }
 
-function buildBehavioralModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], bills: OutstandingBill[] = []): BehavioralModels {
+export function buildBehavioralModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], bills: OutstandingBill[] = []): BehavioralModels {
   const customers = buildCustomerModels(movements, invoices)
   return {
     customers,
