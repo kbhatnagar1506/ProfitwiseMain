@@ -18,7 +18,7 @@ const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
 const ENTITY_TYPES = [
   "vendor", "customer", "employee", "processor", "bank_account",
-  "ledger_account", "tax_authority", "owner", "lender", "internal", "unknown",
+  "tax_authority", "owner", "lender", "internal", "unknown",
 ] as const
 type EntityType = (typeof ENTITY_TYPES)[number]
 
@@ -327,7 +327,7 @@ async function extractQboSignalGroups(userId: string, ctx: SelfContext): Promise
     groups.push(makeGroup(anchor, sats))
   }
 
-  // QBO Account entities — split bank_account vs ledger_account
+  // QBO Account entities — only real bank/credit card accounts (not ledger accounts)
   const { rows: accounts } = await query<{ entity_id: string; data: Record<string, unknown> }>(
     `SELECT e.entity_id, e.data FROM qbo_entities e
      JOIN qbo_connections c ON c.realm_id = e.realm_id
@@ -344,17 +344,14 @@ async function extractQboSignalGroups(userId: string, ctx: SelfContext): Promise
     const isRealBank = /^(Bank|Credit Card)$/i.test(acctType)
       || /^(Checking|Savings|Money Market|Credit Card|Trust)$/i.test(acctSubType)
 
-    const isLedger = /^(Other Current Asset|Other Current Liability|Equity|Income|Cost of Goods Sold|Expense|Other Income|Other Expense|Accounts Receivable|Accounts Payable|Fixed Asset|Long Term Liability)$/i.test(acctType)
+    if (!isRealBank) continue
 
-    if (!isRealBank && !isLedger) continue
-
-    const eType: EntityType = isRealBank ? "bank_account" : "ledger_account"
     groups.push(makeGroup({
       alias: name,
       alias_type: "name",
       source: "qbo",
       source_id: row.entity_id,
-      entity_type: eType,
+      entity_type: "bank_account",
       confidence: 0.9,
       extra: { account_type: acctType, account_sub_type: acctSubType },
     }))
@@ -715,7 +712,6 @@ export async function seedIdentityGraph(userId: string): Promise<{
   processorsDetected: number
   testSkipped: number
   bankAccounts: number
-  ledgerAccounts: number
 }> {
   await ensureIdentitySchema()
 
@@ -723,7 +719,7 @@ export async function seedIdentityGraph(userId: string): Promise<{
     entitiesCreated: 0, entitiesUpdated: 0, aliasesCreated: 0,
     assertionsCreated: 0, plaidMerchantsNormalized: 0, plaidSkipped: 0,
     selfEntities: 0, processorsDetected: 0, testSkipped: 0,
-    bankAccounts: 0, ledgerAccounts: 0,
+    bankAccounts: 0,
   }
 
   log("identity.seed.start", { userId }, "identity")
@@ -861,7 +857,6 @@ export async function seedIdentityGraph(userId: string): Promise<{
       if (!entityId) continue
       stats.entitiesCreated++
       if (anchor.entity_type === "bank_account") stats.bankAccounts++
-      if (anchor.entity_type === "ledger_account") stats.ledgerAccounts++
 
       entities.push({ id: entityId, canonical_name: canonicalName, entity_type: anchor.entity_type, confidence: anchor.confidence })
     }
@@ -937,7 +932,7 @@ export async function seedIdentityGraph(userId: string): Promise<{
   await query(
     `INSERT INTO identity_resolution_decisions (user_id, decision_type, reason)
      VALUES ($1, 'auto_create', $2)`,
-    [userId, `v4: ${stats.entitiesCreated} new, ${stats.entitiesUpdated} updated, ${stats.plaidSkipped} noise, ${stats.testSkipped} test, ${stats.bankAccounts} bank, ${stats.ledgerAccounts} ledger, from ${totalSignals} signals in ${allGroups.length} groups`]
+    [userId, `v4: ${stats.entitiesCreated} new, ${stats.entitiesUpdated} updated, ${stats.plaidSkipped} noise, ${stats.testSkipped} test, ${stats.bankAccounts} bank, from ${totalSignals} signals in ${allGroups.length} groups`]
   )
 
   log("identity.seed.done", { userId, ...stats }, "identity")
