@@ -109,7 +109,7 @@ const steps = [
   {
     id: 12,
     title: "AR & AP Business State Layer",
-    description: "Expected inflows (AR) from invoices; expected outflows (AP) derived from money movement patterns.",
+    description: "Expected inflows (AR) from invoices; expected outflows (AP).",
   },
   {
     id: 13,
@@ -261,8 +261,8 @@ export function OnboardingFlow({
   type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; risk: RiskState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
   type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: { invoice_id: string; source: string; customer_name: string; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: string }[]; avg_days_to_due: number | null }
-  type BehavioralAPState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; confidence: string; cadence: string; payment_count: number }[] }
-  const [arApData, setArApData] = useState<{ ar: ARState; behavioral_ap: BehavioralAPState } | null>(null)
+  type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; confidence: string; cadence: string; payment_count: number }[] }
+  const [arApData, setArApData] = useState<{ ar: ARState; ap: APState } | null>(null)
   const [arApLoading, setArApLoading] = useState(false)
   const [arApError, setArApError] = useState<string | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
@@ -803,7 +803,7 @@ export function OnboardingFlow({
 
     fetch("/api/ar-ap")
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then((data: { ar: ARState; behavioral_ap: BehavioralAPState }) => {
+      .then((data: { ar: ARState; ap: APState }) => {
         if (cancelled) return
         setArApData(data)
         setArApLoading(false)
@@ -3067,12 +3067,27 @@ export function OnboardingFlow({
 
       case 12: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        const moneySmall = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        const sourceBadge = (s: string) => {
+          const c = s === "qbo" ? "bg-blue-500/20 text-blue-300" : s === "xero" ? "bg-teal-500/20 text-teal-300" : s === "stripe" ? "bg-purple-500/20 text-purple-300" : "bg-gray-500/20 text-gray-300"
+          return <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded uppercase ${c}`}>{s}</span>
+        }
+        const statusBadge = (status: string, daysOverdue: number | null) => {
+          if (status === "overdue" || (daysOverdue != null && daysOverdue > 0))
+            return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">Overdue</span>
+          if (status === "partially_paid") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Partial</span>
+          return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Open</span>
+        }
+        const arInvoices = arApData?.ar.invoices ?? []
+        const arOverdueFirst = [...arInvoices].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0))
+        const apObligations = arApData?.ap.obligations ?? []
 
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
               <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[11].description}</p>
+              <p className="text-gray-400 text-lg mb-1">{steps[11].description}</p>
+              <p className="text-[11px] text-gray-500 mb-5">Uses only data from steps 1–11 (bank, accounting, identity, tagged movements).</p>
 
               {arApLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -3088,80 +3103,153 @@ export function OnboardingFlow({
 
             {!arApLoading && arApData && (
               <div className="space-y-6">
-                {/* AR (Accounts Receivable) — expected inflow */}
-                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-2">
-                    <span className="text-emerald-400">🟢</span> AR (Accounts Receivable)
-                  </h3>
-                  <p className="text-xs text-gray-400 mb-4">Money you are expected to receive, but have not received yet. From invoices (QBO, Xero, Stripe, Gmail).</p>
-                  <div className="grid grid-cols-4 gap-3 mb-4">
-                    <div className="bg-white/5 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold font-mono text-emerald-400">{money(arApData.ar.total_outstanding)}</div>
-                      <div className="text-[10px] text-gray-500">Total outstanding</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold font-mono text-red-400">{money(arApData.ar.total_overdue)}</div>
-                      <div className="text-[10px] text-gray-500">Overdue</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-3 py-2">
-                      <div className="text-sm font-semibold text-white">{arApData.ar.invoice_count}</div>
-                      <div className="text-[10px] text-gray-500">Invoices</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-3 py-2">
-                      <div className="text-sm font-semibold text-white">{arApData.ar.overdue_count}</div>
-                      <div className="text-[10px] text-gray-500">Overdue count</div>
-                    </div>
+                {/* ─── Summary bar ─── */}
+                <div className="flex flex-wrap gap-4 justify-center text-sm">
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                    <span className="text-emerald-400 font-bold">{money(arApData.ar.total_outstanding)}</span>
+                    <span className="text-gray-400">AR outstanding</span>
                   </div>
-                  {arApData.ar.invoices.length > 0 && (
-                    <div>
-                      <div className="text-[10px] uppercase text-gray-500 mb-2">Outstanding invoices</div>
-                      <div className="space-y-1 max-h-[200px] overflow-y-auto">
-                        {arApData.ar.invoices.slice(0, 15).map((inv, i) => (
-                          <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded bg-white/[0.02]">
-                            <span className="text-gray-300 truncate max-w-[50%]">{inv.customer_name}</span>
-                            <span className="text-[10px] text-gray-500">{inv.source}</span>
-                            <span className={`font-mono ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>{money(inv.amount_due)}</span>
-                            {inv.days_overdue != null && inv.days_overdue > 0 && <span className="text-red-300 text-[10px]">{inv.days_overdue}d overdue</span>}
-                          </div>
-                        ))}
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                  <span className="text-red-400 font-bold">{money(arApData.ap.total_expected_30d)}</span>
+                  <span className="text-gray-400">AP (next 30d)</span>
+                  </div>
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 border border-white/10">
+                    <span className="text-white font-bold">{money(arApData.ar.total_outstanding - arApData.ap.total_expected_30d)}</span>
+                    <span className="text-gray-400">Net expected</span>
+                  </div>
+                </div>
+
+                {/* ─── AR (Accounts Receivable) ─── */}
+                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl overflow-hidden">
+                  <div className="p-5 border-b border-emerald-500/10">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-base font-semibold text-emerald-400 flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                          AR (Accounts Receivable)
+                        </h3>
+                        <p className="text-xs text-gray-400 mt-1">Expected inflow — money you are owed. From invoices (QBO, Xero, Stripe, Gmail).</p>
+                      </div>
+                      <div className="flex gap-4 shrink-0">
+                        <div className="text-right">
+                          <div className="text-2xl font-bold font-mono text-emerald-400">{money(arApData.ar.total_outstanding)}</div>
+                          <div className="text-[10px] text-gray-500">Total outstanding</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xl font-bold font-mono text-red-400">{money(arApData.ar.total_overdue)}</div>
+                          <div className="text-[10px] text-gray-500">Overdue ({arApData.ar.overdue_count})</div>
+                        </div>
                       </div>
                     </div>
+                  </div>
+
+                  {arInvoices.length > 0 ? (
+                    <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-emerald-500/10 hover:bg-transparent sticky top-0 bg-emerald-500/10 backdrop-blur-sm z-10">
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold">Customer</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-16">Source</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24">Due date</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Status</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Amount due</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {arOverdueFirst.map((inv, i) => (
+                            <TableRow key={`${inv.invoice_id}-${i}`} className="border-emerald-500/5 hover:bg-emerald-500/5">
+                              <TableCell className="text-sm text-white font-medium py-2.5">{inv.customer_name}</TableCell>
+                              <TableCell className="py-2.5">{sourceBadge(inv.source)}</TableCell>
+                              <TableCell className="text-xs text-gray-400 py-2.5">
+                                {inv.due_date ?? "—"}
+                                {inv.days_overdue != null && inv.days_overdue > 0 && (
+                                  <span className="block text-red-400 font-medium">{inv.days_overdue}d overdue</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="py-2.5">{statusBadge(inv.status, inv.days_overdue ?? null)}</TableCell>
+                              <TableCell className={`text-right font-mono font-semibold py-2.5 ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>
+                                {moneySmall(inv.amount_due)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {arInvoices.length > 0 && (
+                        <div className="p-3 border-t border-emerald-500/10 text-center">
+                          <span className="text-[11px] text-gray-500">{arInvoices.length} invoice{arInvoices.length !== 1 ? "s" : ""} total</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-8 text-center text-gray-500 text-sm">No outstanding invoices.</div>
                   )}
                 </div>
 
-                {/* Behavioral AP (Accounts Payable) — expected outflow from movement patterns */}
-                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-red-400 uppercase tracking-wider mb-1 flex items-center gap-2">
-                    <span className="text-red-400">🔴</span> Behavioral AP (Accounts Payable)
-                  </h3>
-                  <p className="text-xs text-gray-400 mb-4">Money you are expected to pay, derived from recurring vendor payment patterns. We do not use QBO bills.</p>
-                  <div className="grid grid-cols-3 gap-3 mb-4">
-                    <div className="bg-white/5 rounded-lg px-3 py-2">
-                      <div className="text-lg font-bold font-mono text-red-400">{money(arApData.behavioral_ap.total_expected_30d)}</div>
-                      <div className="text-[10px] text-gray-500">Expected next 30d</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-3 py-2">
-                      <div className="text-sm font-semibold text-white">{arApData.behavioral_ap.obligation_count}</div>
-                      <div className="text-[10px] text-gray-500">Obligations</div>
-                    </div>
-                  </div>
-                  {arApData.behavioral_ap.obligations.length > 0 && (
-                    <div>
-                      <div className="text-[10px] uppercase text-gray-500 mb-2">Expected vendor payments (30d)</div>
-                      <div className="space-y-1 max-h-[200px] overflow-y-auto">
-                        {arApData.behavioral_ap.obligations.slice(0, 15).map((ob, i) => (
-                          <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded bg-white/[0.02]">
-                            <span className="text-gray-300 truncate max-w-[45%]">{ob.vendor_name}</span>
-                            <span className="text-[10px] text-gray-500">{ob.cadence} · {ob.payment_count}x</span>
-                            <span className="text-[10px] text-gray-500">in {ob.days_until_due}d</span>
-                            <span className="font-mono text-red-400">{money(ob.expected_amount)}</span>
-                          </div>
-                        ))}
+                {/* ─── AP (Accounts Payable) ─── */}
+                <div className="bg-red-500/5 border border-red-500/20 rounded-xl overflow-hidden">
+                  <div className="p-5 border-b border-red-500/10">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-base font-semibold text-red-400 flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-red-400" />
+                          AP (Accounts Payable)
+                        </h3>
+                        <p className="text-xs text-gray-400 mt-1">Expected outflow — money you are expected to pay.</p>
+                      </div>
+                      <div className="flex gap-4 shrink-0">
+                        <div className="text-right">
+                          <div className="text-2xl font-bold font-mono text-red-400">{money(arApData.ap.total_expected_30d)}</div>
+                          <div className="text-[10px] text-gray-500">Next 30 days</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xl font-bold text-white">{arApData.ap.obligation_count}</div>
+                          <div className="text-[10px] text-gray-500">Obligations</div>
+                        </div>
                       </div>
                     </div>
+                  </div>
+
+                  {apObligations.length > 0 ? (
+                    <div className="overflow-x-auto max-h-[320px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-red-500/10 hover:bg-transparent sticky top-0 bg-red-500/10 backdrop-blur-sm z-10">
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold">Vendor</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-28">Cadence</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Due in</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Confidence</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Expected</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {apObligations.map((ob) => (
+                            <TableRow key={ob.obligation_id} className="border-red-500/5 hover:bg-red-500/5">
+                              <TableCell className="text-sm text-white font-medium py-2.5">{ob.vendor_name}</TableCell>
+                              <TableCell className="text-xs text-gray-400 py-2.5">{ob.cadence} · {ob.payment_count} payments</TableCell>
+                              <TableCell className="text-xs text-gray-400 py-2.5">{ob.days_until_due} days</TableCell>
+                              <TableCell className="py-2.5">
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                                  ob.confidence === "high" ? "bg-emerald-500/20 text-emerald-300" :
+                                  ob.confidence === "medium" ? "bg-amber-500/20 text-amber-300" : "bg-gray-500/20 text-gray-400"
+                                }`}>{ob.confidence}</span>
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-semibold text-red-400 py-2.5">{moneySmall(ob.expected_amount)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {apObligations.length > 0 && (
+                        <div className="p-3 border-t border-red-500/10 text-center">
+                          <span className="text-[11px] text-gray-500">{apObligations.length} obligation{apObligations.length !== 1 ? "s" : ""} in next 30d</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-8 text-center text-gray-500 text-sm">No recurring vendor obligations detected in the next 30 days.</div>
                   )}
                 </div>
 
+                {/* ─── Refresh ─── */}
                 <div className="flex justify-end">
                   <button
                     type="button"
@@ -3171,7 +3259,7 @@ export function OnboardingFlow({
                       setArApError(null)
                       fetch("/api/ar-ap")
                         .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-                        .then((data: { ar: ARState; behavioral_ap: BehavioralAPState }) => { setArApData(data); setArApLoading(false) })
+                        .then((data: { ar: ARState; ap: APState }) => { setArApData(data); setArApLoading(false) })
                         .catch((err) => { setArApError(err instanceof Error ? err.message : "Failed"); setArApLoading(false) })
                     }}
                     className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

@@ -1,3 +1,15 @@
+// ─── AR/AP API: Step 12 only — uses data from steps 1–11 ─────────────
+//
+// DATA LINEAGE (must NOT touch steps 12–15):
+//   Step 1–2:  Plaid → plaid_accounts
+//   Step 3:    QBO, Xero, Stripe → qbo_entities, xero_entities, stripe_entities
+//   Step 4:    Gmail → gmail_synced_messages
+//   Step 9:    Identity → entities, entity_aliases
+//   Step 10:   Money movements → movements, movement_observations
+//   Step 11:   Business semantics → movement_tags, movement_families
+//
+// Does NOT use: state_snapshots, forecast, /api/state, /api/forecast
+
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
@@ -7,7 +19,7 @@ import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movemen
 import type { OutstandingInvoice } from "@/lib/state/types"
 import { buildBehavioralModels, setIdentityContext } from "@/lib/state/forecast-engine"
 import type { IdentityContext } from "@/lib/state/forecast-engine"
-import { computeARState, computeBehavioralAPState } from "@/lib/state/ar-ap"
+import { computeARState, computeAPState } from "@/lib/state/ar-ap"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -352,9 +364,9 @@ export async function GET() {
     const models = buildBehavioralModels(tagged, outstandingInvoices, [])
 
     const ar = computeARState(outstandingInvoices)
-    const behavioral_ap = computeBehavioralAPState(models.vendors, 30)
+    const ap = computeAPState(models.vendors, 30)
 
-    return NextResponse.json({ ar, behavioral_ap })
+    return NextResponse.json({ ar, ap })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error("[AR-AP] compute failed:", msg)
