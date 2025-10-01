@@ -261,7 +261,7 @@ export function OnboardingFlow({
   type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; risk: RiskState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
   type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: { invoice_id: string; source: string; customer_name: string; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: string }[]; avg_days_to_due: number | null }
-  type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; confidence: string; cadence: string; payment_count: number }[] }
+  type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; source: "bill" | "inferred"; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; days_overdue: number | null; confidence: string; cadence: string; payment_count: number; priority: "high" | "medium" | "low"; risk_flag: string | null }[] }
   const [arApData, setArApData] = useState<{ ar: ARState; ap: APState } | null>(null)
   const [arApLoading, setArApLoading] = useState(false)
   const [arApError, setArApError] = useState<string | null>(null)
@@ -3215,6 +3215,7 @@ export function OnboardingFlow({
                         <TableHeader>
                           <TableRow className="border-red-500/10 hover:bg-transparent sticky top-0 bg-red-500/10 backdrop-blur-sm z-10">
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold">Vendor</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Source</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-28">Cadence</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Due in</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Confidence</TableHead>
@@ -3224,9 +3225,30 @@ export function OnboardingFlow({
                         <TableBody>
                           {apObligations.map((ob) => (
                             <TableRow key={ob.obligation_id} className="border-red-500/5 hover:bg-red-500/5">
-                              <TableCell className="text-sm text-white font-medium py-2.5">{ob.vendor_name}</TableCell>
-                              <TableCell className="text-xs text-gray-400 py-2.5">{ob.cadence} · {ob.payment_count} payments</TableCell>
-                              <TableCell className="text-xs text-gray-400 py-2.5">{ob.days_until_due} days</TableCell>
+                              <TableCell className="text-sm text-white font-medium py-2.5">
+                                <div className="flex items-center gap-2">
+                                  {ob.vendor_name}
+                                  {ob.risk_flag && (
+                                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">{ob.risk_flag}</span>
+                                  )}
+                                  {ob.priority === "high" && !ob.risk_flag && (
+                                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">high</span>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-xs text-gray-400 py-2.5">
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                                  (ob.source ?? "inferred") === "bill" ? "bg-blue-500/20 text-blue-300" : "bg-gray-500/20 text-gray-400"
+                                }`}>{ob.source ?? "inferred"}</span>
+                              </TableCell>
+                              <TableCell className="text-xs text-gray-400 py-2.5">{(ob.cadence ?? "") === "bill" ? "bill" : `${ob.cadence ?? "—"} · ${ob.payment_count ?? 0} payments`}</TableCell>
+                              <TableCell className="text-xs text-gray-400 py-2.5">
+                                {ob.days_overdue != null && ob.days_overdue > 0 ? (
+                                  <span className="text-red-400">{ob.days_overdue}d overdue</span>
+                                ) : (
+                                  `${ob.days_until_due} days`
+                                )}
+                              </TableCell>
                               <TableCell className="py-2.5">
                                 <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
                                   ob.confidence === "high" ? "bg-emerald-500/20 text-emerald-300" :
