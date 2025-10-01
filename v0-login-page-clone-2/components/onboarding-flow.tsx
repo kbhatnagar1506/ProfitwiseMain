@@ -507,22 +507,52 @@ export function OnboardingFlow({
 
   useEffect(() => {
     if (currentStep !== 9) return
+    let cancelled = false
+
     setIdentitySeeding(true)
     setIdentityError(null)
-    fetch("/api/identity/seed", { method: "POST" })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then(() => {
-        setIdentitySeeding(false)
-        setIdentityLoading(true)
-        return fetch("/api/identity")
-      })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then((data: IdentityData) => setIdentityData(data))
-      .catch((err) => {
-        setIdentityData(null)
-        setIdentityError(err instanceof Error ? err.message : "Failed to load identity graph")
-      })
-      .finally(() => { setIdentitySeeding(false); setIdentityLoading(false) })
+    setIdentityData(null)
+
+    // Fire seed (returns immediately — work happens in background on server)
+    fetch("/api/identity/seed", { method: "POST" }).catch(() => {})
+
+    // Poll /api/identity until entities appear (or we give up after ~90s)
+    let attempts = 0
+    const maxAttempts = 30
+    const poll = () => {
+      if (cancelled) return
+      attempts++
+      fetch("/api/identity")
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+        .then((data: IdentityData) => {
+          if (cancelled) return
+          if (data.entities.length > 0) {
+            setIdentityData(data)
+            setIdentitySeeding(false)
+            setIdentityLoading(false)
+          } else if (attempts < maxAttempts) {
+            setTimeout(poll, 3000)
+          } else {
+            setIdentitySeeding(false)
+            setIdentityLoading(false)
+          }
+        })
+        .catch((err) => {
+          if (cancelled) return
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 3000)
+          } else {
+            setIdentityError(err instanceof Error ? err.message : "Failed to load identity graph")
+            setIdentitySeeding(false)
+            setIdentityLoading(false)
+          }
+        })
+    }
+
+    // First poll after 2s to give the seed a head start
+    setTimeout(poll, 2000)
+
+    return () => { cancelled = true }
   }, [currentStep])
 
   const onPlaidSuccess = useCallback(
