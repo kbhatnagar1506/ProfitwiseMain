@@ -646,6 +646,15 @@ export async function ensureMovementsSchema(): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='movements' AND column_name='movement_subclass') THEN
         ALTER TABLE movements ADD COLUMN movement_subclass TEXT;
       END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='movements' AND column_name='event_type') THEN
+        ALTER TABLE movements ADD COLUMN event_type TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='movements' AND column_name='movement_mechanic') THEN
+        ALTER TABLE movements ADD COLUMN movement_mechanic TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='movements' AND column_name='review_status') THEN
+        ALTER TABLE movements ADD COLUMN review_status TEXT;
+      END IF;
     END $$
   `)
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_user ON movements (user_id)")
@@ -654,6 +663,60 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_pnl ON movements (user_id, pnl_eligible)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_statement ON movements (user_id, statement_impact)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_entity ON movements (entity_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_event_type ON movements (user_id, event_type)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_review_status ON movements (user_id, review_status)")
+  // Backfill event_type, movement_mechanic, review_status from movement_class + movement_subclass
+  await p.query(`
+    UPDATE movements SET
+      event_type = CASE
+        WHEN movement_class = 'operating_revenue' THEN 'sale'
+        WHEN movement_class = 'operating_expense' AND movement_subclass = 'platform_fee' THEN 'fee'
+        WHEN movement_class = 'operating_expense' THEN 'purchase'
+        WHEN movement_class = 'internal_transfer' THEN 'transfer'
+        WHEN movement_class = 'settlement' AND movement_subclass = 'liability_settlement' THEN 'liability_settlement'
+        WHEN movement_class = 'settlement' AND movement_subclass = 'processor_settlement' THEN 'processor_settlement'
+        WHEN movement_class = 'settlement' THEN 'processor_settlement'
+        WHEN movement_class = 'fee' THEN 'fee'
+        WHEN movement_class = 'refund' THEN 'refund'
+        WHEN movement_class = 'financing' AND movement_subclass = 'interest_income' THEN 'other_income'
+        WHEN movement_class = 'financing' AND amount < 0 THEN 'debt_repayment'
+        WHEN movement_class = 'financing' THEN 'debt_draw'
+        WHEN movement_class = 'payroll' THEN 'payroll'
+        WHEN movement_class = 'tax' THEN 'tax_payment'
+        WHEN movement_class = 'owner_draw' AND amount >= 0 THEN 'owner_contribution'
+        WHEN movement_class = 'owner_draw' THEN 'owner_draw'
+        WHEN movement_class IN ('owner_related_candidate', 'funding_candidate', 'transfer_candidate') THEN 'unknown'
+        WHEN movement_class IN ('unresolved_inflow', 'unresolved_outflow') THEN 'unknown'
+        WHEN movement_class = 'uncategorized' AND movement_subclass = 'verification' THEN 'verification'
+        WHEN movement_class = 'uncategorized' THEN 'unknown'
+        ELSE 'unknown'
+      END,
+      movement_mechanic = CASE
+        WHEN movement_class = 'operating_revenue' THEN 'customer_receipt'
+        WHEN movement_class = 'operating_expense' AND movement_subclass = 'platform_fee' THEN 'processor_debit'
+        WHEN movement_class = 'operating_expense' THEN 'vendor_payout'
+        WHEN movement_class = 'internal_transfer' THEN 'internal_transfer'
+        WHEN movement_class = 'settlement' AND movement_subclass = 'liability_settlement' THEN 'credit_card_payment'
+        WHEN movement_class = 'settlement' AND (movement_subclass = 'processor_settlement' OR movement_subclass IS NULL) THEN 'processor_payout'
+        WHEN movement_class = 'fee' THEN 'bank_fee'
+        WHEN movement_class = 'refund' THEN 'reversal'
+        WHEN movement_class = 'financing' AND movement_subclass = 'interest_income' THEN 'bank_interest'
+        WHEN movement_class = 'owner_draw' AND amount >= 0 THEN 'owner_in'
+        WHEN movement_class = 'owner_draw' THEN 'owner_out'
+        WHEN movement_class IN ('owner_related_candidate', 'funding_candidate') AND amount >= 0 THEN 'transfer_in'
+        WHEN movement_class IN ('owner_related_candidate', 'funding_candidate', 'transfer_candidate') THEN 'transfer_out'
+        WHEN movement_class IN ('unresolved_inflow') THEN 'transfer_in'
+        WHEN movement_class IN ('unresolved_outflow') THEN 'transfer_out'
+        ELSE NULL
+      END,
+      review_status = CASE
+        WHEN movement_class IN ('owner_related_candidate', 'funding_candidate', 'transfer_candidate', 'unresolved_inflow', 'unresolved_outflow') THEN 'needs_review'
+        WHEN movement_class = 'owner_draw' THEN 'provisional'
+        WHEN movement_class = 'uncategorized' AND movement_subclass = 'verification' THEN 'excluded'
+        ELSE 'confirmed'
+      END
+    WHERE event_type IS NULL AND movement_class IS NOT NULL
+  `)
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }
