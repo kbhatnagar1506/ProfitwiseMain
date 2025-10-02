@@ -531,8 +531,8 @@ export default function OAuthConnectorPage() {
                   )}
                     <p className="text-[11px] text-gray-500 leading-relaxed text-center mt-1">
                     We use your number only to send messages related to ProfitWise. You can disconnect at any time.
-                  </p>
-                </div>
+              </p>
+            </div>
               )}
           </div>
         </div>

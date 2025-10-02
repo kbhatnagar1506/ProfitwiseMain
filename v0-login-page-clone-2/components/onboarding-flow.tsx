@@ -189,9 +189,10 @@ export function OnboardingFlow({
   const [identitySeeding, setIdentitySeeding] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
-  type MovementRow = { id: string; source: string; source_type: string; source_id: string; entity_id: string | null; date: string; amount: string; raw_description: string | null; counterparty: string | null; movement_class: string; pnl_eligible: boolean; from_account: string | null; to_account: string | null; confidence: number; metadata: Record<string, unknown>; created_at: string }
+  type MovementRow = { id: string; event_id?: string | null; source: string; source_type: string; source_id: string; entity_id: string | null; date: string; amount: string; raw_description: string | null; counterparty: string | null; movement_class: string; pnl_eligible: boolean; statement_impact?: string | null; movement_subclass?: string | null; from_account: string | null; to_account: string | null; confidence: number; metadata: Record<string, unknown>; created_at: string }
+  type EventRow = { id: string; event_id: string | null; date: string; amount: string; counterparty: string | null; raw_description: string | null; movement_class: string; statement_impact: string | null; movement_subclass: string | null; confidence: number; source: string; evidence_count: number }
   type MovementSummary = { movement_class: string; pnl_eligible: boolean; count: number; total_amount: string }
-  type MovementsData = { movements: MovementRow[]; summary: MovementSummary[] }
+  type MovementsData = { movements: MovementRow[]; events?: EventRow[]; summary: MovementSummary[] }
   const [movementsData, setMovementsData] = useState<MovementsData | null>(null)
   const [movementsLoading, setMovementsLoading] = useState(false)
   const [movementsClassifying, setMovementsClassifying] = useState(false)
@@ -1132,7 +1133,7 @@ export function OnboardingFlow({
 
       case 5:
         return (
-          <div>
+              <div>
             <div className="text-center mb-6">
               <h2 className="text-2xl font-semibold text-white mb-3">Choose your communication channels</h2>
               <p className="text-gray-400 text-base">
@@ -1154,8 +1155,8 @@ export function OnboardingFlow({
                     width={80}
                     height={80}
                     className="object-contain max-w-full max-h-full"
-                  />
-                </div>
+                />
+              </div>
                 <h3 className="text-white font-semibold text-sm leading-tight mb-1">WhatsApp</h3>
                 {whatsappStatus?.verified && whatsappStatus.phone ? null : null}
               </button>
@@ -1177,8 +1178,8 @@ export function OnboardingFlow({
                       width={80}
                       height={80}
                       className="object-contain max-w-full max-h-full"
-                    />
-                  </div>
+                />
+              </div>
                   <h3 className="text-white font-semibold text-sm leading-tight">{channel.name}</h3>
                 </button>
               ))}
@@ -1944,8 +1945,13 @@ export function OnboardingFlow({
 
       case 10: {
         const PNL_ELIGIBLE_CLASSES_UI = new Set(["operating_revenue", "operating_expense", "payroll", "tax"])
+        const PNL_STATEMENT_IMPACTS = new Set(["pnl_revenue", "pnl_expense", "pnl_contra_revenue"])
+        const UNRESOLVED_CLASSES = new Set(["unresolved_inflow", "unresolved_outflow", "owner_related_candidate", "funding_candidate", "transfer_candidate"])
         const mvts = movementsData?.movements ?? []
+        const events = movementsData?.events ?? []
         const mvtSummary = movementsData?.summary ?? []
+        const rows = events.length > 0 ? events : mvts
+        const totalCount = events.length > 0 ? events.length : mvts.length
 
         const classCounts: Record<string, number> = {}
         const classAmounts: Record<string, number> = {}
@@ -1969,6 +1975,7 @@ export function OnboardingFlow({
           c === "payroll" ? "bg-pink-500/80 border-pink-400/50" :
           c === "tax" ? "bg-red-700/80 border-red-600/50" :
           c === "owner_draw" ? "bg-rose-500/80 border-rose-400/50" :
+          UNRESOLVED_CLASSES.has(c) ? "bg-amber-700/80 border-amber-600/50" :
           "bg-zinc-500/80 border-zinc-400/50"
 
         const mvtClassLabel = (c: string) =>
@@ -1983,12 +1990,17 @@ export function OnboardingFlow({
           c === "tax" ? "Tax" :
           c === "owner_draw" ? "Owner Draw" :
           c === "uncategorized" ? "Uncategorized" :
+          c === "unresolved_inflow" ? "Unresolved inflow" :
+          c === "unresolved_outflow" ? "Unresolved outflow" :
+          c === "owner_related_candidate" ? "Owner-related (review)" :
+          c === "funding_candidate" ? "Funding candidate" :
+          c === "transfer_candidate" ? "Transfer candidate" :
           c
 
         const mvtSourceColor = (s: string) =>
-          s === "plaid" ? "bg-amber-500/80" :
-          s === "qbo" ? "bg-blue-500/80" :
-          s === "stripe" ? "bg-purple-500/80" :
+          s?.includes("plaid") ? "bg-amber-500/80" :
+          s?.includes("qbo") ? "bg-blue-500/80" :
+          s?.includes("stripe") ? "bg-purple-500/80" :
           "bg-zinc-500/80"
 
         const fmtAmt = (a: string | number) => {
@@ -2001,7 +2013,9 @@ export function OnboardingFlow({
         const classOrder = [
           "operating_revenue", "operating_expense", "payroll", "tax",
           "internal_transfer", "settlement", "fee", "refund",
-          "financing", "owner_draw", "uncategorized",
+          "financing", "owner_draw",
+          "unresolved_inflow", "unresolved_outflow", "owner_related_candidate", "funding_candidate", "transfer_candidate",
+          "uncategorized",
         ]
         const activeClasses = classOrder.filter((c) => (classCounts[c] ?? 0) > 0)
 
@@ -2021,17 +2035,17 @@ export function OnboardingFlow({
               <p className="text-red-300 text-sm mb-4">Failed to load movements: {movementsError}</p>
             )}
 
-            {!movementsLoading && !movementsClassifying && movementsData && mvts.length === 0 && (
+            {!movementsLoading && !movementsClassifying && movementsData && totalCount === 0 && (
               <p className="text-gray-400 text-sm mb-4">No movements classified yet. Connect integrations and sync data first.</p>
             )}
 
-            {!movementsLoading && !movementsClassifying && mvts.length > 0 && (
+            {!movementsLoading && !movementsClassifying && totalCount > 0 && (
               <div className="space-y-6">
                 {/* Summary stats */}
                 <div className="flex flex-wrap gap-3 items-end">
                   <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
-                    <div className="text-2xl font-bold text-white">{mvts.length}</div>
-                    <div className="text-xs text-gray-400">Total movements</div>
+                    <div className="text-2xl font-bold text-white">{totalCount}</div>
+                    <div className="text-xs text-gray-400">{events.length > 0 ? "Events" : "Movements"}</div>
                   </div>
                   <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
                     <div className="text-2xl font-bold text-emerald-400">{pnlCount}</div>
@@ -2073,17 +2087,24 @@ export function OnboardingFlow({
 
                 {/* Tables per movement class */}
                 {activeClasses.map((cls) => {
-                  const clsMvts = mvts.filter((m) => m.movement_class === cls)
+                  const clsRows = rows.filter((r) => r.movement_class === cls)
                   const isPnl = PNL_ELIGIBLE_CLASSES_UI.has(cls)
+                  const isUnresolved = UNRESOLVED_CLASSES.has(cls)
+                  const stmtImpact = clsRows[0] && "statement_impact" in clsRows[0] ? (clsRows[0] as { statement_impact?: string }).statement_impact : null
+                  const showPnlBadge = stmtImpact && PNL_STATEMENT_IMPACTS.has(stmtImpact)
                   return (
-                    <div key={cls} className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
+                    <div key={cls} className={`rounded-xl border overflow-hidden ${isUnresolved ? "border-amber-500/40 bg-amber-950/20" : "border-white/20 bg-white/5"}`}>
                       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/20">
                         <span className={`inline-flex rounded-md border px-2.5 py-1 text-sm font-semibold text-white ${mvtClassColor(cls)}`}>
                           {mvtClassLabel(cls)}
                         </span>
-                        <span className="text-sm text-gray-400">{classCounts[cls]} movement{classCounts[cls] !== 1 ? "s" : ""}</span>
+                        <span className="text-sm text-gray-400">{classCounts[cls]} event{classCounts[cls] !== 1 ? "s" : ""}</span>
                         <span className="text-sm text-gray-500">{fmtAmt(classAmounts[cls] ?? 0)} net</span>
-                        {isPnl ? (
+                        {isUnresolved ? (
+                          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[11px] text-amber-400 font-medium">
+                            Needs review
+                          </span>
+                        ) : showPnlBadge ? (
                           <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] text-emerald-400 font-medium">
                             <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
                             P&L
@@ -2103,29 +2124,32 @@ export function OnboardingFlow({
                               <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
                               <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
                               <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
-                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[60px]">Source</th>
-                              <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
+                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[80px]">Source</th>
+                              <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[55px]">Conf</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-white/5">
-                            {clsMvts.slice(0, 200).map((m) => (
-                              <tr key={m.id} className="hover:bg-white/5">
-                                <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
-                                <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${parseFloat(m.amount) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                                  {fmtAmt(m.amount)}
+                            {clsRows.slice(0, 200).map((r) => (
+                              <tr key={r.id} className="hover:bg-white/5">
+                                <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{r.date?.split("T")[0]}</td>
+                                <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${parseFloat(String(r.amount)) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                  {fmtAmt(r.amount)}
                                 </td>
-                                <td className="text-white px-3 py-1.5 text-xs truncate max-w-[200px]">{m.counterparty ?? "\u2014"}</td>
-                                <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[250px]">{m.raw_description ?? "\u2014"}</td>
+                                <td className="text-white px-3 py-1.5 text-xs truncate max-w-[200px]">{r.counterparty ?? "\u2014"}</td>
+                                <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[250px]">{r.raw_description ?? "\u2014"}</td>
                                 <td className="px-3 py-1.5">
-                                  <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${mvtSourceColor(m.source)}`}>{m.source}</span>
+                                  <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${mvtSourceColor(r.source)}`}>
+                                    {r.source}
+                                    {"evidence_count" in r && r.evidence_count > 1 ? ` (${r.evidence_count})` : ""}
+                                  </span>
                                 </td>
-                                <td className="text-gray-500 px-3 py-1.5 text-xs text-right">{Math.round(m.confidence * 100)}%</td>
+                                <td className="text-gray-500 px-3 py-1.5 text-xs text-right">{Math.round((r.confidence ?? 0.5) * 100)}%</td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
-                        {clsMvts.length > 200 && (
-                          <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {clsMvts.length} movements</div>
+                        {clsRows.length > 200 && (
+                          <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {clsRows.length} events</div>
                         )}
                       </div>
                     </div>

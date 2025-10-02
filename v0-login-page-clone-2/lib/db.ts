@@ -604,6 +604,7 @@ const MOVEMENTS_SQL = `
   CREATE TABLE IF NOT EXISTS movements (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event_id        UUID,
     source          TEXT NOT NULL,
     source_type     TEXT NOT NULL,
     source_id       TEXT NOT NULL,
@@ -614,6 +615,8 @@ const MOVEMENTS_SQL = `
     counterparty    TEXT,
     movement_class  TEXT NOT NULL,
     pnl_eligible    BOOLEAN NOT NULL DEFAULT false,
+    statement_impact TEXT,
+    movement_subclass TEXT,
     from_account    TEXT,
     to_account      TEXT,
     confidence      REAL DEFAULT 0.5,
@@ -632,9 +635,24 @@ export async function ensureMovementsSchema(): Promise<void> {
   await ensureAuthSchema()
   await ensureIdentitySchema()
   await p.query(MOVEMENTS_SQL)
+  await p.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='movements' AND column_name='event_id') THEN
+        ALTER TABLE movements ADD COLUMN event_id UUID;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='movements' AND column_name='statement_impact') THEN
+        ALTER TABLE movements ADD COLUMN statement_impact TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='movements' AND column_name='movement_subclass') THEN
+        ALTER TABLE movements ADD COLUMN movement_subclass TEXT;
+      END IF;
+    END $$
+  `)
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_user ON movements (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_class ON movements (user_id, movement_class)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_event ON movements (user_id, event_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_pnl ON movements (user_id, pnl_eligible)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_statement ON movements (user_id, statement_impact)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_entity ON movements (entity_id)")
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
