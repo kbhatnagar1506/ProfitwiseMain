@@ -931,3 +931,121 @@ export async function seedIdentityGraph(userId: string): Promise<{
   log("identity.seed.done", { userId, ...stats }, "identity")
   return stats
 }
+
+// ─── Movement Identity Context ─────────────────────────────────────
+// Pre-computed lookup that the movement engine consumes.
+// Identity owns resolution; movement owns classification.
+
+export type CounterpartyRole =
+  | "vendor" | "customer" | "employee" | "processor"
+  | "tax_authority" | "owner" | "lender" | "internal"
+  | "bank_account" | "unknown"
+
+export type MovementIdentityEntry = {
+  entity_id: string
+  role: CounterpartyRole
+  canonical_name: string
+  confidence: number
+  is_self: boolean
+  is_own_account: boolean
+}
+
+export type MovementIdentityContext = Map<string, MovementIdentityEntry>
+
+function normKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "")
+}
+
+/**
+ * Builds a pre-computed lookup from every known counterparty string to the
+ * identity entry the movement engine needs. The movement engine never touches
+ * entity_aliases directly — this function does all the resolution work.
+ *
+ * Keys in the map: normalized canonical names, name aliases, merchant_string
+ * aliases, and plaid account_ids (for own-account detection).
+ */
+export async function buildMovementIdentityContext(userId: string): Promise<MovementIdentityContext> {
+  const ctx: MovementIdentityContext = new Map()
+
+  const { rows: entities } = await query<{
+    id: string; canonical_name: string; entity_type: string; confidence: number
+  }>(
+    "SELECT id, canonical_name, entity_type, confidence FROM entities WHERE user_id = $1",
+    [userId]
+  )
+  if (entities.length === 0) return ctx
+
+  const entityIds = entities.map((e) => e.id)
+  const { rows: aliases } = await query<{
+    entity_id: string; alias: string; alias_type: string; source: string; source_id: string | null
+  }>(
+    `SELECT entity_id, alias, alias_type, source, source_id FROM entity_aliases WHERE entity_id = ANY($1)`,
+    [entityIds]
+  )
+
+  const selfTypes = new Set(["internal"])
+  const ownAccountTypes = new Set(["bank_account"])
+
+  const entMap = new Map(entities.map((e) => [e.id, e]))
+
+  const addEntry = (key: string, ent: typeof entities[number]) => {
+    const k = normKey(key)
+    if (k.length < 2) return
+    if (ctx.has(k) && (ctx.get(k)!.confidence >= ent.confidence)) return
+    ctx.set(k, {
+      entity_id: ent.id,
+      role: ent.entity_type as CounterpartyRole,
+      canonical_name: ent.canonical_name,
+      confidence: ent.confidence,
+      is_self: selfTypes.has(ent.entity_type),
+      is_own_account: ownAccountTypes.has(ent.entity_type),
+    })
+  }
+
+  for (const ent of entities) {
+    addEntry(ent.canonical_name, ent)
+    addEntry(stripParenthetical(ent.canonical_name), ent)
+    addEntry(normalizeProcessorName(ent.canonical_name), ent)
+  }
+
+  for (const a of aliases) {
+    const ent = entMap.get(a.entity_id)
+    if (!ent) continue
+
+    if (a.alias_type === "name" || a.alias_type === "merchant_string") {
+      addEntry(a.alias, ent)
+      addEntry(stripParenthetical(a.alias), ent)
+      addEntry(normalizeProcessorName(a.alias), ent)
+    }
+
+    // Plaid account_id → bank_account entity (for own-account detection)
+    if (a.source === "plaid" && a.source_id && ent.entity_type === "bank_account") {
+      const acctKey = `__plaid_account__${a.source_id}`
+      ctx.set(acctKey, {
+        entity_id: ent.id,
+        role: "bank_account",
+        canonical_name: ent.canonical_name,
+        confidence: ent.confidence,
+        is_self: false,
+        is_own_account: true,
+      })
+    }
+
+    // Stripe entity_id (cus_xxx) → customer entity (for payment_intent resolution)
+    if (a.source === "stripe" && a.source_id) {
+      const stripeKey = normKey(a.source_id)
+      if (stripeKey.length >= 4 && !ctx.has(stripeKey)) {
+        ctx.set(stripeKey, {
+          entity_id: ent.id,
+          role: ent.entity_type as CounterpartyRole,
+          canonical_name: ent.canonical_name,
+          confidence: ent.confidence,
+          is_self: selfTypes.has(ent.entity_type),
+          is_own_account: ownAccountTypes.has(ent.entity_type),
+        })
+      }
+    }
+  }
+
+  return ctx
+}

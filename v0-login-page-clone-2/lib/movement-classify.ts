@@ -1,14 +1,27 @@
 /**
- * Money Movement Classification Engine.
+ * Money Movement Classification Engine v2.
  *
- * Determines what each financial record actually is before any P&L categorization.
- * Phase 1: Rule-based classification (deterministic, no LLM)
- * Phase 2: LLM fallback for ambiguous records
- * Phase 3: P&L eligibility gate
+ * Architecture:
+ *   1. Extract raw movements from Plaid, QBO, Stripe
+ *   2. Normalize amounts (positive = inflow, negative = outflow)
+ *   3. Build MovementIdentityContext from identity layer (clean handoff)
+ *   4. Resolve counterparty → identity role for each movement
+ *   5. Pair Plaid cross-account transfers
+ *   6. Deduplicate across sources (same date ± 1 day, same |amount|, same counterparty)
+ *   7. Three-tier classification: structural → identity → heuristic
+ *   8. LLM fallback with identity role in prompt
+ *   9. P&L eligibility gate
+ *  10. Batch persist
  */
 
 import { query, ensureMovementsSchema } from "./db"
 import { log } from "./logger"
+import {
+  buildMovementIdentityContext,
+  seedIdentityGraph,
+  type MovementIdentityContext,
+  type MovementIdentityEntry,
+} from "./identity-seed"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
@@ -41,7 +54,7 @@ type RawMovement = {
   source_type: string
   source_id: string
   date: string
-  amount: number
+  amount: number // positive = inflow, negative = outflow (normalized)
   raw_description: string | null
   counterparty: string | null
   entity_id: string | null
@@ -50,6 +63,8 @@ type RawMovement = {
   to_account: string | null
   plaid_category: string[] | null
   metadata: Record<string, unknown>
+  _dedup_key?: string // for cross-source dedup
+  _paired?: boolean   // true if already paired as transfer
 }
 
 type ClassifiedMovement = RawMovement & {
@@ -112,19 +127,23 @@ const REFUND_PATTERNS = [
   /\bchargeback\b/i,
 ]
 
-// ─── Phase 1: Extract raw movements from all sources ───────────────
+function normKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "")
+}
+
+// ─── Phase 1: Extract raw movements (amounts normalized) ───────────
 
 async function extractPlaidMovements(userId: string): Promise<RawMovement[]> {
   const movements: RawMovement[] = []
 
-  const { rows: userAccountIds } = await query<{ account_id: string; name: string | null }>(
+  const { rows: userAccounts } = await query<{ account_id: string; name: string | null }>(
     `SELECT pa.account_id, pa.name FROM plaid_accounts pa
      JOIN plaid_items pi ON pi.item_id = pa.item_id
      WHERE pi.user_id = $1`,
     [userId]
   )
-  const ownAccountIds = new Set(userAccountIds.map((a) => a.account_id))
-  const accountNames = new Map(userAccountIds.map((a) => [a.account_id, a.name ?? a.account_id]))
+  const ownAccountIds = new Set(userAccounts.map((a) => a.account_id))
+  const accountNames = new Map(userAccounts.map((a) => [a.account_id, a.name ?? a.account_id]))
 
   const { rows: txns } = await query<{
     transaction_id: string
@@ -145,7 +164,10 @@ async function extractPlaidMovements(userId: string): Promise<RawMovement[]> {
 
   for (const tx of txns) {
     const desc = tx.merchant_name?.trim() || tx.name?.trim() || null
+    // Plaid: positive amount = money left the account (expense), negative = money in
+    // Normalize: positive = inflow, negative = outflow
     const amt = -parseFloat(tx.amount)
+    const acctName = accountNames.get(tx.account_id) ?? tx.account_id
 
     movements.push({
       source: "plaid",
@@ -157,8 +179,8 @@ async function extractPlaidMovements(userId: string): Promise<RawMovement[]> {
       counterparty: null,
       entity_id: null,
       entity_type: null,
-      from_account: amt < 0 ? (accountNames.get(tx.account_id) ?? tx.account_id) : null,
-      to_account: amt >= 0 ? (accountNames.get(tx.account_id) ?? tx.account_id) : null,
+      from_account: amt < 0 ? acctName : null,
+      to_account: amt >= 0 ? acctName : null,
       plaid_category: tx.category,
       metadata: { account_id: tx.account_id, own_account: ownAccountIds.has(tx.account_id) },
     })
@@ -197,9 +219,9 @@ async function extractQboMovements(userId: string): Promise<RawMovement[]> {
     else if (vendRef?.name) counterparty = String(vendRef.name)
     else if (entityRef?.name) counterparty = String(entityRef.name)
 
-    let amount = total
+    // Normalize: positive = inflow, negative = outflow
     const isInflow = ["Invoice", "Payment", "SalesReceipt", "Deposit", "CreditMemo"].includes(row.entity_type)
-    if (!isInflow) amount = -amount
+    const amount = isInflow ? Math.abs(total) : -Math.abs(total)
 
     let fromAcct: string | null = null
     let toAcct: string | null = null
@@ -236,6 +258,17 @@ async function extractQboMovements(userId: string): Promise<RawMovement[]> {
 async function extractStripeMovements(userId: string): Promise<RawMovement[]> {
   const movements: RawMovement[] = []
 
+  // Pre-load Stripe customer ID → name map so we can resolve cus_ IDs
+  const { rows: stripeCusts } = await query<{ entity_id: string; data: Record<string, unknown> }>(
+    `SELECT entity_id, data FROM stripe_entities WHERE user_id = $1 AND entity_type = 'customer'`,
+    [userId]
+  )
+  const custIdToName = new Map<string, string>()
+  for (const c of stripeCusts) {
+    const name = c.data.name as string | undefined
+    if (name) custIdToName.set(c.entity_id, name)
+  }
+
   const STRIPE_TXN_TYPES = ["payment_intent", "payout", "balance_transaction", "invoice"]
 
   const { rows } = await query<{ entity_type: string; entity_id: string; data: Record<string, unknown> }>(
@@ -246,21 +279,24 @@ async function extractStripeMovements(userId: string): Promise<RawMovement[]> {
 
   for (const row of rows) {
     const d = row.data
-    let amount = parseFloat(String(d.amount ?? d.amount_paid ?? 0)) / 100
     const created = d.created ? new Date(Number(d.created) * 1000).toISOString().split("T")[0] : "1970-01-01"
 
     let counterparty: string | null = null
     let desc: string | null = String(d.description ?? d.statement_descriptor ?? "")
     if (!desc) desc = null
 
+    let amount: number
     if (row.entity_type === "payout") {
       amount = parseFloat(String(d.amount ?? 0)) / 100
     } else if (row.entity_type === "balance_transaction") {
       amount = parseFloat(String(d.net ?? d.amount ?? 0)) / 100
+    } else {
+      amount = parseFloat(String(d.amount ?? d.amount_paid ?? 0)) / 100
     }
 
+    // Resolve Stripe customer ID (cus_xxx) to actual name
     if (d.customer && typeof d.customer === "string") {
-      counterparty = d.customer
+      counterparty = custIdToName.get(d.customer) ?? d.customer
     }
 
     const txnType = (d.type ?? row.entity_type) as string
@@ -278,127 +314,316 @@ async function extractStripeMovements(userId: string): Promise<RawMovement[]> {
       from_account: null,
       to_account: null,
       plaid_category: null,
-      metadata: { stripe_type: txnType, status: d.status },
+      metadata: { stripe_type: txnType, status: d.status, stripe_customer_id: d.customer ?? null },
     })
   }
 
   return movements
 }
 
-// ─── Phase 2: Link to identity layer ───────────────────────────────
+async function extractXeroMovements(userId: string): Promise<RawMovement[]> {
+  const movements: RawMovement[] = []
 
-async function linkToIdentities(
-  movements: RawMovement[],
-  userId: string
-): Promise<void> {
-  const { rows: entities } = await query<{
-    id: string; canonical_name: string; entity_type: string
-  }>(
-    "SELECT id, canonical_name, entity_type FROM entities WHERE user_id = $1",
-    [userId]
-  )
-  if (entities.length === 0) return
+  const XERO_TXN_TYPES = ["Invoice", "Bill", "Payment", "CreditNote", "BankTransaction", "ManualJournal"]
 
-  const { rows: aliases } = await query<{ entity_id: string; alias: string; alias_type: string }>(
-    `SELECT entity_id, alias, alias_type FROM entity_aliases WHERE entity_id = ANY($1)`,
-    [entities.map((e) => e.id)]
+  const { rows } = await query<{ entity_type: string; entity_id: string; data: Record<string, unknown> }>(
+    `SELECT e.entity_type, e.entity_id, e.data FROM xero_entities e
+     JOIN xero_connections c ON c.tenant_id = e.tenant_id
+     WHERE c.user_id = $1 AND e.entity_type = ANY($2)`,
+    [userId, XERO_TXN_TYPES]
   )
 
-  const nameIndex = new Map<string, { entity_id: string; entity_type: string }>()
-  for (const e of entities) {
-    nameIndex.set(e.canonical_name.toLowerCase().replace(/[^a-z0-9]/g, ""), { entity_id: e.id, entity_type: e.entity_type })
+  for (const row of rows) {
+    const d = row.data
+
+    const txnDate = (d.Date ?? d.DateString ?? "") as string
+    const total = parseFloat(String(d.Total ?? d.SubTotal ?? d.Amount ?? 0))
+
+    let counterparty: string | null = null
+    const contact = d.Contact as Record<string, unknown> | undefined
+    if (contact?.Name) counterparty = String(contact.Name)
+
+    // Normalize: Xero Invoices (ACCREC) = customer owes you = inflow
+    // Bills (ACCPAY) = you owe vendor = outflow
+    const xeroType = (d.Type as string) ?? row.entity_type
+    const isInflow = row.entity_type === "Invoice"
+      ? xeroType === "ACCREC"
+      : row.entity_type === "Payment"
+        ? (d.Invoice as Record<string, unknown> | undefined)?.Type === "ACCREC"
+        : row.entity_type === "CreditNote"
+          ? xeroType === "ACCREC"
+          : false
+    const amount = isInflow ? Math.abs(total) : -Math.abs(total)
+
+    // BankTransaction has BankAccount
+    let fromAcct: string | null = null
+    let toAcct: string | null = null
+    if (row.entity_type === "BankTransaction") {
+      const bankAcct = d.BankAccount as Record<string, unknown> | undefined
+      const acctName = bankAcct?.Name ? String(bankAcct.Name) : null
+      if (amount < 0) fromAcct = acctName
+      else toAcct = acctName
+    }
+
+    const ref = (d.Reference ?? d.InvoiceNumber ?? "") as string
+
+    movements.push({
+      source: "qbo", // stored under "qbo" source for dedup compatibility; tagged in metadata
+      source_type: `xero_${row.entity_type}`,
+      source_id: `xero_${row.entity_id}`,
+      date: txnDate ? txnDate.split("T")[0] : "1970-01-01",
+      amount,
+      raw_description: ref || counterparty || row.entity_type,
+      counterparty,
+      entity_id: null,
+      entity_type: null,
+      from_account: fromAcct,
+      to_account: toAcct,
+      plaid_category: null,
+      metadata: { xero_type: row.entity_type, xero_sub_type: xeroType, source_system: "xero" },
+    })
   }
-  for (const a of aliases) {
-    if (a.alias_type === "name" || a.alias_type === "merchant_string") {
-      const ent = entities.find((e) => e.id === a.entity_id)
-      if (ent) {
-        nameIndex.set(a.alias.toLowerCase().replace(/[^a-z0-9]/g, ""), { entity_id: ent.id, entity_type: ent.entity_type })
+
+  return movements
+}
+
+// ─── Phase 2: Resolve counterparty → identity role ─────────────────
+
+function resolveIdentity(
+  m: RawMovement,
+  ctx: MovementIdentityContext
+): MovementIdentityEntry | null {
+  const candidates: string[] = []
+  if (m.counterparty) candidates.push(m.counterparty)
+  if (m.raw_description && m.raw_description !== m.counterparty) candidates.push(m.raw_description)
+
+  for (const c of candidates) {
+    const key = normKey(c)
+    if (key.length < 2) continue
+
+    // Exact match
+    const exact = ctx.get(key)
+    if (exact) return exact
+
+    // Substring match (both directions, min 4 chars)
+    for (const [k, entry] of ctx) {
+      if (k.startsWith("__")) continue // skip special keys
+      if (k.length >= 4 && key.length >= 4 && (k.includes(key) || key.includes(k))) {
+        return entry
       }
     }
   }
 
-  for (const m of movements) {
-    if (!m.counterparty && !m.raw_description) continue
-    const search = (m.counterparty ?? m.raw_description ?? "").toLowerCase().replace(/[^a-z0-9]/g, "")
-    if (search.length < 2) continue
+  return null
+}
 
-    const exact = nameIndex.get(search)
-    if (exact) {
-      m.entity_id = exact.entity_id
-      m.entity_type = exact.entity_type
-      continue
-    }
+function resolveOwnAccount(
+  accountId: string,
+  ctx: MovementIdentityContext
+): MovementIdentityEntry | null {
+  return ctx.get(`__plaid_account__${accountId}`) ?? null
+}
 
-    for (const [key, val] of nameIndex) {
-      if (key.length >= 4 && search.length >= 4 && (key.includes(search) || search.includes(key))) {
-        m.entity_id = val.entity_id
-        m.entity_type = val.entity_type
+// ─── Phase 3: Plaid cross-account transfer pairing ─────────────────
+
+function pairPlaidTransfers(movements: RawMovement[]): void {
+  const plaidMvts = movements.filter(
+    (m) => m.source === "plaid" && !m._paired
+  )
+
+  // Index by |amount| rounded to cents and date
+  const byAmountDate = new Map<string, RawMovement[]>()
+  for (const m of plaidMvts) {
+    const absAmt = Math.abs(m.amount).toFixed(2)
+    const key = `${absAmt}`
+    const list = byAmountDate.get(key) ?? []
+    list.push(m)
+    byAmountDate.set(key, list)
+  }
+
+  for (const [, group] of byAmountDate) {
+    if (group.length < 2) continue
+
+    // Look for opposite-sign pairs on the same date (± 1 day), different accounts
+    for (let i = 0; i < group.length; i++) {
+      if (group[i]._paired) continue
+      for (let j = i + 1; j < group.length; j++) {
+        if (group[j]._paired) continue
+
+        const a = group[i]
+        const b = group[j]
+
+        // Opposite signs
+        if (Math.sign(a.amount) === Math.sign(b.amount)) continue
+
+        // Different accounts
+        const aAcct = a.metadata.account_id as string
+        const bAcct = b.metadata.account_id as string
+        if (aAcct === bAcct) continue
+
+        // Both own accounts
+        if (!a.metadata.own_account || !b.metadata.own_account) continue
+
+        // Date within 1 day
+        const da = new Date(a.date).getTime()
+        const db = new Date(b.date).getTime()
+        if (Math.abs(da - db) > 86400000) continue
+
+        // Pair them: outflow side becomes the canonical movement, inflow is marked paired
+        const outflow = a.amount < 0 ? a : b
+        const inflow = a.amount < 0 ? b : a
+
+        outflow.from_account = outflow.from_account ?? (outflow.metadata.account_id as string)
+        outflow.to_account = inflow.to_account ?? (inflow.metadata.account_id as string)
+        outflow.metadata = {
+          ...outflow.metadata,
+          paired_transaction_id: inflow.source_id,
+          transfer_type: "cross_account",
+        }
+
+        inflow._paired = true
         break
       }
     }
   }
 }
 
-// ─── Phase 3: Rule-based classification ────────────────────────────
+// ─── Phase 4: Cross-source dedup ───────────────────────────────────
 
-function classifyByRules(m: RawMovement): { cls: MovementClass; confidence: number } | null {
+function dedupAcrossSources(movements: RawMovement[]): RawMovement[] {
+  // Build dedup keys: |amount| rounded, date, normalized counterparty prefix
+  for (const m of movements) {
+    const absAmt = Math.abs(m.amount).toFixed(2)
+    const cpKey = normKey(m.counterparty ?? m.raw_description ?? "").slice(0, 12)
+    m._dedup_key = `${absAmt}|${m.date}|${cpKey}`
+  }
+
+  // Source priority: qbo > stripe > plaid (QBO is richest)
+  const PRIORITY: Record<string, number> = { qbo: 3, stripe: 2, plaid: 1 }
+
+  const groups = new Map<string, RawMovement[]>()
+  for (const m of movements) {
+    if (m._paired) continue // skip paired inflow sides
+    const key = m._dedup_key!
+    const list = groups.get(key) ?? []
+    list.push(m)
+    groups.set(key, list)
+  }
+
+  const result: RawMovement[] = []
+  for (const [, group] of groups) {
+    if (group.length === 1) {
+      result.push(group[0])
+      continue
+    }
+
+    // Check if this group has movements from different sources with matching amounts
+    const sources = new Set(group.map((m) => m.source))
+    if (sources.size === 1) {
+      // Same source, keep all (they're different transactions)
+      result.push(...group)
+      continue
+    }
+
+    // Multiple sources — keep the highest-priority one, link others in metadata
+    group.sort((a, b) => (PRIORITY[b.source] ?? 0) - (PRIORITY[a.source] ?? 0))
+    const primary = group[0]
+    const duplicateIds = group.slice(1).map((m) => `${m.source}:${m.source_id}`)
+    primary.metadata = { ...primary.metadata, dedup_linked: duplicateIds }
+
+    // Merge counterparty from richer source if primary is missing it
+    if (!primary.counterparty) {
+      for (const m of group) {
+        if (m.counterparty) { primary.counterparty = m.counterparty; break }
+      }
+    }
+
+    result.push(primary)
+  }
+
+  return result
+}
+
+// ─── Phase 5: Three-tier classification ────────────────────────────
+
+const ROLE_TO_CLASS: Record<string, MovementClass> = {
+  processor: "settlement",
+  employee: "payroll",
+  tax_authority: "tax",
+  owner: "owner_draw",
+  lender: "financing",
+  internal: "internal_transfer",
+  bank_account: "internal_transfer",
+  vendor: "operating_expense",
+  customer: "operating_revenue",
+}
+
+function classifyMovement(
+  m: RawMovement,
+  identity: MovementIdentityEntry | null
+): { cls: MovementClass; confidence: number } | null {
   const desc = (m.raw_description ?? "").toLowerCase()
-  const counterparty = (m.counterparty ?? "").toLowerCase()
   const cats = m.plaid_category ?? []
   const catStr = cats.join(" ").toLowerCase()
 
-  // QBO Transfer entity type is always internal_transfer
+  // ── Tier 1: Structural certainties (source type is definitional) ──
+
   if (m.source === "qbo" && m.source_type === "Transfer") {
     return { cls: "internal_transfer", confidence: 0.95 }
   }
-
-  // QBO RefundReceipt, CreditMemo, VendorCredit → refund
   if (m.source === "qbo" && ["RefundReceipt", "CreditMemo", "VendorCredit"].includes(m.source_type)) {
     return { cls: "refund", confidence: 0.9 }
   }
-
-  // Stripe payouts are settlements (processor → bank)
+  // Xero CreditNote
+  if (m.source_type === "xero_CreditNote") {
+    return { cls: "refund", confidence: 0.9 }
+  }
   if (m.source === "stripe" && m.source_type === "payout") {
     return { cls: "settlement", confidence: 0.95 }
   }
-
-  // Stripe balance_transaction with type 'stripe_fee' or 'fee'
   if (m.source === "stripe" && m.source_type === "balance_transaction") {
     const sType = (m.metadata.stripe_type ?? "") as string
     if (sType === "stripe_fee" || sType === "fee") return { cls: "fee", confidence: 0.95 }
     if (sType === "refund") return { cls: "refund", confidence: 0.95 }
     if (sType === "payout") return { cls: "settlement", confidence: 0.9 }
   }
+  // Already paired as cross-account transfer
+  if (m.metadata.transfer_type === "cross_account") {
+    return { cls: "internal_transfer", confidence: 0.95 }
+  }
 
-  // Identity-based classification
-  if (m.entity_type === "processor") return { cls: "settlement", confidence: 0.9 }
-  if (m.entity_type === "employee") return { cls: "payroll", confidence: 0.9 }
-  if (m.entity_type === "tax_authority") return { cls: "tax", confidence: 0.9 }
-  if (m.entity_type === "owner") return { cls: "owner_draw", confidence: 0.9 }
-  if (m.entity_type === "lender") return { cls: "financing", confidence: 0.85 }
-  if (m.entity_type === "internal") return { cls: "internal_transfer", confidence: 0.85 }
+  // ── Tier 2: Identity-resolved (role from identity context) ────────
 
-  // Plaid category-based
+  if (identity && identity.confidence >= 0.6) {
+    const cls = ROLE_TO_CLASS[identity.role]
+    if (cls) {
+      return { cls, confidence: Math.min(0.92, identity.confidence) }
+    }
+  }
+
+  // ── Tier 3: Heuristics (patterns, categories, source-type fallback)
+
+  // Plaid category
   if (catStr.includes("bank fees")) return { cls: "fee", confidence: 0.85 }
   if (catStr.includes("payroll")) return { cls: "payroll", confidence: 0.85 }
   if (catStr.includes("tax")) return { cls: "tax", confidence: 0.8 }
   if (catStr.includes("transfer") && !catStr.includes("wire transfer")) return { cls: "internal_transfer", confidence: 0.75 }
   if (catStr.includes("loan")) return { cls: "financing", confidence: 0.8 }
 
-  // Pattern-based on description
+  // Description patterns
   if (TRANSFER_PATTERNS.some((p) => p.test(desc))) return { cls: "internal_transfer", confidence: 0.8 }
   if (FEE_PATTERNS.some((p) => p.test(desc))) return { cls: "fee", confidence: 0.8 }
   if (TAX_PATTERNS.some((p) => p.test(desc))) return { cls: "tax", confidence: 0.8 }
   if (FINANCING_PATTERNS.some((p) => p.test(desc))) return { cls: "financing", confidence: 0.75 }
   if (REFUND_PATTERNS.some((p) => p.test(desc))) return { cls: "refund", confidence: 0.75 }
 
-  // Payroll processor match
-  const cpNorm = counterparty.replace(/[^a-z0-9]/g, "")
+  // Payroll processor name match
+  const cpNorm = normKey(m.counterparty ?? "")
   for (const pp of PAYROLL_PROCESSORS) {
     if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) return { cls: "payroll", confidence: 0.85 }
   }
 
-  // QBO type-based fallback for remaining QBO records
+  // QBO type fallback
   if (m.source === "qbo") {
     if (["Invoice", "Payment", "SalesReceipt", "Deposit"].includes(m.source_type)) {
       return { cls: "operating_revenue", confidence: 0.8 }
@@ -408,27 +633,40 @@ function classifyByRules(m: RawMovement): { cls: MovementClass; confidence: numb
     }
   }
 
-  // Stripe payment_intent / invoice → revenue
+  // Xero type fallback
+  const xeroSubType = (m.metadata.xero_sub_type ?? "") as string
+  if (m.source_type === "xero_Invoice") {
+    return xeroSubType === "ACCPAY"
+      ? { cls: "operating_expense", confidence: 0.8 }
+      : { cls: "operating_revenue", confidence: 0.8 }
+  }
+  if (m.source_type === "xero_Bill") return { cls: "operating_expense", confidence: 0.8 }
+  if (m.source_type === "xero_Payment") {
+    return xeroSubType === "ACCPAY" || m.amount < 0
+      ? { cls: "operating_expense", confidence: 0.75 }
+      : { cls: "operating_revenue", confidence: 0.75 }
+  }
+  if (m.source_type === "xero_BankTransaction") {
+    return m.amount >= 0
+      ? { cls: "operating_revenue", confidence: 0.7 }
+      : { cls: "operating_expense", confidence: 0.7 }
+  }
+
+  // Stripe type fallback
   if (m.source === "stripe" && (m.source_type === "payment_intent" || m.source_type === "invoice")) {
     return { cls: "operating_revenue", confidence: 0.75 }
   }
 
-  // Identity-based: vendor → expense, customer → revenue
-  if (m.entity_type === "vendor") return { cls: "operating_expense", confidence: 0.7 }
-  if (m.entity_type === "customer") return { cls: "operating_revenue", confidence: 0.7 }
-
   return null
 }
 
-// ─── Phase 4: LLM fallback ─────────────────────────────────────────
+// ─── Phase 6: LLM fallback (with identity role in prompt) ──────────
 
-type LlmClassResult = {
-  source_id: string
-  movement_class: string
-  confidence: number
-}
+type LlmClassResult = { source_id: string; movement_class: string; confidence: number }
 
-async function llmClassifyBatch(unclassified: RawMovement[]): Promise<LlmClassResult[]> {
+async function llmClassifyBatch(
+  unclassified: Array<{ movement: RawMovement; identity: MovementIdentityEntry | null }>
+): Promise<LlmClassResult[]> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey || unclassified.length === 0) return []
 
@@ -437,9 +675,11 @@ async function llmClassifyBatch(unclassified: RawMovement[]): Promise<LlmClassRe
 
   for (let i = 0; i < unclassified.length; i += batchSize) {
     const batch = unclassified.slice(i, i + batchSize)
-    const numbered = batch.map((m, idx) => {
+    const numbered = batch.map(({ movement: m, identity }, idx) => {
       const dir = m.amount >= 0 ? "INFLOW" : "OUTFLOW"
-      return `${idx + 1}. [${dir}] $${Math.abs(m.amount).toFixed(2)} | ${m.raw_description ?? "(no description)"} | counterparty: ${m.counterparty ?? "unknown"} | source: ${m.source}/${m.source_type} | date: ${m.date}`
+      const cp = m.counterparty ?? "unknown"
+      const roleTag = identity ? ` (${identity.role})` : ""
+      return `${idx + 1}. [${dir}] $${Math.abs(m.amount).toFixed(2)} | ${m.raw_description ?? "(no description)"} | counterparty: ${cp}${roleTag} | source: ${m.source}/${m.source_type} | date: ${m.date}`
     }).join("\n")
 
     const systemPrompt = `You classify financial movements for a small business. For each record, determine the movement_class.
@@ -456,6 +696,8 @@ Classes:
 - tax: IRS, state tax, sales tax remittance
 - owner_draw: owner distributions, personal transfers
 - uncategorized: cannot determine
+
+The counterparty role in parentheses (if present) comes from the identity graph and is a strong signal.
 
 Return a JSON array. Each element:
 - "index": the 1-based number
@@ -494,7 +736,7 @@ Output ONLY valid JSON array. No markdown.`
           const idx = p.index - 1
           if (idx >= 0 && idx < batch.length) {
             results.push({
-              source_id: batch[idx].source_id,
+              source_id: batch[idx].movement.source_id,
               movement_class: MOVEMENT_CLASSES.includes(p.movement_class as MovementClass) ? p.movement_class : "uncategorized",
               confidence: Math.min(1, Math.max(0, p.confidence ?? 0.5)),
             })
@@ -514,52 +756,95 @@ Output ONLY valid JSON array. No markdown.`
 
 export async function classifyMovements(userId: string): Promise<{
   total: number
+  afterDedup: number
   ruleClassified: number
   llmClassified: number
+  identityResolved: number
+  transfersPaired: number
   pnlEligible: number
   byClass: Record<string, number>
 }> {
   await ensureMovementsSchema()
 
   const stats = {
-    total: 0, ruleClassified: 0, llmClassified: 0, pnlEligible: 0,
+    total: 0, afterDedup: 0, ruleClassified: 0, llmClassified: 0,
+    identityResolved: 0, transfersPaired: 0, pnlEligible: 0,
     byClass: {} as Record<string, number>,
   }
 
   log("movements.classify.start", { userId }, "movements")
 
-  // Extract raw movements from all sources
-  const [plaidMvts, qboMvts, stripeMvts] = await Promise.all([
+  // Step 1: Extract raw movements from all sources
+  const [plaidMvts, qboMvts, stripeMvts, xeroMvts] = await Promise.all([
     extractPlaidMovements(userId),
     extractQboMovements(userId),
     extractStripeMovements(userId),
+    extractXeroMovements(userId),
   ])
 
-  const allMovements = [...plaidMvts, ...qboMvts, ...stripeMvts]
-  stats.total = allMovements.length
+  const allRaw = [...plaidMvts, ...qboMvts, ...stripeMvts, ...xeroMvts]
+  stats.total = allRaw.length
 
   log("movements.classify.extracted", {
-    userId,
-    plaid: plaidMvts.length,
-    qbo: qboMvts.length,
-    stripe: stripeMvts.length,
-    total: allMovements.length,
+    userId, plaid: plaidMvts.length, qbo: qboMvts.length, stripe: stripeMvts.length, xero: xeroMvts.length, total: allRaw.length,
   }, "movements")
 
-  if (allMovements.length === 0) {
+  if (allRaw.length === 0) {
     log("movements.classify.done", { userId, ...stats }, "movements")
     return stats
   }
 
-  // Link to identity layer
-  await linkToIdentities(allMovements, userId)
+  // Step 2: Build identity context (auto-seed if empty)
+  let identityCtx = await buildMovementIdentityContext(userId)
+  if (identityCtx.size === 0) {
+    log("movements.classify.identity_empty_seeding", { userId }, "movements")
+    await seedIdentityGraph(userId)
+    identityCtx = await buildMovementIdentityContext(userId)
+  }
 
-  // Phase 1: Rule-based classification
+  // Step 3: Resolve counterparty → identity for each movement
+  for (const m of allRaw) {
+    const entry = resolveIdentity(m, identityCtx)
+    if (entry) {
+      m.entity_id = entry.entity_id
+      m.entity_type = entry.role
+      m.counterparty = m.counterparty ?? entry.canonical_name
+      stats.identityResolved++
+    }
+
+    // Resolve Plaid account_id → bank_account entity for from/to
+    if (m.source === "plaid" && m.metadata.account_id) {
+      const acctEntry = resolveOwnAccount(m.metadata.account_id as string, identityCtx)
+      if (acctEntry) {
+        if (m.amount < 0 && !m.from_account) m.from_account = acctEntry.canonical_name
+        if (m.amount >= 0 && !m.to_account) m.to_account = acctEntry.canonical_name
+      }
+    }
+  }
+
+  // Step 4: Pair Plaid cross-account transfers
+  pairPlaidTransfers(allRaw)
+  stats.transfersPaired = allRaw.filter((m) => m.metadata.transfer_type === "cross_account").length
+
+  // Step 5: Deduplicate across sources
+  const deduped = dedupAcrossSources(allRaw)
+  stats.afterDedup = deduped.length
+
+  log("movements.classify.prepared", {
+    userId,
+    identityResolved: stats.identityResolved,
+    transfersPaired: stats.transfersPaired,
+    afterDedup: stats.afterDedup,
+    identityContextSize: identityCtx.size,
+  }, "movements")
+
+  // Step 6: Three-tier classification
   const classified: ClassifiedMovement[] = []
-  const unclassified: RawMovement[] = []
+  const unclassified: Array<{ movement: RawMovement; identity: MovementIdentityEntry | null }> = []
 
-  for (const m of allMovements) {
-    const result = classifyByRules(m)
+  for (const m of deduped) {
+    const identity = m.entity_id ? resolveIdentity(m, identityCtx) : null
+    const result = classifyMovement(m, identity)
     if (result) {
       classified.push({
         ...m,
@@ -569,16 +854,16 @@ export async function classifyMovements(userId: string): Promise<{
       })
       stats.ruleClassified++
     } else {
-      unclassified.push(m)
+      unclassified.push({ movement: m, identity })
     }
   }
 
-  // Phase 2: LLM fallback for unclassified
+  // Step 7: LLM fallback with identity role in prompt
   if (unclassified.length > 0) {
     const llmResults = await llmClassifyBatch(unclassified)
     const llmMap = new Map(llmResults.map((r) => [r.source_id, r]))
 
-    for (const m of unclassified) {
+    for (const { movement: m } of unclassified) {
       const llmResult = llmMap.get(m.source_id)
       const cls = (llmResult?.movement_class ?? "uncategorized") as MovementClass
       classified.push({
@@ -591,28 +876,44 @@ export async function classifyMovements(userId: string): Promise<{
     }
   }
 
-  // Phase 3: Persist
-  for (const m of classified) {
-    stats.byClass[m.movement_class] = (stats.byClass[m.movement_class] ?? 0) + 1
-    if (m.pnl_eligible) stats.pnlEligible++
+  // Step 8: Batch persist
+  const BATCH_SIZE = 50
+  for (let i = 0; i < classified.length; i += BATCH_SIZE) {
+    const batch = classified.slice(i, i + BATCH_SIZE)
+
+    const values: string[] = []
+    const params: unknown[] = []
+    let paramIdx = 0
+
+    for (const m of batch) {
+      stats.byClass[m.movement_class] = (stats.byClass[m.movement_class] ?? 0) + 1
+      if (m.pnl_eligible) stats.pnlEligible++
+
+      const offsets = Array.from({ length: 15 }, (_, k) => `$${paramIdx + k + 1}`)
+      values.push(`(${offsets.join(", ")})`)
+      params.push(
+        userId, m.source, m.source_type, m.source_id,
+        m.entity_id, m.date, m.amount, m.raw_description,
+        m.counterparty, m.movement_class, m.pnl_eligible,
+        m.from_account, m.to_account, m.confidence,
+        JSON.stringify(m.metadata),
+      )
+      paramIdx += 15
+    }
 
     await query(
       `INSERT INTO movements (user_id, source, source_type, source_id, entity_id, date, amount, raw_description, counterparty, movement_class, pnl_eligible, from_account, to_account, confidence, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       VALUES ${values.join(", ")}
        ON CONFLICT (user_id, source, source_id) DO UPDATE SET
          entity_id = EXCLUDED.entity_id,
          movement_class = EXCLUDED.movement_class,
          pnl_eligible = EXCLUDED.pnl_eligible,
          counterparty = EXCLUDED.counterparty,
          confidence = EXCLUDED.confidence,
+         from_account = EXCLUDED.from_account,
+         to_account = EXCLUDED.to_account,
          metadata = EXCLUDED.metadata`,
-      [
-        userId, m.source, m.source_type, m.source_id,
-        m.entity_id, m.date, m.amount, m.raw_description,
-        m.counterparty, m.movement_class, m.pnl_eligible,
-        m.from_account, m.to_account, m.confidence,
-        JSON.stringify(m.metadata),
-      ]
+      params,
     )
   }
 
