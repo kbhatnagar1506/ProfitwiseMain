@@ -7,8 +7,15 @@ import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema } from "@/lib/db"
-import { getMovementIdsWithAllocations, getAllocationsForUser } from "@/lib/allocation-persist"
+import { getAllocationsForUser, createAllocation } from "@/lib/allocation-persist"
 import { isFeeAnomaly } from "@/lib/fee-anomaly"
+import { matchARPayment, type InflowPayment } from "@/lib/ar-payment-match"
+import { matchAPPayment, type PaymentInput } from "@/lib/ap-llm-match"
+import { fetchOutstandingInvoices } from "@/lib/invoices-fetch"
+import { fetchOutstandingBills } from "@/lib/bills-fetch"
+import { computeAPStateFromBills } from "@/lib/state/ar-ap"
+
+const AUTO_MATCH_CONFIDENCE = 0.8
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -23,18 +30,69 @@ export async function GET() {
   }
 
   try {
-    const allocatedMovementIds = await getMovementIdsWithAllocations(user.id)
-    const allocations = await getAllocationsForUser(user.id)
+    let allocations = await getAllocationsForUser(user.id)
+    const allocatedMovementIds = new Set(allocations.map((a) => a.movement_id))
 
-    const totalFeesPaid = allocations.reduce((s, a) => s + a.fee_amount, 0)
-
-    type MovementRow = { id: string; direction: string; amount: string; date: string; counterparty: string | null }
+    type MovementRow = { id: string; direction: string; amount: string; date: string; counterparty: string | null; counterparty_entity_id: string | null; raw_description: string | null }
     const { rows: movementRows } = await query<MovementRow>(
-      `SELECT id, direction, amount::float, date, counterparty FROM movements
+      `SELECT id, direction, amount::float, date, counterparty, counterparty_entity_id, raw_description FROM movements
        WHERE user_id = $1 AND duplicate_of IS NULL
        ORDER BY date DESC`,
       [user.id]
     )
+
+    // Auto-match: create allocations for high-confidence deterministic matches
+    const unmatchedInflowRows = movementRows.filter((m) => m.direction === "inflow" && !allocatedMovementIds.has(m.id))
+    const unmatchedOutflowRows = movementRows.filter((m) => m.direction === "outflow" && !allocatedMovementIds.has(m.id))
+
+    if (unmatchedInflowRows.length > 0) {
+      const invoices = await fetchOutstandingInvoices(user.id)
+      for (const m of unmatchedInflowRows) {
+        const amount = parseFloat(String(m.amount))
+        const payment: InflowPayment = {
+          movement_id: m.id,
+          amount,
+          date: m.date,
+          entity_id: m.counterparty_entity_id,
+          raw_description: m.raw_description,
+          counterparty_name: m.counterparty ?? undefined,
+        }
+        const match = matchARPayment(payment, invoices)
+        if (match && match.confidence >= AUTO_MATCH_CONFIDENCE) {
+          try {
+            await createAllocation(user.id, m.id, "ar", match.invoice_id, match.gross_applied, match.fee_amount, match.net_applied, match.confidence, match.match_method)
+            allocatedMovementIds.add(m.id)
+          } catch { /* skip */ }
+        }
+      }
+    }
+
+    if (unmatchedOutflowRows.length > 0) {
+      const bills = await fetchOutstandingBills(user.id)
+      const obligations = computeAPStateFromBills(bills)
+      for (const m of unmatchedOutflowRows) {
+        const amount = parseFloat(String(m.amount))
+        const payment: PaymentInput = {
+          movement_id: m.id,
+          amount,
+          date: m.date,
+          raw_description: m.raw_description,
+          entity_id: m.counterparty_entity_id,
+          counterparty_name: m.counterparty ?? undefined,
+        }
+        const match = matchAPPayment(payment, obligations)
+        if (match && match.confidence >= AUTO_MATCH_CONFIDENCE) {
+          try {
+            await createAllocation(user.id, m.id, "ap", match.obligation_id, match.gross_applied, match.fee_amount, match.net_applied, match.confidence, match.match_method)
+            allocatedMovementIds.add(m.id)
+          } catch { /* skip */ }
+        }
+      }
+    }
+
+    allocations = await getAllocationsForUser(user.id)
+
+    const totalFeesPaid = allocations.reduce((s, a) => s + a.fee_amount, 0)
 
     const matchedInflows: { movement_id: string; amount: number; date: string; counterparty: string | null; allocations: { entity_type: string; entity_id: string; gross: number; fee: number; net: number }[] }[] = []
     const matchedOutflows: typeof matchedInflows = []
