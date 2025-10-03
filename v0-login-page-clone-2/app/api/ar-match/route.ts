@@ -11,7 +11,7 @@ import { query, ensureMovementsSchema } from "@/lib/db"
 import { matchARPayment, suggestARMatches, type InflowPayment, type ARMatchSuggestion } from "@/lib/ar-payment-match"
 import { suggestARMatchesLLM } from "@/lib/ar-llm-match"
 import { createAllocation } from "@/lib/allocation-persist"
-import { fetchOutstandingInvoices } from "@/lib/invoices-fetch"
+import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 
 export async function POST(req: Request) {
   const cookieStore = await cookies()
@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       counterparty_name: row.counterparty ?? null,
     }
 
-    const outstandingInvoices = await fetchOutstandingInvoices(user.id)
+    const outstandingInvoices = await fetchInvoicesForReconciliation(user.id)
 
     // Confirm: persist allocation when invoice_id provided
     const invoiceId = body.invoice_id
