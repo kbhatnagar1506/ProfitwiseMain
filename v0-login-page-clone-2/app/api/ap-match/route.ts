@@ -1,7 +1,7 @@
 /**
  * Payment → AP matching API.
- * POST with { movement_id } to get suggested obligation matches.
- * No write — user confirms in UI.
+ * POST { movement_id } → suggested obligation matches.
+ * POST { movement_id, obligation_id } → confirm and persist allocation.
  */
 
 import { NextResponse } from "next/server"
@@ -15,6 +15,7 @@ import { buildBehavioralModels, setIdentityContext } from "@/lib/state/forecast-
 import type { IdentityContext } from "@/lib/state/forecast-engine"
 import { computeAPStateFromBills, mergeAPObligations, computeAPState } from "@/lib/state/ar-ap"
 import type { OutstandingInvoice } from "@/lib/state/types"
+import { createAllocation } from "@/lib/allocation-persist"
 
 export async function POST(req: Request) {
   const cookieStore = await cookies()
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
   const user = await getUserBySessionToken(sessionToken ?? "")
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  let body: { movement_id?: string }
+  let body: { movement_id?: string; obligation_id?: string }
   try {
     body = await req.json()
   } catch {
@@ -89,6 +90,26 @@ export async function POST(req: Request) {
   const models = buildBehavioralModels([], outstandingInvoices, outstandingBills)
   const patternObligations = computeAPState(models.vendors, 30).obligations
   const obligations: APObligation[] = mergeAPObligations(billObligations, patternObligations)
+
+  // Confirm: persist allocation when obligation_id provided
+  const obligationId = body.obligation_id
+  if (obligationId && typeof obligationId === "string") {
+    const obligation = obligations.find((o) => o.obligation_id === obligationId)
+    if (!obligation) return NextResponse.json({ error: "Obligation not found" }, { status: 404 })
+    const amount = payment.amount
+    const allocation = await createAllocation(
+      user.id,
+      movementId,
+      "ap",
+      obligationId,
+      amount,
+      0,
+      amount,
+      0.9,
+      "manual",
+    )
+    return NextResponse.json({ suggestions: [], allocation })
+  }
 
   const suggestions = await suggestAPMatches(payment, obligations)
   return NextResponse.json({ suggestions })

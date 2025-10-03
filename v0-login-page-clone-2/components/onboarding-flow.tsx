@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, Fragment } from "react"
 import { usePlaidLink } from "react-plaid-link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import Image from "next/image"
+import Link from "next/link"
 import { Sparkles, Loader2 } from "lucide-react"
 import { displayLabelForCounterparty } from "@/lib/alias-normalize"
 import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
@@ -113,16 +114,21 @@ const steps = [
   },
   {
     id: 13,
+    title: "AR/AP to Payments Mapping",
+    description: "Link payments to invoices and obligations. Gross − Fee = Net. Matched, unmatched, and fees.",
+  },
+  {
+    id: 14,
     title: "State objects",
     description: "Revenue, Spend, and Liquidity states computed from frozen tags, plus transition detectors.",
   },
   {
-    id: 14,
+    id: 15,
     title: "Cashflow forecast",
     description: "Simulate future cash based on behavioral component models, not simple time-series prediction.",
   },
   {
-    id: 15,
+    id: 16,
     title: "Decisions & actions",
     description: "Top actions ranked by impact, combined strategies, and execution steps.",
   },
@@ -265,8 +271,21 @@ export function OnboardingFlow({
   const [arApData, setArApData] = useState<{ ar: ARState; ap: APState } | null>(null)
   const [arApLoading, setArApLoading] = useState(false)
   const [arApError, setArApError] = useState<string | null>(null)
+  const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null)
+  const [expandedObligationId, setExpandedObligationId] = useState<string | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
+  type MappingReconData = {
+    total_matched_inflows: number
+    total_matched_outflows: number
+    total_unmatched_inflows: number
+    total_unmatched_outflows: number
+    total_fees_paid: number
+  }
+  const [mappingArAp, setMappingArAp] = useState<{ ar: ARState; ap: APState } | null>(null)
+  const [mappingRecon, setMappingRecon] = useState<MappingReconData | null>(null)
+  const [mappingLoading, setMappingLoading] = useState(false)
+  const [mappingError, setMappingError] = useState<string | null>(null)
 
   type ComponentBehavior = "recurring" | "episodic" | "seasonal" | "one_time"
   type CashflowComponent = { id: string; label: string; direction: "in" | "out"; category: string; behavior: ComponentBehavior; monthly_avg: number; monthly_count: number; trend: number; volatility: number; confidence: "high" | "medium" | "low"; seasonal_index: Record<number, number> | null }
@@ -817,9 +836,38 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 13: State objects (computed from frozen tags)
+  // Step 13: AR/AP to Payments Mapping
   useEffect(() => {
     if (currentStep !== 13) return
+    let cancelled = false
+
+    setMappingLoading(true)
+    setMappingError(null)
+    setMappingArAp(null)
+    setMappingRecon(null)
+
+    Promise.all([
+      fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed")))),
+      fetch("/api/ar-ap-reconciliation").then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed")))),
+    ])
+      .then(([arApData, reconData]) => {
+        if (cancelled) return
+        setMappingArAp(arApData)
+        setMappingRecon(reconData)
+        setMappingLoading(false)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setMappingError(e instanceof Error ? e.message : "Failed to load")
+        setMappingLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [currentStep])
+
+  // Step 14: State objects (computed from frozen tags)
+  useEffect(() => {
+    if (currentStep !== 14) return
     let cancelled = false
 
     setStateLoading(true)
@@ -842,9 +890,9 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 14 & 15: Cashflow forecast + Decisions (share forecast data)
+  // Step 15 & 16: Cashflow forecast + Decisions (share forecast data)
   useEffect(() => {
-    if (currentStep !== 14 && currentStep !== 15) return
+    if (currentStep !== 15 && currentStep !== 16) return
     let cancelled = false
 
     setForecastLoading(true)
@@ -3156,22 +3204,53 @@ export function OnboardingFlow({
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {arOverdueFirst.map((inv, i) => (
-                            <TableRow key={`${inv.invoice_id}-${i}`} className="border-emerald-500/5 hover:bg-emerald-500/5">
-                              <TableCell className="text-sm text-white font-medium py-2.5">{inv.customer_name}</TableCell>
-                              <TableCell className="py-2.5">{sourceBadge(inv.source)}</TableCell>
-                              <TableCell className="text-xs text-gray-400 py-2.5">
-                                {inv.due_date ?? "—"}
-                                {inv.days_overdue != null && inv.days_overdue > 0 && (
-                                  <span className="block text-red-400 font-medium">{inv.days_overdue}d overdue</span>
+                          {arOverdueFirst.map((inv, i) => {
+                            const invExt = inv as { allocations?: { movement_id: string; gross: number; fee: number; net: number }[]; amount_collected?: number; amount_remaining?: number }
+                            const allocs = invExt.allocations ?? []
+                            const amountCollected = invExt.amount_collected ?? allocs.reduce((s: number, c: { gross: number }) => s + c.gross, 0)
+                            const amountRemaining = invExt.amount_remaining ?? Math.max(0, inv.amount_due - amountCollected)
+                            const pct = inv.amount_due > 0 ? Math.round((amountCollected / inv.amount_due) * 100) : 0
+                            const isExpanded = expandedInvoiceId === inv.invoice_id
+                            return (
+                              <Fragment key={`${inv.invoice_id}-${i}`}>
+                                <TableRow
+                                  className="border-emerald-500/5 hover:bg-emerald-500/5 cursor-pointer"
+                                  onClick={() => setExpandedInvoiceId(isExpanded ? null : inv.invoice_id)}
+                                >
+                                  <TableCell className="text-sm text-white font-medium py-2.5">{inv.customer_name}</TableCell>
+                                  <TableCell className="py-2.5">{sourceBadge(inv.source)}</TableCell>
+                                  <TableCell className="text-xs text-gray-400 py-2.5">
+                                    {inv.due_date ?? "—"}
+                                    {inv.days_overdue != null && inv.days_overdue > 0 && (
+                                      <span className="block text-red-400 font-medium">{inv.days_overdue}d overdue</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="py-2.5">{statusBadge(inv.status, inv.days_overdue ?? null)}</TableCell>
+                                  <TableCell className={`text-right font-mono font-semibold py-2.5 ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>
+                                    {moneySmall(inv.amount_due)}
+                                    {allocs.length > 0 && <span className="block text-[10px] text-gray-500">collected {moneySmall(amountCollected)}</span>}
+                                  </TableCell>
+                                </TableRow>
+                                {isExpanded && allocs.length > 0 && (
+                                  <TableRow className="border-emerald-500/5 bg-emerald-500/5">
+                                    <TableCell colSpan={5} className="py-3 pl-8">
+                                      <div className="space-y-2 text-xs">
+                                        <div className="flex gap-4">
+                                          <span>Gross: {moneySmall(inv.amount_due)}</span>
+                                          <span className="text-amber-400">Fee: {moneySmall(allocs.reduce((s, c) => s + c.fee, 0))}</span>
+                                          <span className="text-emerald-400">Net: {moneySmall(allocs.reduce((s, c) => s + c.net, 0))}</span>
+                                        </div>
+                                        <div className="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                                          <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.min(100, pct)}%` }} />
+                                        </div>
+                                        <div className="text-gray-500">{pct}% collected</div>
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
                                 )}
-                              </TableCell>
-                              <TableCell className="py-2.5">{statusBadge(inv.status, inv.days_overdue ?? null)}</TableCell>
-                              <TableCell className={`text-right font-mono font-semibold py-2.5 ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>
-                                {moneySmall(inv.amount_due)}
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                              </Fragment>
+                            )
+                          })}
                         </TableBody>
                       </Table>
                       {arInvoices.length > 0 && (
@@ -3223,41 +3302,73 @@ export function OnboardingFlow({
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {apObligations.map((ob) => (
-                            <TableRow key={ob.obligation_id} className="border-red-500/5 hover:bg-red-500/5">
-                              <TableCell className="text-sm text-white font-medium py-2.5">
-                                <div className="flex items-center gap-2">
-                                  {ob.vendor_name}
-                                  {ob.risk_flag && (
-                                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">{ob.risk_flag}</span>
-                                  )}
-                                  {ob.priority === "high" && !ob.risk_flag && (
-                                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">high</span>
-                                  )}
-                                </div>
-                              </TableCell>
-                              <TableCell className="text-xs text-gray-400 py-2.5">
-                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                                  (ob.source ?? "inferred") === "bill" ? "bg-blue-500/20 text-blue-300" : "bg-gray-500/20 text-gray-400"
-                                }`}>{ob.source ?? "inferred"}</span>
-                              </TableCell>
-                              <TableCell className="text-xs text-gray-400 py-2.5">{(ob.cadence ?? "") === "bill" ? "bill" : `${ob.cadence ?? "—"} · ${ob.payment_count ?? 0} payments`}</TableCell>
-                              <TableCell className="text-xs text-gray-400 py-2.5">
-                                {ob.days_overdue != null && ob.days_overdue > 0 ? (
-                                  <span className="text-red-400">{ob.days_overdue}d overdue</span>
-                                ) : (
-                                  `${ob.days_until_due} days`
+                          {apObligations.map((ob) => {
+                            const obExt = ob as { allocations?: { movement_id: string; gross: number; fee: number; net: number }[]; amount_paid?: number; amount_remaining?: number }
+                            const allocs = obExt.allocations ?? []
+                            const amountPaid = obExt.amount_paid ?? allocs.reduce((s: number, c: { gross: number }) => s + c.gross, 0)
+                            const pct = ob.expected_amount > 0 ? Math.round((amountPaid / ob.expected_amount) * 100) : 0
+                            const isExpanded = expandedObligationId === ob.obligation_id
+                            return (
+                              <Fragment key={ob.obligation_id}>
+                                <TableRow
+                                  className="border-red-500/5 hover:bg-red-500/5 cursor-pointer"
+                                  onClick={() => setExpandedObligationId(isExpanded ? null : ob.obligation_id)}
+                                >
+                                  <TableCell className="text-sm text-white font-medium py-2.5">
+                                    <div className="flex items-center gap-2">
+                                      {ob.vendor_name}
+                                      {ob.risk_flag && (
+                                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">{ob.risk_flag}</span>
+                                      )}
+                                      {ob.priority === "high" && !ob.risk_flag && (
+                                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">high</span>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-xs text-gray-400 py-2.5">
+                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                                      (ob.source ?? "inferred") === "bill" ? "bg-blue-500/20 text-blue-300" : "bg-gray-500/20 text-gray-400"
+                                    }`}>{ob.source ?? "inferred"}</span>
+                                  </TableCell>
+                                  <TableCell className="text-xs text-gray-400 py-2.5">{(ob.cadence ?? "") === "bill" ? "bill" : `${ob.cadence ?? "—"} · ${ob.payment_count ?? 0} payments`}</TableCell>
+                                  <TableCell className="text-xs text-gray-400 py-2.5">
+                                    {ob.days_overdue != null && ob.days_overdue > 0 ? (
+                                      <span className="text-red-400">{ob.days_overdue}d overdue</span>
+                                    ) : (
+                                      `${ob.days_until_due} days`
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="py-2.5">
+                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                                      ob.confidence === "high" ? "bg-emerald-500/20 text-emerald-300" :
+                                      ob.confidence === "medium" ? "bg-amber-500/20 text-amber-300" : "bg-gray-500/20 text-gray-400"
+                                    }`}>{ob.confidence}</span>
+                                  </TableCell>
+                                  <TableCell className="text-right font-mono font-semibold text-red-400 py-2.5">
+                                    {moneySmall(ob.expected_amount)}
+                                    {allocs.length > 0 && <span className="block text-[10px] text-gray-500">paid {moneySmall(amountPaid)}</span>}
+                                  </TableCell>
+                                </TableRow>
+                                {isExpanded && allocs.length > 0 && (
+                                  <TableRow className="border-red-500/5 bg-red-500/5">
+                                    <TableCell colSpan={6} className="py-3 pl-8">
+                                      <div className="space-y-2 text-xs">
+                                        <div className="flex gap-4">
+                                          <span>Gross: {moneySmall(amountPaid)}</span>
+                                          <span className="text-amber-400">Fee: {moneySmall(allocs.reduce((s, c) => s + c.fee, 0))}</span>
+                                          <span className="text-red-400">Net: {moneySmall(allocs.reduce((s, c) => s + c.net, 0))}</span>
+                                        </div>
+                                        <div className="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                                          <div className="h-full bg-red-500 rounded-full" style={{ width: `${Math.min(100, pct)}%` }} />
+                                        </div>
+                                        <div className="text-gray-500">{pct}% paid</div>
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
                                 )}
-                              </TableCell>
-                              <TableCell className="py-2.5">
-                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                                  ob.confidence === "high" ? "bg-emerald-500/20 text-emerald-300" :
-                                  ob.confidence === "medium" ? "bg-amber-500/20 text-amber-300" : "bg-gray-500/20 text-gray-400"
-                                }`}>{ob.confidence}</span>
-                              </TableCell>
-                              <TableCell className="text-right font-mono font-semibold text-red-400 py-2.5">{moneySmall(ob.expected_amount)}</TableCell>
-                            </TableRow>
-                          ))}
+                              </Fragment>
+                            )
+                          })}
                         </TableBody>
                       </Table>
                       {apObligations.length > 0 && (
@@ -3296,6 +3407,107 @@ export function OnboardingFlow({
       }
 
       case 13: {
+        const moneyMap = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
+
+              {mappingLoading && (
+                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Loading AR/AP mapping…
+                </div>
+              )}
+
+              {mappingError && !mappingLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed: {mappingError}</p>
+              )}
+            </div>
+
+            {!mappingLoading && mappingArAp && mappingRecon && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-6">
+                    <h2 className="text-base font-semibold text-emerald-400 mb-4">AR (Accounts Receivable)</h2>
+                    <div className="space-y-3">
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Total Outstanding</span>
+                        <span className="font-mono font-semibold text-emerald-400">{moneyMap(mappingArAp.ar.total_outstanding)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Collected This Period</span>
+                        <span className="font-mono text-white">{moneyMap(mappingRecon.total_matched_inflows)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Overdue</span>
+                        <span className="font-mono text-red-400">{moneyMap(mappingArAp.ar.total_overdue)} ({mappingArAp.ar.overdue_count})</span>
+                      </div>
+                      {mappingArAp.ar.total_outstanding > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-400">Collection Rate</span>
+                          <span className="font-mono text-white">{Math.round(((mappingRecon.total_matched_inflows / (mappingRecon.total_matched_inflows + mappingArAp.ar.total_outstanding)) || 0) * 100)}%</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-6">
+                    <h2 className="text-base font-semibold text-red-400 mb-4">AP (Accounts Payable)</h2>
+                    <div className="space-y-3">
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Total Due (30d)</span>
+                        <span className="font-mono font-semibold text-red-400">{moneyMap(mappingArAp.ap.total_expected_30d)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Paid This Period</span>
+                        <span className="font-mono text-white">{moneyMap(mappingRecon.total_matched_outflows)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Obligations</span>
+                        <span className="font-mono text-white">{mappingArAp.ap.obligation_count}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-white/5 border border-white/10 rounded-xl p-6">
+                  <h2 className="text-base font-semibold text-white mb-4">Payments (Gross − Fee = Net)</h2>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                      <div className="text-2xl font-bold font-mono text-emerald-400">{moneyMap(mappingRecon.total_matched_inflows + mappingRecon.total_unmatched_inflows)}</div>
+                      <div className="text-[10px] text-gray-500">Total Inflows</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold font-mono text-red-400">{moneyMap(mappingRecon.total_matched_outflows + mappingRecon.total_unmatched_outflows)}</div>
+                      <div className="text-[10px] text-gray-500">Total Outflows</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold font-mono text-amber-400">{moneyMap(mappingRecon.total_fees_paid)}</div>
+                      <div className="text-[10px] text-gray-500">Fees Paid</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold font-mono text-white">
+                        {moneyMap((mappingRecon.total_matched_inflows + mappingRecon.total_unmatched_inflows) - (mappingRecon.total_matched_outflows + mappingRecon.total_unmatched_outflows))}
+                      </div>
+                      <div className="text-[10px] text-gray-500">Net Cash Movement</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  <Link href="/payments" className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium">
+                    Payments View
+                  </Link>
+                  <Link href="/reconciliation" className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium">
+                    Reconciliation View
+                  </Link>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
+      case 14: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const badge = (severity: "info" | "warning" | "critical") =>
           severity === "critical"
@@ -3311,8 +3523,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
 
               {stateLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -3687,7 +3899,7 @@ export function OnboardingFlow({
         )
       }
 
-      case 14: {
+      case 15: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const behaviorLabel = (b: ComponentBehavior) => b === "recurring" ? "Recurring" : b === "episodic" ? "Episodic" : b === "seasonal" ? "Seasonal" : "One-time"
@@ -3699,8 +3911,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[14].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[14].description}</p>
 
               {forecastLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -4891,13 +5103,13 @@ export function OnboardingFlow({
         )
       }
 
-      case 15: {
+      case 16: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[14].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[14].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[15].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[15].description}</p>
               {forecastLoading && (
                 <div className="flex justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -4987,7 +5199,7 @@ export function OnboardingFlow({
                   </div>
                 ) : (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-6 text-center">
-                    <p className="text-gray-400 text-sm">No actions available. Complete step 13 (Cashflow forecast) first to see recommended actions.</p>
+                    <p className="text-gray-400 text-sm">No actions available. Complete step 15 (Cashflow forecast) first to see recommended actions.</p>
                   </div>
                 )}
 
@@ -5058,7 +5270,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14 || currentStep === 15
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14 || currentStep === 15 || currentStep === 16
   return (
     <div
       className={
