@@ -29,7 +29,26 @@ export type MatchSuggestion = {
   reasoning: string
 }
 
-/** Deterministic match: amount ±5%, date ±3 days. Returns confidence 0–1 or null if no match. */
+/** Normalize name for fuzzy match. */
+function normalizeName(s: string | null | undefined): string {
+  if (!s || typeof s !== "string") return ""
+  return s.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim()
+}
+
+/** Check if two names are similar enough. */
+function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normalizeName(a)
+  const nb = normalizeName(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  if (na.includes(nb) || nb.includes(na)) return true
+  const tokensA = new Set(na.split(/\s+/).filter((t) => t.length > 1))
+  const tokensB = new Set(nb.split(/\s+/).filter((t) => t.length > 1))
+  const overlap = [...tokensA].filter((t) => tokensB.has(t)).length
+  return overlap >= Math.min(tokensA.size, tokensB.size, 2)
+}
+
+/** Deterministic match: amount ±5%, date ±7 days. When entity_id missing, use counterparty vs vendor name. */
 function deterministicMatch(
   payment: PaymentInput,
   obligation: APObligation,
@@ -45,7 +64,15 @@ function deterministicMatch(
 
   const amountMatch = 1 - Math.abs(amountRatio - 1)
   const dateMatch = 1 - diffDays / DATE_TOLERANCE_DAYS
-  const confidence = (amountMatch + dateMatch) / 2
+  const entityMatch = payment.entity_id && obligation.entity_id
+    ? payment.entity_id === obligation.entity_id
+    : false
+  const nameMatch = !entityMatch && namesMatch(
+    payment.counterparty_name ?? payment.raw_description,
+    obligation.vendor_name,
+  )
+  const entityScore = entityMatch ? 1 : nameMatch ? 0.85 : 0.5
+  const confidence = (amountMatch + dateMatch + entityScore) / 3
   return {
     confidence,
     reasoning: `Amount within ±${AMOUNT_TOLERANCE_PCT * 100}%, date within ±${DATE_TOLERANCE_DAYS} days`,

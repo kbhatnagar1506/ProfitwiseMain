@@ -43,19 +43,44 @@ function daysBetween(a: string, b: string): number {
   return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000)
 }
 
-/** Deterministic AR match: entity + time ±14d + amount ±5%. */
+/** Normalize name for fuzzy match: lowercase, collapse spaces, remove punctuation. */
+function normalizeName(s: string | null | undefined): string {
+  if (!s || typeof s !== "string") return ""
+  return s.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim()
+}
+
+/** Check if two names are similar enough (one contains the other, or they share key tokens). */
+function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normalizeName(a)
+  const nb = normalizeName(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  if (na.includes(nb) || nb.includes(na)) return true
+  const tokensA = new Set(na.split(/\s+/).filter((t) => t.length > 1))
+  const tokensB = new Set(nb.split(/\s+/).filter((t) => t.length > 1))
+  const overlap = [...tokensA].filter((t) => tokensB.has(t)).length
+  return overlap >= Math.min(tokensA.size, tokensB.size, 2)
+}
+
+/** Deterministic AR match: entity + time ±14d + amount ±5%. When entity_id is missing on one side, use counterparty name. */
 function deterministicARMatch(
   payment: InflowPayment,
   invoice: OutstandingInvoice,
 ): { confidence: number; gross: number; fee: number; net: number; method: "exact" | "tolerance" } | null {
   if (payment.amount <= 0 || invoice.amount_due <= 0) return null
 
-  // Entity match: when both have entity_id, they must match. When payment lacks entity_id, allow match by amount+date (weaker).
+  // Entity match: when both have entity_id, they must match.
   const entityMatch = payment.entity_id && invoice.entity_id
     ? payment.entity_id === invoice.entity_id
     : false
   if (payment.entity_id && invoice.entity_id && !entityMatch) return null
-  // If payment has entity_id but invoice doesn't (or vice versa), allow match by amount+date
+
+  // When entity_id is missing on one side (e.g. invoice has it, transaction doesn't), use counterparty name.
+  // Transaction has counterparty/raw_description; invoice has customer_name.
+  const nameMatch = !entityMatch && namesMatch(
+    payment.counterparty_name ?? payment.raw_description,
+    invoice.customer_name,
+  )
 
   // Time window: payment date within ±14 days of due date
   const dueDate = invoice.due_date ?? payment.date
@@ -72,7 +97,7 @@ function deterministicARMatch(
   const fee = Math.max(0, gross - net)
   const amountMatch = 1 - Math.abs(ratio - 1)
   const dateMatch = 1 - diffDays / AR_DATE_TOLERANCE_DAYS
-  const entityScore = entityMatch ? 1 : 0.5
+  const entityScore = entityMatch ? 1 : nameMatch ? 0.85 : 0.5
   const confidence = (amountMatch + dateMatch + entityScore) / 3
   const method = ratio >= 0.99 && ratio <= 1.01 && diffDays <= 3 ? "exact" : "tolerance"
 
