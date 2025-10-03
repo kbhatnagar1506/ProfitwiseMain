@@ -8,10 +8,10 @@ const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFr
 type Movement = { id: string; direction: string; amount: number; date: string; counterparty: string | null; raw_description: string | null }
 type Allocation = { movement_id: string; entity_type: string; entity_id: string; gross: number; fee: number; net: number }
 type ReconData = {
-  matched_inflows: { movement_id: string; amount: number; date: string; counterparty: string | null; allocations: Allocation[] }[]
-  matched_outflows: { movement_id: string; amount: number; date: string; counterparty: string | null; allocations: Allocation[] }[]
-  unmatched_inflows: { movement_id: string; amount: number; date: string; counterparty: string | null }[]
-  unmatched_outflows: { movement_id: string; amount: number; date: string; counterparty: string | null }[]
+  matched_inflows: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }[]
+  matched_outflows: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }[]
+  unmatched_inflows: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }[]
+  unmatched_outflows: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }[]
 }
 
 export default function PaymentsPage() {
@@ -91,7 +91,7 @@ export default function PaymentsPage() {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Counterparty</span>
-                <span className="truncate max-w-[140px]">{selected.counterparty ?? "—"}</span>
+                <span className="truncate max-w-[140px]">{(selected as { display_name?: string | null }).display_name ?? selected.counterparty ?? "—"}</span>
               </div>
             </div>
             {selected.allocations && selected.allocations.length > 0 && (

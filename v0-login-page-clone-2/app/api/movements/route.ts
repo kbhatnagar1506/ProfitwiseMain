@@ -4,6 +4,7 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { toMovementClass } from "@/lib/movement-types"
 import type { CanonicalMovement, MovementClass, ReviewReason } from "@/lib/movement-types"
+import { resolveDisplayNames } from "@/lib/display-name-resolve"
 
 type DbMovementRow = {
   id: string
@@ -110,6 +111,15 @@ export async function GET() {
   const tagMap = new Map<string, TagRow>()
   for (const t of tagRows) tagMap.set(t.movement_id, t)
 
+  // Resolve display names: entity canonical > merchant_tags normalized > counterparty
+  const displayInputs = movements.map((m) => ({
+    movement_id: m.id,
+    user_id: userId,
+    counterparty: (m.metadata?.counterparty as string) ?? null,
+    counterparty_entity_id: m.entity_id,
+  }))
+  const displayNames = await resolveDisplayNames(displayInputs)
+
   // Fetch entity canonical names for resolved counterparties (Phase 7 display)
   const entityIds = [...new Set(movements.map((m) => m.entity_id).filter(Boolean))] as string[]
   const entityNames = new Map<string, string>()
@@ -124,7 +134,9 @@ export async function GET() {
   const movementsWithTags = movements.map((m) => {
     const tag = tagMap.get(m.id)
     const entityCanonicalName = m.entity_id ? entityNames.get(m.entity_id) ?? null : null
-    if (!tag) return { ...m, tag: entityCanonicalName ? { entity_canonical_name: entityCanonicalName } : undefined }
+    const displayRes = displayNames.get(m.id)
+    const display_name = displayRes?.display_name ?? entityCanonicalName ?? undefined
+    if (!tag) return { ...m, tag: display_name ? { entity_canonical_name: entityCanonicalName ?? undefined, display_name } : undefined }
     return {
       ...m,
       tag: {
@@ -132,6 +144,7 @@ export async function GET() {
         cashflow_bucket: tag.cashflow_bucket,
         counterparty_role: tag.counterparty_role,
         entity_canonical_name: entityCanonicalName ?? undefined,
+        display_name,
         ...tag.tag_data,
       },
     }

@@ -14,6 +14,7 @@ import { matchAPPayment, type PaymentInput } from "@/lib/ap-llm-match"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
 import { computeAPStateFromBills } from "@/lib/state/ar-ap"
+import { resolveDisplayNames } from "@/lib/display-name-resolve"
 
 const AUTO_MATCH_CONFIDENCE = 0.8
 
@@ -94,21 +95,33 @@ export async function GET() {
 
     const totalFeesPaid = allocations.reduce((s, a) => s + a.fee_amount, 0)
 
-    const matchedInflows: { movement_id: string; amount: number; date: string; counterparty: string | null; allocations: { entity_type: string; entity_id: string; gross: number; fee: number; net: number }[] }[] = []
+    // Resolve display names: entity > merchant_tags > counterparty (for AI context)
+    const displayInputs = movementRows.map((m) => ({
+      movement_id: m.id,
+      user_id: user.id,
+      counterparty: m.counterparty,
+      counterparty_entity_id: m.counterparty_entity_id,
+    }))
+    const displayNames = await resolveDisplayNames(displayInputs)
+
+    const matchedInflows: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name: string | null; allocations: { entity_type: string; entity_id: string; gross: number; fee: number; net: number }[] }[] = []
     const matchedOutflows: typeof matchedInflows = []
-    const unmatchedInflows: { movement_id: string; amount: number; date: string; counterparty: string | null }[] = []
+    const unmatchedInflows: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name: string | null }[] = []
     const unmatchedOutflows: typeof unmatchedInflows = []
 
     for (const m of movementRows) {
       const amount = parseFloat(String(m.amount))
       const allocs = allocations.filter((a) => a.movement_id === m.id)
       const isAllocated = allocs.length > 0
+      const displayRes = displayNames.get(m.id)
+      const display_name = displayRes?.display_name ?? null
 
       const entry = {
         movement_id: m.id,
         amount,
         date: m.date,
         counterparty: m.counterparty,
+        display_name,
       }
 
       if (m.direction === "inflow") {

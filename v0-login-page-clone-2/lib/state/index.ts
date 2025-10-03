@@ -204,6 +204,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
       is_anomaly: (td.is_anomaly as boolean) ?? false,
       is_large_outlier: (td.is_large_outlier as boolean) ?? false,
       is_first_seen_counterparty: (td.is_first_seen_counterparty as boolean) ?? false,
+      display_name: (td.display_name as string) ?? null,
     }
 
     tagged.push({ ...m, tag })
