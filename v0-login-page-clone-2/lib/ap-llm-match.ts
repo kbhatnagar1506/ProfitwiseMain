@@ -11,7 +11,7 @@ const API_KEY = process.env.FORECAST_LLM_API_KEY ?? process.env.OPENAI_API_KEY
 const MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
 const AMOUNT_TOLERANCE_PCT = 0.05
-const DATE_TOLERANCE_DAYS = 7
+const DATE_TOLERANCE_DAYS = 14
 
 export type PaymentInput = {
   movement_id: string
@@ -48,7 +48,7 @@ function namesMatch(a: string | null | undefined, b: string | null | undefined):
   return overlap >= Math.min(tokensA.size, tokensB.size, 2)
 }
 
-/** Deterministic match: amount ±5%, date ±7 days. When entity_id missing, use counterparty vs vendor name. */
+/** Deterministic match: amount ±5%, date ±14 days. When entity_id missing, use counterparty vs vendor name. */
 function deterministicMatch(
   payment: PaymentInput,
   obligation: APObligation,
