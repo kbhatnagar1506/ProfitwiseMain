@@ -114,21 +114,26 @@ const steps = [
   },
   {
     id: 13,
+    title: "Tagged bank transactions",
+    description: "Bank payments matched to AR/AP. Gross − Fee = Net. View all reconciliation in one table.",
+  },
+  {
+    id: 14,
     title: "AR/AP to Payments Mapping",
     description: "Link payments to invoices and obligations. Gross − Fee = Net. Matched, unmatched, and fees.",
   },
   {
-    id: 14,
+    id: 15,
     title: "State objects",
     description: "Revenue, Spend, and Liquidity states computed from frozen tags, plus transition detectors.",
   },
   {
-    id: 15,
+    id: 16,
     title: "Cashflow forecast",
     description: "Simulate future cash based on behavioral component models, not simple time-series prediction.",
   },
   {
-    id: 16,
+    id: 17,
     title: "Decisions & actions",
     description: "Top actions ranked by impact, combined strategies, and execution steps.",
   },
@@ -837,9 +842,9 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 13: AR/AP to Payments Mapping
+  // Step 13 & 17: AR/AP to Payments Mapping / Tagged bank transactions
   useEffect(() => {
-    if (currentStep !== 13) return
+    if (currentStep !== 13 && currentStep !== 14) return
     let cancelled = false
 
     setMappingLoading(true)
@@ -868,7 +873,7 @@ export function OnboardingFlow({
 
   // Step 14: State objects (computed from frozen tags)
   useEffect(() => {
-    if (currentStep !== 14) return
+    if (currentStep !== 15) return
     let cancelled = false
 
     setStateLoading(true)
@@ -893,7 +898,7 @@ export function OnboardingFlow({
 
   // Step 15 & 16: Cashflow forecast + Decisions (share forecast data)
   useEffect(() => {
-    if (currentStep !== 15 && currentStep !== 16) return
+    if (currentStep !== 16 && currentStep !== 17) return
     let cancelled = false
 
     setForecastLoading(true)
@@ -3420,7 +3425,13 @@ export function OnboardingFlow({
       }
 
       case 13: {
-        const moneyMap = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        const money2 = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        const allRows = [
+          ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "inflow" as const })),
+          ...(mappingRecon.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "outflow" as const })),
+          ...(mappingRecon.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow" as const, allocations: [] })),
+          ...(mappingRecon.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow" as const, allocations: [] })),
+        ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
@@ -3429,6 +3440,71 @@ export function OnboardingFlow({
 
               {mappingLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Loading tagged transactions…
+                </div>
+              )}
+
+            </div>
+            {!mappingLoading && (
+              <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+                <h3 className="text-base font-semibold text-white px-4 py-3 border-b border-white/10">All tagged bank transactions</h3>
+                <div className="max-h-[420px] overflow-y-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
+                        <TableHead className="text-[10px] uppercase text-gray-500">Payment</TableHead>
+                        <TableHead className="text-[10px] uppercase text-gray-500 w-24">Gross</TableHead>
+                        <TableHead className="text-[10px] uppercase text-gray-500 w-20">Fee</TableHead>
+                        <TableHead className="text-[10px] uppercase text-gray-500 w-24">Net</TableHead>
+                        <TableHead className="text-[10px] uppercase text-gray-500">Linked AR/AP</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {allRows.slice(0, 100).map((r) => {
+                        const totalFee = (r.allocations ?? []).reduce((s: number, a: { fee: number }) => s + a.fee, 0)
+                        const totalGross = (r.allocations ?? []).reduce((s: number, a: { gross: number }) => s + a.gross, 0)
+                        const totalNet = (r.allocations ?? []).reduce((s: number, a: { net: number }) => s + a.net, 0)
+                        const linked = (r.allocations ?? []).length > 0
+                          ? (r.allocations ?? []).map((a: { entity_type: string; entity_id: string }) => `${a.entity_type.toUpperCase()}: ${a.entity_id.slice(0, 12)}...`).join(", ")
+                          : "—"
+                        return (
+                          <TableRow key={r.movement_id} className={`border-white/5 ${(r.allocations ?? []).length === 0 ? "bg-amber-500/5" : ""}`}>
+                            <TableCell className="py-2">
+                              <span className={r.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
+                                {r.direction === "inflow" ? "+" : "-"}{money2(r.amount)}
+                              </span>
+                              <span className="text-gray-500 text-xs block">{(r as { date?: string }).date} · {(r as { display_name?: string | null }).display_name ?? r.counterparty ?? "—"}</span>
+                            </TableCell>
+                            <TableCell className="py-2 font-mono text-sm">{totalGross > 0 ? money2(totalGross) : money2(r.amount)}</TableCell>
+                            <TableCell className="py-2 font-mono text-amber-400 text-sm">{totalFee > 0 ? money2(totalFee) : "—"}</TableCell>
+                            <TableCell className="py-2 font-mono text-sm">{totalNet > 0 ? money2(totalNet) : money2(r.amount)}</TableCell>
+                            <TableCell className="py-2 text-xs text-gray-400 truncate max-w-[160px]">{linked}</TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500">
+                  {allRows.length} transactions · <Link href="/reconciliation" className="text-gray-400 hover:text-white underline">View all</Link>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
+      case 14: {
+        const moneyMap = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
+
+              {mappingLoading && (
+                <div className="flex justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
                   Loading AR/AP mapping…
                 </div>
@@ -3520,7 +3596,7 @@ export function OnboardingFlow({
         )
       }
 
-      case 14: {
+      case 15: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const badge = (severity: "info" | "warning" | "critical") =>
           severity === "critical"
@@ -3536,8 +3612,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[14].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[14].description}</p>
 
               {stateLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -3912,7 +3988,7 @@ export function OnboardingFlow({
         )
       }
 
-      case 15: {
+      case 16: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const behaviorLabel = (b: ComponentBehavior) => b === "recurring" ? "Recurring" : b === "episodic" ? "Episodic" : b === "seasonal" ? "Seasonal" : "One-time"
@@ -3924,8 +4000,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[14].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[14].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[15].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[15].description}</p>
 
               {forecastLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -5116,13 +5192,13 @@ export function OnboardingFlow({
         )
       }
 
-      case 16: {
+      case 17: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[15].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[15].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[16].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[16].description}</p>
               {forecastLoading && (
                 <div className="flex justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -5212,7 +5288,7 @@ export function OnboardingFlow({
                   </div>
                 ) : (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-6 text-center">
-                    <p className="text-gray-400 text-sm">No actions available. Complete step 15 (Cashflow forecast) first to see recommended actions.</p>
+                    <p className="text-gray-400 text-sm">No actions available. Complete step 16 (Cashflow forecast) first to see recommended actions.</p>
                   </div>
                 )}
 
@@ -5283,7 +5359,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14 || currentStep === 15 || currentStep === 16
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14 || currentStep === 15 || currentStep === 16 || currentStep === 17
   return (
     <div
       className={
