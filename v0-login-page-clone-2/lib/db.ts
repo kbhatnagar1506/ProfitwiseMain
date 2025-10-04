@@ -171,6 +171,8 @@ const PLAID_TRANSACTIONS_SQL = `
     name            TEXT,
     merchant_name   TEXT,
     category        JSONB,
+    personal_finance_category JSONB,
+    payment_channel TEXT,
     pending         BOOLEAN DEFAULT false,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(item_id, transaction_id)
@@ -197,6 +199,9 @@ export async function ensurePlaidSchema(): Promise<void> {
   await p.query(PLAID_ACCOUNTS_SQL)
   await p.query(PLAID_TRANSACTIONS_SQL)
   await p.query(PLAID_WEBHOOK_LAST_SQL)
+  // Add columns for Plaid v2 fields if they don't exist yet
+  await p.query("ALTER TABLE plaid_transactions ADD COLUMN IF NOT EXISTS personal_finance_category JSONB")
+  await p.query("ALTER TABLE plaid_transactions ADD COLUMN IF NOT EXISTS payment_channel TEXT")
   plaidSchemaEnsured = true
   log("plaid.schema.ensured", undefined, "db")
 }
