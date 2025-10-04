@@ -1951,13 +1951,17 @@ export function OnboardingFlow({
         let pnlCount = 0
         let nonPnlCount = 0
         let reviewCount = 0
+        let coalescedCount = 0
         for (const s of mvtSummary) {
           typeCounts[s.movement_type] = (typeCounts[s.movement_type] ?? 0) + s.count
           typeAmounts[s.movement_type] = (typeAmounts[s.movement_type] ?? 0) + parseFloat(s.total_amount)
           if (s.pnl_eligible) pnlCount += s.count
           else nonPnlCount += s.count
         }
-        for (const m of mvts) { if (m.review_needed) reviewCount++ }
+        for (const m of mvts) {
+          if (m.review_needed) reviewCount++
+          if (m.metadata?.provenance === "coalesced") coalescedCount++
+        }
 
         const TYPE_META: Record<string, { label: string; color: string; group: "pnl" | "non_pnl" | "unknown" }> = {
           cash_in_customer:         { label: "Customer Cash In",      color: "bg-emerald-500/80 border-emerald-400/50",  group: "pnl" },
@@ -1982,6 +1986,8 @@ export function OnboardingFlow({
           account_verification:     { label: "Account Verification",  color: "bg-gray-500/80 border-gray-400/50",        group: "non_pnl" },
           opening_balance:          { label: "Opening Balance",       color: "bg-gray-600/80 border-gray-500/50",        group: "non_pnl" },
           balance_adjustment:       { label: "Balance Adjustment",    color: "bg-gray-700/80 border-gray-600/50",        group: "non_pnl" },
+          merchant_deposit_unresolved: { label: "Merchant Deposit?",   color: "bg-amber-700/80 border-amber-600/50",      group: "unknown" },
+          owner_contribution_candidate: { label: "Owner Contribution?", color: "bg-rose-300/80 border-rose-200/50",    group: "unknown" },
           unknown_inflow:           { label: "Unknown Inflow",        color: "bg-zinc-500/80 border-zinc-400/50",        group: "unknown" },
           unknown_outflow:          { label: "Unknown Outflow",       color: "bg-zinc-600/80 border-zinc-500/50",        group: "unknown" },
           unknown_transfer_candidate: { label: "Unknown Transfer?",   color: "bg-zinc-700/80 border-zinc-600/50",        group: "unknown" },
@@ -1993,6 +1999,12 @@ export function OnboardingFlow({
           s === "stripe" ? "bg-purple-500/80" :
           s === "xero" ? "bg-cyan-500/80" :
           "bg-zinc-500/80"
+
+        const provenanceLabel = (p: string) =>
+          p === "coalesced" ? { text: "C", color: "bg-green-600/80", title: "Coalesced (multi-source)" } :
+          p === "bank_observed" ? { text: "B", color: "bg-amber-600/80", title: "Bank observed" } :
+          p === "accounting_observed" ? { text: "A", color: "bg-blue-600/80", title: "Accounting observed" } :
+          { text: "?", color: "bg-zinc-600/80", title: "Unknown provenance" }
 
         const fmtAmt = (a: string | number) => {
           const n = typeof a === "string" ? parseFloat(a) : a
@@ -2076,7 +2088,10 @@ export function OnboardingFlow({
                             </td>
                             <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[160px]">{m.raw_description ?? "\u2014"}</td>
                             <td className="px-3 py-1.5">
-                              <div className="flex gap-0.5">
+                              <div className="flex gap-0.5 items-center">
+                                {(() => { const p = provenanceLabel(String(m.metadata?.provenance ?? "")); return (
+                                  <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
+                                ) })()}
                                 {(m.evidence_refs ?? []).map((e: { source: string; source_id: string }, ei: number) => (
                                   <span key={ei} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(e.source)}`}>{e.source}</span>
                                 ))}
@@ -2124,7 +2139,10 @@ export function OnboardingFlow({
                           </td>
                           <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[200px]">{m.raw_description ?? "\u2014"}</td>
                           <td className="px-3 py-1.5">
-                            <div className="flex gap-0.5">
+                            <div className="flex gap-0.5 items-center">
+                              {(() => { const p = provenanceLabel(String(m.metadata?.provenance ?? "")); return (
+                                <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
+                              ) })()}
                               {(m.evidence_refs ?? []).map((e: { source: string; source_id: string }, ei: number) => (
                                 <span key={ei} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(e.source)}`}>{e.source}</span>
                               ))}
@@ -2183,6 +2201,12 @@ export function OnboardingFlow({
                     <div className="text-2xl font-bold text-gray-400">{nonPnlCount}</div>
                     <div className="text-xs text-gray-500">Non-P&L</div>
                   </div>
+                  {coalescedCount > 0 && (
+                    <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
+                      <div className="text-2xl font-bold text-green-400">{coalescedCount}</div>
+                      <div className="text-xs text-green-400/70">Coalesced</div>
+                    </div>
+                  )}
                   {reviewCount > 0 && (
                     <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
                       <div className="text-2xl font-bold text-yellow-400">{reviewCount}</div>

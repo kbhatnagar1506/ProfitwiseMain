@@ -1,18 +1,22 @@
 /**
- * Money Movement Classification Engine v3.
+ * Money Movement Classification Engine v4.
  *
  * Outputs cash movement classifications, NOT accounting event classifications.
  *
  * Pipeline:
- *   Step 1: Extract source observations from Plaid, QBO, Stripe, Xero
- *   Step 2: Deduplicate / coalesce cross-source observations into canonical movements
- *   Step 3: Resolve accounts (source cash account, destination, internal flag)
- *   Step 4: Resolve counterparty identity (entity, entity_type, confidence)
- *   Step 5: Classify non-P&L movements first (transfers, settlements, fees, equity, financing)
- *   Step 6: Classify operating cash movements (customer, vendor, refund, interest)
- *   Step 7: Fallback to unknown_inflow / unknown_outflow / unknown_transfer_candidate
- *   Step 8: LLM assist for low-confidence
- *   Step 9: Batch persist
+ *   Step 1:  Extract source observations from Plaid, QBO, Stripe, Xero (skip $0 non-cash)
+ *   Step 2:  Coalesce cross-source observations into canonical movements (date-window matching)
+ *   Step 2b: Pair Plaid cross-account transfers
+ *   Step 3:  Resolve accounts
+ *   Step 4:  Resolve counterparty identity
+ *   Step 5:  Classify non-P&L (transfers, settlements, fees, equity, financing, CC payments)
+ *   Step 6:  Classify operating (customer, vendor, refund, interest)
+ *   Step 6b: Provisional classes (merchant_deposit_unresolved, owner_contribution_candidate)
+ *   Step 7:  Fallback to unknown_inflow / unknown_outflow / unknown_transfer_candidate
+ *   Step 7b: Family-level learning (recurring pattern recognition)
+ *   Step 8:  LLM assist for low-confidence
+ *   Step 8b: Direction/type consistency validation
+ *   Step 9:  Batch persist (with provenance)
  */
 
 import { query, ensureMovementsSchema, ensurePlaidSchema } from "./db"
@@ -56,13 +60,18 @@ const PNL_TYPES = [
   "other_operating",
 ] as const
 
+const PROVISIONAL_TYPES = [
+  "merchant_deposit_unresolved",
+  "owner_contribution_candidate",
+] as const
+
 const FALLBACK_TYPES = [
   "unknown_inflow",
   "unknown_outflow",
   "unknown_transfer_candidate",
 ] as const
 
-const ALL_MOVEMENT_TYPES = [...NON_PNL_TYPES, ...PNL_TYPES, ...FALLBACK_TYPES] as const
+const ALL_MOVEMENT_TYPES = [...NON_PNL_TYPES, ...PNL_TYPES, ...PROVISIONAL_TYPES, ...FALLBACK_TYPES] as const
 type MovementType = (typeof ALL_MOVEMENT_TYPES)[number]
 
 const PNL_ELIGIBLE_SET = new Set<string>(PNL_TYPES as unknown as string[])
@@ -92,6 +101,8 @@ type SourceObservation = {
 
 // ─── Canonical Movement (post-dedup, pre-classify) ──────────────────
 
+type Provenance = "bank_observed" | "accounting_observed" | "coalesced"
+
 type CanonicalMovement = {
   direction: "inflow" | "outflow"
   amount: number       // always positive
@@ -104,6 +115,7 @@ type CanonicalMovement = {
   linked_internal_account_id: string | null
   raw_description: string | null
   evidence: SourceObservation[]
+  provenance: Provenance
   plaid_category: string[] | null
   plaid_pfc: Record<string, string> | null
   plaid_payment_channel: string | null
@@ -199,6 +211,15 @@ const OWNER_CONTRIBUTION_PATTERNS = [
   /\bshareholder.*(contribut|invest|capital)\b/i,
   /\bmember.*(contribut|capital)\b/i,
   /\bcapital\s+contribut/i,
+]
+
+const MERCHANT_DEPOSIT_PATTERNS = [
+  /\bmerchant\s*(bankcd|bank\s*card|deposit|service)\b/i,
+  /\bbankcd.*deposit\b/i,
+  /\bdeposit\s+\d{6,}\b/i,
+  /\bmerch\s*dep\b/i,
+  /\bpos\s*deposit\b/i,
+  /\b(square|clover|toast|stripe|shopify)\b.*\b(deposit|payout|transfer)\b/i,
 ]
 
 const VERIFICATION_PATTERNS = [
@@ -492,68 +513,63 @@ function counterpartyMatchScore(a: string | null, b: string | null): number {
   return 0
 }
 
-function coalesceObservations(observations: SourceObservation[]): CanonicalMovement[] {
-  // Dedup key: |amount| rounded to cents + date (narrow window)
-  // Counterparty is NOT in the key — checked explicitly during pairing
-  type KeyedObs = SourceObservation & { _key: string }
-  const keyed: KeyedObs[] = observations.map((o) => ({
-    ...o,
-    _key: `${Math.abs(o.amount).toFixed(2)}|${o.date}`,
-  }))
+function dateDistance(a: string, b: string): number {
+  const da = new Date(a).getTime()
+  const db = new Date(b).getTime()
+  return Math.abs(da - db) / 86400000 // in days
+}
 
-  const groups = new Map<string, KeyedObs[]>()
-  for (const o of keyed) {
-    const list = groups.get(o._key) ?? []
+function coalesceObservations(observations: SourceObservation[]): CanonicalMovement[] {
+  // Filter out zero-dollar non-cash notices
+  const nonZero = observations.filter((o) => Math.abs(o.amount) >= 0.01)
+
+  // Group by |amount| rounded to cents — the primary matching dimension
+  // Date is checked with a ±1 day window during pairing, not as a key
+  type Indexed = SourceObservation & { _idx: number }
+  const indexed: Indexed[] = nonZero.map((o, i) => ({ ...o, _idx: i }))
+
+  const byAmount = new Map<string, Indexed[]>()
+  for (const o of indexed) {
+    const key = Math.abs(o.amount).toFixed(2)
+    const list = byAmount.get(key) ?? []
     list.push(o)
-    groups.set(o._key, list)
+    byAmount.set(key, list)
   }
 
   const movements: CanonicalMovement[] = []
+  const used = new Set<number>()
 
-  for (const [, group] of groups) {
-    if (group.length === 1) {
-      movements.push(obsToCanonical([group[0]]))
-      continue
-    }
-
-    // Within same source, always keep each as separate movement
-    const bySource = new Map<string, KeyedObs[]>()
-    for (const o of group) {
-      const list = bySource.get(o.source) ?? []
-      list.push(o)
-      bySource.set(o.source, list)
-    }
-
-    if (bySource.size === 1) {
-      for (const o of group) {
-        movements.push(obsToCanonical([o]))
-      }
-      continue
-    }
-
-    // Cross-source: attempt to pair observations that describe the same cash event
+  for (const [, group] of byAmount) {
+    // Sort by source priority (highest first)
     group.sort((a, b) => (SOURCE_PRIORITY[b.source] ?? 0) - (SOURCE_PRIORITY[a.source] ?? 0))
 
-    const used = new Set<number>()
     for (let i = 0; i < group.length; i++) {
-      if (used.has(i)) continue
+      if (used.has(group[i]._idx)) continue
       const primary = group[i]
       const evidenceGroup = [primary]
-      used.add(i)
+      used.add(primary._idx)
 
+      // Try to find cross-source matches within ±1 day
       for (let j = i + 1; j < group.length; j++) {
-        if (used.has(j)) continue
+        if (used.has(group[j]._idx)) continue
         const candidate = group[j]
+
+        // Same source: never coalesce (these are genuinely separate transactions)
         if (candidate.source === primary.source) continue
+
+        // Must have same sign (both inflow or both outflow)
         if (Math.sign(candidate.amount) !== Math.sign(primary.amount)) continue
 
-        // Require counterparty similarity OR at least one side has no counterparty
+        // Date must be within 1 day
+        if (dateDistance(primary.date, candidate.date) > 1) continue
+
+        // Counterparty: require similarity OR at least one side blank
         const cpScore = counterpartyMatchScore(primary.counterparty, candidate.counterparty)
         const eitherBlank = !primary.counterparty || !candidate.counterparty
-        if (cpScore < 0.5 && !eitherBlank) continue
+        if (cpScore < 0.4 && !eitherBlank) continue
 
         evidenceGroup.push(candidate)
-        used.add(j)
+        used.add(candidate._idx)
       }
 
       movements.push(obsToCanonical(evidenceGroup))
@@ -561,6 +577,16 @@ function coalesceObservations(observations: SourceObservation[]): CanonicalMovem
   }
 
   return movements
+}
+
+const BANK_SOURCES = new Set(["plaid"])
+const ACCT_SOURCES = new Set(["qbo", "xero", "stripe"])
+
+function deriveProvenance(evidence: SourceObservation[]): Provenance {
+  if (evidence.length > 1) return "coalesced"
+  const src = evidence[0].source
+  if (BANK_SOURCES.has(src)) return "bank_observed"
+  return "accounting_observed"
 }
 
 function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
@@ -577,9 +603,16 @@ function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
     }
   }
 
-  // Merge account info
+  // Merge account info — prefer bank-observed account
   let cashAcct = primary.account_name
   let cashAcctId = primary.account_id
+  for (const e of evidence) {
+    if (e.source === "plaid" && e.account_name) {
+      cashAcct = e.account_name
+      cashAcctId = e.account_id
+      break
+    }
+  }
   if (!cashAcct) {
     for (const e of evidence) {
       if (e.account_name) { cashAcct = e.account_name; cashAcctId = e.account_id; break }
@@ -602,7 +635,7 @@ function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
     Object.assign(mergedMeta, e.metadata)
   }
   if (evidence.length > 1) {
-    mergedMeta.dedup_sources = evidence.map((e) => `${e.source}:${e.source_id}`)
+    mergedMeta.coalesced_sources = evidence.map((e) => `${e.source}:${e.source_id}`)
   }
 
   return {
@@ -617,6 +650,7 @@ function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
     linked_internal_account_id: null,
     raw_description: primary.raw_description,
     evidence,
+    provenance: deriveProvenance(evidence),
     plaid_category: plaidCat,
     plaid_pfc: plaidPfc,
     plaid_payment_channel: plaidChannel,
@@ -940,10 +974,17 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
     // to operating classification or fallback as unknown_transfer_candidate.
   }
 
-  // ── Identity: processor → settlement ──
+  // ── Identity: processor → settlement or CC payment ──
   if (identity?.role === "processor" && identity.confidence >= 0.6) {
     if (m.direction === "inflow") {
       return { type: "processor_payout", confidence: Math.min(0.88, identity.confidence) }
+    }
+    // Check if this is actually a credit card payment, not a processor fee
+    const cpLower = (m.counterparty ?? "").toLowerCase()
+    const isCcBrand = /\bchase\b|\bamex\b|\bciti\b|\bcapital\s*one\b|\bvisa\b|\bmastercard\b|\bdiscover\b/.test(cpLower)
+    const isCcDesc = CC_PAYMENT_PATTERNS.some((p) => p.test(desc))
+    if (isCcBrand || isCcDesc) {
+      return { type: "credit_card_payment", confidence: Math.min(0.88, identity.confidence) }
     }
     return { type: "processor_fee_settlement", confidence: Math.min(0.85, identity.confidence) }
   }
@@ -1108,6 +1149,31 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
   return null
 }
 
+// ─── Step 6b: Provisional classes ───────────────────────────────────
+
+function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEntry | null): { type: MovementType; confidence: number } | null {
+  const desc = (m.raw_description ?? "").toLowerCase()
+
+  // Merchant deposit: recurring BANKCD/DEPOSIT patterns with reference numbers
+  if (m.direction === "inflow" && MERCHANT_DEPOSIT_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "merchant_deposit_unresolved", confidence: 0.55 }
+  }
+
+  // Inflows from owner-linked entities without strong owner-draw/contribution signals
+  if (m.direction === "inflow" && identity?.role === "internal") {
+    if (!OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
+      return { type: "owner_contribution_candidate", confidence: 0.5 }
+    }
+  }
+
+  // Inflows that look like personal transfers to the business
+  if (m.direction === "inflow" && identity?.is_own_account && !m.linked_internal_account_id) {
+    return { type: "owner_contribution_candidate", confidence: 0.5 }
+  }
+
+  return null
+}
+
 // ─── Step 7: Fallback ───────────────────────────────────────────────
 
 function classifyFallback(m: CanonicalMovement): { type: MovementType; confidence: number } {
@@ -1121,6 +1187,95 @@ function classifyFallback(m: CanonicalMovement): { type: MovementType; confidenc
   return m.direction === "inflow"
     ? { type: "unknown_inflow", confidence: 0.3 }
     : { type: "unknown_outflow", confidence: 0.3 }
+}
+
+// ─── Step 7b: Family-level learning ──────────────────────────────────
+
+type MovementFamily = {
+  pattern: string        // normalized description prefix
+  account: string | null
+  direction: "inflow" | "outflow"
+  count: number
+  dominantType: MovementType
+  dominantConfidence: number
+}
+
+function buildFamilies(classified: ClassifiedMovement[]): Map<string, MovementFamily> {
+  const families = new Map<string, { types: Map<string, { count: number; totalConf: number }>; account: string | null; direction: "inflow" | "outflow"; count: number }>()
+
+  for (const c of classified) {
+    if (c.confidence < 0.6) continue // only learn from reasonably confident
+    const desc = (c.raw_description ?? "").toLowerCase().replace(/\d{4,}/g, "NNNNN").replace(/\s+/g, " ").trim()
+    if (desc.length < 5) continue
+
+    // Prefix up to 40 chars as the "family signature"
+    const prefix = desc.slice(0, 40)
+    const key = `${c.direction}|${c.cash_account_name ?? "?"}|${prefix}`
+
+    let fam = families.get(key)
+    if (!fam) {
+      fam = { types: new Map(), account: c.cash_account_name, direction: c.direction, count: 0 }
+      families.set(key, fam)
+    }
+    fam.count++
+    const typeEntry = fam.types.get(c.movement_type) ?? { count: 0, totalConf: 0 }
+    typeEntry.count++
+    typeEntry.totalConf += c.confidence
+    fam.types.set(c.movement_type, typeEntry)
+  }
+
+  // Only keep families with 3+ members (recurring pattern)
+  const result = new Map<string, MovementFamily>()
+  for (const [key, fam] of families) {
+    if (fam.count < 3) continue
+    let bestType: MovementType = "unknown_inflow"
+    let bestCount = 0
+    let bestConf = 0
+    for (const [type, entry] of fam.types) {
+      if (entry.count > bestCount) {
+        bestCount = entry.count
+        bestType = type as MovementType
+        bestConf = entry.totalConf / entry.count
+      }
+    }
+    // Only meaningful if dominant type covers >60% of family
+    if (bestCount / fam.count >= 0.6) {
+      result.set(key, {
+        pattern: key.split("|").slice(2).join("|"),
+        account: fam.account,
+        direction: fam.direction,
+        count: fam.count,
+        dominantType: bestType,
+        dominantConfidence: Math.min(0.85, bestConf + 0.05), // slight boost
+      })
+    }
+  }
+  return result
+}
+
+function applyFamilyLearning(classified: ClassifiedMovement[], families: Map<string, MovementFamily>): number {
+  if (families.size === 0) return 0
+  let upgraded = 0
+
+  for (const c of classified) {
+    if (c.confidence >= 0.7) continue // already confident enough
+    const desc = (c.raw_description ?? "").toLowerCase().replace(/\d{4,}/g, "NNNNN").replace(/\s+/g, " ").trim()
+    const prefix = desc.slice(0, 40)
+    const key = `${c.direction}|${c.cash_account_name ?? "?"}|${prefix}`
+
+    const family = families.get(key)
+    if (!family) continue
+    if (family.dominantConfidence > c.confidence) {
+      c.movement_type = family.dominantType
+      c.pnl_eligible = isPnlEligible(family.dominantType)
+      c.confidence = family.dominantConfidence
+      c.review_needed = family.dominantConfidence < 0.7
+      c.metadata.family_learned = true
+      c.metadata.family_count = family.count
+      upgraded++
+    }
+  }
+  return upgraded
 }
 
 // ─── Step 8: LLM assist ────────────────────────────────────────────
@@ -1173,6 +1328,10 @@ P&L types (operational):
 - cash_out_bank_fee: bank service fees
 - cash_out_payroll: employee compensation
 - cash_out_tax: tax payments
+
+Provisional (low certainty but directional):
+- merchant_deposit_unresolved: recurring merchant/card deposit, likely settlement, but counterparty unknown
+- owner_contribution_candidate: inflow that may be owner capital, but not confirmed
 
 Fallback:
 - unknown_inflow / unknown_outflow / unknown_transfer_candidate
@@ -1232,22 +1391,30 @@ Output ONLY valid JSON array. No markdown.`
 
 export async function classifyMovements(userId: string): Promise<{
   total_observations: number
+  zero_dollar_skipped: number
   canonical_movements: number
+  coalesced_count: number
   rule_classified: number
+  provisional_classified: number
+  family_upgraded: number
   llm_classified: number
   identity_resolved: number
   transfers_paired: number
   pnl_eligible: number
   review_needed: number
   by_type: Record<string, number>
+  by_provenance: Record<string, number>
 }> {
   await ensureMovementsSchema()
   await ensurePlaidSchema()
 
   const stats = {
-    total_observations: 0, canonical_movements: 0, rule_classified: 0, llm_classified: 0,
+    total_observations: 0, zero_dollar_skipped: 0,
+    canonical_movements: 0, coalesced_count: 0,
+    rule_classified: 0, provisional_classified: 0, family_upgraded: 0, llm_classified: 0,
     identity_resolved: 0, transfers_paired: 0, pnl_eligible: 0, review_needed: 0,
     by_type: {} as Record<string, number>,
+    by_provenance: {} as Record<string, number>,
   }
 
   log("movements.classify.start", { userId }, "movements")
@@ -1285,6 +1452,8 @@ export async function classifyMovements(userId: string): Promise<{
 
   // Step 2b: Coalesce cross-source observations into canonical movements
   let movements = coalesceObservations(allObs)
+  stats.zero_dollar_skipped = allObs.filter((o) => Math.abs(o.amount) < 0.01).length
+  stats.coalesced_count = movements.filter((m) => m.provenance === "coalesced").length
 
   // Get own Plaid account IDs for transfer pairing
   const { rows: ownAccts } = await query<{ account_id: string }>(
@@ -1359,6 +1528,20 @@ export async function classifyMovements(userId: string): Promise<{
       continue
     }
 
+    // Step 6b: Provisional classes
+    const provisional = classifyProvisional(m, identity)
+    if (provisional) {
+      classified.push({
+        ...m,
+        movement_type: provisional.type,
+        pnl_eligible: isPnlEligible(provisional.type),
+        confidence: provisional.confidence,
+        review_needed: true,
+      })
+      stats.provisional_classified++
+      continue
+    }
+
     // Step 7: Fallback (but also queue for LLM if we have API key)
     const fallback = classifyFallback(m)
     needsLlm.push({ idx: classified.length, movement: m, identity })
@@ -1389,6 +1572,10 @@ export async function classifyMovements(userId: string): Promise<{
       }
     }
   }
+
+  // Step 7b: Family-level learning — upgrade low-confidence items from recurring patterns
+  const families = buildFamilies(classified)
+  stats.family_upgraded = applyFamilyLearning(classified, families)
 
   // Step 8b: Direction/type consistency validation
   const INFLOW_TYPES = new Set<string>([
@@ -1427,6 +1614,7 @@ export async function classifyMovements(userId: string): Promise<{
   // Count stats
   for (const c of classified) {
     stats.by_type[c.movement_type] = (stats.by_type[c.movement_type] ?? 0) + 1
+    stats.by_provenance[c.provenance] = (stats.by_provenance[c.provenance] ?? 0) + 1
     if (c.pnl_eligible) stats.pnl_eligible++
     if (c.review_needed) stats.review_needed++
   }
@@ -1444,6 +1632,8 @@ export async function classifyMovements(userId: string): Promise<{
       const evidenceRefs = JSON.stringify(m.evidence.map((e) => ({ source: e.source, source_type: e.source_type, source_id: e.source_id })))
       // Deterministic hash: sorted source:source_id pairs
       const evidenceHash = m.evidence.map((e) => `${e.source}:${e.source_id}`).sort().join("|")
+      // Store provenance in metadata alongside other info
+      m.metadata.provenance = m.provenance
 
       const offsets = Array.from({ length: 17 }, (_, k) => `$${paramIdx + k + 1}`)
       values.push(`(${offsets.join(", ")})`)
