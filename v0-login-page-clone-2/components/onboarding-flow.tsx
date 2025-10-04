@@ -2005,10 +2005,13 @@ export function OnboardingFlow({
         const nonPnlTypes = Object.entries(TYPE_META).filter(([, v]) => v.group === "non_pnl").map(([k]) => k).filter((k) => (typeCounts[k] ?? 0) > 0)
         const unknownTypes = Object.entries(TYPE_META).filter(([, v]) => v.group === "unknown").map(([k]) => k).filter((k) => (typeCounts[k] ?? 0) > 0)
 
+        const TRANSFER_TYPES = new Set(["internal_transfer"])
+
         const renderTypeTable = (typeKey: string) => {
           const meta = TYPE_META[typeKey] ?? { label: typeKey, color: "bg-zinc-500/80 border-zinc-400/50", group: "unknown" }
           const typeMvts = mvts.filter((m) => m.movement_type === typeKey)
           const isPnl = meta.group === "pnl"
+          const isTransferType = TRANSFER_TYPES.has(typeKey)
           return (
             <div key={typeKey} className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
               <div className="flex items-center gap-3 px-4 py-3 border-b border-white/20">
@@ -2035,49 +2038,107 @@ export function OnboardingFlow({
                 )}
               </div>
               <div className="max-h-[40vh] overflow-y-auto overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-black/60 backdrop-blur-sm">
-                    <tr className="border-b border-white/15">
-                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[90px]">Date</th>
-                      <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Dir</th>
-                      <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
-                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
-                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Account</th>
-                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
-                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]">Evidence</th>
-                      <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {typeMvts.slice(0, 200).map((m) => (
-                      <tr key={m.id} className={`hover:bg-white/5 ${m.review_needed ? "bg-yellow-500/5" : ""}`}>
-                        <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
-                        <td className="px-3 py-1.5 text-xs text-center">
-                          <span className={`inline-block w-4 text-center font-bold ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
-                            {m.direction === "inflow" ? "\u2191" : "\u2193"}
-                          </span>
-                        </td>
-                        <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
-                          ${parseFloat(m.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]">{m.counterparty ?? "\u2014"}</td>
-                        <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[120px]">{m.cash_account_id ?? "\u2014"}</td>
-                        <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[200px]">{m.raw_description ?? "\u2014"}</td>
-                        <td className="px-3 py-1.5">
-                          <div className="flex gap-0.5">
-                            {(m.evidence_refs ?? []).map((e: { source: string; source_id: string }, ei: number) => (
-                              <span key={ei} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(e.source)}`}>{e.source}</span>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="text-gray-500 px-3 py-1.5 text-xs text-right">
-                          {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
-                          {Math.round(m.confidence * 100)}%
-                        </td>
+                {isTransferType ? (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-black/60 backdrop-blur-sm">
+                      <tr className="border-b border-white/15">
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[90px]">Date</th>
+                        <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">From</th>
+                        <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[30px]"></th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">To</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]">Evidence</th>
+                        <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {typeMvts.slice(0, 200).map((m) => {
+                        const md = m.metadata ?? {}
+                        const fromName = (md.from_account_name as string) ?? m.cash_account_id ?? "\u2014"
+                        const fromType = (md.from_account_subtype as string) ?? (md.from_account_type as string) ?? (md.account_subtype as string) ?? ""
+                        const toName = (md.to_account_name as string) ?? m.linked_internal_account_id ?? "\u2014"
+                        const toType = (md.to_account_subtype as string) ?? (md.to_account_type as string) ?? ""
+                        return (
+                          <tr key={m.id} className={`hover:bg-white/5 ${m.review_needed ? "bg-yellow-500/5" : ""}`}>
+                            <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
+                            <td className="px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap text-white">
+                              ${parseFloat(m.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-3 py-1.5 text-xs">
+                              <div className="text-white truncate max-w-[140px]">{fromName}</div>
+                              {fromType && <div className="text-[10px] text-gray-500 capitalize">{fromType}</div>}
+                            </td>
+                            <td className="px-3 py-1.5 text-center text-gray-500 text-xs">{"\u2192"}</td>
+                            <td className="px-3 py-1.5 text-xs">
+                              <div className="text-white truncate max-w-[140px]">{toName}</div>
+                              {toType && <div className="text-[10px] text-gray-500 capitalize">{toType}</div>}
+                            </td>
+                            <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[160px]">{m.raw_description ?? "\u2014"}</td>
+                            <td className="px-3 py-1.5">
+                              <div className="flex gap-0.5">
+                                {(m.evidence_refs ?? []).map((e: { source: string; source_id: string }, ei: number) => (
+                                  <span key={ei} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(e.source)}`}>{e.source}</span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="text-gray-500 px-3 py-1.5 text-xs text-right">
+                              {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
+                              {Math.round(m.confidence * 100)}%
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-black/60 backdrop-blur-sm">
+                      <tr className="border-b border-white/15">
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[90px]">Date</th>
+                        <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Dir</th>
+                        <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Account</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]">Evidence</th>
+                        <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {typeMvts.slice(0, 200).map((m) => (
+                        <tr key={m.id} className={`hover:bg-white/5 ${m.review_needed ? "bg-yellow-500/5" : ""}`}>
+                          <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
+                          <td className="px-3 py-1.5 text-xs text-center">
+                            <span className={`inline-block w-4 text-center font-bold ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                              {m.direction === "inflow" ? "\u2191" : "\u2193"}
+                            </span>
+                          </td>
+                          <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                            ${parseFloat(m.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]">{m.counterparty ?? "\u2014"}</td>
+                          <td className="px-3 py-1.5 text-xs">
+                            <div className="text-gray-400 truncate max-w-[120px]">{m.cash_account_id ?? "\u2014"}</div>
+                            {typeof m.metadata?.account_subtype === "string" && <div className="text-[10px] text-gray-500 capitalize">{m.metadata.account_subtype}</div>}
+                          </td>
+                          <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[200px]">{m.raw_description ?? "\u2014"}</td>
+                          <td className="px-3 py-1.5">
+                            <div className="flex gap-0.5">
+                              {(m.evidence_refs ?? []).map((e: { source: string; source_id: string }, ei: number) => (
+                                <span key={ei} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(e.source)}`}>{e.source}</span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="text-gray-500 px-3 py-1.5 text-xs text-right">
+                            {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
+                            {Math.round(m.confidence * 100)}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
                 {typeMvts.length > 200 && (
                   <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {typeMvts.length} movements</div>
                 )}
