@@ -1,17 +1,18 @@
 /**
- * Money Movement Classification Engine v2.
+ * Money Movement Classification Engine v3.
  *
- * Architecture:
- *   1. Extract raw movements from Plaid, QBO, Stripe
- *   2. Normalize amounts (positive = inflow, negative = outflow)
- *   3. Build MovementIdentityContext from identity layer (clean handoff)
- *   4. Resolve counterparty → identity role for each movement
- *   5. Pair Plaid cross-account transfers
- *   6. Deduplicate across sources (same date ± 1 day, same |amount|, same counterparty)
- *   7. Three-tier classification: structural → identity → heuristic
- *   8. LLM fallback with identity role in prompt
- *   9. P&L eligibility gate
- *  10. Batch persist
+ * Outputs cash movement classifications, NOT accounting event classifications.
+ *
+ * Pipeline:
+ *   Step 1: Extract source observations from Plaid, QBO, Stripe, Xero
+ *   Step 2: Deduplicate / coalesce cross-source observations into canonical movements
+ *   Step 3: Resolve accounts (source cash account, destination, internal flag)
+ *   Step 4: Resolve counterparty identity (entity, entity_type, confidence)
+ *   Step 5: Classify non-P&L movements first (transfers, settlements, fees, equity, financing)
+ *   Step 6: Classify operating cash movements (customer, vendor, refund, interest)
+ *   Step 7: Fallback to unknown_inflow / unknown_outflow / unknown_transfer_candidate
+ *   Step 8: LLM assist for low-confidence
+ *   Step 9: Batch persist
  */
 
 import { query, ensureMovementsSchema } from "./db"
@@ -25,52 +26,91 @@ import {
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
-// ─── Types ─────────────────────────────────────────────────────────
+// ─── Movement Type Taxonomy ──────────────────────────────────────────
 
-const MOVEMENT_CLASSES = [
-  "operating_revenue",
-  "operating_expense",
+const NON_PNL_TYPES = [
   "internal_transfer",
-  "settlement",
-  "fee",
-  "refund",
-  "financing",
-  "payroll",
-  "tax",
+  "processor_payout",
+  "processor_fee_settlement",
+  "credit_card_payment",
+  "loan_funding",
+  "loan_principal_payment",
+  "owner_contribution",
   "owner_draw",
-  "uncategorized",
+  "account_verification",
+  "opening_balance",
+  "balance_adjustment",
 ] as const
-type MovementClass = (typeof MOVEMENT_CLASSES)[number]
 
-const PNL_ELIGIBLE_CLASSES = new Set<MovementClass>([
-  "operating_revenue",
-  "operating_expense",
-  "payroll",
-  "tax",
-])
+const PNL_TYPES = [
+  "cash_in_customer",
+  "cash_out_vendor",
+  "cash_out_operating_expense",
+  "cash_out_refund",
+  "cash_in_refund",
+  "cash_in_interest",
+  "cash_out_interest",
+  "cash_out_bank_fee",
+  "cash_out_payroll",
+  "cash_out_tax",
+  "other_operating",
+] as const
 
-type RawMovement = {
-  source: "plaid" | "qbo" | "stripe"
+const FALLBACK_TYPES = [
+  "unknown_inflow",
+  "unknown_outflow",
+  "unknown_transfer_candidate",
+] as const
+
+const ALL_MOVEMENT_TYPES = [...NON_PNL_TYPES, ...PNL_TYPES, ...FALLBACK_TYPES] as const
+type MovementType = (typeof ALL_MOVEMENT_TYPES)[number]
+
+const PNL_ELIGIBLE_SET = new Set<string>(PNL_TYPES as unknown as string[])
+const NON_PNL_SET = new Set<string>(NON_PNL_TYPES as unknown as string[])
+
+function isPnlEligible(t: MovementType): boolean {
+  return PNL_ELIGIBLE_SET.has(t)
+}
+
+// ─── Source Observation (raw, pre-dedup) ────────────────────────────
+
+type SourceObservation = {
+  source: "plaid" | "qbo" | "stripe" | "xero"
   source_type: string
   source_id: string
   date: string
-  amount: number // positive = inflow, negative = outflow (normalized)
+  amount: number       // positive = inflow, negative = outflow (normalized)
   raw_description: string | null
   counterparty: string | null
-  entity_id: string | null
-  entity_type: string | null
-  from_account: string | null
-  to_account: string | null
   plaid_category: string[] | null
+  account_name: string | null
+  account_id: string | null
   metadata: Record<string, unknown>
-  _dedup_key?: string // for cross-source dedup
-  _paired?: boolean   // true if already paired as transfer
 }
 
-type ClassifiedMovement = RawMovement & {
-  movement_class: MovementClass
+// ─── Canonical Movement (post-dedup, pre-classify) ──────────────────
+
+type CanonicalMovement = {
+  direction: "inflow" | "outflow"
+  amount: number       // always positive
+  date: string
+  cash_account_id: string | null
+  cash_account_name: string | null
+  counterparty: string | null
+  counterparty_entity_id: string | null
+  counterparty_entity_type: string | null
+  linked_internal_account_id: string | null
+  raw_description: string | null
+  evidence: SourceObservation[]
+  plaid_category: string[] | null
+  metadata: Record<string, unknown>
+}
+
+type ClassifiedMovement = CanonicalMovement & {
+  movement_type: MovementType
   pnl_eligible: boolean
   confidence: number
+  review_needed: boolean
 }
 
 // ─── Known patterns ────────────────────────────────────────────────
@@ -85,7 +125,7 @@ const TRANSFER_PATTERNS = [
   /xfer|tfr/i,
 ]
 
-const FEE_PATTERNS = [
+const BANK_FEE_PATTERNS = [
   /\bfee\b/i,
   /\bservice charge\b/i,
   /\bmonthly maintenance\b/i,
@@ -106,13 +146,17 @@ const TAX_PATTERNS = [
   /\bfranchise tax\b/i,
 ]
 
-const FINANCING_PATTERNS = [
-  /\bloan (payment|draw|advance|repay)/i,
+const LOAN_PATTERNS = [
+  /\bloan (payment|draw|advance|repay|disbursement|proceed)/i,
   /\bcredit line\b/i,
   /\bline of credit\b/i,
   /\bsba\b/i,
   /\bmortgage\b/i,
-  /\binterest (payment|charge)\b/i,
+]
+
+const INTEREST_PATTERNS = [
+  /\binterest (payment|charge|earned|income|expense)\b/i,
+  /\binterest on\b/i,
 ]
 
 const PAYROLL_PROCESSORS = new Set([
@@ -127,14 +171,52 @@ const REFUND_PATTERNS = [
   /\bchargeback\b/i,
 ]
 
+const CC_PAYMENT_PATTERNS = [
+  /\bcredit card payment\b/i,
+  /\bcard payment\b/i,
+  /\bautomatic payment.*card\b/i,
+  /\bpayment.*chase\b/i,
+  /\bpayment.*amex\b/i,
+  /\bpayment.*citi\b/i,
+  /\bpayment.*capital one\b/i,
+  /\bpayment.*visa\b/i,
+  /\bpayment.*mastercard\b/i,
+]
+
+const OWNER_PATTERNS = [
+  /\bowner.*(draw|distribution|distrib)\b/i,
+  /\bshareholder.*(draw|distribution)\b/i,
+  /\bdividend\b/i,
+  /\bmember.*(draw|distribution)\b/i,
+]
+
+const OWNER_CONTRIBUTION_PATTERNS = [
+  /\bowner.*(contribut|invest|infusion|capital)\b/i,
+  /\bshareholder.*(contribut|invest|capital)\b/i,
+  /\bmember.*(contribut|capital)\b/i,
+  /\bcapital\s+contribut/i,
+]
+
+const VERIFICATION_PATTERNS = [
+  /\b(micro|account)\s*(verification|verify)\b/i,
+  /\bverify.*account\b/i,
+  /\bplaid\b/i,
+  /\b(test|pending)\s+(deposit|credit)\b/i,
+]
+
+const OPENING_BALANCE_PATTERNS = [
+  /\bopening balance\b/i,
+  /\binitial (balance|deposit|funding)\b/i,
+]
+
 function normKey(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "")
 }
 
-// ─── Phase 1: Extract raw movements (amounts normalized) ───────────
+// ─── Step 1: Extract source observations ────────────────────────────
 
-async function extractPlaidMovements(userId: string): Promise<RawMovement[]> {
-  const movements: RawMovement[] = []
+async function extractPlaidObservations(userId: string): Promise<SourceObservation[]> {
+  const obs: SourceObservation[] = []
 
   const { rows: userAccounts } = await query<{ account_id: string; name: string | null }>(
     `SELECT pa.account_id, pa.name FROM plaid_accounts pa
@@ -142,18 +224,11 @@ async function extractPlaidMovements(userId: string): Promise<RawMovement[]> {
      WHERE pi.user_id = $1`,
     [userId]
   )
-  const ownAccountIds = new Set(userAccounts.map((a) => a.account_id))
   const accountNames = new Map(userAccounts.map((a) => [a.account_id, a.name ?? a.account_id]))
 
   const { rows: txns } = await query<{
-    transaction_id: string
-    account_id: string
-    amount: string
-    date: string
-    name: string | null
-    merchant_name: string | null
-    category: string[] | null
-    pending: boolean
+    transaction_id: string; account_id: string; amount: string; date: string
+    name: string | null; merchant_name: string | null; category: string[] | null; pending: boolean
   }>(
     `SELECT pt.transaction_id, pt.account_id, pt.amount, pt.date, pt.name, pt.merchant_name, pt.category, pt.pending
      FROM plaid_transactions pt
@@ -164,33 +239,29 @@ async function extractPlaidMovements(userId: string): Promise<RawMovement[]> {
 
   for (const tx of txns) {
     const desc = tx.merchant_name?.trim() || tx.name?.trim() || null
-    // Plaid: positive amount = money left the account (expense), negative = money in
-    // Normalize: positive = inflow, negative = outflow
+    // Plaid: positive = money left (expense), negative = money in
     const amt = -parseFloat(tx.amount)
-    const acctName = accountNames.get(tx.account_id) ?? tx.account_id
 
-    movements.push({
+    obs.push({
       source: "plaid",
       source_type: "transaction",
       source_id: tx.transaction_id,
       date: tx.date,
       amount: amt,
       raw_description: desc,
-      counterparty: null,
-      entity_id: null,
-      entity_type: null,
-      from_account: amt < 0 ? acctName : null,
-      to_account: amt >= 0 ? acctName : null,
+      counterparty: tx.merchant_name?.trim() || null,
       plaid_category: tx.category,
-      metadata: { account_id: tx.account_id, own_account: ownAccountIds.has(tx.account_id) },
+      account_name: accountNames.get(tx.account_id) ?? tx.account_id,
+      account_id: tx.account_id,
+      metadata: { plaid_name: tx.name },
     })
   }
 
-  return movements
+  return obs
 }
 
-async function extractQboMovements(userId: string): Promise<RawMovement[]> {
-  const movements: RawMovement[] = []
+async function extractQboObservations(userId: string): Promise<SourceObservation[]> {
+  const obs: SourceObservation[] = []
 
   const QBO_TXN_TYPES = [
     "Invoice", "Payment", "Bill", "BillPayment", "Purchase",
@@ -219,7 +290,6 @@ async function extractQboMovements(userId: string): Promise<RawMovement[]> {
     else if (vendRef?.name) counterparty = String(vendRef.name)
     else if (entityRef?.name) counterparty = String(entityRef.name)
 
-    // Normalize: positive = inflow, negative = outflow
     const isInflow = ["Invoice", "Payment", "SalesReceipt", "Deposit", "CreditMemo"].includes(row.entity_type)
     const amount = isInflow ? Math.abs(total) : -Math.abs(total)
 
@@ -234,8 +304,9 @@ async function extractQboMovements(userId: string): Promise<RawMovement[]> {
 
     const docNumber = d.DocNumber ? String(d.DocNumber) : null
     const memo = (d.PrivateNote ?? d.Memo ?? "") as string
+    const bankAcct = (d.AccountRef as Record<string, unknown> | undefined)?.name as string | undefined
 
-    movements.push({
+    obs.push({
       source: "qbo",
       source_type: row.entity_type,
       source_id: row.entity_id,
@@ -243,22 +314,24 @@ async function extractQboMovements(userId: string): Promise<RawMovement[]> {
       amount,
       raw_description: memo || counterparty || row.entity_type,
       counterparty,
-      entity_id: null,
-      entity_type: null,
-      from_account: fromAcct,
-      to_account: toAcct,
       plaid_category: null,
-      metadata: { qbo_type: row.entity_type, doc_number: docNumber },
+      account_name: bankAcct ?? fromAcct ?? toAcct ?? null,
+      account_id: null,
+      metadata: {
+        qbo_type: row.entity_type,
+        doc_number: docNumber,
+        from_account: fromAcct,
+        to_account: toAcct,
+      },
     })
   }
 
-  return movements
+  return obs
 }
 
-async function extractStripeMovements(userId: string): Promise<RawMovement[]> {
-  const movements: RawMovement[] = []
+async function extractStripeObservations(userId: string): Promise<SourceObservation[]> {
+  const obs: SourceObservation[] = []
 
-  // Pre-load Stripe customer ID → name map so we can resolve cus_ IDs
   const { rows: stripeCusts } = await query<{ entity_id: string; data: Record<string, unknown> }>(
     `SELECT entity_id, data FROM stripe_entities WHERE user_id = $1 AND entity_type = 'customer'`,
     [userId]
@@ -294,14 +367,13 @@ async function extractStripeMovements(userId: string): Promise<RawMovement[]> {
       amount = parseFloat(String(d.amount ?? d.amount_paid ?? 0)) / 100
     }
 
-    // Resolve Stripe customer ID (cus_xxx) to actual name
     if (d.customer && typeof d.customer === "string") {
       counterparty = custIdToName.get(d.customer) ?? d.customer
     }
 
     const txnType = (d.type ?? row.entity_type) as string
 
-    movements.push({
+    obs.push({
       source: "stripe",
       source_type: row.entity_type,
       source_id: row.entity_id,
@@ -309,20 +381,18 @@ async function extractStripeMovements(userId: string): Promise<RawMovement[]> {
       amount,
       raw_description: desc,
       counterparty,
-      entity_id: null,
-      entity_type: null,
-      from_account: null,
-      to_account: null,
       plaid_category: null,
+      account_name: "Stripe",
+      account_id: null,
       metadata: { stripe_type: txnType, status: d.status, stripe_customer_id: d.customer ?? null },
     })
   }
 
-  return movements
+  return obs
 }
 
-async function extractXeroMovements(userId: string): Promise<RawMovement[]> {
-  const movements: RawMovement[] = []
+async function extractXeroObservations(userId: string): Promise<SourceObservation[]> {
+  const obs: SourceObservation[] = []
 
   const XERO_TXN_TYPES = ["Invoice", "Bill", "Payment", "CreditNote", "BankTransaction", "ManualJournal"]
 
@@ -335,7 +405,6 @@ async function extractXeroMovements(userId: string): Promise<RawMovement[]> {
 
   for (const row of rows) {
     const d = row.data
-
     const txnDate = (d.Date ?? d.DateString ?? "") as string
     const total = parseFloat(String(d.Total ?? d.SubTotal ?? d.Amount ?? 0))
 
@@ -343,8 +412,6 @@ async function extractXeroMovements(userId: string): Promise<RawMovement[]> {
     const contact = d.Contact as Record<string, unknown> | undefined
     if (contact?.Name) counterparty = String(contact.Name)
 
-    // Normalize: Xero Invoices (ACCREC) = customer owes you = inflow
-    // Bills (ACCPAY) = you owe vendor = outflow
     const xeroType = (d.Type as string) ?? row.entity_type
     const isInflow = row.entity_type === "Invoice"
       ? xeroType === "ACCREC"
@@ -355,44 +422,244 @@ async function extractXeroMovements(userId: string): Promise<RawMovement[]> {
           : false
     const amount = isInflow ? Math.abs(total) : -Math.abs(total)
 
-    // BankTransaction has BankAccount
-    let fromAcct: string | null = null
-    let toAcct: string | null = null
-    if (row.entity_type === "BankTransaction") {
-      const bankAcct = d.BankAccount as Record<string, unknown> | undefined
-      const acctName = bankAcct?.Name ? String(bankAcct.Name) : null
-      if (amount < 0) fromAcct = acctName
-      else toAcct = acctName
-    }
-
+    const bankAcct = d.BankAccount as Record<string, unknown> | undefined
+    const acctName = bankAcct?.Name ? String(bankAcct.Name) : null
     const ref = (d.Reference ?? d.InvoiceNumber ?? "") as string
 
-    movements.push({
-      source: "qbo", // stored under "qbo" source for dedup compatibility; tagged in metadata
-      source_type: `xero_${row.entity_type}`,
+    obs.push({
+      source: "xero",
+      source_type: row.entity_type,
       source_id: `xero_${row.entity_id}`,
       date: txnDate ? txnDate.split("T")[0] : "1970-01-01",
       amount,
       raw_description: ref || counterparty || row.entity_type,
       counterparty,
-      entity_id: null,
-      entity_type: null,
-      from_account: fromAcct,
-      to_account: toAcct,
       plaid_category: null,
-      metadata: { xero_type: row.entity_type, xero_sub_type: xeroType, source_system: "xero" },
+      account_name: acctName,
+      account_id: null,
+      metadata: { xero_type: row.entity_type, xero_sub_type: xeroType },
     })
+  }
+
+  return obs
+}
+
+// ─── Step 2: Deduplicate / coalesce into canonical movements ────────
+
+function coalesceObservations(observations: SourceObservation[]): CanonicalMovement[] {
+  // Build dedup keys: |amount| rounded, date, normalized counterparty prefix
+  type KeyedObs = SourceObservation & { _key: string }
+  const keyed: KeyedObs[] = observations.map((o) => ({
+    ...o,
+    _key: `${Math.abs(o.amount).toFixed(2)}|${o.date}|${normKey(o.counterparty ?? o.raw_description ?? "").slice(0, 12)}`,
+  }))
+
+  // Source priority: qbo/xero > stripe > plaid (accounting systems are richest)
+  const PRIORITY: Record<string, number> = { qbo: 4, xero: 3, stripe: 2, plaid: 1 }
+
+  const groups = new Map<string, KeyedObs[]>()
+  for (const o of keyed) {
+    const list = groups.get(o._key) ?? []
+    list.push(o)
+    groups.set(o._key, list)
+  }
+
+  const movements: CanonicalMovement[] = []
+
+  for (const [, group] of groups) {
+    // Within same source, keep each as separate movement
+    const bySource = new Map<string, KeyedObs[]>()
+    for (const o of group) {
+      const list = bySource.get(o.source) ?? []
+      list.push(o)
+      bySource.set(o.source, list)
+    }
+
+    if (bySource.size === 1) {
+      // All from same source — each is its own movement
+      for (const o of group) {
+        movements.push(obsToCanonical([o]))
+      }
+      continue
+    }
+
+    // Cross-source group: pair by matching sign, keep primary, link rest as evidence
+    // Sort all by priority
+    group.sort((a, b) => (PRIORITY[b.source] ?? 0) - (PRIORITY[a.source] ?? 0))
+
+    const used = new Set<number>()
+    for (let i = 0; i < group.length; i++) {
+      if (used.has(i)) continue
+      const primary = group[i]
+      const evidenceGroup = [primary]
+      used.add(i)
+
+      // Find cross-source matches (same sign or opposite for transfer pairing)
+      for (let j = i + 1; j < group.length; j++) {
+        if (used.has(j)) continue
+        const candidate = group[j]
+        if (candidate.source === primary.source) continue
+        // Same direction match = duplicate observation of same event
+        if (Math.sign(candidate.amount) === Math.sign(primary.amount)) {
+          evidenceGroup.push(candidate)
+          used.add(j)
+        }
+      }
+
+      movements.push(obsToCanonical(evidenceGroup))
+    }
   }
 
   return movements
 }
 
-// ─── Phase 2: Resolve counterparty → identity role ─────────────────
+function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
+  // Primary = first (highest priority after sort)
+  const primary = evidence[0]
+  const amt = primary.amount
+  const direction: "inflow" | "outflow" = amt >= 0 ? "inflow" : "outflow"
 
-function resolveIdentity(
-  m: RawMovement,
-  ctx: MovementIdentityContext
-): MovementIdentityEntry | null {
+  // Merge counterparty: prefer the one with an actual name
+  let counterparty = primary.counterparty
+  if (!counterparty) {
+    for (const e of evidence) {
+      if (e.counterparty) { counterparty = e.counterparty; break }
+    }
+  }
+
+  // Merge account info
+  let cashAcct = primary.account_name
+  let cashAcctId = primary.account_id
+  if (!cashAcct) {
+    for (const e of evidence) {
+      if (e.account_name) { cashAcct = e.account_name; cashAcctId = e.account_id; break }
+    }
+  }
+
+  // Merge plaid categories
+  let plaidCat: string[] | null = null
+  for (const e of evidence) {
+    if (e.plaid_category && e.plaid_category.length > 0) { plaidCat = e.plaid_category; break }
+  }
+
+  // Merge metadata
+  const mergedMeta: Record<string, unknown> = {}
+  for (const e of evidence) {
+    Object.assign(mergedMeta, e.metadata)
+  }
+  if (evidence.length > 1) {
+    mergedMeta.dedup_sources = evidence.map((e) => `${e.source}:${e.source_id}`)
+  }
+
+  return {
+    direction,
+    amount: Math.abs(amt),
+    date: primary.date,
+    cash_account_id: cashAcctId,
+    cash_account_name: cashAcct,
+    counterparty,
+    counterparty_entity_id: null,
+    counterparty_entity_type: null,
+    linked_internal_account_id: null,
+    raw_description: primary.raw_description,
+    evidence,
+    plaid_category: plaidCat,
+    metadata: mergedMeta,
+  }
+}
+
+// ─── Step 2b: Plaid cross-account transfer pairing ──────────────────
+
+function pairPlaidTransfers(
+  movements: CanonicalMovement[],
+  ownAccountIds: Set<string>
+): CanonicalMovement[] {
+  // Find Plaid-only canonical movements with single evidence
+  const plaidSingles = movements.filter(
+    (m) => m.evidence.length === 1 && m.evidence[0].source === "plaid"
+  )
+
+  // Index by |amount|
+  const byAmount = new Map<string, CanonicalMovement[]>()
+  for (const m of plaidSingles) {
+    const key = m.amount.toFixed(2)
+    const list = byAmount.get(key) ?? []
+    list.push(m)
+    byAmount.set(key, list)
+  }
+
+  const pairedSet = new Set<CanonicalMovement>()
+
+  for (const [, group] of byAmount) {
+    if (group.length < 2) continue
+
+    for (let i = 0; i < group.length; i++) {
+      if (pairedSet.has(group[i])) continue
+      for (let j = i + 1; j < group.length; j++) {
+        if (pairedSet.has(group[j])) continue
+
+        const a = group[i]
+        const b = group[j]
+
+        if (a.direction === b.direction) continue
+
+        const aAcct = a.evidence[0].account_id
+        const bAcct = b.evidence[0].account_id
+        if (!aAcct || !bAcct || aAcct === bAcct) continue
+        if (!ownAccountIds.has(aAcct) || !ownAccountIds.has(bAcct)) continue
+
+        // Date within 1 day
+        const da = new Date(a.date).getTime()
+        const db = new Date(b.date).getTime()
+        if (Math.abs(da - db) > 86400000) continue
+
+        // Merge into single internal_transfer canonical movement
+        const outflow = a.direction === "outflow" ? a : b
+        const inflow = a.direction === "inflow" ? a : b
+
+        outflow.evidence = [...outflow.evidence, ...inflow.evidence]
+        outflow.linked_internal_account_id = inflow.cash_account_name ?? inflow.cash_account_id
+        outflow.metadata = {
+          ...outflow.metadata,
+          transfer_type: "cross_account",
+          paired_account: inflow.cash_account_name,
+        }
+
+        pairedSet.add(inflow)
+        break
+      }
+    }
+  }
+
+  return movements.filter((m) => !pairedSet.has(m))
+}
+
+// ─── Step 3: Resolve accounts ───────────────────────────────────────
+
+function resolveAccounts(movements: CanonicalMovement[], ctx: MovementIdentityContext): void {
+  for (const m of movements) {
+    // If we have a Plaid account_id, check if it's one of user's own accounts
+    const acctId = m.cash_account_id
+    if (acctId) {
+      const acctEntry = ctx.get(`__plaid_account__${acctId}`)
+      if (acctEntry) {
+        m.cash_account_name = m.cash_account_name ?? acctEntry.canonical_name
+      }
+    }
+
+    // If QBO Transfer, both sides are internal accounts
+    const fromAcct = m.metadata.from_account as string | undefined
+    const toAcct = m.metadata.to_account as string | undefined
+    if (fromAcct && toAcct) {
+      m.cash_account_name = m.cash_account_name ?? fromAcct
+      m.linked_internal_account_id = m.linked_internal_account_id ?? toAcct
+    }
+  }
+}
+
+// ─── Step 4: Resolve counterparty identity ──────────────────────────
+
+function resolveCounterpartyIdentity(m: CanonicalMovement, ctx: MovementIdentityContext): MovementIdentityEntry | null {
   const candidates: string[] = []
   if (m.counterparty) candidates.push(m.counterparty)
   if (m.raw_description && m.raw_description !== m.counterparty) candidates.push(m.raw_description)
@@ -401,13 +668,11 @@ function resolveIdentity(
     const key = normKey(c)
     if (key.length < 2) continue
 
-    // Exact match
     const exact = ctx.get(key)
     if (exact) return exact
 
-    // Substring match (both directions, min 4 chars)
     for (const [k, entry] of ctx) {
-      if (k.startsWith("__")) continue // skip special keys
+      if (k.startsWith("__")) continue
       if (k.length >= 4 && key.length >= 4 && (k.includes(key) || key.includes(k))) {
         return entry
       }
@@ -417,255 +682,253 @@ function resolveIdentity(
   return null
 }
 
-function resolveOwnAccount(
-  accountId: string,
-  ctx: MovementIdentityContext
-): MovementIdentityEntry | null {
-  return ctx.get(`__plaid_account__${accountId}`) ?? null
-}
+// ─── Step 5: Classify non-P&L movements ─────────────────────────────
 
-// ─── Phase 3: Plaid cross-account transfer pairing ─────────────────
-
-function pairPlaidTransfers(movements: RawMovement[]): void {
-  const plaidMvts = movements.filter(
-    (m) => m.source === "plaid" && !m._paired
-  )
-
-  // Index by |amount| rounded to cents and date
-  const byAmountDate = new Map<string, RawMovement[]>()
-  for (const m of plaidMvts) {
-    const absAmt = Math.abs(m.amount).toFixed(2)
-    const key = `${absAmt}`
-    const list = byAmountDate.get(key) ?? []
-    list.push(m)
-    byAmountDate.set(key, list)
-  }
-
-  for (const [, group] of byAmountDate) {
-    if (group.length < 2) continue
-
-    // Look for opposite-sign pairs on the same date (± 1 day), different accounts
-    for (let i = 0; i < group.length; i++) {
-      if (group[i]._paired) continue
-      for (let j = i + 1; j < group.length; j++) {
-        if (group[j]._paired) continue
-
-        const a = group[i]
-        const b = group[j]
-
-        // Opposite signs
-        if (Math.sign(a.amount) === Math.sign(b.amount)) continue
-
-        // Different accounts
-        const aAcct = a.metadata.account_id as string
-        const bAcct = b.metadata.account_id as string
-        if (aAcct === bAcct) continue
-
-        // Both own accounts
-        if (!a.metadata.own_account || !b.metadata.own_account) continue
-
-        // Date within 1 day
-        const da = new Date(a.date).getTime()
-        const db = new Date(b.date).getTime()
-        if (Math.abs(da - db) > 86400000) continue
-
-        // Pair them: outflow side becomes the canonical movement, inflow is marked paired
-        const outflow = a.amount < 0 ? a : b
-        const inflow = a.amount < 0 ? b : a
-
-        outflow.from_account = outflow.from_account ?? (outflow.metadata.account_id as string)
-        outflow.to_account = inflow.to_account ?? (inflow.metadata.account_id as string)
-        outflow.metadata = {
-          ...outflow.metadata,
-          paired_transaction_id: inflow.source_id,
-          transfer_type: "cross_account",
-        }
-
-        inflow._paired = true
-        break
-      }
-    }
-  }
-}
-
-// ─── Phase 4: Cross-source dedup ───────────────────────────────────
-
-function dedupAcrossSources(movements: RawMovement[]): RawMovement[] {
-  // Build dedup keys: |amount| rounded, date, normalized counterparty prefix
-  for (const m of movements) {
-    const absAmt = Math.abs(m.amount).toFixed(2)
-    const cpKey = normKey(m.counterparty ?? m.raw_description ?? "").slice(0, 12)
-    m._dedup_key = `${absAmt}|${m.date}|${cpKey}`
-  }
-
-  // Source priority: qbo > stripe > plaid (QBO is richest)
-  const PRIORITY: Record<string, number> = { qbo: 3, stripe: 2, plaid: 1 }
-
-  const groups = new Map<string, RawMovement[]>()
-  for (const m of movements) {
-    if (m._paired) continue // skip paired inflow sides
-    const key = m._dedup_key!
-    const list = groups.get(key) ?? []
-    list.push(m)
-    groups.set(key, list)
-  }
-
-  const result: RawMovement[] = []
-  for (const [, group] of groups) {
-    if (group.length === 1) {
-      result.push(group[0])
-      continue
-    }
-
-    // Check if this group has movements from different sources with matching amounts
-    const sources = new Set(group.map((m) => m.source))
-    if (sources.size === 1) {
-      // Same source, keep all (they're different transactions)
-      result.push(...group)
-      continue
-    }
-
-    // Multiple sources — keep the highest-priority one, link others in metadata
-    group.sort((a, b) => (PRIORITY[b.source] ?? 0) - (PRIORITY[a.source] ?? 0))
-    const primary = group[0]
-    const duplicateIds = group.slice(1).map((m) => `${m.source}:${m.source_id}`)
-    primary.metadata = { ...primary.metadata, dedup_linked: duplicateIds }
-
-    // Merge counterparty from richer source if primary is missing it
-    if (!primary.counterparty) {
-      for (const m of group) {
-        if (m.counterparty) { primary.counterparty = m.counterparty; break }
-      }
-    }
-
-    result.push(primary)
-  }
-
-  return result
-}
-
-// ─── Phase 5: Three-tier classification ────────────────────────────
-
-const ROLE_TO_CLASS: Record<string, MovementClass> = {
-  processor: "settlement",
-  employee: "payroll",
-  tax_authority: "tax",
-  owner: "owner_draw",
-  lender: "financing",
-  internal: "internal_transfer",
-  bank_account: "internal_transfer",
-  vendor: "operating_expense",
-  customer: "operating_revenue",
-}
-
-function classifyMovement(
-  m: RawMovement,
-  identity: MovementIdentityEntry | null
-): { cls: MovementClass; confidence: number } | null {
+function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | null): { type: MovementType; confidence: number } | null {
   const desc = (m.raw_description ?? "").toLowerCase()
-  const cats = m.plaid_category ?? []
-  const catStr = cats.join(" ").toLowerCase()
+  const catStr = (m.plaid_category ?? []).join(" ").toLowerCase()
+  const primaryObs = m.evidence[0]
 
-  // ── Tier 1: Structural certainties (source type is definitional) ──
-
-  if (m.source === "qbo" && m.source_type === "Transfer") {
-    return { cls: "internal_transfer", confidence: 0.95 }
-  }
-  if (m.source === "qbo" && ["RefundReceipt", "CreditMemo", "VendorCredit"].includes(m.source_type)) {
-    return { cls: "refund", confidence: 0.9 }
-  }
-  // Xero CreditNote
-  if (m.source_type === "xero_CreditNote") {
-    return { cls: "refund", confidence: 0.9 }
-  }
-  if (m.source === "stripe" && m.source_type === "payout") {
-    return { cls: "settlement", confidence: 0.95 }
-  }
-  if (m.source === "stripe" && m.source_type === "balance_transaction") {
-    const sType = (m.metadata.stripe_type ?? "") as string
-    if (sType === "stripe_fee" || sType === "fee") return { cls: "fee", confidence: 0.95 }
-    if (sType === "refund") return { cls: "refund", confidence: 0.95 }
-    if (sType === "payout") return { cls: "settlement", confidence: 0.9 }
-  }
-  // Already paired as cross-account transfer
+  // ── Structural: cross-account transfer (already paired) ──
   if (m.metadata.transfer_type === "cross_account") {
-    return { cls: "internal_transfer", confidence: 0.95 }
+    return { type: "internal_transfer", confidence: 0.95 }
   }
 
-  // ── Tier 2: Identity-resolved (role from identity context) ────────
+  // ── Structural: QBO Transfer entity ──
+  if (primaryObs.source === "qbo" && primaryObs.source_type === "Transfer") {
+    return { type: "internal_transfer", confidence: 0.95 }
+  }
 
-  if (identity && identity.confidence >= 0.6) {
-    const cls = ROLE_TO_CLASS[identity.role]
-    if (cls) {
-      return { cls, confidence: Math.min(0.92, identity.confidence) }
+  // ── Structural: Stripe payout (processor → bank) ──
+  if (primaryObs.source === "stripe" && primaryObs.source_type === "payout") {
+    return { type: "processor_payout", confidence: 0.95 }
+  }
+
+  // ── Structural: Stripe balance_transaction sub-types ──
+  if (primaryObs.source === "stripe" && primaryObs.source_type === "balance_transaction") {
+    const sType = (m.metadata.stripe_type ?? "") as string
+    if (sType === "stripe_fee" || sType === "fee") return { type: "processor_fee_settlement", confidence: 0.95 }
+    if (sType === "payout") return { type: "processor_payout", confidence: 0.9 }
+  }
+
+  // ── Verification deposits (tiny amounts ≤ $1, verification description) ──
+  if (m.amount <= 1.0 && VERIFICATION_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "account_verification", confidence: 0.9 }
+  }
+  if (m.amount <= 0.50 && catStr.includes("bank fees")) {
+    return { type: "account_verification", confidence: 0.85 }
+  }
+
+  // ── Opening balance ──
+  if (OPENING_BALANCE_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "opening_balance", confidence: 0.85 }
+  }
+
+  // ── Credit card payments ──
+  if (CC_PAYMENT_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "credit_card_payment", confidence: 0.85 }
+  }
+  if (identity?.role === "processor" && CC_PAYMENT_PATTERNS.some((p) => p.test(m.counterparty ?? ""))) {
+    return { type: "credit_card_payment", confidence: 0.85 }
+  }
+
+  // ── Owner draw / contribution ──
+  if (OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "owner_contribution", confidence: 0.85 }
+  }
+  if (OWNER_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "owner_draw", confidence: 0.85 }
+  }
+  if (identity?.role === "owner") {
+    return m.direction === "inflow"
+      ? { type: "owner_contribution", confidence: Math.min(0.88, identity.confidence) }
+      : { type: "owner_draw", confidence: Math.min(0.88, identity.confidence) }
+  }
+
+  // ── Loan / financing ──
+  if (LOAN_PATTERNS.some((p) => p.test(desc))) {
+    return m.direction === "inflow"
+      ? { type: "loan_funding", confidence: 0.8 }
+      : { type: "loan_principal_payment", confidence: 0.8 }
+  }
+  if (catStr.includes("loan")) {
+    return m.direction === "inflow"
+      ? { type: "loan_funding", confidence: 0.75 }
+      : { type: "loan_principal_payment", confidence: 0.75 }
+  }
+  if (identity?.role === "lender") {
+    return m.direction === "inflow"
+      ? { type: "loan_funding", confidence: Math.min(0.85, identity.confidence) }
+      : { type: "loan_principal_payment", confidence: Math.min(0.85, identity.confidence) }
+  }
+
+  // ── Transfer patterns (bank description) ──
+  if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
+    // If identity says internal or bank_account → internal_transfer
+    if (identity && (identity.role === "internal" || identity.role === "bank_account" || identity.is_own_account)) {
+      return { type: "internal_transfer", confidence: 0.85 }
+    }
+    // Plaid transfer category
+    if (catStr.includes("transfer") && !catStr.includes("wire transfer")) {
+      return { type: "internal_transfer", confidence: 0.75 }
     }
   }
 
-  // ── Tier 3: Heuristics (patterns, categories, source-type fallback)
-
-  // Plaid category
-  if (catStr.includes("bank fees")) return { cls: "fee", confidence: 0.85 }
-  if (catStr.includes("payroll")) return { cls: "payroll", confidence: 0.85 }
-  if (catStr.includes("tax")) return { cls: "tax", confidence: 0.8 }
-  if (catStr.includes("transfer") && !catStr.includes("wire transfer")) return { cls: "internal_transfer", confidence: 0.75 }
-  if (catStr.includes("loan")) return { cls: "financing", confidence: 0.8 }
-
-  // Description patterns
-  if (TRANSFER_PATTERNS.some((p) => p.test(desc))) return { cls: "internal_transfer", confidence: 0.8 }
-  if (FEE_PATTERNS.some((p) => p.test(desc))) return { cls: "fee", confidence: 0.8 }
-  if (TAX_PATTERNS.some((p) => p.test(desc))) return { cls: "tax", confidence: 0.8 }
-  if (FINANCING_PATTERNS.some((p) => p.test(desc))) return { cls: "financing", confidence: 0.75 }
-  if (REFUND_PATTERNS.some((p) => p.test(desc))) return { cls: "refund", confidence: 0.75 }
-
-  // Payroll processor name match
-  const cpNorm = normKey(m.counterparty ?? "")
-  for (const pp of PAYROLL_PROCESSORS) {
-    if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) return { cls: "payroll", confidence: 0.85 }
-  }
-
-  // QBO type fallback
-  if (m.source === "qbo") {
-    if (["Invoice", "Payment", "SalesReceipt", "Deposit"].includes(m.source_type)) {
-      return { cls: "operating_revenue", confidence: 0.8 }
+  // ── Identity: processor → settlement ──
+  if (identity?.role === "processor" && identity.confidence >= 0.6) {
+    if (m.direction === "inflow") {
+      return { type: "processor_payout", confidence: Math.min(0.88, identity.confidence) }
     }
-    if (["Bill", "BillPayment", "Purchase"].includes(m.source_type)) {
-      return { cls: "operating_expense", confidence: 0.8 }
-    }
+    return { type: "processor_fee_settlement", confidence: Math.min(0.85, identity.confidence) }
   }
 
-  // Xero type fallback
-  const xeroSubType = (m.metadata.xero_sub_type ?? "") as string
-  if (m.source_type === "xero_Invoice") {
-    return xeroSubType === "ACCPAY"
-      ? { cls: "operating_expense", confidence: 0.8 }
-      : { cls: "operating_revenue", confidence: 0.8 }
-  }
-  if (m.source_type === "xero_Bill") return { cls: "operating_expense", confidence: 0.8 }
-  if (m.source_type === "xero_Payment") {
-    return xeroSubType === "ACCPAY" || m.amount < 0
-      ? { cls: "operating_expense", confidence: 0.75 }
-      : { cls: "operating_revenue", confidence: 0.75 }
-  }
-  if (m.source_type === "xero_BankTransaction") {
-    return m.amount >= 0
-      ? { cls: "operating_revenue", confidence: 0.7 }
-      : { cls: "operating_expense", confidence: 0.7 }
-  }
-
-  // Stripe type fallback
-  if (m.source === "stripe" && (m.source_type === "payment_intent" || m.source_type === "invoice")) {
-    return { cls: "operating_revenue", confidence: 0.75 }
+  // ── Identity: internal / bank_account → internal_transfer ──
+  if (identity && (identity.role === "internal" || identity.role === "bank_account") && identity.confidence >= 0.6) {
+    return { type: "internal_transfer", confidence: Math.min(0.88, identity.confidence) }
   }
 
   return null
 }
 
-// ─── Phase 6: LLM fallback (with identity role in prompt) ──────────
+// ─── Step 6: Classify operating cash movements ──────────────────────
 
-type LlmClassResult = { source_id: string; movement_class: string; confidence: number }
+function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry | null): { type: MovementType; confidence: number } | null {
+  const desc = (m.raw_description ?? "").toLowerCase()
+  const catStr = (m.plaid_category ?? []).join(" ").toLowerCase()
+  const primaryObs = m.evidence[0]
+
+  // ── Bank fees ──
+  if (BANK_FEE_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "cash_out_bank_fee", confidence: 0.85 }
+  }
+  if (catStr.includes("bank fees")) {
+    return { type: "cash_out_bank_fee", confidence: 0.85 }
+  }
+
+  // ── Payroll ──
+  if (catStr.includes("payroll")) {
+    return { type: "cash_out_payroll", confidence: 0.85 }
+  }
+  const cpNorm = normKey(m.counterparty ?? "")
+  for (const pp of PAYROLL_PROCESSORS) {
+    if (cpNorm.includes(pp.replace(/[^a-z0-9]/g, ""))) return { type: "cash_out_payroll", confidence: 0.85 }
+  }
+  if (identity?.role === "employee" && identity.confidence >= 0.6) {
+    return { type: "cash_out_payroll", confidence: Math.min(0.88, identity.confidence) }
+  }
+
+  // ── Tax ──
+  if (TAX_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "cash_out_tax", confidence: 0.85 }
+  }
+  if (catStr.includes("tax")) {
+    return { type: "cash_out_tax", confidence: 0.8 }
+  }
+  if (identity?.role === "tax_authority" && identity.confidence >= 0.6) {
+    return { type: "cash_out_tax", confidence: Math.min(0.88, identity.confidence) }
+  }
+
+  // ── Interest ──
+  if (INTEREST_PATTERNS.some((p) => p.test(desc))) {
+    return m.direction === "inflow"
+      ? { type: "cash_in_interest", confidence: 0.8 }
+      : { type: "cash_out_interest", confidence: 0.8 }
+  }
+
+  // ── Refunds ──
+  if (REFUND_PATTERNS.some((p) => p.test(desc))) {
+    return m.direction === "inflow"
+      ? { type: "cash_in_refund", confidence: 0.8 }
+      : { type: "cash_out_refund", confidence: 0.8 }
+  }
+  if (primaryObs.source === "qbo" && ["RefundReceipt", "CreditMemo", "VendorCredit"].includes(primaryObs.source_type)) {
+    return { type: "cash_out_refund", confidence: 0.9 }
+  }
+  if (primaryObs.source === "xero" && primaryObs.source_type === "CreditNote") {
+    return { type: "cash_out_refund", confidence: 0.9 }
+  }
+  if (primaryObs.source === "stripe" && primaryObs.source_type === "balance_transaction") {
+    const sType = (m.metadata.stripe_type ?? "") as string
+    if (sType === "refund") {
+      return { type: "cash_out_refund", confidence: 0.9 }
+    }
+  }
+
+  // ── Identity: customer → cash_in_customer ──
+  if (identity?.role === "customer" && identity.confidence >= 0.6) {
+    return { type: "cash_in_customer", confidence: Math.min(0.88, identity.confidence) }
+  }
+
+  // ── Identity: vendor → cash_out_vendor ──
+  if (identity?.role === "vendor" && identity.confidence >= 0.6) {
+    return { type: "cash_out_vendor", confidence: Math.min(0.88, identity.confidence) }
+  }
+
+  // ── QBO type fallback ──
+  if (primaryObs.source === "qbo") {
+    if (["Invoice", "Payment", "SalesReceipt", "Deposit"].includes(primaryObs.source_type)) {
+      return { type: "cash_in_customer", confidence: 0.75 }
+    }
+    if (["Bill", "BillPayment", "Purchase"].includes(primaryObs.source_type)) {
+      return { type: "cash_out_vendor", confidence: 0.75 }
+    }
+  }
+
+  // ── Xero type fallback ──
+  if (primaryObs.source === "xero") {
+    const xeroSubType = (m.metadata.xero_sub_type ?? "") as string
+    if (primaryObs.source_type === "Invoice") {
+      return xeroSubType === "ACCPAY"
+        ? { type: "cash_out_vendor", confidence: 0.75 }
+        : { type: "cash_in_customer", confidence: 0.75 }
+    }
+    if (primaryObs.source_type === "Bill") return { type: "cash_out_vendor", confidence: 0.75 }
+    if (primaryObs.source_type === "Payment") {
+      return m.direction === "outflow"
+        ? { type: "cash_out_vendor", confidence: 0.7 }
+        : { type: "cash_in_customer", confidence: 0.7 }
+    }
+    if (primaryObs.source_type === "BankTransaction") {
+      return m.direction === "inflow"
+        ? { type: "cash_in_customer", confidence: 0.65 }
+        : { type: "cash_out_operating_expense", confidence: 0.65 }
+    }
+  }
+
+  // ── Stripe type fallback ──
+  if (primaryObs.source === "stripe" && (primaryObs.source_type === "payment_intent" || primaryObs.source_type === "invoice")) {
+    return { type: "cash_in_customer", confidence: 0.75 }
+  }
+
+  // ── Plaid category-based operating heuristics ──
+  if (m.direction === "inflow" && catStr.includes("deposit")) {
+    return { type: "cash_in_customer", confidence: 0.6 }
+  }
+
+  return null
+}
+
+// ─── Step 7: Fallback ───────────────────────────────────────────────
+
+function classifyFallback(m: CanonicalMovement): { type: MovementType; confidence: number } {
+  const desc = (m.raw_description ?? "").toLowerCase()
+
+  // If it looks like a transfer but we couldn't confirm
+  if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "unknown_transfer_candidate", confidence: 0.3 }
+  }
+
+  return m.direction === "inflow"
+    ? { type: "unknown_inflow", confidence: 0.3 }
+    : { type: "unknown_outflow", confidence: 0.3 }
+}
+
+// ─── Step 8: LLM assist ────────────────────────────────────────────
+
+type LlmClassResult = { index: number; movement_type: string; confidence: number }
 
 async function llmClassifyBatch(
-  unclassified: Array<{ movement: RawMovement; identity: MovementIdentityEntry | null }>
+  unclassified: Array<{ movement: CanonicalMovement; identity: MovementIdentityEntry | null }>
 ): Promise<LlmClassResult[]> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey || unclassified.length === 0) return []
@@ -676,34 +939,47 @@ async function llmClassifyBatch(
   for (let i = 0; i < unclassified.length; i += batchSize) {
     const batch = unclassified.slice(i, i + batchSize)
     const numbered = batch.map(({ movement: m, identity }, idx) => {
-      const dir = m.amount >= 0 ? "INFLOW" : "OUTFLOW"
       const cp = m.counterparty ?? "unknown"
       const roleTag = identity ? ` (${identity.role})` : ""
-      return `${idx + 1}. [${dir}] $${Math.abs(m.amount).toFixed(2)} | ${m.raw_description ?? "(no description)"} | counterparty: ${cp}${roleTag} | source: ${m.source}/${m.source_type} | date: ${m.date}`
+      const src = m.evidence.map((e) => `${e.source}/${e.source_type}`).join(", ")
+      return `${idx + 1}. [${m.direction.toUpperCase()}] $${m.amount.toFixed(2)} | ${m.raw_description ?? "(no description)"} | counterparty: ${cp}${roleTag} | source: ${src} | date: ${m.date} | account: ${m.cash_account_name ?? "unknown"}`
     }).join("\n")
 
-    const systemPrompt = `You classify financial movements for a small business. For each record, determine the movement_class.
+    const typeList = ALL_MOVEMENT_TYPES.join(", ")
 
-Classes:
-- operating_revenue: customer payments, sales, invoice receipts
-- operating_expense: vendor payments, purchases, services, supplies
-- internal_transfer: own-account-to-own-account movements
-- settlement: processor payouts (Shopify/Stripe/PayPal → bank)
-- fee: bank fees, processor fees, service charges
-- refund: returned payments, credit memos, chargebacks
-- financing: loan draws/repayments, credit line activity
-- payroll: employee compensation, payroll processor debits
-- tax: IRS, state tax, sales tax remittance
-- owner_draw: owner distributions, personal transfers
-- uncategorized: cannot determine
+    const systemPrompt = `You classify cash movements for a small business. For each record, determine the movement_type.
 
-The counterparty role in parentheses (if present) comes from the identity graph and is a strong signal.
+Types: ${typeList}
 
-Return a JSON array. Each element:
-- "index": the 1-based number
-- "movement_class": one of the classes above
-- "confidence": 0.0-1.0
+Non-P&L types (not operational cash activity):
+- internal_transfer: own-account-to-own-account
+- processor_payout: Shopify/Stripe/PayPal → bank
+- processor_fee_settlement: processor fees, platform charges
+- credit_card_payment: CC bill payments
+- loan_funding: loan draws, credit line advances
+- loan_principal_payment: loan repayments
+- owner_contribution: owner capital infusion
+- owner_draw: owner distributions, personal
+- account_verification: micro-deposits, test transactions
+- opening_balance: initial balance
+- balance_adjustment: reconciliation adjustments
 
+P&L types (operational):
+- cash_in_customer: customer payments, sales receipts
+- cash_out_vendor: vendor payments, supplier costs
+- cash_out_operating_expense: general operating expenses
+- cash_out_refund / cash_in_refund: refunds, chargebacks
+- cash_in_interest / cash_out_interest: interest
+- cash_out_bank_fee: bank service fees
+- cash_out_payroll: employee compensation
+- cash_out_tax: tax payments
+
+Fallback:
+- unknown_inflow / unknown_outflow / unknown_transfer_candidate
+
+The counterparty role in parentheses (if present) is a strong signal from the identity graph.
+
+Return a JSON array. Each element: {"index": 1, "movement_type": "...", "confidence": 0.0-1.0}
 Output ONLY valid JSON array. No markdown.`
 
     try {
@@ -714,7 +990,7 @@ Output ONLY valid JSON array. No markdown.`
           model: OPENAI_MODEL,
           messages: [
             { role: "system", content: systemPrompt },
-            { role: "user", content: `Classify these movements:\n${numbered}` },
+            { role: "user", content: `Classify these cash movements:\n${numbered}` },
           ],
           max_tokens: 2048,
           temperature: 0.05,
@@ -729,15 +1005,15 @@ Output ONLY valid JSON array. No markdown.`
       const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
       const content = data.choices?.[0]?.message?.content ?? ""
       const jsonStr = content.replace(/```json?\s*/gi, "").replace(/```/g, "").trim()
-      const parsed = JSON.parse(jsonStr) as Array<{ index: number; movement_class: string; confidence: number }>
+      const parsed = JSON.parse(jsonStr) as Array<{ index: number; movement_type: string; confidence: number }>
 
       if (Array.isArray(parsed)) {
         for (const p of parsed) {
-          const idx = p.index - 1
-          if (idx >= 0 && idx < batch.length) {
+          const validType = (ALL_MOVEMENT_TYPES as readonly string[]).includes(p.movement_type) ? p.movement_type : null
+          if (validType) {
             results.push({
-              source_id: batch[idx].movement.source_id,
-              movement_class: MOVEMENT_CLASSES.includes(p.movement_class as MovementClass) ? p.movement_class : "uncategorized",
+              index: (i + p.index - 1),
+              movement_type: validType,
               confidence: Math.min(1, Math.max(0, p.confidence ?? 0.5)),
             })
           }
@@ -755,46 +1031,47 @@ Output ONLY valid JSON array. No markdown.`
 // ─── Main classify function ────────────────────────────────────────
 
 export async function classifyMovements(userId: string): Promise<{
-  total: number
-  afterDedup: number
-  ruleClassified: number
-  llmClassified: number
-  identityResolved: number
-  transfersPaired: number
-  pnlEligible: number
-  byClass: Record<string, number>
+  total_observations: number
+  canonical_movements: number
+  rule_classified: number
+  llm_classified: number
+  identity_resolved: number
+  transfers_paired: number
+  pnl_eligible: number
+  review_needed: number
+  by_type: Record<string, number>
 }> {
   await ensureMovementsSchema()
 
   const stats = {
-    total: 0, afterDedup: 0, ruleClassified: 0, llmClassified: 0,
-    identityResolved: 0, transfersPaired: 0, pnlEligible: 0,
-    byClass: {} as Record<string, number>,
+    total_observations: 0, canonical_movements: 0, rule_classified: 0, llm_classified: 0,
+    identity_resolved: 0, transfers_paired: 0, pnl_eligible: 0, review_needed: 0,
+    by_type: {} as Record<string, number>,
   }
 
   log("movements.classify.start", { userId }, "movements")
 
-  // Step 1: Extract raw movements from all sources
-  const [plaidMvts, qboMvts, stripeMvts, xeroMvts] = await Promise.all([
-    extractPlaidMovements(userId),
-    extractQboMovements(userId),
-    extractStripeMovements(userId),
-    extractXeroMovements(userId),
+  // Step 1: Extract source observations
+  const [plaidObs, qboObs, stripeObs, xeroObs] = await Promise.all([
+    extractPlaidObservations(userId),
+    extractQboObservations(userId),
+    extractStripeObservations(userId),
+    extractXeroObservations(userId),
   ])
 
-  const allRaw = [...plaidMvts, ...qboMvts, ...stripeMvts, ...xeroMvts]
-  stats.total = allRaw.length
+  const allObs = [...plaidObs, ...qboObs, ...stripeObs, ...xeroObs]
+  stats.total_observations = allObs.length
 
   log("movements.classify.extracted", {
-    userId, plaid: plaidMvts.length, qbo: qboMvts.length, stripe: stripeMvts.length, xero: xeroMvts.length, total: allRaw.length,
+    userId, plaid: plaidObs.length, qbo: qboObs.length, stripe: stripeObs.length, xero: xeroObs.length, total: allObs.length,
   }, "movements")
 
-  if (allRaw.length === 0) {
+  if (allObs.length === 0) {
     log("movements.classify.done", { userId, ...stats }, "movements")
     return stats
   }
 
-  // Step 2: Build identity context (auto-seed if empty)
+  // Step 2a: Build identity context
   let identityCtx = await buildMovementIdentityContext(userId)
   if (identityCtx.size === 0) {
     log("movements.classify.identity_empty_seeding", { userId }, "movements")
@@ -802,81 +1079,119 @@ export async function classifyMovements(userId: string): Promise<{
     identityCtx = await buildMovementIdentityContext(userId)
   }
 
-  // Step 3: Resolve counterparty → identity for each movement
-  for (const m of allRaw) {
-    const entry = resolveIdentity(m, identityCtx)
+  // Step 2b: Coalesce cross-source observations into canonical movements
+  let movements = coalesceObservations(allObs)
+
+  // Get own Plaid account IDs for transfer pairing
+  const { rows: ownAccts } = await query<{ account_id: string }>(
+    `SELECT pa.account_id FROM plaid_accounts pa
+     JOIN plaid_items pi ON pi.item_id = pa.item_id
+     WHERE pi.user_id = $1`,
+    [userId]
+  )
+  const ownAccountIds = new Set(ownAccts.map((a) => a.account_id))
+
+  // Step 2c: Pair Plaid cross-account transfers
+  movements = pairPlaidTransfers(movements, ownAccountIds)
+  stats.transfers_paired = movements.filter((m) => m.metadata.transfer_type === "cross_account").length
+
+  stats.canonical_movements = movements.length
+
+  // Step 3: Resolve accounts
+  resolveAccounts(movements, identityCtx)
+
+  // Step 4: Resolve counterparty identity
+  for (const m of movements) {
+    const entry = resolveCounterpartyIdentity(m, identityCtx)
     if (entry) {
-      m.entity_id = entry.entity_id
-      m.entity_type = entry.role
+      m.counterparty_entity_id = entry.entity_id
+      m.counterparty_entity_type = entry.role
       m.counterparty = m.counterparty ?? entry.canonical_name
-      stats.identityResolved++
+      stats.identity_resolved++
+    }
+  }
+
+  log("movements.classify.prepared", {
+    userId,
+    observations: stats.total_observations,
+    canonical: stats.canonical_movements,
+    identityResolved: stats.identity_resolved,
+    transfersPaired: stats.transfers_paired,
+    identityContextSize: identityCtx.size,
+  }, "movements")
+
+  // Steps 5-7: Classify
+  const classified: ClassifiedMovement[] = []
+  const needsLlm: Array<{ idx: number; movement: CanonicalMovement; identity: MovementIdentityEntry | null }> = []
+
+  for (const m of movements) {
+    const identity = m.counterparty_entity_id ? resolveCounterpartyIdentity(m, identityCtx) : null
+
+    // Step 5: Non-P&L first
+    const nonPnl = classifyNonPnl(m, identity)
+    if (nonPnl) {
+      classified.push({
+        ...m,
+        movement_type: nonPnl.type,
+        pnl_eligible: false,
+        confidence: nonPnl.confidence,
+        review_needed: nonPnl.confidence < 0.7,
+      })
+      stats.rule_classified++
+      continue
     }
 
-    // Resolve Plaid account_id → bank_account entity for from/to
-    if (m.source === "plaid" && m.metadata.account_id) {
-      const acctEntry = resolveOwnAccount(m.metadata.account_id as string, identityCtx)
-      if (acctEntry) {
-        if (m.amount < 0 && !m.from_account) m.from_account = acctEntry.canonical_name
-        if (m.amount >= 0 && !m.to_account) m.to_account = acctEntry.canonical_name
+    // Step 6: Operating
+    const operating = classifyOperating(m, identity)
+    if (operating) {
+      classified.push({
+        ...m,
+        movement_type: operating.type,
+        pnl_eligible: isPnlEligible(operating.type),
+        confidence: operating.confidence,
+        review_needed: operating.confidence < 0.7,
+      })
+      stats.rule_classified++
+      continue
+    }
+
+    // Step 7: Fallback (but also queue for LLM if we have API key)
+    const fallback = classifyFallback(m)
+    needsLlm.push({ idx: classified.length, movement: m, identity })
+    classified.push({
+      ...m,
+      movement_type: fallback.type,
+      pnl_eligible: false,
+      confidence: fallback.confidence,
+      review_needed: true,
+    })
+  }
+
+  // Step 8: LLM assist — upgrade fallback classifications
+  if (needsLlm.length > 0) {
+    const llmResults = await llmClassifyBatch(needsLlm.map((n) => ({ movement: n.movement, identity: n.identity })))
+
+    for (const llmResult of llmResults) {
+      const match = needsLlm.find((_, i) => i === llmResult.index)
+      if (match && llmResult.confidence > classified[match.idx].confidence) {
+        const t = llmResult.movement_type as MovementType
+        classified[match.idx].movement_type = t
+        classified[match.idx].pnl_eligible = isPnlEligible(t)
+        classified[match.idx].confidence = llmResult.confidence
+        classified[match.idx].review_needed = llmResult.confidence < 0.7
+        stats.llm_classified++
       }
     }
   }
 
-  // Step 4: Pair Plaid cross-account transfers
-  pairPlaidTransfers(allRaw)
-  stats.transfersPaired = allRaw.filter((m) => m.metadata.transfer_type === "cross_account").length
-
-  // Step 5: Deduplicate across sources
-  const deduped = dedupAcrossSources(allRaw)
-  stats.afterDedup = deduped.length
-
-  log("movements.classify.prepared", {
-    userId,
-    identityResolved: stats.identityResolved,
-    transfersPaired: stats.transfersPaired,
-    afterDedup: stats.afterDedup,
-    identityContextSize: identityCtx.size,
-  }, "movements")
-
-  // Step 6: Three-tier classification
-  const classified: ClassifiedMovement[] = []
-  const unclassified: Array<{ movement: RawMovement; identity: MovementIdentityEntry | null }> = []
-
-  for (const m of deduped) {
-    const identity = m.entity_id ? resolveIdentity(m, identityCtx) : null
-    const result = classifyMovement(m, identity)
-    if (result) {
-      classified.push({
-        ...m,
-        movement_class: result.cls,
-        pnl_eligible: PNL_ELIGIBLE_CLASSES.has(result.cls),
-        confidence: result.confidence,
-      })
-      stats.ruleClassified++
-    } else {
-      unclassified.push({ movement: m, identity })
-    }
+  // Count stats
+  for (const c of classified) {
+    stats.by_type[c.movement_type] = (stats.by_type[c.movement_type] ?? 0) + 1
+    if (c.pnl_eligible) stats.pnl_eligible++
+    if (c.review_needed) stats.review_needed++
   }
 
-  // Step 7: LLM fallback with identity role in prompt
-  if (unclassified.length > 0) {
-    const llmResults = await llmClassifyBatch(unclassified)
-    const llmMap = new Map(llmResults.map((r) => [r.source_id, r]))
-
-    for (const { movement: m } of unclassified) {
-      const llmResult = llmMap.get(m.source_id)
-      const cls = (llmResult?.movement_class ?? "uncategorized") as MovementClass
-      classified.push({
-        ...m,
-        movement_class: cls,
-        pnl_eligible: PNL_ELIGIBLE_CLASSES.has(cls),
-        confidence: llmResult?.confidence ?? 0.3,
-      })
-      if (llmResult) stats.llmClassified++
-    }
-  }
-
-  // Step 8: Batch persist
+  // Step 9: Batch persist
   const BATCH_SIZE = 50
   for (let i = 0; i < classified.length; i += BATCH_SIZE) {
     const batch = classified.slice(i, i + BATCH_SIZE)
@@ -886,33 +1201,52 @@ export async function classifyMovements(userId: string): Promise<{
     let paramIdx = 0
 
     for (const m of batch) {
-      stats.byClass[m.movement_class] = (stats.byClass[m.movement_class] ?? 0) + 1
-      if (m.pnl_eligible) stats.pnlEligible++
+      const evidenceRefs = JSON.stringify(m.evidence.map((e) => ({ source: e.source, source_type: e.source_type, source_id: e.source_id })))
+      // Deterministic hash: sorted source:source_id pairs
+      const evidenceHash = m.evidence.map((e) => `${e.source}:${e.source_id}`).sort().join("|")
 
-      const offsets = Array.from({ length: 15 }, (_, k) => `$${paramIdx + k + 1}`)
+      const offsets = Array.from({ length: 17 }, (_, k) => `$${paramIdx + k + 1}`)
       values.push(`(${offsets.join(", ")})`)
       params.push(
-        userId, m.source, m.source_type, m.source_id,
-        m.entity_id, m.date, m.amount, m.raw_description,
-        m.counterparty, m.movement_class, m.pnl_eligible,
-        m.from_account, m.to_account, m.confidence,
+        userId,
+        m.direction,
+        m.amount,
+        m.date,
+        m.movement_type,
+        m.pnl_eligible,
+        m.cash_account_name,
+        m.counterparty,
+        m.counterparty_entity_id,
+        m.counterparty_entity_type,
+        m.linked_internal_account_id,
+        m.confidence,
+        m.review_needed,
+        evidenceHash,
+        evidenceRefs,
+        m.raw_description,
         JSON.stringify(m.metadata),
       )
-      paramIdx += 15
+      paramIdx += 17
     }
 
     await query(
-      `INSERT INTO movements (user_id, source, source_type, source_id, entity_id, date, amount, raw_description, counterparty, movement_class, pnl_eligible, from_account, to_account, confidence, metadata)
-       VALUES ${values.join(", ")}
-       ON CONFLICT (user_id, source, source_id) DO UPDATE SET
-         entity_id = EXCLUDED.entity_id,
-         movement_class = EXCLUDED.movement_class,
-         pnl_eligible = EXCLUDED.pnl_eligible,
-         counterparty = EXCLUDED.counterparty,
-         confidence = EXCLUDED.confidence,
-         from_account = EXCLUDED.from_account,
-         to_account = EXCLUDED.to_account,
-         metadata = EXCLUDED.metadata`,
+      `INSERT INTO movements (
+        user_id, direction, amount, date, movement_type, pnl_eligible,
+        cash_account_id, counterparty, counterparty_entity_id, counterparty_entity_type,
+        linked_internal_account_id, confidence, review_needed, evidence_hash, evidence_refs,
+        raw_description, metadata
+      )
+      VALUES ${values.join(", ")}
+      ON CONFLICT (user_id, evidence_hash) DO UPDATE SET
+        movement_type = EXCLUDED.movement_type,
+        pnl_eligible = EXCLUDED.pnl_eligible,
+        counterparty = EXCLUDED.counterparty,
+        counterparty_entity_id = EXCLUDED.counterparty_entity_id,
+        counterparty_entity_type = EXCLUDED.counterparty_entity_type,
+        confidence = EXCLUDED.confidence,
+        review_needed = EXCLUDED.review_needed,
+        evidence_refs = EXCLUDED.evidence_refs,
+        metadata = EXCLUDED.metadata`,
       params,
     )
   }

@@ -189,8 +189,8 @@ export function OnboardingFlow({
   const [identitySeeding, setIdentitySeeding] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
-  type MovementRow = { id: string; source: string; source_type: string; source_id: string; entity_id: string | null; date: string; amount: string; raw_description: string | null; counterparty: string | null; movement_class: string; pnl_eligible: boolean; from_account: string | null; to_account: string | null; confidence: number; metadata: Record<string, unknown>; created_at: string }
-  type MovementSummary = { movement_class: string; pnl_eligible: boolean; count: number; total_amount: string }
+  type MovementRow = { id: string; direction: string; amount: string; date: string; movement_type: string; pnl_eligible: boolean; cash_account_id: string | null; counterparty: string | null; counterparty_entity_id: string | null; counterparty_entity_type: string | null; linked_internal_account_id: string | null; confidence: number; review_needed: boolean; evidence_refs: Array<{ source: string; source_type: string; source_id: string }>; raw_description: string | null; metadata: Record<string, unknown>; created_at: string }
+  type MovementSummary = { movement_type: string; pnl_eligible: boolean; count: number; total_amount: string }
   type MovementsData = { movements: MovementRow[]; summary: MovementSummary[] }
   const [movementsData, setMovementsData] = useState<MovementsData | null>(null)
   const [movementsLoading, setMovementsLoading] = useState(false)
@@ -1943,52 +1943,55 @@ export function OnboardingFlow({
       }
 
       case 10: {
-        const PNL_ELIGIBLE_CLASSES_UI = new Set(["operating_revenue", "operating_expense", "payroll", "tax"])
         const mvts = movementsData?.movements ?? []
         const mvtSummary = movementsData?.summary ?? []
 
-        const classCounts: Record<string, number> = {}
-        const classAmounts: Record<string, number> = {}
+        const typeCounts: Record<string, number> = {}
+        const typeAmounts: Record<string, number> = {}
         let pnlCount = 0
         let nonPnlCount = 0
+        let reviewCount = 0
         for (const s of mvtSummary) {
-          classCounts[s.movement_class] = (classCounts[s.movement_class] ?? 0) + s.count
-          classAmounts[s.movement_class] = (classAmounts[s.movement_class] ?? 0) + parseFloat(s.total_amount)
+          typeCounts[s.movement_type] = (typeCounts[s.movement_type] ?? 0) + s.count
+          typeAmounts[s.movement_type] = (typeAmounts[s.movement_type] ?? 0) + parseFloat(s.total_amount)
           if (s.pnl_eligible) pnlCount += s.count
           else nonPnlCount += s.count
         }
+        for (const m of mvts) { if (m.review_needed) reviewCount++ }
 
-        const mvtClassColor = (c: string) =>
-          c === "operating_revenue" ? "bg-emerald-500/80 border-emerald-400/50" :
-          c === "operating_expense" ? "bg-orange-500/80 border-orange-400/50" :
-          c === "internal_transfer" ? "bg-slate-500/80 border-slate-400/50" :
-          c === "settlement" ? "bg-violet-500/80 border-violet-400/50" :
-          c === "fee" ? "bg-red-500/80 border-red-400/50" :
-          c === "refund" ? "bg-amber-500/80 border-amber-400/50" :
-          c === "financing" ? "bg-indigo-500/80 border-indigo-400/50" :
-          c === "payroll" ? "bg-pink-500/80 border-pink-400/50" :
-          c === "tax" ? "bg-red-700/80 border-red-600/50" :
-          c === "owner_draw" ? "bg-rose-500/80 border-rose-400/50" :
-          "bg-zinc-500/80 border-zinc-400/50"
+        const TYPE_META: Record<string, { label: string; color: string; group: "pnl" | "non_pnl" | "unknown" }> = {
+          cash_in_customer:         { label: "Customer Cash In",      color: "bg-emerald-500/80 border-emerald-400/50",  group: "pnl" },
+          cash_out_vendor:          { label: "Vendor Cash Out",       color: "bg-orange-500/80 border-orange-400/50",    group: "pnl" },
+          cash_out_operating_expense: { label: "Operating Expense",   color: "bg-amber-600/80 border-amber-500/50",      group: "pnl" },
+          cash_out_payroll:         { label: "Payroll",               color: "bg-pink-500/80 border-pink-400/50",        group: "pnl" },
+          cash_out_tax:             { label: "Tax",                   color: "bg-red-700/80 border-red-600/50",          group: "pnl" },
+          cash_out_bank_fee:        { label: "Bank Fee",              color: "bg-red-500/80 border-red-400/50",          group: "pnl" },
+          cash_out_refund:          { label: "Refund Out",            color: "bg-amber-500/80 border-amber-400/50",      group: "pnl" },
+          cash_in_refund:           { label: "Refund In",             color: "bg-lime-500/80 border-lime-400/50",        group: "pnl" },
+          cash_in_interest:         { label: "Interest In",           color: "bg-teal-500/80 border-teal-400/50",        group: "pnl" },
+          cash_out_interest:        { label: "Interest Out",          color: "bg-teal-700/80 border-teal-600/50",        group: "pnl" },
+          other_operating:          { label: "Other Operating",       color: "bg-cyan-600/80 border-cyan-500/50",        group: "pnl" },
+          internal_transfer:        { label: "Internal Transfer",     color: "bg-slate-500/80 border-slate-400/50",      group: "non_pnl" },
+          processor_payout:         { label: "Processor Payout",      color: "bg-violet-500/80 border-violet-400/50",    group: "non_pnl" },
+          processor_fee_settlement: { label: "Processor Fee",         color: "bg-violet-700/80 border-violet-600/50",    group: "non_pnl" },
+          credit_card_payment:      { label: "Credit Card Payment",   color: "bg-indigo-500/80 border-indigo-400/50",    group: "non_pnl" },
+          loan_funding:             { label: "Loan Funding",          color: "bg-blue-600/80 border-blue-500/50",        group: "non_pnl" },
+          loan_principal_payment:   { label: "Loan Payment",          color: "bg-blue-800/80 border-blue-700/50",        group: "non_pnl" },
+          owner_contribution:       { label: "Owner Contribution",    color: "bg-rose-400/80 border-rose-300/50",        group: "non_pnl" },
+          owner_draw:               { label: "Owner Draw",            color: "bg-rose-600/80 border-rose-500/50",        group: "non_pnl" },
+          account_verification:     { label: "Account Verification",  color: "bg-gray-500/80 border-gray-400/50",        group: "non_pnl" },
+          opening_balance:          { label: "Opening Balance",       color: "bg-gray-600/80 border-gray-500/50",        group: "non_pnl" },
+          balance_adjustment:       { label: "Balance Adjustment",    color: "bg-gray-700/80 border-gray-600/50",        group: "non_pnl" },
+          unknown_inflow:           { label: "Unknown Inflow",        color: "bg-zinc-500/80 border-zinc-400/50",        group: "unknown" },
+          unknown_outflow:          { label: "Unknown Outflow",       color: "bg-zinc-600/80 border-zinc-500/50",        group: "unknown" },
+          unknown_transfer_candidate: { label: "Unknown Transfer?",   color: "bg-zinc-700/80 border-zinc-600/50",        group: "unknown" },
+        }
 
-        const mvtClassLabel = (c: string) =>
-          c === "operating_revenue" ? "Revenue" :
-          c === "operating_expense" ? "Expense" :
-          c === "internal_transfer" ? "Transfer" :
-          c === "settlement" ? "Settlement" :
-          c === "fee" ? "Fee" :
-          c === "refund" ? "Refund" :
-          c === "financing" ? "Financing" :
-          c === "payroll" ? "Payroll" :
-          c === "tax" ? "Tax" :
-          c === "owner_draw" ? "Owner Draw" :
-          c === "uncategorized" ? "Uncategorized" :
-          c
-
-        const mvtSourceColor = (s: string) =>
+        const sourceColor = (s: string) =>
           s === "plaid" ? "bg-amber-500/80" :
           s === "qbo" ? "bg-blue-500/80" :
           s === "stripe" ? "bg-purple-500/80" :
+          s === "xero" ? "bg-cyan-500/80" :
           "bg-zinc-500/80"
 
         const fmtAmt = (a: string | number) => {
@@ -1998,12 +2001,90 @@ export function OnboardingFlow({
           return n >= 0 ? `+$${formatted}` : `-$${formatted}`
         }
 
-        const classOrder = [
-          "operating_revenue", "operating_expense", "payroll", "tax",
-          "internal_transfer", "settlement", "fee", "refund",
-          "financing", "owner_draw", "uncategorized",
-        ]
-        const activeClasses = classOrder.filter((c) => (classCounts[c] ?? 0) > 0)
+        const pnlTypes = Object.entries(TYPE_META).filter(([, v]) => v.group === "pnl").map(([k]) => k).filter((k) => (typeCounts[k] ?? 0) > 0)
+        const nonPnlTypes = Object.entries(TYPE_META).filter(([, v]) => v.group === "non_pnl").map(([k]) => k).filter((k) => (typeCounts[k] ?? 0) > 0)
+        const unknownTypes = Object.entries(TYPE_META).filter(([, v]) => v.group === "unknown").map(([k]) => k).filter((k) => (typeCounts[k] ?? 0) > 0)
+
+        const renderTypeTable = (typeKey: string) => {
+          const meta = TYPE_META[typeKey] ?? { label: typeKey, color: "bg-zinc-500/80 border-zinc-400/50", group: "unknown" }
+          const typeMvts = mvts.filter((m) => m.movement_type === typeKey)
+          const isPnl = meta.group === "pnl"
+          return (
+            <div key={typeKey} className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-3 border-b border-white/20">
+                <span className={`inline-flex rounded-md border px-2.5 py-1 text-sm font-semibold text-white ${meta.color}`}>
+                  {meta.label}
+                </span>
+                <span className="text-sm text-gray-400">{typeCounts[typeKey]} movement{typeCounts[typeKey] !== 1 ? "s" : ""}</span>
+                <span className="text-sm text-gray-500">${(typeAmounts[typeKey] ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                {isPnl ? (
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] text-emerald-400 font-medium">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    P&L
+                  </span>
+                ) : meta.group === "unknown" ? (
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 text-[11px] text-yellow-400 font-medium">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                    Needs review
+                  </span>
+                ) : (
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-white/5 border border-white/10 px-2 py-0.5 text-[11px] text-gray-500 font-medium">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-gray-500" />
+                    Non-P&L
+                  </span>
+                )}
+              </div>
+              <div className="max-h-[40vh] overflow-y-auto overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-black/60 backdrop-blur-sm">
+                    <tr className="border-b border-white/15">
+                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[90px]">Date</th>
+                      <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Dir</th>
+                      <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
+                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
+                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Account</th>
+                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
+                      <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]">Evidence</th>
+                      <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {typeMvts.slice(0, 200).map((m) => (
+                      <tr key={m.id} className={`hover:bg-white/5 ${m.review_needed ? "bg-yellow-500/5" : ""}`}>
+                        <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
+                        <td className="px-3 py-1.5 text-xs text-center">
+                          <span className={`inline-block w-4 text-center font-bold ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                            {m.direction === "inflow" ? "\u2191" : "\u2193"}
+                          </span>
+                        </td>
+                        <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                          ${parseFloat(m.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]">{m.counterparty ?? "\u2014"}</td>
+                        <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[120px]">{m.cash_account_id ?? "\u2014"}</td>
+                        <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[200px]">{m.raw_description ?? "\u2014"}</td>
+                        <td className="px-3 py-1.5">
+                          <div className="flex gap-0.5">
+                            {(m.evidence_refs ?? []).map((e: { source: string; source_id: string }, ei: number) => (
+                              <span key={ei} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(e.source)}`}>{e.source}</span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="text-gray-500 px-3 py-1.5 text-xs text-right">
+                          {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
+                          {Math.round(m.confidence * 100)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {typeMvts.length > 200 && (
+                  <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {typeMvts.length} movements</div>
+                )}
+              </div>
+            </div>
+          )
+        }
 
         return (
           <div className="pt-0 pb-2 w-full">
@@ -2013,7 +2094,7 @@ export function OnboardingFlow({
             {(movementsClassifying || movementsLoading) && (
               <div className="flex items-center gap-2 py-6 text-gray-400">
                 <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                {movementsClassifying ? "Classifying movements across all sources (this may take a moment)\u2026" : "Loading movements\u2026"}
+                {movementsClassifying ? "Classifying cash movements across all sources (this may take a moment)\u2026" : "Loading movements\u2026"}
               </div>
             )}
 
@@ -2031,7 +2112,7 @@ export function OnboardingFlow({
                 <div className="flex flex-wrap gap-3 items-end">
                   <div className="rounded-lg border border-white/20 bg-white/5 px-4 py-3">
                     <div className="text-2xl font-bold text-white">{mvts.length}</div>
-                    <div className="text-xs text-gray-400">Total movements</div>
+                    <div className="text-xs text-gray-400">Cash movements</div>
                   </div>
                   <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
                     <div className="text-2xl font-bold text-emerald-400">{pnlCount}</div>
@@ -2041,6 +2122,12 @@ export function OnboardingFlow({
                     <div className="text-2xl font-bold text-gray-400">{nonPnlCount}</div>
                     <div className="text-xs text-gray-500">Non-P&L</div>
                   </div>
+                  {reviewCount > 0 && (
+                    <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
+                      <div className="text-2xl font-bold text-yellow-400">{reviewCount}</div>
+                      <div className="text-xs text-yellow-400/70">Needs review</div>
+                    </div>
+                  )}
                   <button
                     type="button"
                     disabled={movementsClassifying}
@@ -2071,66 +2158,35 @@ export function OnboardingFlow({
                   </button>
                 </div>
 
-                {/* Tables per movement class */}
-                {activeClasses.map((cls) => {
-                  const clsMvts = mvts.filter((m) => m.movement_class === cls)
-                  const isPnl = PNL_ELIGIBLE_CLASSES_UI.has(cls)
-                  return (
-                    <div key={cls} className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
-                      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/20">
-                        <span className={`inline-flex rounded-md border px-2.5 py-1 text-sm font-semibold text-white ${mvtClassColor(cls)}`}>
-                          {mvtClassLabel(cls)}
-                        </span>
-                        <span className="text-sm text-gray-400">{classCounts[cls]} movement{classCounts[cls] !== 1 ? "s" : ""}</span>
-                        <span className="text-sm text-gray-500">{fmtAmt(classAmounts[cls] ?? 0)} net</span>
-                        {isPnl ? (
-                          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] text-emerald-400 font-medium">
-                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                            P&L
-                          </span>
-                        ) : (
-                          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-white/5 border border-white/10 px-2 py-0.5 text-[11px] text-gray-500 font-medium">
-                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-gray-500" />
-                            Balance sheet
-                          </span>
-                        )}
-                      </div>
-                      <div className="max-h-[40vh] overflow-y-auto overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead className="sticky top-0 bg-black/60 backdrop-blur-sm">
-                            <tr className="border-b border-white/15">
-                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[90px]">Date</th>
-                              <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
-                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
-                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
-                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[60px]">Source</th>
-                              <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Conf</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-white/5">
-                            {clsMvts.slice(0, 200).map((m) => (
-                              <tr key={m.id} className="hover:bg-white/5">
-                                <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
-                                <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${parseFloat(m.amount) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                                  {fmtAmt(m.amount)}
-                                </td>
-                                <td className="text-white px-3 py-1.5 text-xs truncate max-w-[200px]">{m.counterparty ?? "\u2014"}</td>
-                                <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[250px]">{m.raw_description ?? "\u2014"}</td>
-                                <td className="px-3 py-1.5">
-                                  <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium text-white uppercase ${mvtSourceColor(m.source)}`}>{m.source}</span>
-                                </td>
-                                <td className="text-gray-500 px-3 py-1.5 text-xs text-right">{Math.round(m.confidence * 100)}%</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        {clsMvts.length > 200 && (
-                          <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {clsMvts.length} movements</div>
-                        )}
-                      </div>
+                {/* P&L Eligible movements */}
+                {pnlTypes.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold text-emerald-400 mb-3">P&L Eligible (Operational Cash Activity)</h3>
+                    <div className="space-y-4">
+                      {pnlTypes.map(renderTypeTable)}
                     </div>
-                  )
-                })}
+                  </div>
+                )}
+
+                {/* Non-P&L movements */}
+                {nonPnlTypes.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-400 mb-3">Non-P&L (Transfers, Financing, Equity, Settlement)</h3>
+                    <div className="space-y-4">
+                      {nonPnlTypes.map(renderTypeTable)}
+                    </div>
+                  </div>
+                )}
+
+                {/* Unknown / needs review */}
+                {unknownTypes.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold text-yellow-400 mb-3">Unclassified (Needs Review)</h3>
+                    <div className="space-y-4">
+                      {unknownTypes.map(renderTypeTable)}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
