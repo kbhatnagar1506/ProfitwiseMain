@@ -189,7 +189,7 @@ export function OnboardingFlow({
   const [identitySeeding, setIdentitySeeding] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
-  type ConfidenceBreakdown = { score: number; evidence_strength: number; entity_confidence: number; account_resolution: number; pattern_strength: number; source_agreement: number; history: number; directional_consistency: number }
+  type ConfidenceBreakdown = { score: number; evidence_strength: number; entity_confidence: number; account_resolution: number; pattern_strength: number; source_authority: number; source_agreement: number; history: number; directional_consistency: number }
   type ObservationRow = { id: string; source: string; source_type: string; source_id: string; amount: string; date: string; raw_description: string | null; counterparty: string | null; account_name: string | null; account_id: string | null }
   type MovementRow = { id: string; direction: string; amount: string; date: string; movement_type: string; pnl_eligible: boolean; provenance: string; cash_account_id: string | null; counterparty: string | null; counterparty_entity_id: string | null; counterparty_entity_type: string | null; linked_internal_account_id: string | null; confidence: ConfidenceBreakdown; review_needed: boolean; observations: ObservationRow[]; raw_description: string | null; metadata: Record<string, unknown>; created_at: string }
   type MovementSummary = { movement_type: string; pnl_eligible: boolean; count: number; total_amount: string }

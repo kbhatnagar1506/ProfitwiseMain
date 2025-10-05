@@ -491,7 +491,7 @@ Given raw bank transaction descriptions, return a JSON array. Each element:
 Entity type rules:
 - "internal": the business itself ("${selfNamesStr}") or its own accounts appearing in transactions
 - "owner": the business owner(s) — personal transfers, personal credit card payments by the owner
-- "processor": payment intermediaries — Shopify, Melio, PayPal, Square, Stripe, Gusto, ADP, Chase, Wells Fargo, Intuit, Zelle, Venmo, Gateway Services, Merchant Bankcard, etc.
+- "processor": payment intermediaries, payment processors, payroll providers, merchant acquirers, and similar financial service entities that move money on behalf of the business
 - "bank_account": bank-to-bank transfers, money market movements, account-to-account transfers (set skip=true for these)
 - "employee": individuals receiving payroll or reimbursements
 - "tax_authority": IRS, state tax agencies, sales tax payments
@@ -504,7 +504,7 @@ Normalization rules:
 - Strip suffixes: reference numbers, routing info, addresses, timestamps, "- USD", "customer -", "vendor -"
 - For ACH descriptions like "ACME CORP M/ACH Pmt Invoice 1029...", extract just the company name: "Acme Corp"
 - For Zelle transfers like "ZELLE MICHELLE SCHOR", extract just the person name: "Michelle Schor"
-- Merge variations: "Shopify", "SHOPIFY/SHOPIFY ST-...", "Shopify - USD", "Shopify customer - USD", "Shopify vendor - USD" → all normalize to "Shopify"
+- Merge variations of the same entity that appear with different descriptions into a single canonical name
 - If the same real entity appears with different descriptions, normalize to the same canonical name
 - Names with parenthetical context like "Brenna Sleggs (Pittsburgh Penguins)" should normalize to "Brenna Sleggs" with the context preserved in domain_guess or dropped
 - Test/sample entries like "test", "Sample Customer", "Test Company", "Demo Vendor" should have skip=true
