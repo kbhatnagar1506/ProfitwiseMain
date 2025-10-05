@@ -709,6 +709,22 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_obs_movement ON movement_observations (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_obs_source ON movement_observations (source, source_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_families_user ON movement_families (user_id)")
+  // Phase 1: movement_tags table
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS movement_tags (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      movement_id       UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE UNIQUE,
+      economic_class    TEXT NOT NULL,
+      cashflow_bucket   TEXT NOT NULL,
+      counterparty_role TEXT NOT NULL,
+      tag_data          JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_tags_movement ON movement_tags (movement_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_tags_eclass ON movement_tags (economic_class)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_tags_bucket ON movement_tags (cashflow_bucket)")
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }

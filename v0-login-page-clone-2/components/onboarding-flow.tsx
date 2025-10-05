@@ -99,6 +99,11 @@ const steps = [
     title: "Money movements",
     description: "Every transaction classified: what it is, whether it hits the P&L, and which accounts are involved.",
   },
+  {
+    id: 11,
+    title: "Business semantics",
+    description: "Every movement tagged with economic class, cashflow bucket, counterparty role, and structural flags.",
+  },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -205,6 +210,12 @@ export function OnboardingFlow({
   const [movementsLoading, setMovementsLoading] = useState(false)
   const [movementsClassifying, setMovementsClassifying] = useState(false)
   const [movementsError, setMovementsError] = useState<string | null>(null)
+  type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
+  type TagStats = { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number }
+  const [tagData, setTagData] = useState<{ movements: TaggedMovement[]; stats: TagStats } | null>(null)
+  const [tagLoading, setTagLoading] = useState(false)
+  const [tagRunning, setTagRunning] = useState(false)
+  const [tagError, setTagError] = useState<string | null>(null)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -630,6 +641,40 @@ export function OnboardingFlow({
         if (cancelled) return
         setMovementsError(err instanceof Error ? err.message : "Failed to load movements")
         setMovementsLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [currentStep])
+
+  // Step 11: Business semantics (tagging)
+  useEffect(() => {
+    if (currentStep !== 11) return
+    let cancelled = false
+
+    setTagLoading(true)
+    setTagError(null)
+
+    // First trigger tagging, then load tagged movements
+    setTagRunning(true)
+    fetch("/api/movements/tag", { method: "POST" })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((result: { tagged: number; stats: TagStats }) => {
+        if (cancelled) return
+        setTagRunning(false)
+        // Now load movements (they'll include tags)
+        return fetch("/api/movements")
+          .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+          .then((data: { movements: TaggedMovement[]; summary: unknown }) => {
+            if (cancelled) return
+            setTagData({ movements: data.movements, stats: result.stats })
+            setTagLoading(false)
+          })
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setTagError(err instanceof Error ? err.message : "Failed to run tagging")
+        setTagLoading(false)
+        setTagRunning(false)
       })
 
     return () => { cancelled = true }
@@ -2266,12 +2311,281 @@ export function OnboardingFlow({
         )
       }
 
+      case 11: {
+        const tagged = tagData?.movements ?? []
+        const stats = tagData?.stats
+
+        const ECLASS_LABELS: Record<string, { label: string; color: string }> = {
+          customer_receipt:    { label: "Customer Receipt",    color: "bg-emerald-500/80" },
+          vendor_payment:      { label: "Vendor Payment",      color: "bg-orange-500/80" },
+          payroll:             { label: "Payroll",              color: "bg-orange-700/80" },
+          bank_fee:            { label: "Bank Fee",             color: "bg-red-500/80" },
+          transfer:            { label: "Transfer",             color: "bg-slate-500/80" },
+          owner_contribution:  { label: "Owner Contribution",   color: "bg-rose-400/80" },
+          owner_draw:          { label: "Owner Draw",           color: "bg-rose-600/80" },
+          processor_fee:       { label: "Processor Fee",        color: "bg-violet-700/80" },
+          processor_payout:    { label: "Processor Payout",     color: "bg-violet-500/80" },
+          refund:              { label: "Refund",               color: "bg-amber-500/80" },
+          tax:                 { label: "Tax",                  color: "bg-red-700/80" },
+          debt_payment:        { label: "Debt Payment",         color: "bg-indigo-500/80" },
+          interest:            { label: "Interest",             color: "bg-teal-500/80" },
+          adjustment:          { label: "Adjustment",           color: "bg-gray-600/80" },
+          unknown:             { label: "Unknown",              color: "bg-zinc-500/80" },
+        }
+
+        const BUCKET_LABELS: Record<string, { label: string; color: string }> = {
+          revenue_in:    { label: "Revenue In",     color: "text-emerald-400" },
+          cogs_out:      { label: "COGS Out",       color: "text-orange-400" },
+          opex_out:      { label: "OpEx Out",       color: "text-amber-400" },
+          financing_in:  { label: "Financing In",   color: "text-blue-400" },
+          financing_out: { label: "Financing Out",  color: "text-indigo-400" },
+          transfer:      { label: "Transfer",       color: "text-slate-400" },
+          settlement:    { label: "Settlement",     color: "text-violet-400" },
+          unknown:       { label: "Unknown",        color: "text-zinc-400" },
+        }
+
+        const ROLE_LABELS: Record<string, string> = {
+          customer: "Customer", vendor: "Vendor", owner: "Owner", employee: "Employee",
+          processor: "Processor", bank: "Bank", tax_authority: "Tax Authority",
+          lender: "Lender", marketplace: "Marketplace", unknown: "Unknown",
+        }
+
+        // Aggregate by bucket
+        const bucketAgg: Record<string, { count: number; total: number }> = {}
+        for (const m of tagged) {
+          const bucket = m.tag?.cashflow_bucket ?? "unknown"
+          if (!bucketAgg[bucket]) bucketAgg[bucket] = { count: 0, total: 0 }
+          bucketAgg[bucket].count++
+          bucketAgg[bucket].total += m.amount
+        }
+
+        // Aggregate by economic class
+        const eclassAgg: Record<string, { count: number; total: number }> = {}
+        for (const m of tagged) {
+          const ec = m.tag?.economic_class ?? "unknown"
+          if (!eclassAgg[ec]) eclassAgg[ec] = { count: 0, total: 0 }
+          eclassAgg[ec].count++
+          eclassAgg[ec].total += m.amount
+        }
+
+        // Structural flag counts
+        const flagCounts = { operating: 0, financing: 0, investing: 0, owner_related: 0, hits_pnl: 0, working_capital: 0, recurring: 0, anomalies: 0, first_seen: 0 }
+        for (const m of tagged) {
+          if (m.tag?.is_operating) flagCounts.operating++
+          if (m.tag?.is_financing) flagCounts.financing++
+          if (m.tag?.is_investing) flagCounts.investing++
+          if (m.tag?.is_owner_related) flagCounts.owner_related++
+          if (m.tag?.hits_pnl) flagCounts.hits_pnl++
+          if (m.tag?.hits_working_capital) flagCounts.working_capital++
+          if (m.tag?.is_recurring) flagCounts.recurring++
+          if (m.tag?.is_anomaly) flagCounts.anomalies++
+          if (m.tag?.is_first_seen_counterparty) flagCounts.first_seen++
+        }
+
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[10].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[10].description}</p>
+
+              {(tagLoading || tagRunning) && (
+                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  {tagRunning ? "Tagging movements with business semantics\u2026" : "Loading tagged movements\u2026"}
+                </div>
+              )}
+
+              {tagError && !tagLoading && !tagRunning && (
+                <p className="text-red-300 text-sm mb-4">Failed: {tagError}</p>
+              )}
+            </div>
+
+            {!tagLoading && !tagRunning && tagged.length > 0 && (
+              <div className="space-y-6">
+
+                {/* Tagging stats */}
+                {stats && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
+                      <div className="text-2xl font-bold text-white">{stats.total}</div>
+                      <div className="text-xs text-gray-400 mt-1">Total Tagged</div>
+                    </div>
+                    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
+                      <div className="text-2xl font-bold text-emerald-400">{stats.deterministic}</div>
+                      <div className="text-xs text-gray-400 mt-1">Deterministic</div>
+                    </div>
+                    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
+                      <div className="text-2xl font-bold text-blue-400">{stats.identity_aware}</div>
+                      <div className="text-xs text-gray-400 mt-1">Identity-Aware</div>
+                    </div>
+                    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
+                      <div className="text-2xl font-bold text-amber-400">{stats.recurring}</div>
+                      <div className="text-xs text-gray-400 mt-1">Recurring</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Structural flags summary */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Structural Flags</h3>
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center">
+                    {[
+                      { label: "Operating", val: flagCounts.operating, color: "text-emerald-400" },
+                      { label: "Financing", val: flagCounts.financing, color: "text-blue-400" },
+                      { label: "Owner", val: flagCounts.owner_related, color: "text-rose-400" },
+                      { label: "Hits P&L", val: flagCounts.hits_pnl, color: "text-amber-400" },
+                      { label: "Working Cap", val: flagCounts.working_capital, color: "text-orange-400" },
+                      { label: "Recurring", val: flagCounts.recurring, color: "text-violet-400" },
+                      { label: "Anomalies", val: flagCounts.anomalies, color: "text-red-400" },
+                      { label: "First-Seen CP", val: flagCounts.first_seen, color: "text-cyan-400" },
+                    ].map((f) => (
+                      <div key={f.label} className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className={`text-lg font-bold ${f.color}`}>{f.val}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">{f.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Cashflow buckets */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Cashflow Buckets</h3>
+                  <div className="space-y-2">
+                    {Object.entries(bucketAgg)
+                      .sort((a, b) => b[1].total - a[1].total)
+                      .map(([bucket, agg]) => {
+                        const meta = BUCKET_LABELS[bucket] ?? { label: bucket, color: "text-gray-400" }
+                        return (
+                          <div key={bucket} className="flex items-center justify-between px-3 py-2 bg-white/5 rounded-lg">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-sm font-medium ${meta.color}`}>{meta.label}</span>
+                              <span className="text-xs text-gray-500">{agg.count} movements</span>
+                            </div>
+                            <span className="text-sm font-mono text-white">${Math.abs(agg.total).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </div>
+                        )
+                    })}
+                  </div>
+                </div>
+
+                {/* Economic class breakdown */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Economic Classes</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {Object.entries(eclassAgg)
+                      .sort((a, b) => b[1].count - a[1].count)
+                      .map(([ec, agg]) => {
+                        const meta = ECLASS_LABELS[ec] ?? { label: ec, color: "bg-zinc-500/80" }
+                        return (
+                          <div key={ec} className={`${meta.color} rounded-lg px-3 py-2`}>
+                            <div className="text-sm font-medium text-white">{meta.label}</div>
+                            <div className="flex items-baseline gap-2 mt-1">
+                              <span className="text-lg font-bold text-white">{agg.count}</span>
+                              <span className="text-xs text-white/70">${Math.abs(agg.total).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+                            </div>
+                          </div>
+                        )
+                    })}
+                  </div>
+                </div>
+
+                {/* Movement detail table */}
+                <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-white/10">
+                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Tagged Movements</h3>
+                  </div>
+                  <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-black/80 backdrop-blur">
+                        <tr className="text-left text-xs text-gray-500 uppercase tracking-wider">
+                          <th className="px-3 py-2">Date</th>
+                          <th className="px-3 py-2">Dir</th>
+                          <th className="px-3 py-2 text-right">Amount</th>
+                          <th className="px-3 py-2">Economic Class</th>
+                          <th className="px-3 py-2">Bucket</th>
+                          <th className="px-3 py-2">CP Role</th>
+                          <th className="px-3 py-2">Flags</th>
+                          <th className="px-3 py-2">Description</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {tagged.map((m) => {
+                          const ec = m.tag?.economic_class ?? "unknown"
+                          const bucket = m.tag?.cashflow_bucket ?? "unknown"
+                          const role = m.tag?.counterparty_role ?? "unknown"
+                          const ecMeta = ECLASS_LABELS[ec] ?? { label: ec, color: "bg-zinc-500/80" }
+                          const bucketMeta = BUCKET_LABELS[bucket] ?? { label: bucket, color: "text-gray-400" }
+                          const flags: string[] = []
+                          if (m.tag?.is_recurring) flags.push("🔁")
+                          if (m.tag?.is_anomaly) flags.push("⚠")
+                          if (m.tag?.is_large_outlier) flags.push("📈")
+                          if (m.tag?.is_first_seen_counterparty) flags.push("🆕")
+                          if (m.tag?.is_owner_related) flags.push("👤")
+
+                          return (
+                            <tr key={m.id} className="hover:bg-white/5 transition-colors">
+                              <td className="px-3 py-2 text-gray-300 whitespace-nowrap">{m.occurred_at?.slice(0, 10)}</td>
+                              <td className="px-3 py-2">
+                                <span className={m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
+                                  {m.direction === "inflow" ? "↓ In" : "↑ Out"}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono text-white">${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td>
+                              <td className="px-3 py-2">
+                                <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium text-white ${ecMeta.color}`}>
+                                  {ecMeta.label}
+                                </span>
+                              </td>
+                              <td className={`px-3 py-2 text-xs font-medium ${bucketMeta.color}`}>{bucketMeta.label}</td>
+                              <td className="px-3 py-2 text-xs text-gray-400">{ROLE_LABELS[role] ?? role}</td>
+                              <td className="px-3 py-2 text-sm" title={flags.join(" ")}>{flags.join(" ") || "—"}</td>
+                              <td className="px-3 py-2 text-gray-500 text-xs max-w-[200px] truncate">{m.raw_description ?? "—"}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Re-tag button */}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={tagRunning}
+                    onClick={() => {
+                      setTagRunning(true)
+                      setTagData(null)
+                      fetch("/api/movements/tag", { method: "POST" })
+                        .then((res) => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+                        .then((result: { tagged: number; stats: TagStats }) => {
+                          return fetch("/api/movements")
+                            .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+                            .then((data: { movements: TaggedMovement[]; summary: unknown }) => {
+                              setTagData({ movements: data.movements, stats: result.stats })
+                              setTagRunning(false)
+                            })
+                        })
+                        .catch(() => { setTagRunning(false) })
+                    }}
+                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="text-sm font-medium text-white">{tagRunning ? "Tagging\u2026" : "Re-tag"}</div>
+                    <div className="text-xs text-gray-400">Re-run tagging engine</div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
       default:
         return (
           <div className="text-center py-12">
             <div>
-              <h2 className="text-2xl font-semibold text-white mb-3">{steps[currentStep - 1].title}</h2>
-              <p className="text-gray-400 text-base">{steps[currentStep - 1].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-3">{steps[currentStep - 1]?.title}</h2>
+              <p className="text-gray-400 text-base">{steps[currentStep - 1]?.description}</p>
             </div>
             <div className="bg-white/5 border border-white/10 rounded-lg p-6 max-w-md mx-auto">
               <p className="text-sm text-gray-400">This step will be available soon</p>
@@ -2282,7 +2596,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11
   return (
     <div
       className={
