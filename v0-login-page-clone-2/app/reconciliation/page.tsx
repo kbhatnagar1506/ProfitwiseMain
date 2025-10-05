@@ -6,6 +6,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
+type InvoiceRow = { invoice_id: string; type: "ar"; display_name: string; amount: number; amount_due: number; due_date: string | null; status: string }
+type BillRow = { bill_id: string; type: "ap"; display_name: string; amount: number; amount_due: number; due_date: string | null; status: string }
 type Allocation = { entity_type: string; entity_id: string; gross: number; fee: number; net: number; fee_anomaly?: boolean }
 type PaymentRow = {
   movement_id: string
@@ -15,64 +17,29 @@ type PaymentRow = {
   counterparty: string | null
   display_name?: string | null
   allocations: Allocation[]
-  confidence?: number
-}
-
-function ExplainButton({ movementId, allocations, onExplain }: { movementId: string; allocations: Allocation[]; onExplain: (text: string) => void }) {
-  const [loading, setLoading] = useState(false)
-  const handleClick = async () => {
-    if (loading || allocations.length === 0) return
-    setLoading(true)
-    try {
-      const alloc = allocations[0]
-      const res = await fetch("/api/explain-match", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          movement_id: movementId,
-          entity_type: alloc.entity_type,
-          entity_id: alloc.entity_id,
-        }),
-      })
-      const data = await res.json()
-      if (data.explanation) onExplain(data.explanation)
-    } catch {
-      onExplain("Could not load explanation.")
-    } finally {
-      setLoading(false)
-    }
-  }
-  return (
-    <button
-      onClick={handleClick}
-      disabled={loading || allocations.length === 0}
-      className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-50 text-gray-400"
-    >
-      {loading ? "…" : "Explain"}
-    </button>
-  )
 }
 
 export default function ReconciliationPage() {
-  const [rows, setRows] = useState<PaymentRow[]>([])
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([])
+  const [bills, setBills] = useState<BillRow[]>([])
+  const [payments, setPayments] = useState<PaymentRow[]>([])
   const [filter, setFilter] = useState<"all" | "matched" | "unmatched">("all")
   const [loading, setLoading] = useState(true)
-  const [explainText, setExplainText] = useState<string | null>(null)
 
   useEffect(() => {
     fetch("/api/ar-ap-reconciliation")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Failed"))))
       .then((data) => {
+        setInvoices(data.invoices ?? [])
+        setBills(data.bills ?? [])
         const matched: PaymentRow[] = [
           ...(data.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({
             ...m,
             direction: "inflow",
-            confidence: 0.9,
           })),
           ...(data.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({
             ...m,
             direction: "outflow",
-            confidence: 0.9,
           })),
         ]
         const unmatched: PaymentRow[] = [
@@ -80,22 +47,37 @@ export default function ReconciliationPage() {
             ...m,
             direction: "inflow",
             allocations: [],
-            confidence: 0,
           })),
           ...(data.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({
             ...m,
             direction: "outflow",
             allocations: [],
-            confidence: 0,
           })),
         ]
-        setRows([...matched, ...unmatched].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
+        setPayments(
+          [...matched, ...unmatched].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        )
       })
-      .catch(() => setRows([]))
+      .catch(() => {
+        setInvoices([])
+        setBills([])
+        setPayments([])
+      })
       .finally(() => setLoading(false))
   }, [])
 
-  const filtered = filter === "matched" ? rows.filter((r) => r.allocations.length > 0) : filter === "unmatched" ? rows.filter((r) => r.allocations.length === 0) : rows
+  const filteredPayments =
+    filter === "matched"
+      ? payments.filter((r) => r.allocations.length > 0)
+      : filter === "unmatched"
+        ? payments.filter((r) => r.allocations.length === 0)
+        : payments
+
+  const allInvoices = [...invoices, ...bills].sort((a, b) => {
+    const da = a.due_date ?? "9999"
+    const db = b.due_date ?? "9999"
+    return da.localeCompare(db)
+  })
 
   if (loading) {
     return (
@@ -107,13 +89,15 @@ export default function ReconciliationPage() {
 
   return (
     <div className="min-h-screen bg-black font-sans text-white p-6">
-      <div className="max-w-6xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold">Payment → Invoice Reconciliation</h1>
             <p className="text-sm text-gray-500 mt-0.5">All time · Bank payments matched to AR/AP</p>
           </div>
-          <Link href="/dashboard" className="text-sm text-gray-400 hover:text-white">Dashboard</Link>
+          <Link href="/dashboard" className="text-sm text-gray-400 hover:text-white">
+            Dashboard
+          </Link>
         </div>
 
         <div className="flex gap-2 mb-4">
@@ -137,94 +121,117 @@ export default function ReconciliationPage() {
           </button>
         </div>
 
-        <div className="border border-white/10 rounded-xl overflow-hidden">
-          <div className="max-h-[70vh] overflow-y-auto">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
-                <TableHead className="text-[10px] uppercase text-gray-500">Payment</TableHead>
-                <TableHead className="text-[10px] uppercase text-gray-500 w-24">Gross</TableHead>
-                <TableHead className="text-[10px] uppercase text-gray-500 w-20">Fee</TableHead>
-                <TableHead className="text-[10px] uppercase text-gray-500 w-24">Net</TableHead>
-                <TableHead className="text-[10px] uppercase text-gray-500">Linked AR/AP</TableHead>
-                <TableHead className="text-[10px] uppercase text-gray-500 w-20">Confidence</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((r) => {
-                const totalFee = r.allocations.reduce((s, a) => s + a.fee, 0)
-                const totalGross = r.allocations.reduce((s, a) => s + a.gross, 0)
-                const totalNet = r.allocations.reduce((s, a) => s + a.net, 0)
-                const hasFeeAnomaly = r.allocations.some((a) => a.fee_anomaly)
-                const linked = r.allocations.length > 0
-                  ? r.allocations.map((a) => `${a.entity_type.toUpperCase()}: ${a.entity_id.slice(0, 12)}...`).join(", ")
-                  : "—"
-                return (
-                  <TableRow
-                    key={r.movement_id}
-                    className={`border-white/5 ${r.allocations.length === 0 ? "bg-amber-500/5" : ""}`}
-                  >
-                    <TableCell className="py-2.5">
-                      <span className={r.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
-                        {r.direction === "inflow" ? "+" : "-"}{money(r.amount)}
-                      </span>
-                      <span className="text-gray-500 text-xs block">{r.date} · {r.display_name ?? r.counterparty ?? "—"}</span>
-                    </TableCell>
-                    <TableCell className="py-2.5 font-mono text-sm">{totalGross > 0 ? money(totalGross) : money(r.amount)}</TableCell>
-                    <TableCell className="py-2.5 font-mono text-amber-400 text-sm">
-                      {totalFee > 0 ? money(totalFee) : "—"}
-                      {hasFeeAnomaly && <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-500/30 text-amber-200" title="Fee >7% of gross">⚠</span>}
-                    </TableCell>
-                    <TableCell className="py-2.5 font-mono text-sm">{totalNet > 0 ? money(totalNet) : money(r.amount)}</TableCell>
-                    <TableCell className="py-2.5 text-xs text-gray-400 truncate max-w-[200px]">{linked}</TableCell>
-                    <TableCell className="py-2.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                          (r.confidence ?? 0) >= 0.8 ? "bg-emerald-500/20 text-emerald-300" :
-                          (r.confidence ?? 0) >= 0.5 ? "bg-amber-500/20 text-amber-300" : "bg-gray-500/20 text-gray-400"
-                        }`}>
-                          {r.allocations.length > 0 ? "high" : "—"}
-                        </span>
-                        {r.allocations.length > 0 && (
-                          <ExplainButton
-                            movementId={r.movement_id}
-                            allocations={r.allocations}
-                            onExplain={setExplainText}
-                          />
-                        )}
-                      </div>
-                    </TableCell>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left: Invoices (AR + AP) */}
+          <div className="border border-white/10 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-white/10 bg-white/5">
+              <h2 className="text-sm font-semibold text-white">Invoices</h2>
+              <p className="text-xs text-gray-500">AR & AP with entity names</p>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
+                    <TableHead className="text-[10px] uppercase text-gray-500">Entity</TableHead>
+                    <TableHead className="text-[10px] uppercase text-gray-500 w-24">Amount</TableHead>
+                    <TableHead className="text-[10px] uppercase text-gray-500 w-20">Due</TableHead>
+                    <TableHead className="text-[10px] uppercase text-gray-500 w-16">Type</TableHead>
                   </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-          </div>
-          <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500">
-            {filtered.length} payment{filtered.length !== 1 ? "s" : ""} shown
-          </div>
-        </div>
-
-        {explainText && (
-          <div
-            className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-            onClick={() => setExplainText(null)}
-          >
-            <div
-              className="bg-zinc-900 border border-white/10 rounded-xl p-4 max-w-md w-full shadow-xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-sm font-medium text-white mb-2">Explain This</h3>
-              <p className="text-sm text-gray-300 whitespace-pre-wrap">{explainText}</p>
-              <button
-                onClick={() => setExplainText(null)}
-                className="mt-3 text-sm text-gray-400 hover:text-white"
-              >
-                Close
-              </button>
+                </TableHeader>
+                <TableBody>
+                  {allInvoices.map((row) => (
+                    <TableRow key={row.type === "ar" ? row.invoice_id : row.bill_id} className="border-white/5">
+                      <TableCell className="py-2">
+                        <span className="text-white font-medium">{row.display_name}</span>
+                        </TableCell>
+                      <TableCell className="py-2 font-mono text-sm">
+                        {row.type === "ar" ? (
+                          <span className="text-emerald-400">{money(row.amount_due)}</span>
+                        ) : (
+                          <span className="text-red-400">{money(row.amount_due)}</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2 text-xs text-gray-400">{row.due_date ?? "—"}</TableCell>
+                      <TableCell className="py-2">
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            row.type === "ar" ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
+                          }`}
+                        >
+                          {row.type.toUpperCase()}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500">
+              {allInvoices.length} invoice{allInvoices.length !== 1 ? "s" : ""} shown
             </div>
           </div>
-        )}
+
+          {/* Right: Bank payments (tagged) */}
+          <div className="border border-white/10 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-white/10 bg-white/5">
+              <h2 className="text-sm font-semibold text-white">Bank payments</h2>
+              <p className="text-xs text-gray-500">Tagged movements</p>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
+                    <TableHead className="text-[10px] uppercase text-gray-500">Payment</TableHead>
+                    <TableHead className="text-[10px] uppercase text-gray-500 w-24">Gross</TableHead>
+                    <TableHead className="text-[10px] uppercase text-gray-500 w-20">Fee</TableHead>
+                    <TableHead className="text-[10px] uppercase text-gray-500 w-24">Net</TableHead>
+                    <TableHead className="text-[10px] uppercase text-gray-500">Linked</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredPayments.map((r) => {
+                    const totalFee = r.allocations.reduce((s, a) => s + a.fee, 0)
+                    const totalGross = r.allocations.reduce((s, a) => s + a.gross, 0)
+                    const totalNet = r.allocations.reduce((s, a) => s + a.net, 0)
+                    const linked =
+                      r.allocations.length > 0
+                        ? r.allocations.map((a) => `${a.entity_type.toUpperCase()}`).join(", ")
+                        : "—"
+                    return (
+                      <TableRow
+                        key={r.movement_id}
+                        className={`border-white/5 ${r.allocations.length === 0 ? "bg-amber-500/5" : ""}`}
+                      >
+                        <TableCell className="py-2.5">
+                          <span className={r.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
+                            {r.direction === "inflow" ? "+" : "-"}
+                            {money(r.amount)}
+                          </span>
+                          <span className="text-gray-500 text-xs block">
+                            {r.date} · {r.display_name ?? r.counterparty ?? "—"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="py-2.5 font-mono text-sm">
+                          {totalGross > 0 ? money(totalGross) : money(r.amount)}
+                        </TableCell>
+                        <TableCell className="py-2.5 font-mono text-amber-400 text-sm">
+                          {totalFee > 0 ? money(totalFee) : "—"}
+                        </TableCell>
+                        <TableCell className="py-2.5 font-mono text-sm">
+                          {totalNet > 0 ? money(totalNet) : money(r.amount)}
+                        </TableCell>
+                        <TableCell className="py-2.5 text-xs text-gray-400">{linked}</TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500">
+              {filteredPayments.length} payment{filteredPayments.length !== 1 ? "s" : ""} shown
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
