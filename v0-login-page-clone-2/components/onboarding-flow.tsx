@@ -189,10 +189,17 @@ export function OnboardingFlow({
   const [identitySeeding, setIdentitySeeding] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
-  type ConfidenceBreakdown = { score: number; evidence_strength: number; entity_confidence: number; account_resolution: number; pattern_strength: number; source_authority: number; source_agreement: number; history: number; directional_consistency: number }
-  type ObservationRow = { id: string; source: string; source_type: string; source_id: string; amount: string; date: string; raw_description: string | null; counterparty: string | null; account_name: string | null; account_id: string | null }
-  type MovementRow = { id: string; direction: string; amount: string; date: string; movement_type: string; pnl_eligible: boolean; provenance: string; cash_account_id: string | null; counterparty: string | null; counterparty_entity_id: string | null; counterparty_entity_type: string | null; linked_internal_account_id: string | null; confidence: ConfidenceBreakdown; review_needed: boolean; observations: ObservationRow[]; raw_description: string | null; metadata: Record<string, unknown>; created_at: string }
-  type MovementSummary = { movement_type: string; pnl_eligible: boolean; count: number; total_amount: string }
+  type MovementRow = {
+    id: string; user_id: string; occurred_at: string; direction: string; amount: number;
+    currency: string; raw_description: string | null; source_record_ids: string[];
+    entity_id: string | null; account_id: string | null;
+    movement_class: string; movement_type_detail: string; pnl_eligible: boolean;
+    confidence: number; evidence_strength: number;
+    needs_review: boolean; review_reasons: string[];
+    provenance: string; coalesced_group_id: string | null;
+    metadata: Record<string, unknown>;
+  }
+  type MovementSummary = { movement_class: string; movement_type_detail: string; pnl_eligible: boolean; count: number; total_amount: string }
   type MovementsData = { movements: MovementRow[]; summary: MovementSummary[] }
   const [movementsData, setMovementsData] = useState<MovementsData | null>(null)
   const [movementsLoading, setMovementsLoading] = useState(false)
@@ -1948,59 +1955,38 @@ export function OnboardingFlow({
         const mvts = movementsData?.movements ?? []
         const mvtSummary = movementsData?.summary ?? []
 
-        const typeCounts: Record<string, number> = {}
-        const typeAmounts: Record<string, number> = {}
+        const CLASS_META: Record<string, { label: string; color: string; group: "pnl" | "non_pnl" | "review" }> = {
+          customer_cash_in:  { label: "Customer Cash In",    color: "bg-emerald-500/80 border-emerald-400/50", group: "pnl" },
+          vendor_cash_out:   { label: "Vendor Cash Out",     color: "bg-orange-500/80 border-orange-400/50",   group: "pnl" },
+          bank_fee:          { label: "Bank Fee",            color: "bg-red-500/80 border-red-400/50",         group: "pnl" },
+          refund:            { label: "Refund",              color: "bg-amber-500/80 border-amber-400/50",     group: "pnl" },
+          interest:          { label: "Interest",            color: "bg-teal-500/80 border-teal-400/50",       group: "pnl" },
+          internal_transfer: { label: "Internal Transfer",   color: "bg-slate-500/80 border-slate-400/50",     group: "non_pnl" },
+          processor_payout:  { label: "Processor Payout",    color: "bg-violet-500/80 border-violet-400/50",   group: "non_pnl" },
+          processor_fee:     { label: "Processor Fee",       color: "bg-violet-700/80 border-violet-600/50",   group: "non_pnl" },
+          credit_card_payment: { label: "Credit Card Payment", color: "bg-indigo-500/80 border-indigo-400/50", group: "non_pnl" },
+          owner_contribution:  { label: "Owner Contribution",  color: "bg-rose-400/80 border-rose-300/50",     group: "non_pnl" },
+          owner_draw:          { label: "Owner Draw",          color: "bg-rose-600/80 border-rose-500/50",     group: "non_pnl" },
+          opening_balance:     { label: "Opening Balance",     color: "bg-gray-600/80 border-gray-500/50",     group: "non_pnl" },
+          unknown:             { label: "Needs Review",        color: "bg-zinc-500/80 border-zinc-400/50",     group: "review" },
+        }
+
+        const classCounts: Record<string, number> = {}
+        const classAmounts: Record<string, number> = {}
         let pnlCount = 0
         let nonPnlCount = 0
         let reviewCount = 0
         let coalescedCount = 0
         for (const s of mvtSummary) {
-          typeCounts[s.movement_type] = (typeCounts[s.movement_type] ?? 0) + s.count
-          typeAmounts[s.movement_type] = (typeAmounts[s.movement_type] ?? 0) + parseFloat(s.total_amount)
+          classCounts[s.movement_class] = (classCounts[s.movement_class] ?? 0) + s.count
+          classAmounts[s.movement_class] = (classAmounts[s.movement_class] ?? 0) + parseFloat(s.total_amount)
           if (s.pnl_eligible) pnlCount += s.count
           else nonPnlCount += s.count
         }
         for (const m of mvts) {
-          if (m.review_needed) reviewCount++
+          if (m.needs_review) reviewCount++
           if (m.provenance === "coalesced") coalescedCount++
         }
-
-        const TYPE_META: Record<string, { label: string; color: string; group: "pnl" | "non_pnl" | "unknown" }> = {
-          cash_in_customer:         { label: "Customer Cash In",      color: "bg-emerald-500/80 border-emerald-400/50",  group: "pnl" },
-          cash_out_vendor:          { label: "Vendor Cash Out",       color: "bg-orange-500/80 border-orange-400/50",    group: "pnl" },
-          cash_out_operating_expense: { label: "Operating Expense",   color: "bg-amber-600/80 border-amber-500/50",      group: "pnl" },
-          cash_out_payroll:         { label: "Payroll",               color: "bg-pink-500/80 border-pink-400/50",        group: "pnl" },
-          cash_out_tax:             { label: "Tax",                   color: "bg-red-700/80 border-red-600/50",          group: "pnl" },
-          cash_out_bank_fee:        { label: "Bank Fee",              color: "bg-red-500/80 border-red-400/50",          group: "pnl" },
-          cash_out_refund:          { label: "Refund Out",            color: "bg-amber-500/80 border-amber-400/50",      group: "pnl" },
-          cash_in_refund:           { label: "Refund In",             color: "bg-lime-500/80 border-lime-400/50",        group: "pnl" },
-          cash_in_interest:         { label: "Interest In",           color: "bg-teal-500/80 border-teal-400/50",        group: "pnl" },
-          cash_out_interest:        { label: "Interest Out",          color: "bg-teal-700/80 border-teal-600/50",        group: "pnl" },
-          other_operating:          { label: "Other Operating",       color: "bg-cyan-600/80 border-cyan-500/50",        group: "pnl" },
-          internal_transfer:        { label: "Internal Transfer",     color: "bg-slate-500/80 border-slate-400/50",      group: "non_pnl" },
-          processor_payout:         { label: "Processor Payout",      color: "bg-violet-500/80 border-violet-400/50",    group: "non_pnl" },
-          processor_fee_settlement: { label: "Processor Fee",         color: "bg-violet-700/80 border-violet-600/50",    group: "non_pnl" },
-          credit_card_payment:      { label: "Credit Card Payment",   color: "bg-indigo-500/80 border-indigo-400/50",    group: "non_pnl" },
-          loan_funding:             { label: "Loan Funding",          color: "bg-blue-600/80 border-blue-500/50",        group: "non_pnl" },
-          loan_principal_payment:   { label: "Loan Payment",          color: "bg-blue-800/80 border-blue-700/50",        group: "non_pnl" },
-          owner_contribution:       { label: "Owner Contribution",    color: "bg-rose-400/80 border-rose-300/50",        group: "non_pnl" },
-          owner_draw:               { label: "Owner Draw",            color: "bg-rose-600/80 border-rose-500/50",        group: "non_pnl" },
-          account_verification:     { label: "Account Verification",  color: "bg-gray-500/80 border-gray-400/50",        group: "non_pnl" },
-          opening_balance:          { label: "Opening Balance",       color: "bg-gray-600/80 border-gray-500/50",        group: "non_pnl" },
-          balance_adjustment:       { label: "Balance Adjustment",    color: "bg-gray-700/80 border-gray-600/50",        group: "non_pnl" },
-          merchant_deposit_unresolved: { label: "Merchant Deposit?",   color: "bg-amber-700/80 border-amber-600/50",      group: "unknown" },
-          owner_contribution_candidate: { label: "Owner Contribution?", color: "bg-rose-300/80 border-rose-200/50",    group: "unknown" },
-          unknown_inflow:           { label: "Unknown Inflow",        color: "bg-zinc-500/80 border-zinc-400/50",        group: "unknown" },
-          unknown_outflow:          { label: "Unknown Outflow",       color: "bg-zinc-600/80 border-zinc-500/50",        group: "unknown" },
-          unknown_transfer_candidate: { label: "Unknown Transfer?",   color: "bg-zinc-700/80 border-zinc-600/50",        group: "unknown" },
-        }
-
-        const sourceColor = (s: string) =>
-          s === "plaid" ? "bg-amber-500/80" :
-          s === "qbo" ? "bg-blue-500/80" :
-          s === "stripe" ? "bg-purple-500/80" :
-          s === "xero" ? "bg-cyan-500/80" :
-          "bg-zinc-500/80"
 
         const provenanceLabel = (p: string) =>
           p === "coalesced" ? { text: "C", color: "bg-green-600/80", title: "Coalesced (multi-source)" } :
@@ -2008,38 +1994,45 @@ export function OnboardingFlow({
           p === "accounting_observed" ? { text: "A", color: "bg-blue-600/80", title: "Accounting observed" } :
           { text: "?", color: "bg-zinc-600/80", title: "Unknown provenance" }
 
-        const fmtAmt = (a: string | number) => {
-          const n = typeof a === "string" ? parseFloat(a) : a
-          const abs = Math.abs(n)
-          const formatted = abs >= 1000 ? abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : abs.toFixed(2)
-          return n >= 0 ? `+$${formatted}` : `-$${formatted}`
+        const DETAIL_LABELS: Record<string, string> = {
+          cash_in_customer: "Customer Receipt", cash_out_vendor: "Vendor Payment",
+          cash_out_operating_expense: "Operating Expense", cash_out_payroll: "Payroll",
+          cash_out_tax: "Tax", cash_out_bank_fee: "Bank Fee",
+          cash_out_refund: "Refund Out", cash_in_refund: "Refund In",
+          cash_in_interest: "Interest In", cash_out_interest: "Interest Out",
+          merchant_deposit_unresolved: "Merchant Deposit?",
+          owner_contribution_candidate: "Owner Contribution?",
+          unknown_inflow: "Unknown Inflow", unknown_outflow: "Unknown Outflow",
+          unknown_transfer_candidate: "Unknown Transfer?",
+          loan_funding: "Loan Funding", loan_principal_payment: "Loan Payment",
+          other_operating: "Other Operating",
         }
 
-        const pnlTypes = Object.entries(TYPE_META).filter(([, v]) => v.group === "pnl").map(([k]) => k).filter((k) => (typeCounts[k] ?? 0) > 0)
-        const nonPnlTypes = Object.entries(TYPE_META).filter(([, v]) => v.group === "non_pnl").map(([k]) => k).filter((k) => (typeCounts[k] ?? 0) > 0)
-        const unknownTypes = Object.entries(TYPE_META).filter(([, v]) => v.group === "unknown").map(([k]) => k).filter((k) => (typeCounts[k] ?? 0) > 0)
+        const pnlClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "pnl").map(([k]) => k).filter((k) => (classCounts[k] ?? 0) > 0)
+        const nonPnlClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "non_pnl").map(([k]) => k).filter((k) => (classCounts[k] ?? 0) > 0)
+        const reviewClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "review").map(([k]) => k).filter((k) => (classCounts[k] ?? 0) > 0)
 
-        const TRANSFER_TYPES = new Set(["internal_transfer"])
+        const isTransferClass = (cls: string) => cls === "internal_transfer"
 
-        const renderTypeTable = (typeKey: string) => {
-          const meta = TYPE_META[typeKey] ?? { label: typeKey, color: "bg-zinc-500/80 border-zinc-400/50", group: "unknown" }
-          const typeMvts = mvts.filter((m) => m.movement_type === typeKey)
+        const renderClassTable = (classKey: string) => {
+          const meta = CLASS_META[classKey] ?? { label: classKey, color: "bg-zinc-500/80 border-zinc-400/50", group: "review" }
+          const classMvts = mvts.filter((m) => m.movement_class === classKey)
           const isPnl = meta.group === "pnl"
-          const isTransferType = TRANSFER_TYPES.has(typeKey)
+          const isTransfer = isTransferClass(classKey)
           return (
-            <div key={typeKey} className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
+            <div key={classKey} className="rounded-xl border border-white/20 bg-white/5 overflow-hidden">
               <div className="flex items-center gap-3 px-4 py-3 border-b border-white/20">
                 <span className={`inline-flex rounded-md border px-2.5 py-1 text-sm font-semibold text-white ${meta.color}`}>
                   {meta.label}
                 </span>
-                <span className="text-sm text-gray-400">{typeCounts[typeKey]} movement{typeCounts[typeKey] !== 1 ? "s" : ""}</span>
-                <span className="text-sm text-gray-500">${(typeAmounts[typeKey] ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="text-sm text-gray-400">{classCounts[classKey]} movement{classCounts[classKey] !== 1 ? "s" : ""}</span>
+                <span className="text-sm text-gray-500">${(classAmounts[classKey] ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 {isPnl ? (
                   <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] text-emerald-400 font-medium">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
                     P&L
                   </span>
-                ) : meta.group === "unknown" ? (
+                ) : meta.group === "review" ? (
                   <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 text-[11px] text-yellow-400 font-medium">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
                     Needs review
@@ -2052,7 +2045,7 @@ export function OnboardingFlow({
                 )}
               </div>
               <div className="max-h-[40vh] overflow-y-auto overflow-x-auto">
-                {isTransferType ? (
+                {isTransfer ? (
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-black/60 backdrop-blur-sm">
                       <tr className="border-b border-white/15">
@@ -2062,22 +2055,22 @@ export function OnboardingFlow({
                         <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[30px]"></th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">To</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
-                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]">Evidence</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Prov</th>
                         <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[60px]" title="Classification / Evidence">Conf</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                      {typeMvts.slice(0, 200).map((m) => {
+                      {classMvts.slice(0, 200).map((m) => {
                         const md = m.metadata ?? {}
-                        const fromName = (md.from_account_name as string) ?? m.cash_account_id ?? "\u2014"
-                        const fromType = (md.from_account_subtype as string) ?? (md.from_account_type as string) ?? (md.account_subtype as string) ?? ""
-                        const toName = (md.to_account_name as string) ?? m.linked_internal_account_id ?? "\u2014"
+                        const fromName = (md.from_account_name as string) ?? m.account_id ?? "\u2014"
+                        const fromType = (md.from_account_subtype as string) ?? (md.from_account_type as string) ?? ""
+                        const toName = (md.to_account_name as string) ?? (md.linked_internal_account_id as string) ?? "\u2014"
                         const toType = (md.to_account_subtype as string) ?? (md.to_account_type as string) ?? ""
                         return (
-                          <tr key={m.id} className={`hover:bg-white/5 ${m.review_needed ? "bg-yellow-500/5" : ""}`}>
-                            <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
+                          <tr key={m.id} className={`hover:bg-white/5 ${m.needs_review ? "bg-yellow-500/5" : ""}`}>
+                            <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.occurred_at?.split("T")[0]}</td>
                             <td className="px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap text-white">
-                              ${parseFloat(m.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
                             <td className="px-3 py-1.5 text-xs">
                               <div className="text-white truncate max-w-[140px]">{fromName}</div>
@@ -2090,19 +2083,14 @@ export function OnboardingFlow({
                             </td>
                             <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[160px]">{m.raw_description ?? "\u2014"}</td>
                             <td className="px-3 py-1.5">
-                              <div className="flex gap-0.5 items-center">
-                                {(() => { const p = provenanceLabel(m.provenance ?? ""); return (
-                                  <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
-                                ) })()}
-                                {(m.observations ?? []).map((o: ObservationRow, oi: number) => (
-                                  <span key={oi} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(o.source)}`}>{o.source}</span>
-                                ))}
-                              </div>
+                              {(() => { const p = provenanceLabel(m.provenance ?? ""); return (
+                                <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
+                              ) })()}
                             </td>
                             <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap">
-                              {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
-                              <span className="text-white font-medium" title="Classification confidence">{Math.round(m.confidence.score * 100)}%</span>
-                              <span className="text-gray-600 ml-0.5" title="Evidence strength">/{Math.round((m.confidence.evidence_strength ?? 0) * 100)}</span>
+                              {m.needs_review && <span className="text-yellow-400 mr-1" title={m.review_reasons?.join(", ") ?? "Needs review"}>!</span>}
+                              <span className="text-white font-medium" title="Classification confidence">{Math.round(m.confidence * 100)}%</span>
+                              <span className="text-gray-600 ml-0.5" title="Evidence strength">/{Math.round(m.evidence_strength * 100)}</span>
                             </td>
                           </tr>
                         )
@@ -2117,52 +2105,48 @@ export function OnboardingFlow({
                         <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Dir</th>
                         <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
-                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Account</th>
+                        {classKey === "unknown" && <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[110px]">Detail</th>}
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
-                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]">Evidence</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Prov</th>
                         <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[60px]" title="Classification / Evidence">Conf</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                      {typeMvts.slice(0, 200).map((m) => (
-                        <tr key={m.id} className={`hover:bg-white/5 ${m.review_needed ? "bg-yellow-500/5" : ""}`}>
-                          <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.date?.split("T")[0]}</td>
+                      {classMvts.slice(0, 200).map((m) => (
+                        <tr key={m.id} className={`hover:bg-white/5 ${m.needs_review ? "bg-yellow-500/5" : ""}`}>
+                          <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.occurred_at?.split("T")[0]}</td>
                           <td className="px-3 py-1.5 text-xs text-center">
                             <span className={`inline-block w-4 text-center font-bold ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
                               {m.direction === "inflow" ? "\u2191" : "\u2193"}
                             </span>
                           </td>
                           <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
-                            ${parseFloat(m.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
-                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]">{m.counterparty ?? "\u2014"}</td>
-                          <td className="px-3 py-1.5 text-xs">
-                            <div className="text-gray-400 truncate max-w-[120px]">{m.cash_account_id ?? "\u2014"}</div>
-                            {typeof m.metadata?.account_subtype === "string" && <div className="text-[10px] text-gray-500 capitalize">{m.metadata.account_subtype}</div>}
-                          </td>
+                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]">{(m.metadata?.counterparty as string) ?? "\u2014"}</td>
+                          {classKey === "unknown" && (
+                            <td className="px-3 py-1.5 text-xs">
+                              <span className="text-[10px] text-gray-500 bg-white/5 rounded px-1.5 py-0.5">{DETAIL_LABELS[m.movement_type_detail] ?? m.movement_type_detail}</span>
+                            </td>
+                          )}
                           <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[200px]">{m.raw_description ?? "\u2014"}</td>
                           <td className="px-3 py-1.5">
-                            <div className="flex gap-0.5 items-center">
-                              {(() => { const p = provenanceLabel(m.provenance ?? ""); return (
-                                <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
-                              ) })()}
-                              {(m.observations ?? []).map((o: ObservationRow, oi: number) => (
-                                <span key={oi} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-medium text-white uppercase ${sourceColor(o.source)}`}>{o.source}</span>
-                              ))}
-                            </div>
+                            {(() => { const p = provenanceLabel(m.provenance ?? ""); return (
+                              <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
+                            ) })()}
                           </td>
                           <td className="px-3 py-1.5 text-xs text-right whitespace-nowrap">
-                            {m.review_needed && <span className="text-yellow-400 mr-1" title="Needs review">!</span>}
-                            <span className="text-white font-medium" title="Classification confidence">{Math.round(m.confidence.score * 100)}%</span>
-                            <span className="text-gray-600 ml-0.5" title="Evidence strength">/{Math.round((m.confidence.evidence_strength ?? 0) * 100)}</span>
+                            {m.needs_review && <span className="text-yellow-400 mr-1" title={m.review_reasons?.join(", ") ?? "Needs review"}>!</span>}
+                            <span className="text-white font-medium" title="Classification confidence">{Math.round(m.confidence * 100)}%</span>
+                            <span className="text-gray-600 ml-0.5" title="Evidence strength">/{Math.round(m.evidence_strength * 100)}</span>
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 )}
-                {typeMvts.length > 200 && (
-                  <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {typeMvts.length} movements</div>
+                {classMvts.length > 200 && (
+                  <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing 200 of {classMvts.length} movements</div>
                 )}
               </div>
             </div>
@@ -2248,31 +2232,31 @@ export function OnboardingFlow({
                 </div>
 
                 {/* P&L Eligible movements */}
-                {pnlTypes.length > 0 && (
+                {pnlClasses.length > 0 && (
                   <div>
                     <h3 className="text-lg font-semibold text-emerald-400 mb-3">P&L Eligible (Operational Cash Activity)</h3>
                     <div className="space-y-4">
-                      {pnlTypes.map(renderTypeTable)}
+                      {pnlClasses.map(renderClassTable)}
                     </div>
                   </div>
                 )}
 
                 {/* Non-P&L movements */}
-                {nonPnlTypes.length > 0 && (
+                {nonPnlClasses.length > 0 && (
                   <div>
                     <h3 className="text-lg font-semibold text-gray-400 mb-3">Non-P&L (Transfers, Financing, Equity, Settlement)</h3>
                     <div className="space-y-4">
-                      {nonPnlTypes.map(renderTypeTable)}
+                      {nonPnlClasses.map(renderClassTable)}
                     </div>
                   </div>
                 )}
 
                 {/* Unknown / needs review */}
-                {unknownTypes.length > 0 && (
+                {reviewClasses.length > 0 && (
                   <div>
                     <h3 className="text-lg font-semibold text-yellow-400 mb-3">Unclassified (Needs Review)</h3>
                     <div className="space-y-4">
-                      {unknownTypes.map(renderTypeTable)}
+                      {reviewClasses.map(renderClassTable)}
                     </div>
                   </div>
                 )}
