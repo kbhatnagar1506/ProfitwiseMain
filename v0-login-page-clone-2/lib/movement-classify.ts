@@ -125,41 +125,64 @@ type CanonicalMovement = {
 }
 
 // ─── Compositional confidence ─────────────────────────────────────
-// confidence is the weighted sum of contributing signals, not a static number
+//
+// Two separate scores:
+//   classification_confidence — "How sure are we this is the right bucket?"
+//     Only uses signals that ARE present. Absent signals are neutral, not penalizing.
+//   evidence_strength — "How well-corroborated is this across sources/history/entities?"
+//     This one DOES penalize for missing corroboration.
+//
+// The final `score` is classification_confidence (the one used for review_needed threshold).
+// evidence_strength is informational — shown in UI but doesn't gate classification.
 
 type ConfidenceBreakdown = {
-  score: number                 // final composite 0.0–1.0
-  entity_confidence: number     // identity resolution quality (0–1)
+  score: number                 // = classification_confidence
+  evidence_strength: number     // corroboration score (0–1)
+  entity_confidence: number     // identity resolution quality (0–1), -1 = not applicable
   account_resolution: number    // how well we know the cash account (0–1)
   pattern_strength: number      // description pattern match strength (0–1)
   source_agreement: number      // cross-source agreement (0 = single, 1 = full agreement)
-  history: number               // family/recurring pattern strength (0–1)
+  history: number               // family/recurring pattern strength (0–1), -1 = not applicable
   directional_consistency: number // how well direction matches type (0–1)
 }
 
 function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBreakdown {
-  const e = signals.entity_confidence ?? 0
+  const e = signals.entity_confidence ?? -1   // -1 means "not applicable"
   const a = signals.account_resolution ?? 0
   const p = signals.pattern_strength ?? 0
-  const s = signals.source_agreement ?? 0
-  const h = signals.history ?? 0
-   // By default assume direction is consistent unless explicitly downgraded
+  const s = signals.source_agreement ?? -1
+  const h = signals.history ?? -1
   const d = signals.directional_consistency ?? 1
 
-  // Weighted combination (user-specified weights):
-  // entity_confidence: 20%, account_resolution: 20%, pattern_strength: 20%,
-  // source_agreement: 15%, history: 15%, directional_consistency: 10%
-  const score = Math.min(1, Math.max(0,
-    e * 0.20 +
+  // ── Classification confidence ──
+  // Only accumulate signals that are present (>= 0). Weight is redistributed
+  // among present signals so absent ones don't drag the score down.
+  const signalEntries: Array<{ value: number; weight: number }> = []
+  signalEntries.push({ value: p, weight: 0.20 })             // pattern always present
+  signalEntries.push({ value: a, weight: 0.20 })             // account always present
+  signalEntries.push({ value: d, weight: 0.10 })             // direction always present
+  if (e >= 0) signalEntries.push({ value: e, weight: 0.20 }) // only if entity resolved
+  if (s >= 0) signalEntries.push({ value: s, weight: 0.15 }) // only if multi-source
+  if (h >= 0) signalEntries.push({ value: h, weight: 0.15 }) // only if family exists
+
+  const totalWeight = signalEntries.reduce((sum, x) => sum + x.weight, 0)
+  const classificationConfidence = totalWeight > 0
+    ? Math.min(1, Math.max(0, signalEntries.reduce((sum, x) => sum + x.value * (x.weight / totalWeight), 0)))
+    : p // fallback to pattern alone
+
+  // ── Evidence strength ──
+  // This DOES penalize for absence — how well corroborated is this movement?
+  const evidenceStrength = Math.min(1, Math.max(0,
+    (e >= 0 ? e : 0) * 0.25 +
     a * 0.20 +
-    p * 0.20 +
-    s * 0.15 +
-    h * 0.15 +
+    (s >= 0 ? s : 0) * 0.25 +
+    (h >= 0 ? h : 0) * 0.20 +
     d * 0.10
   ))
 
   return {
-    score,
+    score: classificationConfidence,
+    evidence_strength: evidenceStrength,
     entity_confidence: e,
     account_resolution: a,
     pattern_strength: p,
