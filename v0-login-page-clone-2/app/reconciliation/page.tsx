@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import Link from "next/link"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
@@ -21,6 +21,8 @@ type PaymentRow = {
 
 type ARSuggestion = { invoice_id: string; customer_name: string; amount_due: number; confidence: string; reasoning: string; gross_applied: number; fee_amount: number; net_applied: number }
 type APSuggestion = { obligation_id: string; vendor_name: string; confidence: string; reasoning: string }
+type LLMARMatch = { movement_id: string; invoice_id: string; confidence: string; reasoning: string }
+type LLMAPMatch = { movement_id: string; obligation_id: string; confidence: string; reasoning: string }
 
 export default function ReconciliationPage() {
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
@@ -32,6 +34,8 @@ export default function ReconciliationPage() {
   const [linkModal, setLinkModal] = useState<{ payment: PaymentRow; suggestions: ARSuggestion[] | APSuggestion[]; loading: boolean; error: string | null } | null>(null)
   const [unmappedAr, setUnmappedAr] = useState<{ movement_id: string; amount: number; date: string; counterparty: string | null }[]>([])
   const [totalUnmappedAr, setTotalUnmappedAr] = useState(0)
+  const [llmMatching, setLlmMatching] = useState(false)
+  const [llmResults, setLlmResults] = useState<{ ar: LLMARMatch[]; ap: LLMAPMatch[] } | null>(null)
 
   const refresh = useCallback(() => {
     const params = new URLSearchParams()
@@ -60,6 +64,21 @@ export default function ReconciliationPage() {
     setLoading(true)
     refresh().finally(() => setLoading(false))
   }, [refresh])
+
+  useEffect(() => {
+    if (loading || llmRunRef.current) return
+    const unmatched = payments.filter((r) => r.allocations.length === 0)
+    if (unmatched.length === 0) return
+    llmRunRef.current = true
+    setLlmMatching(true)
+    fetch("/api/ar-ap-reconciliation/llm-match", { method: "POST" })
+      .then((r) => r.json())
+      .then((data) => {
+        setLlmResults({ ar: data.ar ?? [], ap: data.ap ?? [] })
+      })
+      .catch(() => setLlmResults({ ar: [], ap: [] }))
+      .finally(() => setLlmMatching(false))
+  }, [loading, payments])
 
   const filteredPayments =
     filter === "matched"
@@ -301,6 +320,133 @@ export default function ReconciliationPage() {
             </div>
           </div>
         </div>
+
+        {llmMatching && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="bg-zinc-900 border border-white/10 rounded-xl p-6 max-w-sm text-center">
+              <div className="h-8 w-8 rounded-full border-2 border-violet-400 border-t-white animate-spin mx-auto mb-3" />
+              <p className="text-white font-medium">Matching with LLM…</p>
+              <p className="text-xs text-gray-500 mt-1">Analyzing unmatched transactions and invoices</p>
+            </div>
+          </div>
+        )}
+
+        {llmResults && (llmResults.ar.length > 0 || llmResults.ap.length > 0) && (
+          <div
+            className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+            onClick={() => setLlmResults(null)}
+          >
+            <div
+              className="bg-zinc-900 border border-white/10 rounded-xl p-4 max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-sm font-medium text-white mb-2">LLM suggested matches</h3>
+              <p className="text-xs text-gray-500 mb-3">Review and apply each match</p>
+              <div className="flex-1 overflow-y-auto space-y-3">
+                {llmResults.ar.map((s) => {
+                  const pay = payments.find((p) => p.movement_id === s.movement_id)
+                  const inv = allInvoices.find((i) => i.type === "ar" && i.invoice_id === s.invoice_id)
+                  return (
+                    <div key={`ar-${s.movement_id}-${s.invoice_id}`} className="p-3 rounded bg-white/5 border border-white/5">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <span className="text-emerald-400">+{pay ? money(pay.amount) : s.movement_id.slice(0, 8)}</span>
+                          <span className="text-gray-500 text-xs ml-2">→ {inv?.display_name ?? s.invoice_id}</span>
+                          <p className="text-xs text-gray-400 mt-1">{s.reasoning}</p>
+                          <span className="text-[10px] text-gray-500">({s.confidence})</span>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res = await fetch("/api/ar-match", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ movement_id: s.movement_id, invoice_id: s.invoice_id }),
+                              })
+                              if (!res.ok) throw new Error((await res.json()).error ?? "Failed")
+                              setLlmResults((r) => {
+                                if (!r) return null
+                                const next = { ...r, ar: r.ar.filter((x) => x.movement_id !== s.movement_id || x.invoice_id !== s.invoice_id) }
+                                return next.ar.length === 0 && next.ap.length === 0 ? null : next
+                              })
+                              refresh()
+                            } catch (e) {
+                              console.error(e)
+                            }
+                          }}
+                          className="text-[10px] px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500"
+                        >
+                          Apply
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+                {llmResults.ap.map((s) => {
+                  const pay = payments.find((p) => p.movement_id === s.movement_id)
+                  const bill = allInvoices.find((i) => i.type === "ap" && `ap_bill_${i.bill_id}` === s.obligation_id)
+                  return (
+                    <div key={`ap-${s.movement_id}-${s.obligation_id}`} className="p-3 rounded bg-white/5 border border-white/5">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <span className="text-red-400">-{pay ? money(pay.amount) : s.movement_id.slice(0, 8)}</span>
+                          <span className="text-gray-500 text-xs ml-2">→ {bill?.display_name ?? s.obligation_id}</span>
+                          <p className="text-xs text-gray-400 mt-1">{s.reasoning}</p>
+                          <span className="text-[10px] text-gray-500">({s.confidence})</span>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res = await fetch("/api/ap-match", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ movement_id: s.movement_id, obligation_id: s.obligation_id }),
+                              })
+                              if (!res.ok) throw new Error((await res.json()).error ?? "Failed")
+                              setLlmResults((r) => {
+                                if (!r) return null
+                                const next = { ...r, ap: r.ap.filter((x) => x.movement_id !== s.movement_id || x.obligation_id !== s.obligation_id) }
+                                return next.ar.length === 0 && next.ap.length === 0 ? null : next
+                              })
+                              refresh()
+                            } catch (e) {
+                              console.error(e)
+                            }
+                          }}
+                          className="text-[10px] px-2 py-1 rounded bg-red-600 hover:bg-red-500"
+                        >
+                          Apply
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => setLlmResults(null)}
+                className="mt-3 text-sm text-gray-400 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+
+        {llmResults && llmResults.ar.length === 0 && llmResults.ap.length === 0 && (
+          <div
+            className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+            onClick={() => setLlmResults(null)}
+          >
+            <div
+              className="bg-zinc-900 border border-white/10 rounded-xl p-4 max-w-sm text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-gray-400">No matches suggested by LLM.</p>
+              <button onClick={() => setLlmResults(null)} className="mt-3 text-sm text-gray-400 hover:text-white">Close</button>
+            </div>
+          </div>
+        )}
 
         {linkModal && (
           <div
