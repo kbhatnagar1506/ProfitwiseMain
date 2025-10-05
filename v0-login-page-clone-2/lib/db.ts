@@ -603,9 +603,25 @@ export async function ensureIdentitySchema(): Promise<void> {
   log("identity.schema.ensured", undefined, "db")
 }
 
-// ─── Money Movement Layer ──────────────────────────────────────────
+// ─── Money Movement Layer (v5 — canonical + observations) ──────────
 
-const MOVEMENTS_V3_SQL = `
+const MOVEMENTS_V5_MIGRATE_SQL = `
+  DO $$
+  BEGIN
+    -- Drop old monolithic movements table if it has the old schema
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='movements' AND column_name='evidence_hash') THEN
+      DROP TABLE IF EXISTS movement_observations CASCADE;
+      DROP TABLE IF EXISTS movement_families CASCADE;
+      DROP TABLE movements CASCADE;
+    END IF;
+    -- Also drop the ancient v1 schema
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='movements' AND column_name='movement_class') THEN
+      DROP TABLE movements CASCADE;
+    END IF;
+  END$$;
+`
+
+const MOVEMENTS_V5_SQL = `
   CREATE TABLE IF NOT EXISTS movements (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id                   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -614,29 +630,58 @@ const MOVEMENTS_V3_SQL = `
     date                      DATE NOT NULL,
     movement_type             TEXT NOT NULL,
     pnl_eligible              BOOLEAN NOT NULL DEFAULT false,
+    provenance                TEXT NOT NULL DEFAULT 'bank_observed',
     cash_account_id           TEXT,
     counterparty              TEXT,
     counterparty_entity_id    UUID REFERENCES entities(id) ON DELETE SET NULL,
     counterparty_entity_type  TEXT,
     linked_internal_account_id TEXT,
-    confidence                REAL DEFAULT 0.5,
+    confidence                JSONB NOT NULL DEFAULT '{"score":0.5}'::jsonb,
     review_needed             BOOLEAN NOT NULL DEFAULT false,
-    evidence_hash             TEXT NOT NULL,
-    evidence_refs             JSONB NOT NULL DEFAULT '[]'::jsonb,
     raw_description           TEXT,
     metadata                  JSONB DEFAULT '{}'::jsonb,
-    created_at                TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, evidence_hash)
+    created_at                TIMESTAMPTZ DEFAULT NOW()
   )
 `
 
-const MOVEMENTS_MIGRATE_SQL = `
-  DO $$
-  BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='movements' AND column_name='movement_class') THEN
-      DROP TABLE movements CASCADE;
-    END IF;
-  END$$;
+const MOVEMENT_OBSERVATIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS movement_observations (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    movement_id       UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
+    source            TEXT NOT NULL,
+    source_type       TEXT NOT NULL,
+    source_id         TEXT NOT NULL,
+    amount            NUMERIC NOT NULL,
+    date              DATE NOT NULL,
+    raw_description   TEXT,
+    counterparty      TEXT,
+    account_name      TEXT,
+    account_id        TEXT,
+    account_type      TEXT,
+    account_subtype   TEXT,
+    metadata          JSONB DEFAULT '{}'::jsonb,
+    created_at        TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(source, source_id)
+  )
+`
+
+const MOVEMENT_FAMILIES_SQL = `
+  CREATE TABLE IF NOT EXISTS movement_families (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    family_key        TEXT NOT NULL,
+    pattern           TEXT NOT NULL,
+    account           TEXT,
+    direction         TEXT NOT NULL,
+    dominant_type     TEXT NOT NULL,
+    dominant_confidence REAL NOT NULL DEFAULT 0.5,
+    occurrence_count  INT NOT NULL DEFAULT 0,
+    last_seen         DATE,
+    metadata          JSONB DEFAULT '{}'::jsonb,
+    created_at        TIMESTAMPTZ DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, family_key)
+  )
 `
 
 let movementsSchemaEnsured = false
@@ -647,14 +692,20 @@ export async function ensureMovementsSchema(): Promise<void> {
   if (!p) return
   await ensureAuthSchema()
   await ensureIdentitySchema()
-  await p.query(MOVEMENTS_MIGRATE_SQL)
-  await p.query(MOVEMENTS_V3_SQL)
+  await p.query(MOVEMENTS_V5_MIGRATE_SQL)
+  await p.query(MOVEMENTS_V5_SQL)
+  await p.query(MOVEMENT_OBSERVATIONS_SQL)
+  await p.query(MOVEMENT_FAMILIES_SQL)
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_user ON movements (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_type ON movements (user_id, movement_type)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_pnl ON movements (user_id, pnl_eligible)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_entity ON movements (counterparty_entity_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_review ON movements (user_id, review_needed)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_movements_date ON movements (user_id, date)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_movements_provenance ON movements (user_id, provenance)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_obs_movement ON movement_observations (movement_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_obs_source ON movement_observations (source, source_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_families_user ON movement_families (user_id)")
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }

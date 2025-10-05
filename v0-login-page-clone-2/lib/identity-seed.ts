@@ -127,7 +127,7 @@ function levenshtein(a: string, b: string): number {
 
 // ─── Self-entity & owner detection ─────────────────────────────────
 
-type SelfContext = {
+export type SelfContext = {
   selfNames: string[]
   selfDomains: string[]
   ownerNames: string[]
@@ -135,7 +135,7 @@ type SelfContext = {
   userEmail: string | null
 }
 
-async function getSelfContext(userId: string): Promise<SelfContext> {
+export async function getSelfContext(userId: string): Promise<SelfContext> {
   const ctx: SelfContext = { selfNames: [], selfDomains: [], ownerNames: [], ownerEmails: [], userEmail: null }
 
   const { rows: userRows } = await query<{ email: string; company_form: Record<string, string> | null }>(
