@@ -14,8 +14,10 @@ export type MovementClass =
   | "owner_draw"
   | "credit_card_payment"
   | "bank_fee"
+  | "bank_fee_refund"
   | "refund"
   | "interest"
+  | "merchant_deposit"
   | "opening_balance"
   | "unknown"
 
@@ -65,6 +67,7 @@ const INTERNAL_TO_CLASS: Record<string, MovementClass> = {
   owner_draw: "owner_draw",
   credit_card_payment: "credit_card_payment",
   cash_out_bank_fee: "bank_fee",
+  bank_fee_refund: "bank_fee_refund",
   cash_in_refund: "refund",
   cash_out_refund: "refund",
   cash_in_interest: "interest",
@@ -74,7 +77,8 @@ const INTERNAL_TO_CLASS: Record<string, MovementClass> = {
   account_verification: "opening_balance",
   loan_funding: "unknown",
   loan_principal_payment: "unknown",
-  merchant_deposit_unresolved: "unknown",
+  merchant_deposit_unresolved: "merchant_deposit",
+  merchant_deposit_resolved: "merchant_deposit",
   unknown_inflow: "unknown",
   unknown_outflow: "unknown",
   unknown_transfer_candidate: "unknown",
@@ -89,6 +93,7 @@ export const MOVEMENT_CLASS_META: Record<MovementClass, { label: string; color: 
   customer_cash_in:  { label: "Customer Cash In",    color: "bg-emerald-500/80 border-emerald-400/50", group: "pnl" },
   vendor_cash_out:   { label: "Vendor Cash Out",     color: "bg-orange-500/80 border-orange-400/50",   group: "pnl" },
   bank_fee:          { label: "Bank Fee",            color: "bg-red-500/80 border-red-400/50",         group: "pnl" },
+  bank_fee_refund:   { label: "Bank Fee Refund",    color: "bg-red-400/60 border-red-300/40",         group: "pnl" },
   refund:            { label: "Refund",              color: "bg-amber-500/80 border-amber-400/50",     group: "pnl" },
   interest:          { label: "Interest",            color: "bg-teal-500/80 border-teal-400/50",       group: "pnl" },
   internal_transfer: { label: "Internal Transfer",   color: "bg-slate-500/80 border-slate-400/50",     group: "non_pnl" },
@@ -97,12 +102,13 @@ export const MOVEMENT_CLASS_META: Record<MovementClass, { label: string; color: 
   credit_card_payment: { label: "Credit Card Payment", color: "bg-indigo-500/80 border-indigo-400/50", group: "non_pnl" },
   owner_contribution:  { label: "Owner Contribution",  color: "bg-rose-400/80 border-rose-300/50",     group: "non_pnl" },
   owner_draw:          { label: "Owner Draw",          color: "bg-rose-600/80 border-rose-500/50",     group: "non_pnl" },
+  merchant_deposit:    { label: "Merchant Deposit",    color: "bg-cyan-600/80 border-cyan-500/50",     group: "non_pnl" },
   opening_balance:     { label: "Opening Balance",     color: "bg-gray-600/80 border-gray-500/50",     group: "non_pnl" },
   unknown:             { label: "Needs Review",        color: "bg-zinc-500/80 border-zinc-400/50",     group: "review" },
 }
 
 export const PNL_CLASSES = new Set<MovementClass>([
-  "customer_cash_in", "vendor_cash_out", "bank_fee", "refund", "interest",
+  "customer_cash_in", "vendor_cash_out", "bank_fee", "bank_fee_refund", "refund", "interest",
 ])
 
 export function isClassPnlEligible(mc: MovementClass): boolean {

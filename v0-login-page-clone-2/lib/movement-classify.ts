@@ -46,6 +46,7 @@ const NON_PNL_TYPES = [
   "account_verification",
   "opening_balance",
   "balance_adjustment",
+  "merchant_deposit_resolved",
 ] as const
 
 const PNL_TYPES = [
@@ -57,6 +58,7 @@ const PNL_TYPES = [
   "cash_in_interest",
   "cash_out_interest",
   "cash_out_bank_fee",
+  "bank_fee_refund",
   "cash_out_payroll",
   "cash_out_tax",
   "other_operating",
@@ -314,6 +316,19 @@ const MERCHANT_DEPOSIT_PATTERNS = [
   /\bmerch\s*dep\b/i,
   /\bpos\s*deposit\b/i,
   /\b(square|clover|toast|stripe|adyen|worldpay|fiserv|heartland)\b.*\b(deposit|payout|transfer)\b/i,
+]
+
+const PROCESSOR_PAYOUT_DESC_PATTERNS = [
+  /\bpreauthorized\s+ach\s+credit\b.*\b(shopify|stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree|gofundme)\b/i,
+  /\bach\s+credit\b.*\b(shopify|stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree)\b/i,
+  /\b(shopify|stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree)\b.*\b(payout|settlement|ach credit)\b/i,
+]
+
+const BANK_FEE_REFUND_PATTERNS = [
+  /\bfee\s*refund\b/i,
+  /\brefund.*\bfee\b/i,
+  /\breversed?\s*(service charge|maintenance|fee)\b/i,
+  /\b(service charge|fee)\s*reversal\b/i,
 ]
 
 const VERIFICATION_PATTERNS = [
@@ -1027,6 +1042,11 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
     return { type: "account_verification", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
   }
 
+  // ── Bank fee refund (must come before general bank fee & refund matching) ──
+  if (BANK_FEE_REFUND_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "bank_fee_refund", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
+  }
+
   // ── Opening balance ──
   if (OPENING_BALANCE_PATTERNS.some((p) => p.test(desc))) {
     return { type: "opening_balance", signals: { pattern_strength: 0.90, source_authority: srcAuth } }
@@ -1040,20 +1060,28 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
     return { type: "credit_card_payment", signals: { pattern_strength: 0.90, entity_confidence: eid, source_authority: srcAuth } }
   }
 
-  // ── Owner draw / contribution (pattern-based) ──
-  if (OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
+  // ── Processor payout by descriptor (ACH CREDIT from known processors) ──
+  if (m.direction === "inflow" && PROCESSOR_PAYOUT_DESC_PATTERNS.some((p) => p.test(desc))) {
+    return { type: "processor_payout", signals: { pattern_strength: 0.92, source_authority: srcAuth, account_resolution: ar } }
+  }
+
+  // Helper: is this a merchant deposit descriptor? Used to block owner contamination.
+  const isMerchantDepositDesc = MERCHANT_DEPOSIT_PATTERNS.some((p) => p.test(desc))
+
+  // ── Owner draw / contribution (pattern-based) — block merchant deposit descriptors ──
+  if (!isMerchantDepositDesc && OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
     return { type: "owner_contribution", signals: { pattern_strength: 0.85, entity_confidence: eid, source_authority: srcAuth } }
   }
-  if (OWNER_PATTERNS.some((p) => p.test(desc))) {
+  if (!isMerchantDepositDesc && OWNER_PATTERNS.some((p) => p.test(desc))) {
     return { type: "owner_draw", signals: { pattern_strength: 0.85, entity_confidence: eid, source_authority: srcAuth } }
   }
-  if (identity?.role === "owner") {
+  if (!isMerchantDepositDesc && identity?.role === "owner") {
     const t = m.direction === "inflow" ? "owner_contribution" as const : "owner_draw" as const
     return { type: t, signals: { entity_confidence: identity.confidence, pattern_strength: 0.65, source_authority: srcAuth, account_resolution: ar } }
   }
 
-  // ── Fix 3: Owner detection from descriptor containing owner name ──
-  if (m.direction === "inflow" && selfCtx.ownerNames.length > 0) {
+  // ── Owner detection from descriptor containing owner name — block merchant deposit descriptors ──
+  if (!isMerchantDepositDesc && m.direction === "inflow" && selfCtx.ownerNames.length > 0) {
     const descNorm = normKey(desc)
     for (const on of selfCtx.ownerNames) {
       const onNorm = on.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -1077,8 +1105,11 @@ function classifyNonPnl(m: CanonicalMovement, identity: MovementIdentityEntry | 
     return { type: t, signals: { entity_confidence: identity.confidence, pattern_strength: 0.60, source_authority: srcAuth } }
   }
 
-  // ── Transfer patterns (bank description) ──
+  // ── Transfer patterns (bank description) — but not processor payouts or merchant deposits ──
   if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
+    if (PROCESSOR_PAYOUT_DESC_PATTERNS.some((p) => p.test(desc))) {
+      return { type: "processor_payout", signals: { pattern_strength: 0.92, source_authority: srcAuth, account_resolution: ar } }
+    }
     if (identity && (identity.role === "internal" || identity.role === "bank_account" || identity.is_own_account)) {
       return { type: "internal_transfer", signals: { pattern_strength: 0.80, entity_confidence: identity.confidence, account_resolution: ar, source_authority: srcAuth } }
     }
@@ -1131,6 +1162,9 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
   if (pfcPrimary === "RENT_AND_UTILITIES" || pfcPrimary === "GENERAL_SERVICES") {
     return { type: "cash_out_operating_expense", signals: { pattern_strength: 0.85, source_authority: srcAuth, account_resolution: ar } }
   }
+
+  // ── Bank fee refund (must check before general bank fee matching) ──
+  if (BANK_FEE_REFUND_PATTERNS.some((p) => p.test(desc))) return { type: "bank_fee_refund", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
 
   // ── Bank fees (descriptor match) ──
   if (BANK_FEE_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.90, source_authority: srcAuth, account_resolution: ar } }
@@ -1246,21 +1280,22 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
 function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEntry | null): ClassifyResult | null {
   const desc = (m.raw_description ?? "").toLowerCase()
   const srcAuth = getSourceAuthority(m.evidence)
+  const isMerchantDepositDesc = MERCHANT_DEPOSIT_PATTERNS.some((p) => p.test(desc))
 
-  // Merchant deposit: recurring BANKCD/DEPOSIT patterns — keep classification moderate
-  if (m.direction === "inflow" && MERCHANT_DEPOSIT_PATTERNS.some((p) => p.test(desc))) {
-    return { type: "merchant_deposit_unresolved", signals: { pattern_strength: 0.45, source_authority: srcAuth } }
+  // Merchant deposit: recurring BANKCD/DEPOSIT patterns — recognized economic class
+  if (m.direction === "inflow" && isMerchantDepositDesc) {
+    return { type: "merchant_deposit_unresolved", signals: { pattern_strength: 0.65, source_authority: srcAuth } }
   }
 
-  // Inflows from owner-linked entities without strong signals
-  if (m.direction === "inflow" && identity?.role === "internal") {
+  // Inflows from owner-linked entities without strong signals — NEVER if merchant deposit descriptor
+  if (!isMerchantDepositDesc && m.direction === "inflow" && identity?.role === "internal") {
     if (!OWNER_CONTRIBUTION_PATTERNS.some((p) => p.test(desc))) {
       return { type: "owner_contribution_candidate", signals: { entity_confidence: identity.confidence, pattern_strength: 0.40, source_authority: srcAuth } }
     }
   }
 
-  // Inflows from own accounts without internal transfer pairing
-  if (m.direction === "inflow" && identity?.is_own_account && !m.linked_internal_account_id) {
+  // Inflows from own accounts without internal transfer pairing — NEVER if merchant deposit descriptor
+  if (!isMerchantDepositDesc && m.direction === "inflow" && identity?.is_own_account && !m.linked_internal_account_id) {
     return { type: "owner_contribution_candidate", signals: { entity_confidence: identity.confidence, pattern_strength: 0.40, source_authority: srcAuth } }
   }
 
@@ -1355,12 +1390,30 @@ function applyFamilyLearning(classified: ClassifiedMovement[], families: Map<str
   let upgraded = 0
 
   for (const c of classified) {
-    if (c.confidence.score >= 0.55) continue
     const desc = c.raw_description ?? ""
     const key = familyKey(desc, c.direction, c.cash_account_name)
-
     const family = families.get(key)
     if (!family) continue
+
+    // Promote merchant_deposit_unresolved to resolved when family is recurring
+    if (c.movement_type === "merchant_deposit_unresolved" && family.count >= 3) {
+      c.movement_type = "merchant_deposit_resolved"
+      c.pnl_eligible = false
+      const familyPatternFloor = family.count >= 10 ? 0.85 : family.count >= 5 ? 0.75 : 0.65
+      c.confidence = computeConfidence({
+        ...c.confidence,
+        history: family.dominantConfidence,
+        pattern_strength: Math.max(c.confidence.pattern_strength, familyPatternFloor),
+      })
+      c.review_needed = c.confidence.score < 0.55
+      c.metadata.family_learned = true
+      c.metadata.family_key = family.family_key
+      c.metadata.family_count = family.count
+      upgraded++
+      continue
+    }
+
+    if (c.confidence.score >= 0.55) continue
     if (family.dominantConfidence > c.confidence.score) {
       c.movement_type = family.dominantType
       c.pnl_eligible = isPnlEligible(family.dominantType)
@@ -1448,6 +1501,7 @@ Non-P&L types (not operational cash activity):
 - account_verification: micro-deposits, test transactions
 - opening_balance: initial balance
 - balance_adjustment: reconciliation adjustments
+- merchant_deposit_resolved: confirmed recurring merchant/card settlement family
 
 P&L types (operational):
 - cash_in_customer: customer payments, sales receipts
@@ -1456,12 +1510,15 @@ P&L types (operational):
 - cash_out_refund / cash_in_refund: refunds, chargebacks
 - cash_in_interest / cash_out_interest: interest
 - cash_out_bank_fee: bank service fees
+- bank_fee_refund: refund/reversal of a bank fee (contra-fee, not expense)
 - cash_out_payroll: employee compensation
 - cash_out_tax: tax payments
 
 Provisional (low certainty but directional):
 - merchant_deposit_unresolved: recurring merchant/card deposit, likely settlement, but counterparty unknown
 - owner_contribution_candidate: inflow that may be owner capital, but not confirmed
+
+IMPORTANT: "MERCHANT BANKCD/DEPOSIT" or "BANKCD DEPOSIT" descriptors are merchant settlements, NOT owner contributions.
 
 Fallback:
 - unknown_inflow / unknown_outflow / unknown_transfer_candidate
@@ -1745,9 +1802,9 @@ export async function classifyMovements(userId: string): Promise<{
 
   // Step 8b: Direction/type consistency validation
   const INFLOW_TYPES = new Set<string>([
-    "cash_in_customer", "cash_in_refund", "cash_in_interest",
+    "cash_in_customer", "cash_in_refund", "cash_in_interest", "bank_fee_refund",
     "loan_funding", "owner_contribution", "owner_contribution_candidate",
-    "merchant_deposit_unresolved", "unknown_inflow",
+    "merchant_deposit_unresolved", "merchant_deposit_resolved", "unknown_inflow",
   ])
   const OUTFLOW_TYPES = new Set<string>([
     "cash_out_vendor", "cash_out_operating_expense", "cash_out_refund",

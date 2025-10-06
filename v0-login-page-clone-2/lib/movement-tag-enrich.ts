@@ -111,9 +111,19 @@ const CLASS_TO_BASE: Record<string, BaseTag> = {
     hits_pnl: true, hits_working_capital: false,
   },
   refund: {
-    economic_class: "refund", cashflow_bucket: "opex_out", counterparty_role: "vendor",
+    economic_class: "refund", cashflow_bucket: "revenue_in", counterparty_role: "customer",
     is_operating: true, is_financing: false, is_investing: false, is_owner_related: false,
     hits_pnl: true, hits_working_capital: true,
+  },
+  bank_fee_refund: {
+    economic_class: "adjustment", cashflow_bucket: "opex_out", counterparty_role: "bank",
+    is_operating: true, is_financing: false, is_investing: false, is_owner_related: false,
+    hits_pnl: true, hits_working_capital: true,
+  },
+  merchant_deposit: {
+    economic_class: "processor_payout", cashflow_bucket: "settlement", counterparty_role: "processor",
+    is_operating: false, is_financing: false, is_investing: false, is_owner_related: false,
+    hits_pnl: false, hits_working_capital: false,
   },
   opening_balance: {
     economic_class: "adjustment", cashflow_bucket: "unknown", counterparty_role: "bank",
@@ -157,7 +167,16 @@ function tagLevel1(m: CanonicalMovement): BaseTag | null {
     tag.cashflow_bucket = m.direction === "inflow" ? "revenue_in" : "opex_out"
   }
   if (m.movement_class === "refund") {
-    tag.cashflow_bucket = m.direction === "inflow" ? "revenue_in" : "opex_out"
+    if (m.direction === "outflow") {
+      tag.cashflow_bucket = "revenue_in"
+      tag.counterparty_role = "customer"
+    } else {
+      tag.cashflow_bucket = "opex_out"
+      tag.counterparty_role = "vendor"
+    }
+  }
+  if (m.movement_class === "bank_fee_refund") {
+    tag.cashflow_bucket = "opex_out"
   }
 
   return tag
