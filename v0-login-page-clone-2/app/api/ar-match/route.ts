@@ -80,6 +80,7 @@ export async function POST(req: Request) {
         match?.confidence ?? 0.5,
         match?.match_method ?? "manual",
       )
+      await query("DELETE FROM reconciliation_cache WHERE user_id = $1", [user.id]).catch(() => {})
       return NextResponse.json({ suggestions: [], allocation })
     }
 
