@@ -210,8 +210,8 @@ export function OnboardingFlow({
   const [movementsLoading, setMovementsLoading] = useState(false)
   const [movementsClassifying, setMovementsClassifying] = useState(false)
   const [movementsError, setMovementsError] = useState<string | null>(null)
-  type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
-  type TagStats = { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number }
+  type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; state_inclusion_policy?: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
+  type TagStats = { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number; policy_include: number; policy_provisional: number; policy_exclude: number }
   const [tagData, setTagData] = useState<{ movements: TaggedMovement[]; stats: TagStats } | null>(null)
   const [tagLoading, setTagLoading] = useState(false)
   const [tagRunning, setTagRunning] = useState(false)
@@ -2405,24 +2405,54 @@ export function OnboardingFlow({
             {!tagLoading && !tagRunning && tagged.length > 0 && (
               <div className="space-y-6">
 
-                {/* Tagging stats */}
+                {/* State inclusion policy */}
                 {stats && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
-                      <div className="text-2xl font-bold text-white">{stats.total}</div>
-                      <div className="text-xs text-gray-400 mt-1">Total Tagged</div>
+                  <div className="space-y-3">
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                      <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">State Inclusion Policy</h3>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-4 py-3 text-center">
+                          <div className="text-2xl font-bold text-emerald-400">{stats.policy_include}</div>
+                          <div className="text-xs text-emerald-300/70 mt-1 font-medium">Include</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">Conf &ge; 80%</div>
+                        </div>
+                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-3 text-center">
+                          <div className="text-2xl font-bold text-amber-400">{stats.policy_provisional}</div>
+                          <div className="text-xs text-amber-300/70 mt-1 font-medium">Provisional</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">55% &le; Conf &lt; 80%</div>
+                        </div>
+                        <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-center">
+                          <div className="text-2xl font-bold text-red-400">{stats.policy_exclude}</div>
+                          <div className="text-xs text-red-300/70 mt-1 font-medium">Exclude &amp; Review</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">Conf &lt; 55%</div>
+                        </div>
+                      </div>
+                      {stats.total > 0 && (
+                        <div className="mt-3 h-2 rounded-full overflow-hidden flex bg-white/5">
+                          <div className="bg-emerald-500 transition-all" style={{ width: `${(stats.policy_include / stats.total) * 100}%` }} />
+                          <div className="bg-amber-500 transition-all" style={{ width: `${(stats.policy_provisional / stats.total) * 100}%` }} />
+                          <div className="bg-red-500 transition-all" style={{ width: `${(stats.policy_exclude / stats.total) * 100}%` }} />
+                        </div>
+                      )}
                     </div>
-                    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
-                      <div className="text-2xl font-bold text-emerald-400">{stats.deterministic}</div>
-                      <div className="text-xs text-gray-400 mt-1">Deterministic</div>
-                    </div>
-                    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
-                      <div className="text-2xl font-bold text-blue-400">{stats.identity_aware}</div>
-                      <div className="text-xs text-gray-400 mt-1">Identity-Aware</div>
-                    </div>
-                    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
-                      <div className="text-2xl font-bold text-amber-400">{stats.recurring}</div>
-                      <div className="text-xs text-gray-400 mt-1">Recurring</div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
+                        <div className="text-2xl font-bold text-white">{stats.total}</div>
+                        <div className="text-xs text-gray-400 mt-1">Total Tagged</div>
+                      </div>
+                      <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
+                        <div className="text-2xl font-bold text-emerald-400">{stats.deterministic}</div>
+                        <div className="text-xs text-gray-400 mt-1">Deterministic</div>
+                      </div>
+                      <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
+                        <div className="text-2xl font-bold text-blue-400">{stats.identity_aware}</div>
+                        <div className="text-xs text-gray-400 mt-1">Identity-Aware</div>
+                      </div>
+                      <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
+                        <div className="text-2xl font-bold text-amber-400">{stats.recurring}</div>
+                        <div className="text-xs text-gray-400 mt-1">Recurring</div>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2506,6 +2536,7 @@ export function OnboardingFlow({
                           <th className="px-3 py-2">Economic Class</th>
                           <th className="px-3 py-2">Bucket</th>
                           <th className="px-3 py-2">CP Role</th>
+                          <th className="px-3 py-2">Policy</th>
                           <th className="px-3 py-2">Flags</th>
                           <th className="px-3 py-2">Description</th>
                         </tr>
@@ -2517,6 +2548,12 @@ export function OnboardingFlow({
                           const role = m.tag?.counterparty_role ?? "unknown"
                           const ecMeta = ECLASS_LABELS[ec] ?? { label: ec, color: "bg-zinc-500/80" }
                           const bucketMeta = BUCKET_LABELS[bucket] ?? { label: bucket, color: "text-gray-400" }
+                          const policy = m.tag?.state_inclusion_policy ?? "exclude_and_review"
+                          const policyMeta = policy === "include"
+                            ? { label: "Include", cls: "text-emerald-400 bg-emerald-500/15" }
+                            : policy === "include_provisional"
+                              ? { label: "Provisional", cls: "text-amber-400 bg-amber-500/15" }
+                              : { label: "Exclude", cls: "text-red-400 bg-red-500/15" }
                           const flags: string[] = []
                           if (m.tag?.is_recurring) flags.push("🔁")
                           if (m.tag?.is_anomaly) flags.push("⚠")
@@ -2540,6 +2577,11 @@ export function OnboardingFlow({
                               </td>
                               <td className={`px-3 py-2 text-xs font-medium ${bucketMeta.color}`}>{bucketMeta.label}</td>
                               <td className="px-3 py-2 text-xs text-gray-400">{ROLE_LABELS[role] ?? role}</td>
+                              <td className="px-3 py-2">
+                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${policyMeta.cls}`}>
+                                  {policyMeta.label}
+                                </span>
+                              </td>
                               <td className="px-3 py-2 text-sm" title={flags.join(" ")}>{flags.join(" ") || "—"}</td>
                               <td className="px-3 py-2 text-gray-500 text-xs max-w-[200px] truncate">{m.raw_description ?? "—"}</td>
                             </tr>

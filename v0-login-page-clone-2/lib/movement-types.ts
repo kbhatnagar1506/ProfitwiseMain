@@ -115,6 +115,25 @@ export function isClassPnlEligible(mc: MovementClass): boolean {
   return PNL_CLASSES.has(mc)
 }
 
+// ─── Phase 2: State Inclusion Policy ────────────────────────────────
+//
+// Confidence drives computation, not just display.
+//   >= 80% classification → fully trusted, include in all state calculations
+//   55–79% classification → included but marked provisional in sensitive metrics
+//   < 55%  classification → excluded from core metrics, routed to unresolved buckets
+
+export type StateInclusionPolicy = "include" | "include_provisional" | "exclude_and_review"
+
+export function computeStatePolicy(
+  classificationConfidence: number,
+  evidenceStrength: number,
+  needsReview: boolean,
+): StateInclusionPolicy {
+  if (needsReview || classificationConfidence < 0.55) return "exclude_and_review"
+  if (classificationConfidence >= 0.80 && evidenceStrength >= 0.15) return "include"
+  return "include_provisional"
+}
+
 // ─── Phase 1: Structural Tagging Layer ──────────────────────────────
 //
 // Tags convert classified movements into state-readable business semantics.
@@ -173,6 +192,7 @@ export type MovementTag = {
   hits_pnl: boolean
   hits_working_capital: boolean
 
+  state_inclusion_policy: StateInclusionPolicy
   classification_confidence: number
   evidence_strength: number
   needs_review: boolean
