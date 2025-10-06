@@ -2658,6 +2658,72 @@ export function OnboardingFlow({
                   </button>
                 </div>
 
+                {/* Review queue: high-value needs_review first, owner vs processor conflicts highlighted */}
+                {excludedForReview > 0 && (() => {
+                  const reviewMvts = mvts
+                    .filter((m) => m.needs_review)
+                    .sort((a, b) => b.amount - a.amount)
+                  const ownerConflictMvts = reviewMvts.filter((m) => (m.review_reasons ?? []).includes("owner_vs_processor_conflict"))
+                  return (
+                    <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/5 overflow-hidden">
+                      <div className="flex items-center justify-between px-4 py-3 border-b border-yellow-500/20">
+                        <h3 className="text-lg font-semibold text-yellow-400">Review queue</h3>
+                        <span className="text-xs text-gray-500">
+                          {reviewMvts.length} item{reviewMvts.length !== 1 ? "s" : ""} · High-value first
+                          {ownerConflictMvts.length > 0 && (
+                            <span className="ml-2 text-amber-400">· {ownerConflictMvts.length} owner vs processor conflict{ownerConflictMvts.length !== 1 ? "s" : ""}</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="max-h-[35vh] overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-black/80 backdrop-blur-sm">
+                            <tr className="border-b border-white/15">
+                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[90px]">Date</th>
+                              <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
+                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
+                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Class</th>
+                              <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[120px]">Flags</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-white/5">
+                            {reviewMvts.slice(0, 50).map((m) => {
+                              const hasOwnerConflict = (m.review_reasons ?? []).includes("owner_vs_processor_conflict")
+                              return (
+                                <tr key={m.id} className={`hover:bg-white/5 ${hasOwnerConflict ? "bg-amber-500/10" : ""}`}>
+                                  <td className="text-gray-400 px-3 py-1.5 text-xs whitespace-nowrap">{m.occurred_at?.split("T")[0]}</td>
+                                  <td className={`px-3 py-1.5 text-xs text-right font-mono font-semibold ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                                    ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]" title={(m.metadata?.counterparty as string) ?? undefined}>
+                                    {displayLabelForCounterparty(m.metadata?.counterparty as string, (m as { tag?: { display_name?: string; entity_canonical_name?: string } }).tag?.display_name ?? (m as { tag?: { entity_canonical_name?: string } }).tag?.entity_canonical_name)}
+                                  </td>
+                                  <td className="text-gray-400 px-3 py-1.5 text-xs">{m.movement_class}</td>
+                                  <td className="px-3 py-1.5">
+                                    {hasOwnerConflict && (
+                                      <span className="inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/20 text-amber-400 border border-amber-500/30" title="Owner vs merchant deposit conflict">
+                                        Owner vs processor
+                                      </span>
+                                    )}
+                                    {!hasOwnerConflict && (m.review_reasons ?? []).length > 0 && (
+                                      <span className="text-[10px] text-gray-500" title={(m.review_reasons ?? []).join(", ")}>
+                                        {(m.review_reasons ?? []).slice(0, 2).join(", ")}
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                        {reviewMvts.length > 50 && (
+                          <div className="px-3 py-2 text-xs text-gray-500 border-t border-white/10">Showing top 50 of {reviewMvts.length} (by amount)</div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
+
                 {/* P&L Eligible movements */}
                 {pnlClasses.length > 0 && (
                   <div>
@@ -3860,6 +3926,12 @@ export function OnboardingFlow({
                           </div>
                         ))}
                       </div>
+                    </div>
+                  )}
+                  {(stateData.spend.provisional_spend > 0 || stateData.spend.excluded_spend > 0) && (
+                    <div className="mt-3 pt-3 border-t border-white/5 text-[10px] text-gray-600">
+                      {stateData.spend.provisional_spend > 0 && <span>Provisional: {money(stateData.spend.provisional_spend)} · </span>}
+                      {stateData.spend.excluded_spend > 0 && <span>Excluded: {money(stateData.spend.excluded_spend)}</span>}
                     </div>
                   )}
                 </div>

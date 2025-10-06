@@ -4,6 +4,7 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { parseEditIntent, type MovementSummary } from "@/lib/movement-edit-llm"
 import { tagMovements } from "@/lib/movement-tag-enrich"
+import { addMerchantOverrideToSupermemory } from "@/lib/supermemory"
 
 export async function POST(req: NextRequest) {
   const cookieStore = await cookies()
@@ -33,9 +34,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Schema not ready" }, { status: 500 })
   }
 
-  type DbRow = { id: string; direction: string; amount: string; raw_description: string | null; counterparty: string | null; movement_type: string }
+  type DbRow = { id: string; direction: string; amount: string; raw_description: string | null; counterparty: string | null; movement_type: string; cash_account_id: string | null }
   const rows = await query<DbRow>(
-    `SELECT id, direction, amount, raw_description, counterparty, movement_type
+    `SELECT id, direction, amount, raw_description, counterparty, movement_type, cash_account_id
      FROM movements WHERE user_id = $1 AND duplicate_of IS NULL`,
     [user.id],
   ).then((r) => r.rows)
@@ -130,6 +131,32 @@ export async function POST(req: NextRequest) {
 
   // Re-tag so movement_tags reflect updated state
   await tagMovements(user.id)
+
+  // Persist user corrections to Supermemory so future classification improves
+  if (process.env.SUPERMEMORY_API_KEY && (plan.changes.movement_type || plan.changes.counterparty != null)) {
+    const rowById = new Map(rows.map((r) => [r.id, r]))
+    for (const id of candidateIds) {
+      const row = rowById.get(id)
+      if (!row) continue
+      const rawName = (row.raw_description ?? row.counterparty ?? "unknown").trim()
+      if (!rawName) continue
+      const normalizedName = (plan.changes.counterparty ?? row.counterparty ?? rawName).trim()
+      const movementType = plan.changes.movement_type ?? row.movement_type
+      const accountId = (row.cash_account_id ?? "unknown").trim() || "unknown"
+      try {
+        await addMerchantOverrideToSupermemory(
+          user.id,
+          accountId,
+          rawName,
+          normalizedName,
+          movementType,
+          movementType,
+        )
+      } catch {
+        // Non-fatal: edit succeeded; Supermemory persistence is best-effort
+      }
+    }
+  }
 
   return NextResponse.json({
     updated,
