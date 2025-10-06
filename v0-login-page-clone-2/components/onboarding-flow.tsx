@@ -104,6 +104,11 @@ const steps = [
     title: "Business semantics",
     description: "Every movement tagged with economic class, cashflow bucket, counterparty role, and structural flags.",
   },
+  {
+    id: 12,
+    title: "Business state",
+    description: "Revenue, spend, and liquidity state computed from tagged movements.",
+  },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -216,6 +221,10 @@ export function OnboardingFlow({
   const [tagLoading, setTagLoading] = useState(false)
   const [tagRunning, setTagRunning] = useState(false)
   const [tagError, setTagError] = useState<string | null>(null)
+  type StateData = { revenue: Record<string, number>; spend: Record<string, number>; liquidity: Record<string, unknown> }
+  const [stateData, setStateData] = useState<StateData | null>(null)
+  const [stateLoading, setStateLoading] = useState(false)
+  const [stateError, setStateError] = useState<string | null>(null)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -677,6 +686,27 @@ export function OnboardingFlow({
         setTagRunning(false)
       })
 
+    return () => { cancelled = true }
+  }, [currentStep])
+
+  // Step 12: Business state (revenue, spend, liquidity)
+  useEffect(() => {
+    if (currentStep !== 12) return
+    let cancelled = false
+    setStateLoading(true)
+    setStateError(null)
+    fetch("/api/state")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((data: StateData) => {
+        if (cancelled) return
+        setStateData(data)
+        setStateLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setStateError(err instanceof Error ? err.message : "Failed to load state")
+        setStateLoading(false)
+      })
     return () => { cancelled = true }
   }, [currentStep])
 
@@ -2616,6 +2646,122 @@ export function OnboardingFlow({
         )
       }
 
+      case 12: {
+        const rev = stateData?.revenue ?? {}
+        const spd = stateData?.spend ?? {}
+        const liq = stateData?.liquidity ?? {}
+
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[11].description}</p>
+
+              {stateLoading && (
+                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Loading business state…
+                </div>
+              )}
+
+              {stateError && !stateLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed: {stateError}</p>
+              )}
+            </div>
+
+            {!stateLoading && stateData && (
+              <div className="space-y-6">
+                {/* Revenue state */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Revenue State</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-emerald-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-emerald-400">{formatBalance(rev.trailing_7d_in)}</div>
+                      <div className="text-[10px] text-gray-500">7d in</div>
+                    </div>
+                    <div className="bg-emerald-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-emerald-400">{formatBalance(rev.trailing_30d_in)}</div>
+                      <div className="text-[10px] text-gray-500">30d in</div>
+                    </div>
+                    <div className="bg-emerald-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-emerald-400">{formatBalance(rev.trailing_90d_in)}</div>
+                      <div className="text-[10px] text-gray-500">90d in</div>
+                    </div>
+                    <div className="bg-emerald-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-emerald-400">{formatBalance(rev.refund_adjusted_net_in)}</div>
+                      <div className="text-[10px] text-gray-500">Net (refund adj)</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span className="text-gray-400">Top customer: {(Number(rev.top_customer_share) * 100).toFixed(1)}%</span>
+                    <span className="text-gray-400">Top 3: {(Number(rev.top_3_customer_share) * 100).toFixed(1)}%</span>
+                    <span className="text-gray-400">Repeat: {(Number(rev.repeat_customer_ratio) * 100).toFixed(1)}%</span>
+                    <span className="text-gray-400">Quality: {(Number(rev.revenue_quality_score) * 100).toFixed(0)}%</span>
+                    <span className="text-amber-400">Unresolved: {(Number(rev.unresolved_revenue_share) * 100).toFixed(1)}%</span>
+                  </div>
+                </div>
+
+                {/* Spend state */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Spend State</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-orange-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-orange-400">{formatBalance(spd.trailing_7d_out)}</div>
+                      <div className="text-[10px] text-gray-500">7d out</div>
+                    </div>
+                    <div className="bg-orange-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-orange-400">{formatBalance(spd.trailing_30d_out)}</div>
+                      <div className="text-[10px] text-gray-500">30d out</div>
+                    </div>
+                    <div className="bg-orange-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-orange-400">{formatBalance(spd.trailing_90d_out)}</div>
+                      <div className="text-[10px] text-gray-500">90d out</div>
+                    </div>
+                    <div className="bg-orange-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-orange-400">{formatBalance(spd.recurring_outflow_estimate)}</div>
+                      <div className="text-[10px] text-gray-500">Recurring est (yr)</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span className="text-gray-400">Top vendor: {(Number(spd.top_vendor_share) * 100).toFixed(1)}%</span>
+                    <span className="text-gray-400">Fixed: {formatBalance(spd.fixed_cost_estimate)}</span>
+                    <span className="text-gray-400">Variable: {formatBalance(spd.variable_cost_estimate)}</span>
+                    <span className="text-amber-400">Unresolved: {(Number(spd.unresolved_spend_share) * 100).toFixed(1)}%</span>
+                  </div>
+                </div>
+
+                {/* Liquidity state */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Liquidity State</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-blue-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-blue-400">{formatBalance(liq.available_cash as number | null)}</div>
+                      <div className="text-[10px] text-gray-500">Available cash</div>
+                    </div>
+                    <div className="bg-blue-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-blue-400">{(liq.operating_buffer_days as number) ?? 0} days</div>
+                      <div className="text-[10px] text-gray-500">Runway</div>
+                    </div>
+                    <div className="bg-blue-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-blue-400">{(Number(liq.transfer_dependency_ratio) * 100).toFixed(1)}%</div>
+                      <div className="text-[10px] text-gray-500">Transfer dep</div>
+                    </div>
+                    <div className="bg-blue-500/10 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold text-blue-400">{(Number(liq.owner_dependency_ratio) * 100).toFixed(1)}%</div>
+                      <div className="text-[10px] text-gray-500">Owner dep</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span className="text-gray-400">Safe floor: {formatBalance(liq.safe_cash_floor as number | null)}</span>
+                    <span className="text-amber-400">Unresolved impact: {(Number(liq.unresolved_cash_impact) * 100).toFixed(1)}%</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
       default:
         return (
           <div className="text-center py-12">
@@ -2632,7 +2778,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12
   return (
     <div
       className={
