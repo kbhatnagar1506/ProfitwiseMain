@@ -103,8 +103,12 @@ const CANONICAL_SPACING: Array<[RegExp, string]> = [
   [/\bHuman\s+N\s+Professional\b/gi, "Human N Professional"],
 ]
 
+// Plaid appends "(deleted)" when a merchant account is removed; strip for display
+const PLAID_DELETED_SUFFIX = /\s*\(deleted\)\s*$/i
+
 function cleanDisplay(s: string): string {
-  let out = splitCamelCase(s)
+  let out = s.replace(PLAID_DELETED_SUFFIX, "").trim()
+  out = splitCamelCase(out)
   for (const [re, repl] of CANONICAL_SPACING) out = out.replace(re, repl)
   return out
     .replace(/\s+/g, " ")
