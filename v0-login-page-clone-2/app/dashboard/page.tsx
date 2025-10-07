@@ -23,16 +23,38 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed")))),
-      fetch("/api/ar-ap-reconciliation").then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed")))),
-    ])
-      .then(([arApData, reconData]) => {
-        setArAp(arApData)
-        setRecon(reconData)
+    let cancelled = false
+    const pollRecon = (): Promise<Record<string, unknown>> =>
+      fetch("/api/ar-ap-reconciliation")
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed"))))
+        .then((data: Record<string, unknown>) => {
+          if (cancelled) return Promise.reject(new Error("Cancelled"))
+          if (data.status === "processing") {
+            return new Promise<Record<string, unknown>>((resolve, reject) => {
+              setTimeout(() => {
+                if (cancelled) return reject(new Error("Cancelled"))
+                pollRecon().then(resolve).catch(reject)
+              }, 2500)
+            })
+          }
+          return data
+        })
+    pollRecon()
+      .then((reconData) => {
+        if (cancelled) return
+        setRecon(reconData as ReconData)
+        return fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed"))))
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
-      .finally(() => setLoading(false))
+      .then((arApData) => {
+        if (cancelled) return
+        setArAp(arApData)
+      })
+      .catch((e) => {
+        if (cancelled || (e instanceof Error && e.message === "Cancelled")) return
+        setError(e instanceof Error ? e.message : "Failed to load")
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [])
 
   if (loading) {

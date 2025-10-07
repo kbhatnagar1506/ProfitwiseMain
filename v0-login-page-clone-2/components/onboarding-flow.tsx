@@ -769,7 +769,7 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 11: AR/AP & reconciliation (merged)
+  // Step 11: AR/AP & reconciliation — fetch reconciliation first (creates allocations), then AR/AP
   useEffect(() => {
     if (currentStep !== 11) return
     let cancelled = false
@@ -782,22 +782,40 @@ export function OnboardingFlow({
     setMappingArAp(null)
     setMappingRecon(null)
 
-    Promise.all([
-      fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed")))),
-      fetch("/api/ar-ap-reconciliation").then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed")))),
-    ])
-      .then(([arApData, reconData]) => {
+    const pollReconciliation = (): Promise<Record<string, unknown>> =>
+      fetch("/api/ar-ap-reconciliation")
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed"))))
+        .then((data: Record<string, unknown>) => {
+          if (cancelled) return Promise.reject(new Error("Cancelled"))
+          if (data.status === "processing") {
+            return new Promise<Record<string, unknown>>((resolve, reject) => {
+              setTimeout(() => {
+                if (cancelled) return reject(new Error("Cancelled"))
+                pollReconciliation().then(resolve).catch(reject)
+              }, 2500)
+            })
+          }
+          return data
+        })
+
+    pollReconciliation()
+      .then((reconData) => {
+        if (cancelled) return
+        setMappingRecon(reconData)
+        setMappingLoading(false)
+        return fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed"))))
+      })
+      .then((arApData) => {
         if (cancelled) return
         setArApData(arApData)
         setMappingArAp(arApData)
-        setMappingRecon(reconData)
         setArApLoading(false)
-        setMappingLoading(false)
       })
       .catch((e) => {
-        if (cancelled) return
-        setMappingError(e instanceof Error ? e.message : "Failed to load")
-        setArApError(e instanceof Error ? e.message : "Failed to load")
+        if (cancelled || (e instanceof Error && e.message === "Cancelled")) return
+        const msg = e instanceof Error ? e.message : "Failed to load"
+        setMappingError(msg)
+        setArApError(msg)
         setArApLoading(false)
         setMappingLoading(false)
       })
@@ -3097,16 +3115,32 @@ export function OnboardingFlow({
                       setMappingLoading(true)
                       setArApError(null)
                       setMappingError(null)
-                      Promise.all([
-                        fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed")))),
-                        fetch("/api/ar-ap-reconciliation").then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed")))),
-                      ])
-                        .then(([arApData, reconData]) => {
+                      const pollRecon = (): Promise<Record<string, unknown>> =>
+                        fetch("/api/ar-ap-reconciliation")
+                          .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed"))))
+                          .then((data: Record<string, unknown>) => {
+                            if (data.status === "processing") {
+                              return new Promise<Record<string, unknown>>((resolve, reject) => {
+                                setTimeout(() => pollRecon().then(resolve).catch(reject), 2500)
+                              })
+                            }
+                            return data
+                          })
+                      pollRecon()
+                        .then((reconData) => {
+                          setMappingRecon(reconData)
+                          setMappingLoading(false)
+                          return fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed"))))
+                        })
+                        .then((arApData) => {
                           setArApData(arApData)
                           setMappingArAp(arApData)
-                          setMappingRecon(reconData)
+                          setArApLoading(false)
                         })
-                        .catch((e) => { setArApError(e instanceof Error ? e.message : "Failed"); setMappingError(e instanceof Error ? e.message : "Failed") })
+                        .catch((e) => {
+                          setArApError(e instanceof Error ? e.message : "Failed")
+                          setMappingError(e instanceof Error ? e.message : "Failed")
+                        })
                         .finally(() => { setArApLoading(false); setMappingLoading(false) })
                     }}
                     className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
