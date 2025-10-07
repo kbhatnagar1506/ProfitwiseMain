@@ -22,6 +22,7 @@ import type { IdentityContext } from "@/lib/state/forecast-engine"
 import { computeARState, computeAPState, computeAPStateFromBills, mergeAPObligations } from "@/lib/state/ar-ap"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
 import { getAllocationsForUser } from "@/lib/allocation-persist"
+import { toEntityUriAr } from "@/lib/entity-uri"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -393,7 +394,8 @@ export async function GET() {
       }
     }
     const arWithAllocations = ar.invoices.map((inv) => {
-      const allocs = arAllocByInvoice.get(inv.invoice_id) ?? []
+      const entityUri = inv.entity_uri ?? toEntityUriAr(inv.source, inv.invoice_id)
+      const allocs = arAllocByInvoice.get(entityUri) ?? []
       const amountCollected = allocs.reduce((s, c) => s + c.gross, 0)
       const amountRemaining = Math.max(0, inv.amount_due - amountCollected)
       return { ...inv, allocations: allocs, amount_collected: amountCollected, amount_remaining: amountRemaining }

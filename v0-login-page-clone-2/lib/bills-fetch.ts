@@ -4,6 +4,7 @@
  */
 
 import { query, ensureQBOSchema } from "@/lib/db"
+import { toEntityUriApBill } from "@/lib/entity-uri"
 import type { OutstandingBill } from "./state/types"
 
 export async function fetchOutstandingBills(userId: string): Promise<OutstandingBill[]> {
@@ -56,7 +57,8 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
       outstandingBills.push({
         bill_id: row.entity_id, source: "qbo",
         vendor_name: vendName, vendor_source_id: vendSourceId,
-        entity_id: entityId, amount: totalAmt, amount_due: balance,
+        entity_id: entityId, entity_uri: toEntityUriApBill("qbo", row.entity_id),
+        amount: totalAmt, amount_due: balance,
         due_date: dueDate, days_until_due: daysToDue,
         days_overdue: daysOverdue, status,
       })
@@ -93,7 +95,8 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
       outstandingBills.push({
         bill_id: row.entity_id, source: "xero",
         vendor_name: vendName, vendor_source_id: null,
-        entity_id: null, amount: total, amount_due: amountDue,
+        entity_id: null, entity_uri: toEntityUriApBill("xero", row.entity_id),
+        amount: total, amount_due: amountDue,
         due_date: dueDate?.slice(0, 10) ?? null, days_until_due: daysToDue,
         days_overdue: daysOverdue, status,
       })
@@ -129,7 +132,8 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
       outstandingBills.push({
         bill_id: billId, source: "gmail",
         vendor_name: vendName, vendor_source_id: null,
-        entity_id: null, amount: total, amount_due: amountDue,
+        entity_id: null, entity_uri: toEntityUriApBill("gmail", billId),
+        amount: total, amount_due: amountDue,
         due_date: dueDate, days_until_due: daysToDue,
         days_overdue: daysOverdue, status,
       })

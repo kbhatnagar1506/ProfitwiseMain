@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 type InvoiceRow = { invoice_id: string; type: "ar"; display_name: string; amount: number; amount_due: number; due_date: string | null; status: string }
-type BillRow = { bill_id: string; type: "ap"; display_name: string; amount: number; amount_due: number; due_date: string | null; status: string; allocated_total: number; remaining_balance: number; payment_count: number }
+type BillRow = { bill_id: string; type: "ap"; entity_uri?: string; display_name: string; amount: number; amount_due: number; due_date: string | null; status: string; allocated_total: number; remaining_balance: number; payment_count: number }
 type Allocation = { entity_type: string; entity_id: string; gross: number; fee: number; net: number; fee_anomaly?: boolean }
 type PaymentRow = {
   movement_id: string
@@ -23,6 +23,8 @@ type ARSuggestion = { invoice_id: string; customer_name: string; amount_due: num
 type APSuggestion = { obligation_id: string; vendor_name: string; confidence: string; reasoning: string }
 type LLMARMatch = { movement_id: string; invoice_id: string; confidence: string; reasoning: string }
 type LLMAPMatch = { movement_id: string; obligation_id: string; confidence: string; reasoning: string }
+type RunARSuggestion = { movement_id: string; invoice_id: string; customer_name: string; confidence: number; gross_applied: number; fee_amount: number; net_applied: number }
+type RunAPSuggestion = { movement_id: string; obligation_id: string; vendor_name: string; confidence: number; gross_applied: number; fee_amount: number; net_applied: number }
 
 export default function ReconciliationPage() {
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
@@ -34,8 +36,15 @@ export default function ReconciliationPage() {
   const [linkModal, setLinkModal] = useState<{ payment: PaymentRow; suggestions: ARSuggestion[] | APSuggestion[]; loading: boolean; error: string | null } | null>(null)
   const [unmappedAr, setUnmappedAr] = useState<{ movement_id: string; amount: number; date: string; counterparty: string | null }[]>([])
   const [totalUnmappedAr, setTotalUnmappedAr] = useState(0)
+  const [cashExplanation, setCashExplanation] = useState<{
+    fully_explained: number
+    partially_explained: number
+    unexplained: number
+    explanation_pct: number
+  } | null>(null)
   const [llmMatching, setLlmMatching] = useState(false)
   const [llmResults, setLlmResults] = useState<{ ar: LLMARMatch[]; ap: LLMAPMatch[] } | null>(null)
+  const [runSuggestions, setRunSuggestions] = useState<{ ar: RunARSuggestion[]; ap: RunAPSuggestion[] }>({ ar: [], ap: [] })
   const llmRunRef = useRef(false)
 
   const applyData = useCallback((data: Record<string, unknown>) => {
@@ -52,6 +61,11 @@ export default function ReconciliationPage() {
     setPayments([...matched, ...unmatched].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
     setUnmappedAr((data.unmapped_ar as { movement_id: string; amount: number; date: string; counterparty: string | null }[]) ?? [])
     setTotalUnmappedAr((data.total_unmapped_ar as number) ?? 0)
+    setCashExplanation((data.cash_explanation as { fully_explained: number; partially_explained: number; unexplained: number; explanation_pct: number }) ?? null)
+    setRunSuggestions({
+      ar: (data.ar_suggestions as RunARSuggestion[]) ?? [],
+      ap: (data.ap_suggestions as RunAPSuggestion[]) ?? [],
+    })
   }, [])
 
   const fetchReconciliation = useCallback(() => {
@@ -142,13 +156,101 @@ export default function ReconciliationPage() {
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-semibold">Payment → Invoice Reconciliation</h1>
-            <p className="text-sm text-gray-500 mt-0.5">All time · Bank payments matched to AR/AP</p>
+            <h1 className="text-2xl font-semibold">Cash Explanation</h1>
+            <p className="text-sm text-gray-500 mt-0.5">How much of your cash we understand · Bank-led</p>
           </div>
           <Link href="/dashboard" className="text-sm text-gray-400 hover:text-white">
             Dashboard
           </Link>
         </div>
+
+        {cashExplanation && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Fully explained</p>
+              <p className="text-xl font-semibold text-emerald-400 mt-1">{money(cashExplanation.fully_explained)}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Partially explained</p>
+              <p className="text-xl font-semibold text-amber-400 mt-1">{money(cashExplanation.partially_explained)}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Unexplained</p>
+              <p className="text-xl font-semibold text-red-400 mt-1">{money(cashExplanation.unexplained)}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Explanation %</p>
+              <p className="text-xl font-semibold text-white mt-1">{cashExplanation.explanation_pct}%</p>
+            </div>
+          </div>
+        )}
+
+        {(runSuggestions.ar.length > 0 || runSuggestions.ap.length > 0) && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 mb-6">
+            <h3 className="text-sm font-medium text-amber-300 mb-2">Suggested matches (65–85% confidence)</h3>
+            <p className="text-xs text-gray-500 mb-3">Review and apply each match</p>
+            <div className="flex flex-wrap gap-3">
+              {runSuggestions.ar.map((s) => {
+                const pay = payments.find((p) => p.movement_id === s.movement_id)
+                return (
+                  <div key={`ar-${s.movement_id}-${s.invoice_id}`} className="flex items-center gap-2 p-2 rounded bg-white/5 border border-white/5">
+                    <span className="text-emerald-400 text-sm">{pay ? money(pay.amount) : s.movement_id.slice(0, 8)}</span>
+                    <span className="text-gray-500 text-xs">→ {s.customer_name}</span>
+                    <span className="text-[10px] text-gray-500">({(s.confidence * 100).toFixed(0)}%)</span>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/ar-match", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ movement_id: s.movement_id, invoice_id: s.invoice_id }),
+                          })
+                          if (!res.ok) throw new Error((await res.json()).error ?? "Failed")
+                          setRunSuggestions((r) => ({ ...r, ar: r.ar.filter((x) => x.movement_id !== s.movement_id || x.invoice_id !== s.invoice_id) }))
+                          refresh()
+                        } catch (e) {
+                          console.error(e)
+                        }
+                      }}
+                      className="text-[10px] px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                )
+              })}
+              {runSuggestions.ap.map((s) => {
+                const pay = payments.find((p) => p.movement_id === s.movement_id)
+                return (
+                  <div key={`ap-${s.movement_id}-${s.obligation_id}`} className="flex items-center gap-2 p-2 rounded bg-white/5 border border-white/5">
+                    <span className="text-red-400 text-sm">{pay ? money(pay.amount) : s.movement_id.slice(0, 8)}</span>
+                    <span className="text-gray-500 text-xs">→ {s.vendor_name}</span>
+                    <span className="text-[10px] text-gray-500">({(s.confidence * 100).toFixed(0)}%)</span>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/ap-match", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ movement_id: s.movement_id, obligation_id: s.obligation_id }),
+                          })
+                          if (!res.ok) throw new Error((await res.json()).error ?? "Failed")
+                          setRunSuggestions((r) => ({ ...r, ap: r.ap.filter((x) => x.movement_id !== s.movement_id || x.obligation_id !== s.obligation_id) }))
+                          refresh()
+                        } catch (e) {
+                          console.error(e)
+                        }
+                      }}
+                      className="text-[10px] px-2 py-1 rounded bg-red-600 hover:bg-red-500"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2 mb-4 items-center">
           <div className="flex gap-2">
@@ -253,11 +355,11 @@ export default function ReconciliationPage() {
             )}
           </div>
 
-          {/* Right: Bank payments (tagged) */}
+          {/* Right: Bank movements (explained) */}
           <div className="border border-white/10 rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-white/10 bg-white/5">
-              <h2 className="text-sm font-semibold text-white">Bank payments</h2>
-              <p className="text-xs text-gray-500">Tagged movements</p>
+              <h2 className="text-sm font-semibold text-white">Bank movements</h2>
+              <p className="text-xs text-gray-500">Explained as AR, AP, fees</p>
             </div>
             <div className="max-h-[60vh] overflow-y-auto">
               <Table>
@@ -420,7 +522,9 @@ export default function ReconciliationPage() {
                 })}
                 {llmResults.ap.map((s) => {
                   const pay = payments.find((p) => p.movement_id === s.movement_id)
-                  const bill = allInvoices.find((i) => i.type === "ap" && `ap_bill_${i.bill_id}` === s.obligation_id)
+                  const bill = allInvoices.find(
+                    (i) => i.type === "ap" && ((i as BillRow).entity_uri === s.obligation_id || `ap://bill/legacy/${(i as BillRow).bill_id}` === s.obligation_id)
+                  )
                   return (
                     <div key={`ap-${s.movement_id}-${s.obligation_id}`} className="p-3 rounded bg-white/5 border border-white/5">
                       <div className="flex justify-between items-start gap-2">

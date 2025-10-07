@@ -3,6 +3,8 @@
 // Reads MovementTag[] (from frozen schema) and produces the 3 core state
 // objects + 5 transition detectors.
 //
+// CORE PRIMITIVE: economic_class (not cashflow_bucket). Bucket is derived.
+//
 // Rules:
 //   - Only tags with state_inclusion_policy !== "exclude_and_review" enter state
 //   - EXCEPTION: contra revenue (refunds) ALWAYS included — a refund is a refund
@@ -11,6 +13,22 @@
 //   - Provisional movements are counted but tracked separately
 
 import type { MovementTag, CanonicalMovement } from "@/lib/movement-types"
+
+function isRevenueInflow(ec: string): boolean {
+  return ec === "customer_receipt" || ec === "settlement_in"
+}
+function isContraRevenue(ec: string): boolean {
+  return ec === "refund"
+}
+function isOpexOut(ec: string): boolean {
+  return ["vendor_payment", "payroll", "bank_fee", "processor_fee", "tax"].includes(ec)
+}
+function isSettlement(ec: string): boolean {
+  return ec === "processor_payout" || ec === "settlement_adjustment"
+}
+function isTransfer(ec: string): boolean {
+  return ec === "transfer"
+}
 import type { RevenueState, SpendState, LiquidityState, TransitionSignal, SeverityBand, AccountCash, SpendBreakdownEntry, LiquidityRegime, SettlementLagSignal } from "./types"
 import { CONCENTRATION, concentrationLabelFromPct, concentrationAdverb } from "./constants"
 import { normalizeAccountDisplayName } from "@/lib/alias-normalize"
@@ -58,8 +76,9 @@ export function computeRevenueState(
     const t = m.tag
     if (!t.state_scope.affects_revenue) continue
 
-    const isContra = t.cashflow_bucket === "contra_revenue"
-    const isRevIn = t.cashflow_bucket === "revenue_in"
+    const ec = t.economic_class
+    const isContra = isContraRevenue(ec)
+    const isRevIn = isRevenueInflow(ec)
 
     // Contra revenue (refunds) always included — they MUST reduce net revenue
     if (isContra) {
@@ -168,8 +187,8 @@ export function computeSpendState(
 
     if (t.state_inclusion_policy === "include_provisional") provisionalSpend += m.amount
 
-    if (t.cashflow_bucket === "opex_out") totalOpex += m.amount
-    if (t.cashflow_bucket === "cogs_out") totalCogs += m.amount
+  if (isOpexOut(t.economic_class)) totalOpex += m.amount
+  if (t.cashflow_bucket === "cogs_out") totalCogs += m.amount
 
     if (t.economic_class === "vendor_payment") {
       vendorPayments += m.amount
@@ -273,11 +292,11 @@ function computeSettlementLag(movements: TaggedMovement[]): SettlementLagSignal 
     const d = m.occurred_at
     if (!d) continue
 
-    if (t.cashflow_bucket === "revenue_in") {
+    if (isRevenueInflow(t.economic_class)) {
       const ts = parseDate(d)
       if (ts) receiptDates.push(ts)
     }
-    if (t.cashflow_bucket === "settlement" && m.direction === "inflow") {
+    if (isSettlement(t.economic_class) && m.direction === "inflow") {
       settlementEntries.push({ date: d })
     }
   }
@@ -327,7 +346,7 @@ export function computeLiquidityState(
   for (const m of movements) {
     const t = m.tag
     if (!t.state_scope.affects_liquidity) {
-      if (t.cashflow_bucket === "transfer") transferVolume += m.amount
+      if (isTransfer(t.economic_class)) transferVolume += m.amount
       continue
     }
 
@@ -347,7 +366,7 @@ export function computeLiquidityState(
     if (t.is_financing) {
       if (isIn) finIn += amt; else finOut += amt
     }
-    if (t.cashflow_bucket === "settlement") {
+    if (isSettlement(t.economic_class)) {
       if (isIn) settleIn += amt; else settleOut += amt
     }
     if (t.is_owner_related) {

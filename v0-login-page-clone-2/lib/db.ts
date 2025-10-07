@@ -741,20 +741,46 @@ export async function ensureMovementsSchema(): Promise<void> {
     )
   `)
   await p.query("CREATE INDEX IF NOT EXISTS idx_state_snapshots_user ON state_snapshots (user_id, snapshot_at DESC)")
-  // AR/AP to Payments mapping: allocation records
+  // AR/AP/Fee/Transfer allocation records (1 movement → many allocations)
   await p.query(`
     CREATE TABLE IF NOT EXISTS movement_allocations (
       id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       movement_id       UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
-      entity_type       TEXT NOT NULL CHECK (entity_type IN ('ar', 'ap')),
+      entity_type       TEXT NOT NULL CHECK (entity_type IN ('ar', 'ap', 'fee', 'transfer', 'unknown')),
       entity_id         TEXT NOT NULL,
-      gross_applied     NUMERIC NOT NULL,
+      gross_applied     NUMERIC NOT NULL DEFAULT 0,
       fee_amount        NUMERIC NOT NULL DEFAULT 0,
       net_applied       NUMERIC NOT NULL,
       confidence        REAL NOT NULL DEFAULT 0.5,
-      match_method      TEXT NOT NULL DEFAULT 'tolerance' CHECK (match_method IN ('exact', 'tolerance', 'llm_suggested', 'manual')),
+      match_method      TEXT NOT NULL DEFAULT 'tolerance' CHECK (match_method IN ('exact', 'tolerance', 'llm_suggested', 'manual', 'stripe_payout_match')),
       created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("ALTER TABLE movement_allocations ADD COLUMN IF NOT EXISTS source_id TEXT")
+  await p.query("ALTER TABLE movement_allocations ADD COLUMN IF NOT EXISTS synthetic_invoice BOOLEAN NOT NULL DEFAULT false")
+  await p.query("ALTER TABLE movement_allocations ADD COLUMN IF NOT EXISTS reconcile_at TIMESTAMPTZ")
+  await p.query("ALTER TABLE movement_allocations DROP CONSTRAINT IF EXISTS movement_allocations_match_method_check")
+  await p.query(`
+    ALTER TABLE movement_allocations ADD CONSTRAINT movement_allocations_match_method_check
+    CHECK (match_method IN ('exact', 'tolerance', 'llm_suggested', 'manual', 'stripe_payout_match'))
+  `)
+  await p.query("ALTER TABLE movement_allocations DROP CONSTRAINT IF EXISTS movement_allocations_entity_type_check")
+  await p.query(`
+    ALTER TABLE movement_allocations ADD CONSTRAINT movement_allocations_entity_type_check
+    CHECK (entity_type IN ('ar', 'ap', 'fee', 'transfer', 'unknown'))
+  `)
+  // Entity payment memory: per-entity payment behavior for allocation scoring
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS entity_payment_profiles (
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id         UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      avg_payment_ratio REAL NOT NULL DEFAULT 1,
+      avg_delay_days    REAL NOT NULL DEFAULT 0,
+      payment_count     INT NOT NULL DEFAULT 0,
+      variance          REAL NOT NULL DEFAULT 0,
+      last_updated      TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, entity_id)
     )
   `)
   await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_movement ON movement_allocations (movement_id)")
@@ -772,6 +798,23 @@ export async function ensureMovementsSchema(): Promise<void> {
       PRIMARY KEY (user_id, ar_ap_only)
     )
   `)
+  await p.query("ALTER TABLE reconciliation_cache ADD COLUMN IF NOT EXISTS merchant_only BOOLEAN NOT NULL DEFAULT false")
+  await p.query("ALTER TABLE reconciliation_cache ADD COLUMN IF NOT EXISTS reconcile_at TIMESTAMPTZ")
+  // Migrate PK to include merchant_only for split run types
+  try {
+    await p.query("ALTER TABLE reconciliation_cache DROP CONSTRAINT IF EXISTS reconciliation_cache_pkey")
+    await p.query("ALTER TABLE reconciliation_cache ADD PRIMARY KEY (user_id, ar_ap_only, merchant_only)")
+  } catch {
+    // PK may already be updated
+  }
+  // Backfill allocation URIs (idempotent)
+  try {
+    const { migrateAllocationUris } = await import("./allocation-migrate-uris")
+    const { updated } = await migrateAllocationUris()
+    if (updated > 0) log("allocation.uris.migrated", { count: updated }, "db")
+  } catch (e) {
+    log("allocation.migrate.uris.error", { err: String(e) }, "db")
+  }
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }

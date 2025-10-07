@@ -11,6 +11,7 @@ import { getAllocationsForUser } from "@/lib/allocation-persist"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
 import { getPaymentClass, isARAPOperating } from "@/lib/payment-class"
+import { toEntityUriApBill } from "@/lib/entity-uri"
 import { batchLLMMatch } from "@/lib/reconciliation-llm-match"
 
 function isTestEntityName(name: string): boolean {
@@ -96,7 +97,7 @@ export async function POST() {
       .filter((b) => !isTestEntityName(b.vendor_name))
       .map((b) => ({
         bill_id: b.bill_id,
-        obligation_id: `ap_bill_${b.bill_id}`,
+        obligation_id: b.entity_uri ?? toEntityUriApBill(b.source, b.bill_id),
         vendor_name: b.vendor_name,
         amount_due: b.amount_due,
         due_date: b.due_date,

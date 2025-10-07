@@ -157,17 +157,19 @@ function parseLLMMatches(content: string | null, obligations: APObligation[]): M
   const lines = content.split("\n").filter((l) => l.trim())
   const obById = new Map(obligations.map((o) => [o.obligation_id, o]))
   for (const line of lines) {
-    const match = line.match(/^[-*]?\s*(?:obligation_id[:\s]+)?([a-z0-9_]+)[:\s,]+(?:confidence[:\s]+)?(high|medium|low)[:\s]*(.*)$/i)
-    if (match) {
-      const [, id, conf, reason] = match
-      const ob = obById.get(id?.trim() ?? "")
-      if (ob) {
+    const confMatch = line.match(/(high|medium|low)[:\s]*(.*)$/i)
+    if (!confMatch) continue
+    const conf = confMatch[1]?.toLowerCase() as "high" | "medium" | "low"
+    const reason = (confMatch[2] ?? "").trim() || "LLM suggested match"
+    for (const ob of obligations) {
+      if (line.includes(ob.obligation_id)) {
         suggestions.push({
           obligation_id: ob.obligation_id,
           vendor_name: ob.vendor_name,
-          confidence: conf?.toLowerCase() as "high" | "medium" | "low",
-          reasoning: (reason ?? "").trim() || "LLM suggested match",
+          confidence: conf,
+          reasoning: reason,
         })
+        break
       }
     }
   }

@@ -97,17 +97,18 @@ export async function POST(req: Request) {
     const obligation = obligations.find((o) => o.obligation_id === obligationId)
     if (!obligation) return NextResponse.json({ error: "Obligation not found" }, { status: 404 })
     const amount = payment.amount
-    const allocation = await createAllocation(
-      user.id,
+    const allocation = await createAllocation({
+      userId: user.id,
       movementId,
-      "ap",
-      obligationId,
-      amount,
-      0,
-      amount,
-      0.9,
-      "manual",
-    )
+      entity_type: "ap",
+      entity_id: obligationId,
+      gross_applied: amount,
+      fee_amount: 0,
+      net_applied: amount,
+      confidence: 0.9,
+      match_method: "manual",
+      reconcile_at: new Date(),
+    })
     await query("DELETE FROM reconciliation_cache WHERE user_id = $1", [user.id]).catch(() => {})
     return NextResponse.json({ suggestions: [], allocation })
   }

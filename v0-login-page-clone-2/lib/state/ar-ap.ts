@@ -10,6 +10,7 @@
 //   - Bill-based: QBO, Xero, Gmail
 //   - Inferred: from tagged movements (step 10–11) — vendor payment patterns
 
+import { toEntityUriApBill, toEntityUriApInferred } from "@/lib/entity-uri"
 import type { OutstandingInvoice, OutstandingBill, VendorModel } from "./types"
 
 export type ARState = {
@@ -110,7 +111,7 @@ export function computeAPState(
     if (daysUntilDue < 1) continue
 
     obligations.push({
-      obligation_id: `ap_inferred_${v.entity_id}_${nextDate}`,
+      obligation_id: toEntityUriApInferred(v.entity_id, nextDate),
       source: "inferred",
       bill_id: null,
       vendor_name: v.name,
@@ -156,7 +157,7 @@ export function computeAPStateFromBills(bills: OutstandingBill[]): APObligation[
     const confidence: APObligation["confidence"] = b.due_date ? "high" : "medium"
 
     obligations.push({
-      obligation_id: `ap_bill_${b.bill_id}`,
+      obligation_id: toEntityUriApBill(b.source, b.bill_id),
       source: "bill",
       bill_id: b.bill_id,
       vendor_name: b.vendor_name,
@@ -188,8 +189,9 @@ function vendorKey(o: APObligation): string {
 }
 
 /**
- * Merge bill-based and inferred obligations. For a vendor with both, prefer bill-based
- * when a bill covers the same due window (±7 days). Keep inferred only when no bill covers.
+ * Merge obligations: BEHAVIOR FIRST, bills last.
+ * 1. Observed payments / recurrence (inferred) = ground truth
+ * 2. Bills = optional, only when no inferred covers the due window (±7 days)
  */
 export function mergeAPObligations(
   billObligations: APObligation[],
@@ -202,24 +204,19 @@ export function mergeAPObligations(
     byVendor.get(key)!.push(o)
   }
 
-  const merged: APObligation[] = [...billObligations]
+  const merged: APObligation[] = [...inferredObligations]
 
-  for (const inf of inferredObligations) {
-    const key = vendorKey(inf)
-    const billsForVendor = byVendor.get(key)
-    if (!billsForVendor || billsForVendor.length === 0) {
-      merged.push(inf)
-      continue
-    }
-    // Check if any bill covers the inferred due date (within ±7 days)
-    const infDue = inf.due_date ? new Date(inf.due_date).getTime() : 0
-    const covered = billsForVendor.some((b) => {
-      if (!b.due_date) return false
-      const billDue = new Date(b.due_date).getTime()
+  for (const bill of billObligations) {
+    const key = vendorKey(bill)
+    const inferredForVendor = merged.filter((o) => vendorKey(o) === key)
+    const billDue = bill.due_date ? new Date(bill.due_date).getTime() : 0
+    const covered = inferredForVendor.some((inf) => {
+      if (!inf.due_date) return false
+      const infDue = new Date(inf.due_date).getTime()
       const diffDays = Math.abs((billDue - infDue) / 86_400_000)
       return diffDays <= DEDUP_WINDOW_DAYS
     })
-    if (!covered) merged.push(inf)
+    if (!covered) merged.push(bill)
   }
 
   return merged.sort((a, b) => a.days_until_due - b.days_until_due)
