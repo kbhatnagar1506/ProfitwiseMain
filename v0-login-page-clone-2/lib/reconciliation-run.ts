@@ -16,7 +16,7 @@ import { filterMerchantDeposits, runMerchantDepositPipeline } from "@/lib/mercha
 import { toEntityUriAr, toEntityUriApBill } from "@/lib/entity-uri"
 import { computeEntityPaymentProfiles } from "@/lib/entity-payment-profiles"
 
-const AUTO_ALLOCATE_CONFIDENCE = 0.85
+const AUTO_ALLOCATE_CONFIDENCE = 0.78
 const SUGGEST_CONFIDENCE_MIN = 0.65
 
 export type ReconciliationJobOptions = {
@@ -37,6 +37,9 @@ export type CashExplanation = {
   partially_explained: number
   unexplained: number
   explanation_pct: number
+  ar_explained: number
+  ap_explained: number
+  fee_explained: number
 }
 
 export type ARSuggestion = {
@@ -390,6 +393,9 @@ export async function runReconciliationJob(
   let fullyExplained = 0
   let partiallyExplained = 0
   let unexplained = 0
+  let arExplained = 0
+  let apExplained = 0
+  let feeExplained = 0
   for (const m of movementRows) {
     const amount = Math.abs(parseFloat(String(m.amount)))
     const allocs = allocsByMovement.get(m.id) ?? []
@@ -399,6 +405,11 @@ export async function runReconciliationJob(
       unexplained += amount
     } else if (diff <= EPSILON * amount || diff <= EPSILON) {
       fullyExplained += amount
+      for (const a of allocs) {
+        if (a.entity_type === "ar") arExplained += a.net_applied
+        else if (a.entity_type === "ap") apExplained += a.net_applied
+        else if (a.entity_type === "fee") feeExplained += Math.abs(a.net_applied)
+      }
     } else {
       partiallyExplained += amount
     }
@@ -409,6 +420,9 @@ export async function runReconciliationJob(
     partially_explained: Math.round(partiallyExplained * 100) / 100,
     unexplained: Math.round(unexplained * 100) / 100,
     explanation_pct: totalCash > 0 ? Math.round((fullyExplained / totalCash) * 1000) / 10 : 100,
+    ar_explained: Math.round(arExplained * 100) / 100,
+    ap_explained: Math.round(apExplained * 100) / 100,
+    fee_explained: Math.round(feeExplained * 100) / 100,
   }
 
   return {
