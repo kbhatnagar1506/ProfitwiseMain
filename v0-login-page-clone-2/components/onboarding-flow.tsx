@@ -2743,15 +2743,6 @@ export function OnboardingFlow({
                   </div>
                 )}
 
-                {/* Unknown / needs review */}
-                {reviewClasses.length > 0 && (
-                  <div>
-                    <h3 className="text-lg font-semibold text-yellow-400 mb-3">Unclassified (Needs Review)</h3>
-                    <div className="space-y-4">
-                      {reviewClasses.map(renderClassTable)}
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
