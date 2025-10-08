@@ -17,7 +17,6 @@ import Image from "next/image"
 import Link from "next/link"
 import { Sparkles, Loader2 } from "lucide-react"
 import { displayLabelForCounterparty } from "@/lib/alias-normalize"
-import { CLASSIFICATION_RECONCILIATION_MAX } from "@/lib/movement-types"
 import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
 import { useRouter } from "next/navigation"
 interface Integration {
@@ -2160,7 +2159,7 @@ export function OnboardingFlow({
                                   <div className="flex items-center gap-1.5">
                                     <div className="w-14 h-1.5 rounded-full bg-white/10 overflow-hidden">
                                       <div
-                                        className={`h-full rounded-full ${ent.confidence >= 0.9 ? "bg-emerald-400" : ent.confidence > CLASSIFICATION_RECONCILIATION_MAX ? "bg-amber-400" : "bg-red-400"}`}
+                                        className={`h-full rounded-full ${ent.confidence >= 0.9 ? "bg-emerald-400" : ent.confidence >= 0.7 ? "bg-amber-400" : "bg-red-400"}`}
                                         style={{ width: `${confPct(ent.confidence)}%` }}
                                       />
                                     </div>
