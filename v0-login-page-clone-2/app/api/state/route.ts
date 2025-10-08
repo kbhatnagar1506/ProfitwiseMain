@@ -61,11 +61,12 @@ function toTaggedMovement(row: DbMovementRow, tag: TagRow | null): TaggedMovemen
     ? ((tagData.state_inclusion_policy as TaggedMovementInput["tag"]["state_inclusion_policy"]) ?? computeStatePolicy(confScore, evStrength, row.review_needed))
     : computeStatePolicy(confScore, evStrength, row.review_needed)
 
+  const occurredAt = row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date ?? "")
   return {
     id: row.id,
     amount: Math.abs(amount),
     direction: row.direction as "inflow" | "outflow",
-    occurred_at: row.date,
+    occurred_at: occurredAt,
     account_id: row.cash_account_id,
     entity_id: row.counterparty_entity_id,
     metadata: { ...(row.metadata ?? {}), counterparty: row.counterparty ?? (row.metadata as Record<string, unknown>)?.counterparty },
