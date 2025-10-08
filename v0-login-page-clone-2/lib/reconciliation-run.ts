@@ -8,7 +8,7 @@ import { isFeeAnomaly } from "@/lib/fee-anomaly"
 import { resolveDisplayNames } from "@/lib/display-name-resolve"
 import { getPaymentClass, isARAPOperating } from "@/lib/payment-class"
 import { toEntityUriApBill } from "@/lib/entity-uri"
-import { runAttributionEngine, type AttributionEngineOptions } from "@/lib/attribution-engine"
+import { runAttributionEngine, AUTO_ALLOCATE_CONFIDENCE, type AttributionEngineOptions } from "@/lib/attribution-engine"
 import { syncCashEventsForUser, refreshEntityCashProfilesFromAttributions } from "@/lib/cash-events-build"
 import { computeAPStateFromBills } from "@/lib/state/ar-ap"
 
@@ -235,6 +235,17 @@ export async function runReconciliationJob(
     allocsByMovement.get(a.movement_id)!.push(a)
   }
   const EPSILON = 0.01
+  /** True when allocations sum to movement within 1% / $0.01 (strict). */
+  function amountsReconcileToMovement(amount: number, allocs: typeof allocations): boolean {
+    const allocSum = allocs.reduce((s, a) => s + a.net_applied, 0)
+    const diff = Math.abs(amount - Math.abs(allocSum))
+    return diff <= EPSILON * amount || diff <= EPSILON
+  }
+  /** Same bar as AR/AP auto-allocate: if every line was accepted at ≥78%, count as fully explained even if float/rounding leaves a small residual vs strict epsilon. */
+  function allocsMeetAutoAllocateConfidence(allocs: typeof allocations): boolean {
+    if (allocs.length === 0) return false
+    return allocs.every((a) => (a.confidence ?? 0) >= AUTO_ALLOCATE_CONFIDENCE)
+  }
   let fullyExplained = 0
   let partiallyExplained = 0
   let unexplained = 0
@@ -244,11 +255,11 @@ export async function runReconciliationJob(
   for (const m of movementRows) {
     const amount = Math.abs(parseFloat(String(m.amount)))
     const allocs = allocsByMovement.get(m.id) ?? []
-    const allocSum = allocs.reduce((s, a) => s + a.net_applied, 0)
-    const diff = Math.abs(amount - Math.abs(allocSum))
+    const strictOk = amountsReconcileToMovement(amount, allocs)
+    const confidenceAligned = allocsMeetAutoAllocateConfidence(allocs)
     if (allocs.length === 0) {
       unexplained += amount
-    } else if (diff <= EPSILON * amount || diff <= EPSILON) {
+    } else if (strictOk || confidenceAligned) {
       fullyExplained += amount
       for (const a of allocs) {
         if (a.entity_type === "ar") arExplained += a.net_applied
