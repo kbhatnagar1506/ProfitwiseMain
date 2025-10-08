@@ -1,6 +1,6 @@
 /**
  * Canonical entity URIs for AR/AP allocations.
- * Format: ar://invoice/{source}/{id} or ap://bill/{source}/{id} or ap://inferred/{entity_id}/{date}
+ * Format: ar://invoice/{source}/{id} | ar://inferred/{entity_id}/{date} | ap://bill/{source}/{id} | ap://inferred/{entity_id}/{date}
  */
 
 export type EntityUriType = "ar" | "ap"
@@ -60,6 +60,13 @@ export function toEntityUriArSynthetic(payoutId: string): string {
 }
 
 /**
+ * Inferred AR (behavioral / no document): e.g. expected customer receipt by entity and date bucket.
+ */
+export function toEntityUriArInferred(entityId: string, date: string): string {
+  return `ar://inferred/${entityId}/${date}`
+}
+
+/**
  * Build AP bill URI.
  */
 export function toEntityUriApBill(source: string, billId: string): string {
@@ -77,6 +84,15 @@ export function toEntityUriApInferred(entityId: string, date: string): string {
  * Parse entity URI into components.
  */
 export function parseEntityUri(uri: string): ParsedEntityUri | null {
+  const arInferredMatch = uri.match(/^ar:\/\/inferred\/([^/]+)\/(.+)$/)
+  if (arInferredMatch) {
+    return {
+      type: "ar",
+      source: "inferred",
+      id: `${arInferredMatch[1]}/${arInferredMatch[2]}`,
+      synthetic: false,
+    }
+  }
   const arMatch = uri.match(/^ar:\/\/invoice\/(synthetic\/)?([^/]+)\/(.+)$/)
   if (arMatch) {
     const synthetic = !!arMatch[1]

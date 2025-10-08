@@ -22,7 +22,6 @@ import type { IdentityContext } from "@/lib/state/forecast-engine"
 import { computeARState, computeAPState, computeAPStateFromBills, mergeAPObligations } from "@/lib/state/ar-ap"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
 import { getAllocationsForUser } from "@/lib/allocation-persist"
-import { toEntityUriAr } from "@/lib/entity-uri"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -377,35 +376,14 @@ export async function GET() {
 
     const ar = computeARState(outstandingInvoices)
 
-    // Enrich AR/AP with allocations
+    // Enrich AR/AP from movement attributions (canonical rollups)
     const allocations = await getAllocationsForUser(user.id)
-    const arAllocByInvoice = new Map<string, { movement_id: string; gross: number; fee: number; net: number }[]>()
-    const apAllocByObl = new Map<string, { movement_id: string; gross: number; fee: number; net: number }[]>()
-    for (const a of allocations) {
-      const entry = { movement_id: a.movement_id, gross: a.gross_applied, fee: a.fee_amount, net: a.net_applied }
-      if (a.entity_type === "ar") {
-        const list = arAllocByInvoice.get(a.entity_id) ?? []
-        list.push(entry)
-        arAllocByInvoice.set(a.entity_id, list)
-      } else {
-        const list = apAllocByObl.get(a.entity_id) ?? []
-        list.push(entry)
-        apAllocByObl.set(a.entity_id, list)
-      }
-    }
-    const arWithAllocations = ar.invoices.map((inv) => {
-      const entityUri = inv.entity_uri ?? toEntityUriAr(inv.source, inv.invoice_id)
-      const allocs = arAllocByInvoice.get(entityUri) ?? []
-      const amountCollected = allocs.reduce((s, c) => s + c.gross, 0)
-      const amountRemaining = Math.max(0, inv.amount_due - amountCollected)
-      return { ...inv, allocations: allocs, amount_collected: amountCollected, amount_remaining: amountRemaining }
-    })
-    const apWithAllocations = mergedObligations.map((ob) => {
-      const allocs = apAllocByObl.get(ob.obligation_id) ?? []
-      const amountPaid = allocs.reduce((s, c) => s + c.gross, 0)
-      const amountRemaining = Math.max(0, ob.amount_due - amountPaid)
-      return { ...ob, allocations: allocs, amount_paid: amountPaid, amount_remaining: amountRemaining }
-    })
+    const { aggregateArAttributionsByUri, aggregateApAttributionsByUri, enrichInvoiceWithAttributions, enrichObligationWithAttributions } =
+      await import("@/lib/state/ar-ap-from-attributions")
+    const arByUri = aggregateArAttributionsByUri(allocations)
+    const apByUri = aggregateApAttributionsByUri(allocations)
+    const arWithAllocations = ar.invoices.map((inv) => enrichInvoiceWithAttributions(inv, arByUri))
+    const apWithAllocations = mergedObligations.map((ob) => enrichObligationWithAttributions(ob, apByUri))
     const ap = {
       total_expected_30d: Math.round(total_expected_30d * 100) / 100,
       obligation_count: mergedObligations.length,

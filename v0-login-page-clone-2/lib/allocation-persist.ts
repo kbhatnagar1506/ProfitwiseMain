@@ -1,59 +1,19 @@
 /**
- * AR/AP to Payments allocation persistence.
- * Links movements to invoices (AR) or obligations (AP) with gross, fee, net.
- *
- * Semantics: AR net_applied = gross (invoice satisfied); fee allocation net_applied = -fee (deduction).
- * Sum of allocations net_applied = movement amount.
+ * AR/AP allocation API — persisted as movement_attributions (canonical).
+ * MovementAllocation shape retained for API/UI compatibility.
  */
 
 import { query, ensureMovementsSchema } from "./db"
+import type { CreateAllocationOpts, MatchMethod, MovementAllocation } from "./cash-allocation-types"
+export type { AllocationTargetType, CreateAllocationOpts, MatchMethod, MovementAllocation } from "./cash-allocation-types"
 
-export type MatchMethod = "exact" | "tolerance" | "llm_suggested" | "manual" | "stripe_payout_match"
-
-export type AllocationTargetType = "ar" | "ap" | "fee" | "transfer" | "unknown"
-
-export type MovementAllocation = {
-  id: string
-  user_id: string
-  movement_id: string
-  entity_type: AllocationTargetType
-  entity_id: string
-  gross_applied: number
-  fee_amount: number
-  net_applied: number
-  confidence: number
-  match_method: MatchMethod
-  created_at: string
-  source_id?: string | null
-  synthetic_invoice?: boolean
-  reconcile_at?: string | null
-}
-
-export type CreateAllocationOpts = {
-  userId: string
-  movementId: string
-  entity_type: AllocationTargetType
-  entity_id: string
-  gross_applied: number
-  fee_amount: number
-  net_applied: number
-  confidence: number
-  match_method: MatchMethod
-  source_id?: string | null
-  synthetic_invoice?: boolean
-  reconcile_at?: Date
-}
-
-function normalizeAllocationRow<T extends { gross_applied?: unknown; fee_amount?: unknown; net_applied?: unknown }>(
-  row: T
-): T & { gross_applied: number; fee_amount: number; net_applied: number } {
-  return {
-    ...row,
-    gross_applied: parseFloat(String(row.gross_applied)),
-    fee_amount: parseFloat(String(row.fee_amount)),
-    net_applied: parseFloat(String(row.net_applied)),
-  } as T & { gross_applied: number; fee_amount: number; net_applied: number }
-}
+import { confidenceFromScore } from "./confidence"
+import {
+  allocationTypeToComponent,
+  attributionToMovementAllocation,
+  createAttribution,
+  matchMethodToAttributionSource,
+} from "./attribution-persist"
 
 export async function createAllocation(opts: CreateAllocationOpts): Promise<MovementAllocation>
 export async function createAllocation(
@@ -95,66 +55,56 @@ export async function createAllocation(
     }
   }
 
-  await ensureMovementsSchema()
   const reconcileAt = opts.reconcile_at ?? new Date()
-  const { rows } = await query<MovementAllocation & { gross_applied: string; fee_amount: string; net_applied: string }>(
-    `INSERT INTO movement_allocations (user_id, movement_id, entity_type, entity_id, gross_applied, fee_amount, net_applied, confidence, match_method, source_id, synthetic_invoice, reconcile_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     RETURNING id, user_id, movement_id, entity_type, entity_id, gross_applied, fee_amount, net_applied, confidence, match_method, created_at, source_id, synthetic_invoice, reconcile_at`,
-    [
-      opts.userId,
-      opts.movementId,
-      opts.entity_type,
-      opts.entity_id,
-      opts.gross_applied,
-      opts.fee_amount,
-      opts.net_applied,
-      opts.confidence,
-      opts.match_method,
-      opts.source_id ?? null,
-      opts.synthetic_invoice ?? false,
-      reconcileAt,
-    ],
-  )
-  const row = rows[0]
-  if (!row) throw new Error("Failed to create allocation")
-  return normalizeAllocationRow(row)
+  const metadata: Record<string, unknown> = {
+    fee_amount: opts.fee_amount,
+    match_method: opts.match_method,
+    synthetic_invoice: opts.synthetic_invoice ?? false,
+    reconcile_at: reconcileAt.toISOString(),
+  }
+
+  const row = await createAttribution({
+    userId: opts.userId,
+    movementId: opts.movementId,
+    component_type: allocationTypeToComponent(opts.entity_type),
+    entity_id: opts.entity_id,
+    reference_id: opts.source_id ?? null,
+    gross_amount: opts.gross_applied,
+    net_amount: opts.net_applied,
+    confidence: opts.confidence,
+    source: matchMethodToAttributionSource(opts.match_method),
+    metadata,
+    confidenceEnvelope: opts.confidenceEnvelope ?? confidenceFromScore(opts.confidence, "probabilistic"),
+  })
+
+  return attributionToMovementAllocation(row)
 }
 
 export async function getAllocationsByMovement(movementId: string): Promise<MovementAllocation[]> {
   await ensureMovementsSchema()
-  const { rows } = await query<MovementAllocation & { gross_applied: string; fee_amount: string; net_applied: string }>(
-    `SELECT id, user_id, movement_id, entity_type, entity_id, gross_applied, fee_amount, net_applied, confidence, match_method, created_at, source_id, synthetic_invoice, reconcile_at
-     FROM movement_allocations WHERE movement_id = $1`,
-    [movementId],
-  )
-  return rows.map((r) => normalizeAllocationRow(r))
+  const { getAttributionsByMovement } = await import("./attribution-persist")
+  const rows = await getAttributionsByMovement(movementId)
+  return rows.map(attributionToMovementAllocation)
 }
 
 export async function getAllocationsByEntity(entityType: "ar" | "ap", entityId: string): Promise<MovementAllocation[]> {
   await ensureMovementsSchema()
-  const { rows } = await query<MovementAllocation & { gross_applied: string; fee_amount: string; net_applied: string }>(
-    `SELECT id, user_id, movement_id, entity_type, entity_id, gross_applied, fee_amount, net_applied, confidence, match_method, created_at, source_id, synthetic_invoice, reconcile_at
-     FROM movement_allocations WHERE entity_type = $1 AND entity_id = $2`,
-    [entityType, entityId],
-  )
-  return rows.map((r) => normalizeAllocationRow(r))
+  const { getAttributionsByEntity } = await import("./attribution-persist")
+  const rows = await getAttributionsByEntity(entityType, entityId)
+  return rows.map(attributionToMovementAllocation)
 }
 
 export async function getAllocationsForUser(userId: string): Promise<MovementAllocation[]> {
   await ensureMovementsSchema()
-  const { rows } = await query<MovementAllocation & { gross_applied: string; fee_amount: string; net_applied: string }>(
-    `SELECT id, user_id, movement_id, entity_type, entity_id, gross_applied, fee_amount, net_applied, confidence, match_method, created_at, source_id, synthetic_invoice, reconcile_at
-     FROM movement_allocations WHERE user_id = $1`,
-    [userId],
-  )
-  return rows.map((r) => normalizeAllocationRow(r))
+  const { getAttributionsForUser } = await import("./attribution-persist")
+  const rows = await getAttributionsForUser(userId)
+  return rows.map(attributionToMovementAllocation)
 }
 
 export async function getMovementIdsWithAllocations(userId: string): Promise<Set<string>> {
   await ensureMovementsSchema()
   const { rows } = await query<{ movement_id: string }>(
-    `SELECT DISTINCT movement_id FROM movement_allocations WHERE user_id = $1`,
+    `SELECT DISTINCT movement_id FROM movement_attributions WHERE user_id = $1`,
     [userId],
   )
   return new Set(rows.map((r) => r.movement_id))
@@ -162,6 +112,9 @@ export async function getMovementIdsWithAllocations(userId: string): Promise<Set
 
 export async function deleteAllocation(allocationId: string, userId: string): Promise<boolean> {
   await ensureMovementsSchema()
+  const { deleteAttribution, deleteAttributionByLegacyAllocationId } = await import("./attribution-persist")
+  if (await deleteAttribution(allocationId, userId)) return true
+  if (await deleteAttributionByLegacyAllocationId(allocationId, userId)) return true
   const { rows } = await query<{ id: string }>(
     `DELETE FROM movement_allocations WHERE id = $1 AND user_id = $2 RETURNING id`,
     [allocationId, userId],

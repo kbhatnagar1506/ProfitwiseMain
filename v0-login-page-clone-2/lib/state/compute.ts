@@ -12,7 +12,7 @@
 //   - Settlement NEVER enters revenue or spend
 //   - Provisional movements are counted but tracked separately
 
-import type { MovementTag, CanonicalMovement } from "@/lib/movement-types"
+import { type MovementTag, type CanonicalMovement, CLASSIFICATION_RECONCILIATION_MAX } from "@/lib/movement-types"
 
 function isRevenueInflow(ec: string): boolean {
   return ec === "customer_receipt" || ec === "settlement_in"
@@ -468,7 +468,7 @@ export function computeStateConfidence(
   for (const m of movements) {
     const t = m.tag
     const conf = (t.classification_confidence ?? m.confidence ?? 0)
-    const isLowConf = conf < 0.7
+    const isLowConf = conf <= CLASSIFICATION_RECONCILIATION_MAX
     const amt = m.amount
 
     if (t.state_scope.affects_revenue) {

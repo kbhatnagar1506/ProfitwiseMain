@@ -10,6 +10,8 @@ import type { IdentityContext } from "@/lib/state/forecast-engine"
 import { computeBusinessState } from "@/lib/state"
 import { generateNarrativeWithLLM, canonicalizeEntitiesBatch, generateExecutionSuggestions } from "@/lib/forecast-llm"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
+import { computeAPStateFromBills } from "@/lib/state/ar-ap"
+import { syncCashEventsForUser, fetchCashEventsForUser30d, cashEventRowsToForecastEvents } from "@/lib/cash-events-build"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -519,7 +521,25 @@ export async function GET() {
       }
     } catch { /* movement_families may not exist */ }
 
-    let forecast = computeCashflowForecast(tagged, startingCash, 6, outstandingInvoices, identityCtx, outstandingBills, forecastCtx)
+    try {
+      const apObs = computeAPStateFromBills(outstandingBills)
+      await syncCashEventsForUser(user.id, outstandingInvoices, apObs)
+    } catch (err) {
+      console.warn("[Forecast] cash_events sync skipped:", err instanceof Error ? err.message : err)
+    }
+    const bridgeRows = await fetchCashEventsForUser30d(user.id).catch(() => [])
+    const bridgeEvents = cashEventRowsToForecastEvents(bridgeRows, today)
+
+    let forecast = computeCashflowForecast(
+      tagged,
+      startingCash,
+      6,
+      outstandingInvoices,
+      identityCtx,
+      outstandingBills,
+      forecastCtx,
+      bridgeEvents,
+    )
 
     // LLM enrichment when enabled (Heroku: set FORECAST_LLM_ENABLED=1)
     if (process.env.FORECAST_LLM_ENABLED) {
