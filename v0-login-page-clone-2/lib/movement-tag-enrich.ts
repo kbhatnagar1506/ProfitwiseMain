@@ -10,7 +10,7 @@
 
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { log } from "@/lib/logger"
-import { toMovementClass, computeStatePolicy } from "@/lib/movement-types"
+import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type {
   CanonicalMovement,
   MovementTag,
@@ -18,6 +18,9 @@ import type {
   CashflowBucket,
   CounterpartyRole,
   ReviewReason,
+  UnresolvedImpact,
+  OwnerDependency,
+  WorkingCapitalSignals,
 } from "@/lib/movement-types"
 
 // ─── Entity context loaded from DB ──────────────────────────────────
@@ -111,7 +114,7 @@ const CLASS_TO_BASE: Record<string, BaseTag> = {
     hits_pnl: true, hits_working_capital: false,
   },
   refund: {
-    economic_class: "refund", cashflow_bucket: "revenue_in", counterparty_role: "customer",
+    economic_class: "refund", cashflow_bucket: "contra_revenue", counterparty_role: "customer",
     is_operating: true, is_financing: false, is_investing: false, is_owner_related: false,
     hits_pnl: true, hits_working_capital: true,
   },
@@ -168,7 +171,7 @@ function tagLevel1(m: CanonicalMovement): BaseTag | null {
   }
   if (m.movement_class === "refund") {
     if (m.direction === "outflow") {
-      tag.cashflow_bucket = "revenue_in"
+      tag.cashflow_bucket = "contra_revenue"
       tag.counterparty_role = "customer"
     } else {
       tag.cashflow_bucket = "opex_out"
@@ -353,6 +356,9 @@ function extractLinkIds(m: CanonicalMovement, base: BaseTag): {
 export async function tagMovements(userId: string): Promise<{
   tags: MovementTag[]
   stats: { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number; policy_include: number; policy_provisional: number; policy_exclude: number }
+  unresolved_impact: UnresolvedImpact
+  owner_dependency: OwnerDependency
+  working_capital: WorkingCapitalSignals
 }> {
   await ensureMovementsSchema()
 
@@ -413,6 +419,7 @@ export async function tagMovements(userId: string): Promise<{
     const links = extractLinkIds(m, base)
 
     const policy = computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review)
+    const scope = computeStateScope(base.economic_class, base.cashflow_bucket, base.hits_working_capital)
 
     tags.push({
       movement_id: m.id,
@@ -428,6 +435,7 @@ export async function tagMovements(userId: string): Promise<{
       hits_pnl: base.hits_pnl,
       hits_working_capital: base.hits_working_capital,
 
+      state_scope: scope,
       state_inclusion_policy: policy,
       classification_confidence: m.confidence,
       evidence_strength: m.evidence_strength,
@@ -455,11 +463,16 @@ export async function tagMovements(userId: string): Promise<{
     else stats.policy_exclude++
   }
 
+  // ─── Derived metrics ──────────────────────────────────────────────
+  const unresolved_impact = computeUnresolvedImpact(movements, tags)
+  const owner_dependency = computeOwnerDependency(movements, tags)
+  const working_capital = computeWorkingCapitalSignals(movements, tags)
+
   // Persist tags
   await persistTags(userId, tags)
 
-  log("movements.tag.done", { userId, ...stats }, "movements")
-  return { tags, stats }
+  log("movements.tag.done", { userId, ...stats, unresolved: unresolved_impact, owner_dep: owner_dependency.owner_dependency_ratio }, "movements")
+  return { tags, stats, unresolved_impact, owner_dependency, working_capital }
 }
 
 // ─── Persist tags to DB ─────────────────────────────────────────────
@@ -485,6 +498,7 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
         t.cashflow_bucket,
         t.counterparty_role,
         JSON.stringify({
+          state_scope: t.state_scope,
           state_inclusion_policy: t.state_inclusion_policy,
           is_operating: t.is_operating,
           is_financing: t.is_financing,
@@ -526,4 +540,155 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
       params,
     )
   }
+}
+
+// ─── Derived: Unresolved Impact (unknown = risk) ────────────────────
+
+function computeUnresolvedImpact(movements: CanonicalMovement[], tags: MovementTag[]): UnresolvedImpact {
+  let inflowTotal = 0
+  let outflowTotal = 0
+  let count = 0
+  let operatingExposure = 0
+
+  for (let i = 0; i < movements.length; i++) {
+    const m = movements[i]
+    const t = tags[i]
+    if (t.economic_class !== "unknown") continue
+
+    count++
+    if (m.direction === "inflow") inflowTotal += m.amount
+    else outflowTotal += m.amount
+
+    if (m.amount > 500) operatingExposure += m.amount
+  }
+
+  return {
+    unresolved_inflow_total: Math.round(inflowTotal * 100) / 100,
+    unresolved_outflow_total: Math.round(outflowTotal * 100) / 100,
+    unresolved_count: count,
+    unresolved_operating_exposure: Math.round(operatingExposure * 100) / 100,
+  }
+}
+
+// ─── Derived: Owner Dependency ──────────────────────────────────────
+
+function computeOwnerDependency(movements: CanonicalMovement[], tags: MovementTag[]): OwnerDependency {
+  let ownerInflowTotal = 0
+  let ownerDrawTotal = 0
+  let totalInflow = 0
+  let contributionCount = 0
+  let drawCount = 0
+
+  for (let i = 0; i < movements.length; i++) {
+    const m = movements[i]
+    const t = tags[i]
+
+    if (m.direction === "inflow" && t.state_inclusion_policy !== "exclude_and_review") {
+      totalInflow += m.amount
+    }
+
+    if (t.economic_class === "owner_contribution") {
+      ownerInflowTotal += m.amount
+      contributionCount++
+    }
+    if (t.economic_class === "owner_draw") {
+      ownerDrawTotal += m.amount
+      drawCount++
+    }
+  }
+
+  const ratio = totalInflow > 0 ? ownerInflowTotal / totalInflow : 0
+
+  return {
+    owner_inflow_total: Math.round(ownerInflowTotal * 100) / 100,
+    total_inflow: Math.round(totalInflow * 100) / 100,
+    owner_dependency_ratio: Math.round(ratio * 1000) / 1000,
+    owner_draw_total: Math.round(ownerDrawTotal * 100) / 100,
+    net_owner_flow: Math.round((ownerInflowTotal - ownerDrawTotal) * 100) / 100,
+    contribution_count: contributionCount,
+    draw_count: drawCount,
+  }
+}
+
+// ─── Derived: Working Capital Signals ───────────────────────────────
+
+function computeWorkingCapitalSignals(movements: CanonicalMovement[], tags: MovementTag[]): WorkingCapitalSignals {
+  const settlementDates: number[] = []
+  const customerReceiptDates: number[] = []
+  const inflowDates: number[] = []
+  const outflowDates: number[] = []
+
+  for (let i = 0; i < movements.length; i++) {
+    const m = movements[i]
+    const t = tags[i]
+    if (t.state_inclusion_policy === "exclude_and_review") continue
+
+    const ts = new Date(m.occurred_at).getTime()
+    if (isNaN(ts)) continue
+
+    if (t.cashflow_bucket === "settlement") settlementDates.push(ts)
+    if (t.economic_class === "customer_receipt") customerReceiptDates.push(ts)
+    if (m.direction === "inflow" && t.state_scope.affects_revenue) inflowDates.push(ts)
+    if (m.direction === "outflow" && t.state_scope.affects_spend) outflowDates.push(ts)
+  }
+
+  const sortAsc = (a: number, b: number) => a - b
+  settlementDates.sort(sortAsc)
+  customerReceiptDates.sort(sortAsc)
+  inflowDates.sort(sortAsc)
+  outflowDates.sort(sortAsc)
+
+  const avgSettlementLag = computeAvgLag(customerReceiptDates, settlementDates)
+  const inflowCadence = computeCadence(inflowDates)
+  const outflowCadence = computeCadence(outflowDates)
+  const inflowRegularity = computeRegularity(inflowDates)
+  const outflowRegularity = computeRegularity(outflowDates)
+
+  return {
+    avg_settlement_lag_days: avgSettlementLag,
+    avg_inflow_cadence_days: inflowCadence,
+    avg_outflow_cadence_days: outflowCadence,
+    inflow_regularity: inflowRegularity,
+    outflow_regularity: outflowRegularity,
+  }
+}
+
+function computeAvgLag(receiptDates: number[], settlementDates: number[]): number | null {
+  if (receiptDates.length < 2 || settlementDates.length < 2) return null
+
+  const lags: number[] = []
+  for (const sd of settlementDates) {
+    let closest: number | null = null
+    for (const rd of receiptDates) {
+      if (rd <= sd) closest = rd
+      else break
+    }
+    if (closest !== null) {
+      lags.push((sd - closest) / (1000 * 60 * 60 * 24))
+    }
+  }
+  if (lags.length === 0) return null
+  return Math.round((lags.reduce((a, b) => a + b, 0) / lags.length) * 10) / 10
+}
+
+function computeCadence(dates: number[]): number | null {
+  if (dates.length < 3) return null
+  const gaps: number[] = []
+  for (let i = 1; i < dates.length; i++) {
+    gaps.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24))
+  }
+  return Math.round((gaps.reduce((a, b) => a + b, 0) / gaps.length) * 10) / 10
+}
+
+function computeRegularity(dates: number[]): number {
+  if (dates.length < 3) return 0
+  const gaps: number[] = []
+  for (let i = 1; i < dates.length; i++) {
+    gaps.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24))
+  }
+  const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length
+  if (mean === 0) return 0
+  const variance = gaps.reduce((s, g) => s + (g - mean) ** 2, 0) / gaps.length
+  const cv = Math.sqrt(variance) / mean
+  return Math.round(Math.max(0, 1 - cv) * 100) / 100
 }
