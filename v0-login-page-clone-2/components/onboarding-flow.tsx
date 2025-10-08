@@ -3074,19 +3074,16 @@ export function OnboardingFlow({
                     </div>
                     <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500 flex justify-between items-center">
                       <span>{allReconRows.length} transactions</span>
-                      <Link href="/reconciliation" className="text-gray-400 hover:text-white underline">View all</Link>
+                      <Link href="/payments" className="text-gray-400 hover:text-white underline">View all</Link>
                     </div>
                   </div>
                 )}
 
                 {/* ─── Payments summary ─── */}
                 {mappingArAp && mappingRecon && (
-                  <div className="flex gap-4">
-                    <Link href="/payments" className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium">
-                      Payments View
-                    </Link>
-                    <Link href="/reconciliation" className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium">
-                      Reconciliation View
+                  <div className="flex flex-wrap gap-4">
+                    <Link href="/payments" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 hover:bg-emerald-500/15 transition text-sm font-medium text-white">
+                      Open AR/AP dashboard (full screen)
                     </Link>
                   </div>
                 )}

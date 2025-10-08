@@ -110,7 +110,9 @@ For each **unmatched outflow**:
 
 ---
 
-## 5. Reconciliation UI (`/reconciliation`)
+## 5. AR/AP dashboard UI (`/payments`)
+
+Legacy URL `/reconciliation` redirects to `/payments` (single full-screen dashboard).
 
 ### Cash Explanation cards
 - Fully explained, Partially explained, Unexplained, Explanation %
@@ -206,5 +208,6 @@ For each **unmatched outflow**:
 | `lib/entity-payment-profiles.ts`  | Per-entity payment ratio history     |
 | `lib/stripe-sync.ts`          | Stripe sync + payout fee extraction       |
 | `lib/allocation-persist.ts`   | Create/read allocations                   |
-| `app/reconciliation/page.tsx` | Cash Explanation + reconciliation UI      |
+| `app/payments/page.tsx`       | AR/AP dashboard (single screen; all data)   |
+| `app/reconciliation/page.tsx` | Redirects to `/payments`                    |
 | `components/onboarding-flow.tsx` | Money movements + Review queue        |
