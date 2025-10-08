@@ -14,7 +14,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import Image from "next/image"
-import Link from "next/link"
 import { Sparkles, Loader2 } from "lucide-react"
 import { displayLabelForCounterparty } from "@/lib/alias-normalize"
 import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
@@ -3035,7 +3034,7 @@ export function OnboardingFlow({
                 {mappingRecon && allReconRows.length > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
                     <h3 className="text-base font-semibold text-white px-4 py-3 border-b border-white/10">Tagged bank transactions</h3>
-                    <div className="max-h-[320px] overflow-y-auto">
+                    <div className="max-h-[min(70vh,900px)] overflow-y-auto">
                       <Table>
                         <TableHeader>
                           <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
@@ -3047,7 +3046,7 @@ export function OnboardingFlow({
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {allReconRows.slice(0, 80).map((r) => {
+                          {allReconRows.map((r) => {
                             const totalFee = (r.allocations ?? []).reduce((s: number, a: { fee: number }) => s + a.fee, 0)
                             const totalGross = (r.allocations ?? []).reduce((s: number, a: { gross: number }) => s + a.gross, 0)
                             const totalNet = (r.allocations ?? []).reduce((s: number, a: { net: number }) => s + a.net, 0)
@@ -3072,65 +3071,12 @@ export function OnboardingFlow({
                         </TableBody>
                       </Table>
                     </div>
-                    <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500 flex justify-between items-center">
-                      <span>{allReconRows.length} transactions</span>
-                      <Link href="/payments" className="text-gray-400 hover:text-white underline">View all</Link>
+                    <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500 text-center">
+                      {allReconRows.length} bank transaction{allReconRows.length !== 1 ? "s" : ""}
                     </div>
                   </div>
                 )}
 
-                {/* ─── Payments summary ─── */}
-                {mappingArAp && mappingRecon && (
-                  <div className="flex flex-wrap gap-4">
-                    <Link href="/payments" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 hover:bg-emerald-500/15 transition text-sm font-medium text-white">
-                      Open AR/AP dashboard (full screen)
-                    </Link>
-                  </div>
-                )}
-
-                {/* ─── Refresh ─── */}
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    disabled={arApLoading || mappingLoading}
-                    onClick={() => {
-                      setArApLoading(true)
-                      setMappingLoading(true)
-                      setArApError(null)
-                      setMappingError(null)
-                      const pollRecon = (): Promise<Record<string, unknown>> =>
-                        fetch("/api/ar-ap-reconciliation")
-                          .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed"))))
-                          .then((data: Record<string, unknown>) => {
-                            if (data.status === "processing") {
-                              return new Promise<Record<string, unknown>>((resolve, reject) => {
-                                setTimeout(() => pollRecon().then(resolve).catch(reject), 2500)
-                              })
-                            }
-                            return data
-                          })
-                      pollRecon()
-                        .then((reconData) => {
-                          setMappingRecon(reconData)
-                          setMappingLoading(false)
-                          return fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed"))))
-                        })
-                        .then((arApData) => {
-                          setArApData(arApData)
-                          setMappingArAp(arApData)
-                          setArApLoading(false)
-                        })
-                        .catch((e) => {
-                          setArApError(e instanceof Error ? e.message : "Failed")
-                          setMappingError(e instanceof Error ? e.message : "Failed")
-                        })
-                        .finally(() => { setArApLoading(false); setMappingLoading(false) })
-                    }}
-                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <div className="text-sm font-medium text-white">{arApLoading || mappingLoading ? "Loading…" : "Refresh AR/AP & reconciliation"}</div>
-                  </button>
-                </div>
               </div>
             )}
           </div>
