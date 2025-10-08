@@ -9,12 +9,13 @@
  *   Step 2b: Pair Plaid cross-account transfers
  *   Step 3:  Resolve accounts
  *   Step 4:  Resolve counterparty identity
+ *   Step 4b: Classification precedence (scrub → processor rails → Zelle/Venmo → canonical alias) — see classification-precedence.ts
  *   Step 5:  Classify non-P&L (transfers, settlements, fees, equity, financing, CC payments)
  *   Step 6:  Classify operating (customer, vendor, refund, interest)
  *   Step 6b: Provisional classes (merchant_deposit_unresolved, owner_contribution_candidate)
  *   Step 7:  Fallback to unknown_inflow / unknown_outflow / unknown_transfer_candidate
  *   Step 7b: Family-level learning (recurring pattern recognition)
- *   Step 8:  LLM assist for low-confidence
+ *   Step 8:  LLM assist for low-confidence (Supermemory on each LLM call; optional identity gate; optional two-phase link + DB history — see docs/IDENTITY_GRAPH_MAINTAINER.md)
  *   Step 8b: Direction/type consistency validation
  *   Step 9:  Batch persist (with provenance)
  */
@@ -31,9 +32,47 @@ import {
 } from "./identity-seed"
 import { normalizeForMatch } from "./alias-normalize"
 import { enrichUnresolved } from "./unresolved-enrich"
+import { applyClassificationPrecedence } from "./classification-precedence"
 import { searchEntityContextFromSupermemory } from "./supermemory"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
+
+/** When not "false", skip LLM for decisive processor/cross-account/high-confidence matches. Default: on. */
+function identityGateLlmEnabled(): boolean {
+  return process.env.IDENTITY_GATE_LLM !== "false"
+}
+
+/** Two-phase link + entity-scoped DB history + classify. Default: off until validated. */
+function twoPhaseLlmEnabled(): boolean {
+  return process.env.TWO_PHASE_LLM === "true"
+}
+
+/** Supermemory retrieval on every OpenAI call in this module (normalize / link / classify). Set "false" to disable. */
+function supermemoryOnEveryLlmEnabled(): boolean {
+  return process.env.SUPERMEMORY_ON_EVERY_LLM !== "false"
+}
+
+/** Company + entity memory layer (Supermemory); query should be movement-relevant text, capped inside search. */
+async function supermemoryContextForLlm(userId: string, searchQuery: string): Promise<string> {
+  if (!supermemoryOnEveryLlmEnabled() || !searchQuery.trim()) return ""
+  try {
+    return await searchEntityContextFromSupermemory(userId, searchQuery.slice(0, 500))
+  } catch {
+    return ""
+  }
+}
+
+const PROCESSOR_MOVEMENT_FAMILY = new Set<string>([
+  "processor_payout",
+  "processor_fee_settlement",
+  "merchant_deposit_resolved",
+  "merchant_deposit_unresolved",
+])
+
+const PROVISIONAL_MOVEMENT_TYPES = new Set<string>([
+  "merchant_deposit_unresolved",
+  "owner_contribution_candidate",
+])
 
 // ─── Movement Type Taxonomy ──────────────────────────────────────────
 
@@ -1620,6 +1659,116 @@ type LlmClassResult = { index: number; movement_type: string; confidence: number
 
 const NOISY_DESC_PATTERN = /^(SQ\s*\*|TST\*|PAYPAL\s*\*|PREAUTHORIZED|MISCELLANEOUS|TRANSFER\s+(CREDIT|DEBIT)|ACH\s+(CREDIT|DEBIT)|ZELLE\s+)/i
 
+const IDENTITY_GATE_MIN_ENTITY_CONF = Math.min(
+  0.95,
+  Math.max(0.35, parseFloat(process.env.IDENTITY_GATE_MIN_ENTITY_CONF ?? "0.55") || 0.55),
+)
+const IDENTITY_GATE_MIN_SCORE = Math.min(
+  0.95,
+  Math.max(0.45, parseFloat(process.env.IDENTITY_GATE_MIN_SCORE ?? "0.6") || 0.6),
+)
+
+/**
+ * Whether to run LLM upgrade for this movement. When false, caller should increment identity_gate_llm_skipped.
+ */
+function shouldInvokeLlmForMovement(
+  m: CanonicalMovement,
+  identity: MovementIdentityEntry | null,
+  movementType: MovementType,
+  conf: ConfidenceBreakdown,
+): boolean {
+  if (!identityGateLlmEnabled()) return true
+
+  if (PROVISIONAL_MOVEMENT_TYPES.has(movementType)) return true
+  if (movementType.startsWith("unknown")) return true
+
+  const isCrossAccountTransfer =
+    movementType === "internal_transfer" && m.metadata?.transfer_type === "cross_account"
+  if (isCrossAccountTransfer) {
+    log("movements.classify.llm_skipped_identity_gate", { reason: "cross_account_transfer", movementType }, "movements")
+    return false
+  }
+
+  const entityConf = identity?.confidence ?? 0
+  const score = conf.score ?? 0
+
+  if (
+    identity &&
+    identity.role === "processor" &&
+    PROCESSOR_MOVEMENT_FAMILY.has(movementType) &&
+    entityConf >= IDENTITY_GATE_MIN_ENTITY_CONF
+  ) {
+    log(
+      "movements.classify.llm_skipped_identity_gate",
+      { reason: "processor_identity_and_family", movementType, entityConf },
+      "movements",
+    )
+    return false
+  }
+
+  if (
+    identity &&
+    entityConf >= IDENTITY_GATE_MIN_ENTITY_CONF &&
+    score >= IDENTITY_GATE_MIN_SCORE &&
+    !movementType.startsWith("unknown") &&
+    !PROVISIONAL_MOVEMENT_TYPES.has(movementType)
+  ) {
+    log(
+      "movements.classify.llm_skipped_identity_gate",
+      { reason: "high_confidence_resolved_identity", movementType, entityConf, score },
+      "movements",
+    )
+    return false
+  }
+
+  return true
+}
+
+async function fetchPriorMovementsContext(
+  userId: string,
+  entityId: string,
+  current: CanonicalMovement,
+  limit: number,
+): Promise<string> {
+  const n = Math.min(12, Math.max(1, limit))
+  try {
+    const { rows } = await query<{
+      date: string
+      amount: string
+      direction: string
+      movement_type: string
+      raw_description: string | null
+    }>(
+      `SELECT date, amount, direction, movement_type, raw_description
+       FROM movements
+       WHERE user_id = $1
+         AND counterparty_entity_id = $2
+         AND (
+           date < $3::date
+           OR (
+             date = $3::date
+             AND (
+               amount::numeric != $4::numeric
+               OR COALESCE(raw_description, '') != COALESCE($5::text, '')
+             )
+           )
+         )
+       ORDER BY date DESC
+       LIMIT $6`,
+      [userId, entityId, current.date, current.amount, current.raw_description ?? "", n],
+    )
+    if (rows.length === 0) return ""
+    return rows
+      .map(
+        (r) =>
+          `  - ${r.date} ${r.direction} $${r.amount} ${r.movement_type} | ${(r.raw_description ?? "").slice(0, 80)}`,
+      )
+      .join("\n")
+  } catch {
+    return ""
+  }
+}
+
 function formatMovementForLlm(
   m: CanonicalMovement,
   identity: MovementIdentityEntry | null,
@@ -1641,6 +1790,7 @@ function formatMovementForLlm(
 
 /** Stage 1: Normalize noisy bank descriptions to clean counterparty names for better classification. */
 async function llmNormalizeCounterpartiesBatch(
+  userId: string,
   batch: Array<{ movement: CanonicalMovement }>
 ): Promise<Map<number, string>> {
   const apiKey = process.env.OPENAI_API_KEY
@@ -1652,6 +1802,9 @@ async function llmNormalizeCounterpartiesBatch(
   if (toNormalize.length === 0) return new Map()
 
   const numbered = toNormalize.map(({ idx, raw }) => `${idx + 1}. ${raw}`).join("\n")
+  const sm = await supermemoryContextForLlm(userId, numbered)
+  const systemBase = `Normalize bank transaction descriptions to clean company/person names. Strip prefixes: SQ *, TST*, PAYPAL *, PREAUTHORIZED ACH, etc. Extract entity name only. Return JSON array: [{"index": 1, "normalized": "Acme Corp"}] Index is 1-based. Output ONLY valid JSON.`
+  const systemPrompt = sm ? `${systemBase}\n\n${sm}` : systemBase
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -1661,7 +1814,7 @@ async function llmNormalizeCounterpartiesBatch(
         messages: [
           {
             role: "system",
-            content: `Normalize bank transaction descriptions to clean company/person names. Strip prefixes: SQ *, TST*, PAYPAL *, PREAUTHORIZED ACH, etc. Extract entity name only. Return JSON array: [{"index": 1, "normalized": "Acme Corp"}] Index is 1-based. Output ONLY valid JSON.`,
+            content: systemPrompt,
           },
           { role: "user", content: `Normalize:\n${numbered}` },
         ],
@@ -1687,6 +1840,96 @@ async function llmNormalizeCounterpartiesBatch(
   }
 }
 
+async function llmLinkPhaseBatch(
+  userId: string,
+  apiKey: string,
+  batch: Array<{ movement: CanonicalMovement; identity: MovementIdentityEntry | null }>,
+  entities: Array<{ id: string; canonical_name: string; entity_type: string }>,
+  batchOffset: number,
+): Promise<Map<number, { entityId: string | null; confidence: number }>> {
+  const out = new Map<number, { entityId: string | null; confidence: number }>()
+  const needLink: Array<{ localIdx: number; movement: CanonicalMovement }> = []
+
+  batch.forEach((row, localIdx) => {
+    if (row.identity?.entity_id) {
+      out.set(localIdx, { entityId: row.identity.entity_id, confidence: row.identity.confidence })
+    } else {
+      needLink.push({ localIdx, movement: row.movement })
+    }
+  })
+
+  if (needLink.length === 0) return out
+
+  const entityLines =
+    entities.length > 0
+      ? entities.map((e) => `- ${e.id} | ${e.entity_type} | ${e.canonical_name}`).join("\n")
+      : "(no entities in graph — return entity_id null)"
+
+  const numbered = needLink
+    .map(({ localIdx, movement: m }) => {
+      const desc = `${m.raw_description ?? ""}`.slice(0, 380)
+      const cp = `${m.counterparty ?? ""}`.slice(0, 140)
+      return `batch_index=${localIdx} | ${desc} | counterparty: ${cp}`
+    })
+    .join("\n")
+
+  const systemPromptBase = `You link bank transaction text to at most ONE existing entity from the list (closed world). Do not invent UUIDs.
+
+Entities:
+${entityLines}
+
+Return a JSON array only. Each element: {"batch_index": <number from input>, "entity_id": "<uuid from list or null>", "confidence": 0.0-1.0}
+- If no entity matches, set entity_id null and confidence low.
+- batch_index must match the batch_index= value from the input line.
+
+Output ONLY valid JSON array. No markdown.`
+
+  const sm = await supermemoryContextForLlm(userId, `${entityLines.slice(0, 200)}\n${numbered}`)
+  const systemPrompt = sm ? `${systemPromptBase}\n\n${sm}` : systemPromptBase
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Link:\n${numbered}` },
+        ],
+        max_tokens: 2048,
+        temperature: 0.05,
+      }),
+    })
+
+    if (!res.ok) {
+      log("movements.llm_link.error", { status: res.status, batchOffset }, "movements")
+      return out
+    }
+
+    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
+    const content = data.choices?.[0]?.message?.content ?? ""
+    const jsonStr = content.replace(/```json?\s*/gi, "").replace(/```/g, "").trim()
+    const parsed = JSON.parse(jsonStr) as Array<{ batch_index: number; entity_id: string | null; confidence: number }>
+
+    const validIds = new Set(entities.map((e) => e.id))
+    if (Array.isArray(parsed)) {
+      for (const p of parsed) {
+        const bi = p.batch_index
+        if (typeof bi !== "number" || bi < 0 || bi >= batch.length) continue
+        let eid = p.entity_id && validIds.has(p.entity_id) ? p.entity_id : null
+        const conf = Math.min(1, Math.max(0, p.confidence ?? 0.4))
+        out.set(bi, { entityId: eid, confidence: conf })
+      }
+    }
+    log("movements.llm_link.batch_done", { batchOffset, linked: out.size }, "movements")
+  } catch (err) {
+    log("movements.llm_link.parse_error", { batchOffset, error: err instanceof Error ? err.message : String(err) }, "movements")
+  }
+
+  return out
+}
+
 async function llmClassifyBatch(
   userId: string,
   selfCtx: SelfContext,
@@ -1697,31 +1940,73 @@ async function llmClassifyBatch(
 
   const results: LlmClassResult[] = []
   const batchSize = 40
+  const historyN = Math.min(12, Math.max(0, parseInt(process.env.MOVEMENT_LLM_HISTORY_N ?? "5", 10) || 5))
 
   const selfNamesStr = selfCtx.selfNames.length > 0 ? selfCtx.selfNames.join(", ") : "(not provided)"
   const ownerNamesStr = selfCtx.ownerNames.length > 0 ? selfCtx.ownerNames.join(", ") : ""
 
+  const { rows: entityRows } = await query<{ id: string; canonical_name: string; entity_type: string }>(
+    `SELECT id, canonical_name, entity_type FROM entities WHERE user_id = $1 ORDER BY canonical_name`,
+    [userId],
+  )
+
+  const twoPhase = twoPhaseLlmEnabled()
+
   for (let i = 0; i < unclassified.length; i += batchSize) {
     const batch = unclassified.slice(i, i + batchSize)
-    const searchText = batch.map(({ movement: m }) => `${m.raw_description ?? ""} ${m.counterparty ?? ""}`).join(" ")
-    let entityContext = ""
-    try {
-      const supermemoryContext = await searchEntityContextFromSupermemory(userId, searchText.slice(0, 500))
-      if (supermemoryContext) entityContext = `\n\n${supermemoryContext}`
-    } catch {
-      // Supermemory unavailable
-    }
 
     // Stage 1: Normalize noisy counterparties for better classification
-    const normalizedMap = await llmNormalizeCounterpartiesBatch(batch)
+    const normalizedMap = await llmNormalizeCounterpartiesBatch(userId, batch)
 
-    const numbered = batch.map(({ movement: m, identity }, idx) =>
-      formatMovementForLlm(m, identity, idx + 1, normalizedMap.get(idx) ?? undefined)
-    ).join("\n")
+    let linkByLocal = new Map<number, { entityId: string | null; confidence: number }>()
+    if (twoPhase) {
+      linkByLocal = await llmLinkPhaseBatch(userId, apiKey, batch, entityRows, i)
+    }
+
+    const historyBlocks: string[] = []
+    if (twoPhase && historyN > 0) {
+      for (let j = 0; j < batch.length; j++) {
+        const { movement: m } = batch[j]
+        const linked = linkByLocal.get(j)
+        const eid = linked?.entityId ?? batch[j].identity?.entity_id ?? m.counterparty_entity_id ?? null
+        if (eid) {
+          const block = await fetchPriorMovementsContext(userId, eid, m, historyN)
+          historyBlocks.push(block ? `Entity prior movements (entity ${eid}):\n${block}` : "")
+        } else {
+          historyBlocks.push("")
+        }
+      }
+    }
+
+    const numbered = batch
+      .map(({ movement: m, identity }, idx) => {
+        const base = formatMovementForLlm(m, identity, idx + 1, normalizedMap.get(idx) ?? undefined)
+        const link = twoPhase ? linkByLocal.get(idx) : null
+        const linkEid = link?.entityId ?? identity?.entity_id ?? m.counterparty_entity_id ?? null
+        const linkConf = link?.confidence ?? identity?.confidence ?? 0
+        const linkLine =
+          twoPhase && linkEid
+            ? ` | llm_link_entity=${linkEid}(conf=${linkConf.toFixed(2)})`
+            : twoPhase
+              ? ` | llm_link_entity=null`
+              : ""
+        const hist = twoPhase && historyBlocks[idx] ? `\n${historyBlocks[idx]}` : ""
+        return `${base}${linkLine}${hist}`
+      })
+      .join("\n")
 
     const typeList = ALL_MOVEMENT_TYPES.join(", ")
 
-    const systemPrompt = `You classify cash movements for a small business. The business is called "${selfNamesStr}".${ownerNamesStr ? ` Owner(s): ${ownerNamesStr}. Use this to distinguish owner contributions/draws from customer payments.` : ""}${entityContext}
+    const phaseNote = twoPhase
+      ? " Phase-2: entity link hints (llm_link_entity) and prior movements are grounding only; still pick the best movement_type from evidence."
+      : ""
+
+    const classifySearchText = batch
+      .map(({ movement: m }) => `${m.raw_description ?? ""} ${m.counterparty ?? ""}`)
+      .join(" ")
+    const supermemoryBlock = await supermemoryContextForLlm(userId, classifySearchText)
+
+    const systemPrompt = `You classify cash movements for a small business. The business is called "${selfNamesStr}".${ownerNamesStr ? ` Owner(s): ${ownerNamesStr}. Use this to distinguish owner contributions/draws from customer payments.` : ""}${phaseNote}${supermemoryBlock ? `\n\n${supermemoryBlock}` : ""}
 
 For each record, determine the movement_type. Use plaid_pfc (Plaid primary/detailed category) and plaid_category as strong signals when present. The counterparty role (vendor/customer/processor/owner) from the identity graph is a strong signal.
 
@@ -1801,7 +2086,7 @@ Output ONLY valid JSON array. No markdown.`
           }
         }
       }
-      log("movements.llm_classify.batch_done", { batch: i, count: parsed.length }, "movements")
+      log("movements.llm_classify.batch_done", { batch: i, count: parsed.length, twoPhase }, "movements")
     } catch (err) {
       log("movements.llm_classify.parse_error", { batch: i, error: err instanceof Error ? err.message : String(err) }, "movements")
     }
@@ -1821,6 +2106,7 @@ export async function classifyMovements(userId: string): Promise<{
   provisional_classified: number
   family_upgraded: number
   llm_classified: number
+  identity_gate_llm_skipped: number
   identity_resolved: number
   transfers_paired: number
   pnl_eligible: number
@@ -1835,6 +2121,7 @@ export async function classifyMovements(userId: string): Promise<{
     total_observations: 0, zero_dollar_skipped: 0,
     canonical_movements: 0, coalesced_count: 0,
     rule_classified: 0, provisional_classified: 0, family_upgraded: 0, llm_classified: 0,
+    identity_gate_llm_skipped: 0,
     identity_resolved: 0, transfers_paired: 0, pnl_eligible: 0, review_needed: 0,
     by_type: {} as Record<string, number>,
     by_provenance: {} as Record<string, number>,
@@ -1925,6 +2212,42 @@ export async function classifyMovements(userId: string): Promise<{
     const identity = m.counterparty_entity_id ? resolveCounterpartyIdentity(m, identityCtx, prefixIdx) : null
     const sa = sourceAgreementScore(m.evidence)
 
+    // Step 4b: Strict precedence (text scrub + processor + P2P + alias) — before legacy rules
+    const prec = applyClassificationPrecedence(m, identity, selfCtx)
+    if (prec) {
+      const validType = (ALL_MOVEMENT_TYPES as readonly string[]).includes(prec.movement_type)
+        ? (prec.movement_type as MovementType)
+        : null
+      if (validType) {
+        const srcAuth = getSourceAuthority(m.evidence)
+        const ar = m.cash_account_id ? 0.9 : m.cash_account_name ? 0.6 : 0.2
+        const conf = computeConfidence(
+          {
+            pattern_strength: prec.pattern_strength,
+            source_authority: srcAuth,
+            account_resolution: ar,
+            source_agreement: sa,
+            directional_consistency: 1,
+          },
+          `${m.date}:${m.amount}:${prec.source}`,
+        )
+        const mergedMeta = { ...m.metadata, classification_precedence: prec.source, ...(prec.extra_metadata ?? {}) }
+        classified.push({
+          ...m,
+          metadata: mergedMeta,
+          movement_type: validType,
+          pnl_eligible: prec.pnl_eligible,
+          confidence: { ...conf, score: Math.max(conf.score, prec.pattern_strength) },
+          review_needed: false,
+          review_reasons: [],
+          currency: "USD",
+          coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
+        })
+        stats.rule_classified++
+        continue
+      }
+    }
+
     // Step 5: Non-P&L first
     const nonPnl = classifyNonPnl(m, identity, selfCtx)
     if (nonPnl) {
@@ -1949,7 +2272,12 @@ export async function classifyMovements(userId: string): Promise<{
       })
       stats.rule_classified++
       if (conf.score < 0.6 && !isCrossAccountTransfer) {
-        needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+        const row = classified[classified.length - 1]
+        if (shouldInvokeLlmForMovement(m, identity, nonPnl.type, row.confidence)) {
+          needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+        } else {
+          stats.identity_gate_llm_skipped++
+        }
       }
       continue
     }
@@ -1973,7 +2301,12 @@ export async function classifyMovements(userId: string): Promise<{
       })
       stats.rule_classified++
       if (conf.score < 0.6) {
-        needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+        const row = classified[classified.length - 1]
+        if (shouldInvokeLlmForMovement(m, identity, operating.type, row.confidence)) {
+          needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+        } else {
+          stats.identity_gate_llm_skipped++
+        }
       }
       continue
     }
@@ -1996,7 +2329,14 @@ export async function classifyMovements(userId: string): Promise<{
         coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
       })
       stats.provisional_classified++
-      needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+      {
+        const row = classified[classified.length - 1]
+        if (shouldInvokeLlmForMovement(m, identity, provisional.type, row.confidence)) {
+          needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+        } else {
+          stats.identity_gate_llm_skipped++
+        }
+      }
       continue
     }
 
@@ -2005,7 +2345,6 @@ export async function classifyMovements(userId: string): Promise<{
     const conf = computeConfidence({ ...fallback.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
     const reasons: string[] = ["weak_classification"]
     if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
-    needsLlm.push({ idx: classified.length, movement: m, identity })
     classified.push({
       ...m,
       movement_type: fallback.type,
@@ -2016,6 +2355,14 @@ export async function classifyMovements(userId: string): Promise<{
       currency: "USD",
       coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
     })
+    {
+      const row = classified[classified.length - 1]
+      if (shouldInvokeLlmForMovement(m, identity, fallback.type, row.confidence)) {
+        needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+      } else {
+        stats.identity_gate_llm_skipped++
+      }
+    }
   }
 
   // Step 8: LLM assist — upgrade fallback classifications and low-confidence rule/provisional

@@ -895,6 +895,34 @@ export async function ensureMovementsSchema(): Promise<void> {
   } catch {
     // PK may already be updated
   }
+  // LLM-suggested entity aliases (human review before insert into entity_aliases)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS entity_alias_suggestions (
+      id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      movement_id           UUID REFERENCES movements(id) ON DELETE SET NULL,
+      raw_fingerprint       TEXT NOT NULL,
+      suggested_entity_id   UUID REFERENCES entities(id) ON DELETE CASCADE,
+      suggested_alias       TEXT NOT NULL,
+      alias_type            TEXT NOT NULL DEFAULT 'merchant_string',
+      confidence            REAL NOT NULL DEFAULT 0.5,
+      rationale             JSONB DEFAULT '{}'::jsonb,
+      status                TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected', 'superseded')),
+      source                TEXT NOT NULL DEFAULT 'llm_graph_maintainer',
+      canonical_name_hint   TEXT,
+      create_new_entity     BOOLEAN NOT NULL DEFAULT false,
+      suggested_entity_type TEXT,
+      created_at            TIMESTAMPTZ DEFAULT NOW(),
+      updated_at            TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_alias_suggestions_pending_fp ON entity_alias_suggestions (user_id, raw_fingerprint) WHERE status = 'pending'",
+  )
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_entity_alias_suggestions_user_status ON entity_alias_suggestions (user_id, status, created_at DESC)",
+  )
   // Backfill allocation URIs (idempotent)
   try {
     const { migrateAllocationUris } = await import("./allocation-migrate-uris")
