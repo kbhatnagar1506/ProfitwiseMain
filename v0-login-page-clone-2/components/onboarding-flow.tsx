@@ -305,6 +305,28 @@ export function OnboardingFlow({
   const [mappingRecon, setMappingRecon] = useState<MappingReconData | null>(null)
   const [mappingLoading, setMappingLoading] = useState(false)
   const [mappingError, setMappingError] = useState<string | null>(null)
+  type BrainRunWaterfall = {
+    scanned_movements: number
+    attributed_rows: number
+    exact_matches: number
+    fee_matches: number
+    fifo_full_matches: number
+    fifo_partial_matches: number
+    unresolved_count: number
+    unresolved_amount: number
+    updated_events: number
+    dry_run: boolean
+  }
+  type BrainRunResult = {
+    ok: boolean
+    cash_events_synced: boolean
+    entity_profiles_refreshed: boolean
+    allocation_count: number
+    ar_suggestions: number
+    ap_suggestions: number
+    waterfall?: BrainRunWaterfall | null
+  }
+  const [brainRunResult, setBrainRunResult] = useState<BrainRunResult | null>(null)
 
   const openMovementDetail = useCallback(async (movementId: string) => {
     setMovementDetail({ movementId, loading: true, error: null, detail: null })
@@ -828,9 +850,24 @@ export function OnboardingFlow({
     setMappingError(null)
     setMappingArAp(null)
     setMappingRecon(null)
+    setBrainRunResult(null)
 
-    fetch("/api/ar-ap-step")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP step failed"))))
+    fetch("/api/brain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        syncCashEvents: true,
+        runWaterfall: true,
+        waterfallDryRun: false,
+        waterfallMinAiReviewAmount: 1000,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Brain run failed"))))
+      .then((brainData: BrainRunResult) => {
+        if (cancelled) return Promise.reject(new Error("Cancelled"))
+        setBrainRunResult(brainData)
+        return fetch("/api/ar-ap-step").then((res) => (res.ok ? res.json() : Promise.reject(new Error("AR/AP step failed"))))
+      })
       .then((data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
         if (cancelled) return
         setArApData({ ar: data.ar, ap: data.ap })
@@ -1066,6 +1103,14 @@ export function OnboardingFlow({
                 AR/AP reconciliation + state objects + cashflow forecast are temporarily disabled in onboarding.
                 You’ll see this placeholder until the new step implementation is wired in.
               </p>
+              {currentStep === 12 && brainRunResult && (
+                <div className="mt-4 border-t border-white/10 pt-4 text-left">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Latest Step 11 run</div>
+                  <div className="mt-1 text-xs text-gray-300">
+                    Saved to Postgres. Allocations: {brainRunResult.allocation_count}. Waterfall updated events: {brainRunResult.waterfall?.updated_events ?? 0}.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -3114,12 +3159,22 @@ export function OnboardingFlow({
               {(arApLoading || mappingLoading) && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Loading AR/AP & reconciliation…
+                  Reconciling + saving to ledger…
                 </div>
               )}
 
               {(arApError || mappingError) && !arApLoading && !mappingLoading && (
                 <p className="text-red-300 text-sm mb-4">Failed: {arApError || mappingError}</p>
+              )}
+
+              {brainRunResult && !arApLoading && !mappingLoading && (
+                <div className="mx-auto mt-3 max-w-3xl rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-left">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Auto reconciliation saved</div>
+                  <div className="mt-1 text-xs text-gray-300">
+                    Allocations: {brainRunResult.allocation_count} · Cash events synced: {brainRunResult.cash_events_synced ? "yes" : "no"} ·
+                    Waterfall unresolved: {brainRunResult.waterfall?.unresolved_count ?? 0} (${(brainRunResult.waterfall?.unresolved_amount ?? 0).toLocaleString()})
+                  </div>
+                </div>
               )}
             </div>
 
