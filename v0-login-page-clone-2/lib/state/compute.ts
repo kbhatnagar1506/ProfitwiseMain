@@ -8,11 +8,16 @@
 //   - StateScope gates which metric domain each movement affects
 //   - Settlement NEVER enters revenue or spend
 //   - Provisional movements are counted but tracked separately
+//   - Contra revenue is accumulated SEPARATELY from gross revenue
+//   - Excluded items are tracked per-bucket for visibility
 
 import type { MovementTag, CanonicalMovement } from "@/lib/movement-types"
-import type { RevenueState, SpendState, LiquidityState, TransitionSignal } from "./types"
+import type { RevenueState, SpendState, LiquidityState, TransitionSignal, SeverityBand, AccountCash, SpendBreakdownEntry } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
+
+const r2 = (n: number) => Math.round(n * 100) / 100
+const pct1 = (n: number, d: number) => d > 0 ? Math.round((n / d) * 1000) / 10 : 0
 
 // ─── Revenue State ──────────────────────────────────────────────────
 
@@ -25,6 +30,7 @@ export function computeRevenueState(
   let contraRevenue = 0
   let provisionalRevenue = 0
   let excludedRevenue = 0
+  let excludedContra = 0
 
   const customerTotals = new Map<string, { name: string; total: number; count: number }>()
 
@@ -32,12 +38,16 @@ export function computeRevenueState(
     const t = m.tag
     if (!t.state_scope.affects_revenue) continue
 
+    const isContra = t.cashflow_bucket === "contra_revenue"
+    const isRevIn = t.cashflow_bucket === "revenue_in"
+
     if (t.state_inclusion_policy === "exclude_and_review") {
-      if (t.cashflow_bucket === "revenue_in") excludedRevenue += m.amount
+      if (isRevIn) excludedRevenue += m.amount
+      if (isContra) excludedContra += m.amount
       continue
     }
 
-    if (t.cashflow_bucket === "revenue_in") {
+    if (isRevIn) {
       grossRevenue += m.amount
       if (t.state_inclusion_policy === "include_provisional") provisionalRevenue += m.amount
 
@@ -52,7 +62,7 @@ export function computeRevenueState(
       }
     }
 
-    if (t.cashflow_bucket === "contra_revenue") {
+    if (isContra) {
       contraRevenue += m.amount
     }
   }
@@ -69,8 +79,6 @@ export function computeRevenueState(
     hhi += share * share
   }
 
-  const r2 = (n: number) => Math.round(n * 100) / 100
-
   return {
     period_start: periodStart,
     period_end: periodEnd,
@@ -79,7 +87,7 @@ export function computeRevenueState(
     net_revenue: r2(netRevenue),
     customer_count: customerCount,
     avg_receipt: r2(avgReceipt),
-    top_customer_pct: Math.round(topCustomerPct * 1000) / 10,
+    top_customer_pct: pct1(topCustomerPct, 1),
     concentration_index: Math.round(hhi * 1000) / 1000,
     revenue_by_customer: customers.slice(0, 10).map((c) => ({
       entity_id: null,
@@ -89,10 +97,27 @@ export function computeRevenueState(
     })),
     provisional_revenue: r2(provisionalRevenue),
     excluded_revenue: r2(excludedRevenue),
+    excluded_contra: r2(excludedContra),
   }
 }
 
 // ─── Spend State ────────────────────────────────────────────────────
+//
+// COGS heuristic: vendor payments where the description or entity suggests
+// direct product cost (inventory, supplies, materials, shipping, fulfillment).
+// This is not GAAP — it's a directional heuristic for operating intelligence.
+
+const DIRECT_COST_PATTERNS = [
+  /\b(inventory|supplies|material|shipping|freight|fulfillment|packaging|warehouse|wholesale|product\s*cost|raw\s*material|merchandise)\b/i,
+  /\b(usps|ups|fedex|dhl|amazon\s*ship|shipstation|shipbob|flexport)\b/i,
+]
+
+function isDirectCostCandidate(m: TaggedMovement): boolean {
+  const desc = (m.raw_description ?? "").toLowerCase()
+  const cp = ((m.metadata?.counterparty as string) ?? "").toLowerCase()
+  const combined = `${desc} ${cp}`
+  return DIRECT_COST_PATTERNS.some((p) => p.test(combined))
+}
 
 export function computeSpendState(
   movements: TaggedMovement[],
@@ -101,6 +126,9 @@ export function computeSpendState(
 ): SpendState {
   let totalOpex = 0
   let totalCogs = 0
+  let directCostCandidates = 0
+  let overheadCandidates = 0
+  let unresolvedSpendMix = 0
   let payroll = 0
   let vendorPayments = 0
   let bankFees = 0
@@ -108,6 +136,8 @@ export function computeSpendState(
   let processorFees = 0
   let provisionalSpend = 0
   let excludedSpend = 0
+  let recurringObligations = 0
+  let recurringObligationCount = 0
 
   const vendorTotals = new Map<string, { name: string; total: number; count: number }>()
 
@@ -125,12 +155,27 @@ export function computeSpendState(
     if (t.cashflow_bucket === "opex_out") totalOpex += m.amount
     if (t.cashflow_bucket === "cogs_out") totalCogs += m.amount
 
+    if (t.economic_class === "vendor_payment") {
+      vendorPayments += m.amount
+      if (isDirectCostCandidate(m)) {
+        directCostCandidates += m.amount
+      } else if (t.economic_class === "vendor_payment" && t.is_recurring) {
+        overheadCandidates += m.amount
+      } else {
+        unresolvedSpendMix += m.amount
+      }
+    }
+
     switch (t.economic_class) {
       case "payroll": payroll += m.amount; break
-      case "vendor_payment": vendorPayments += m.amount; break
       case "bank_fee": case "bank_fee_refund": bankFees += m.amount; break
       case "tax": taxes += m.amount; break
       case "processor_fee": processorFees += m.amount; break
+    }
+
+    if (t.is_recurring) {
+      recurringObligations += m.amount
+      recurringObligationCount++
     }
 
     if (t.counterparty_role === "vendor" || t.counterparty_role === "employee") {
@@ -152,13 +197,28 @@ export function computeSpendState(
   const avgPayment = vendorCount > 0 ? totalSpend / vendors.reduce((s, v) => s + v.count, 0) : 0
   const topVendorPct = vendorCount > 0 && totalSpend > 0 ? vendors[0].total / totalSpend : 0
 
-  const r2 = (n: number) => Math.round(n * 100) / 100
+  let supplierHHI = 0
+  for (const v of vendors) {
+    const share = totalSpend > 0 ? v.total / totalSpend : 0
+    supplierHHI += share * share
+  }
+
+  const spendByVendor: SpendBreakdownEntry[] = vendors.slice(0, 10).map((v) => ({
+    entity_id: null,
+    name: v.name,
+    total: r2(v.total),
+    count: v.count,
+    pct_of_spend: pct1(v.total, totalSpend),
+  }))
 
   return {
     period_start: periodStart,
     period_end: periodEnd,
     total_opex: r2(totalOpex),
     total_cogs: r2(totalCogs),
+    direct_cost_candidates: r2(directCostCandidates),
+    overhead_candidates: r2(overheadCandidates),
+    unresolved_spend_mix: r2(unresolvedSpendMix),
     total_spend: r2(totalSpend),
     payroll: r2(payroll),
     vendor_payments: r2(vendorPayments),
@@ -167,13 +227,11 @@ export function computeSpendState(
     processor_fees: r2(processorFees),
     vendor_count: vendorCount,
     avg_payment: r2(avgPayment),
-    top_vendor_pct: Math.round(topVendorPct * 1000) / 10,
-    spend_by_vendor: vendors.slice(0, 10).map((v) => ({
-      entity_id: null,
-      name: v.name,
-      total: r2(v.total),
-      count: v.count,
-    })),
+    top_vendor_pct: pct1(topVendorPct, 1),
+    supplier_concentration_index: Math.round(supplierHHI * 1000) / 1000,
+    spend_by_vendor: spendByVendor,
+    recurring_obligations: r2(recurringObligations),
+    recurring_obligation_count: recurringObligationCount,
     provisional_spend: r2(provisionalSpend),
     excluded_spend: r2(excludedSpend),
   }
@@ -192,10 +250,16 @@ export function computeLiquidityState(
   let settleIn = 0, settleOut = 0
   let ownerIn = 0, ownerOut = 0
   let excludedCash = 0
+  let transferVolume = 0
+
+  const accountFlows = new Map<string, AccountCash>()
 
   for (const m of movements) {
     const t = m.tag
-    if (!t.state_scope.affects_liquidity) continue
+    if (!t.state_scope.affects_liquidity) {
+      if (t.cashflow_bucket === "transfer") transferVolume += m.amount
+      continue
+    }
 
     if (t.state_inclusion_policy === "exclude_and_review") {
       excludedCash += m.amount
@@ -219,9 +283,27 @@ export function computeLiquidityState(
     if (t.is_owner_related) {
       if (isIn) ownerIn += amt; else ownerOut += amt
     }
+
+    const acctId = m.account_id ?? "unknown"
+    const acctName = (m.metadata?.cash_account_name as string) ?? acctId
+    const acctType = (m.metadata?.account_type as string) ?? "unknown"
+    let acctEntry = accountFlows.get(acctId)
+    if (!acctEntry) {
+      acctEntry = { account_id: acctId, account_name: acctName, account_type: acctType, net_flow: 0, inflows: 0, outflows: 0, movement_count: 0 }
+      accountFlows.set(acctId, acctEntry)
+    }
+    acctEntry.movement_count++
+    if (isIn) { acctEntry.inflows += amt } else { acctEntry.outflows += amt }
+    acctEntry.net_flow = r2(acctEntry.inflows - acctEntry.outflows)
   }
 
-  const r2 = (n: number) => Math.round(n * 100) / 100
+  const cashByAccount = [...accountFlows.values()]
+    .map((a) => ({ ...a, inflows: r2(a.inflows), outflows: r2(a.outflows), net_flow: r2(a.net_flow) }))
+    .sort((a, b) => b.net_flow - a.net_flow)
+
+  const totalFlow = totalIn + totalOut
+  const transferDependencyRatio = totalFlow > 0 ? transferVolume / totalFlow : 0
+  const ownerSupportRatio = totalIn > 0 ? ownerIn / totalIn : 0
 
   return {
     period_start: periodStart,
@@ -241,8 +323,58 @@ export function computeLiquidityState(
     owner_inflows: r2(ownerIn),
     owner_outflows: r2(ownerOut),
     net_owner: r2(ownerIn - ownerOut),
+    cash_by_account: cashByAccount,
+    transfer_dependency_ratio: Math.round(transferDependencyRatio * 1000) / 1000,
+    owner_support_ratio: Math.round(ownerSupportRatio * 1000) / 1000,
     excluded_cash: r2(excludedCash),
   }
+}
+
+// ─── Severity Bands ─────────────────────────────────────────────────
+
+function concentrationBand(topPct: number): SeverityBand {
+  if (topPct > 70) return "critical"
+  if (topPct > 50) return "high"
+  if (topPct > 35) return "elevated"
+  if (topPct > 20) return "moderate"
+  return "low"
+}
+
+function ownerBand(ownerPct: number): SeverityBand {
+  if (ownerPct > 40) return "critical"
+  if (ownerPct > 25) return "high"
+  if (ownerPct > 10) return "elevated"
+  if (ownerPct > 3) return "moderate"
+  return "low"
+}
+
+function liquidityBand(netRatio: number): SeverityBand {
+  if (netRatio < -0.1) return "critical"
+  if (netRatio < 0) return "high"
+  if (netRatio < 0.05) return "elevated"
+  if (netRatio < 0.15) return "moderate"
+  return "low"
+}
+
+function spendSpikeBand(ratio: number): SeverityBand {
+  if (ratio > 2.0) return "critical"
+  if (ratio > 1.5) return "high"
+  if (ratio > 1.25) return "elevated"
+  if (ratio > 1.1) return "moderate"
+  return "low"
+}
+
+function settlementBand(settlePct: number): SeverityBand {
+  if (settlePct < 5) return "low"
+  if (settlePct < 15) return "moderate"
+  if (settlePct < 30) return "elevated"
+  if (settlePct < 50) return "high"
+  return "critical"
+}
+
+function bandTransitioned(current: SeverityBand, previous: SeverityBand | null): boolean {
+  if (!previous) return false
+  return current !== previous
 }
 
 // ─── Transition Detectors ───────────────────────────────────────────
@@ -257,80 +389,104 @@ export function detectTransitions(
 ): TransitionSignal[] {
   const signals: TransitionSignal[] = []
 
-  // 1. Revenue concentration increase
-  const concThreshold = 0.5
+  // 1. Revenue concentration
+  const concCurrent = concentrationBand(revenue.top_customer_pct)
+  const concPrev = previousRevenue ? concentrationBand(previousRevenue.top_customer_pct) : null
+  const concTransitioned = bandTransitioned(concCurrent, concPrev)
   signals.push({
-    signal: "revenue_concentration_increase",
-    severity: revenue.top_customer_pct > 70 ? "critical" : revenue.top_customer_pct > concThreshold * 100 ? "warning" : "info",
-    description: `Top customer represents ${revenue.top_customer_pct}% of revenue`,
+    signal: "revenue_concentration",
+    severity: concCurrent === "critical" || concCurrent === "high" ? "critical" : concCurrent === "elevated" ? "warning" : "info",
+    description: concTransitioned && concPrev
+      ? `Concentration moved from ${concPrev} to ${concCurrent} (top customer ${revenue.top_customer_pct}%)`
+      : `Concentration is ${concCurrent} (top customer ${revenue.top_customer_pct}%)`,
+    current_band: concCurrent,
+    previous_band: concPrev,
     current_value: revenue.top_customer_pct,
     previous_value: previousRevenue?.top_customer_pct ?? null,
-    threshold: concThreshold * 100,
-    triggered: revenue.top_customer_pct > concThreshold * 100,
+    threshold: 50,
+    triggered: concTransitioned || concCurrent === "high" || concCurrent === "critical",
   })
 
   // 2. Abnormal outflow spike
   const prevSpend = previousSpend?.total_spend ?? spend.total_spend
   const spendRatio = prevSpend > 0 ? spend.total_spend / prevSpend : 1
+  const spikeCurrent = spendSpikeBand(spendRatio)
+  const spikePrev: SeverityBand = "low"
   signals.push({
     signal: "abnormal_outflow_spike",
-    severity: spendRatio > 2.0 ? "critical" : spendRatio > 1.5 ? "warning" : "info",
-    description: `Spend is ${Math.round(spendRatio * 100)}% of prior period`,
+    severity: spikeCurrent === "critical" || spikeCurrent === "high" ? "critical" : spikeCurrent === "elevated" ? "warning" : "info",
+    description: spikeCurrent !== "low"
+      ? `Spend spike is ${spikeCurrent} — ${Math.round(spendRatio * 100)}% of prior period`
+      : `Spend is stable at ${Math.round(spendRatio * 100)}% of prior period`,
+    current_band: spikeCurrent,
+    previous_band: previousSpend ? spikePrev : null,
     current_value: Math.round(spendRatio * 100),
     previous_value: 100,
     threshold: 150,
-    triggered: spendRatio > 1.5,
+    triggered: spikeCurrent !== "low",
   })
 
-  // 3. Owner support dependency increase
-  const ownerPct = liquidity.total_inflows > 0
-    ? (liquidity.owner_inflows / liquidity.total_inflows) * 100
-    : 0
-  const prevOwnerPct = previousLiquidity && previousLiquidity.total_inflows > 0
-    ? (previousLiquidity.owner_inflows / previousLiquidity.total_inflows) * 100
-    : null
+  // 3. Owner support dependency
+  const ownerPct = liquidity.owner_support_ratio * 100
+  const ownerCurrent = ownerBand(ownerPct)
+  const prevOwnerPct = previousLiquidity ? previousLiquidity.owner_support_ratio * 100 : null
+  const ownerPrev = prevOwnerPct !== null ? ownerBand(prevOwnerPct) : null
+  const ownerTransitioned = bandTransitioned(ownerCurrent, ownerPrev)
   signals.push({
-    signal: "owner_dependency_increase",
-    severity: ownerPct > 40 ? "critical" : ownerPct > 25 ? "warning" : "info",
-    description: `Owner provides ${Math.round(ownerPct)}% of inflows`,
+    signal: "owner_dependency",
+    severity: ownerCurrent === "critical" || ownerCurrent === "high" ? "critical" : ownerCurrent === "elevated" ? "warning" : "info",
+    description: ownerTransitioned && ownerPrev
+      ? `Owner support moved from ${ownerPrev} to ${ownerCurrent} (${Math.round(ownerPct)}% of inflows)`
+      : `Owner support is ${ownerCurrent} (${Math.round(ownerPct)}% of inflows)`,
+    current_band: ownerCurrent,
+    previous_band: ownerPrev,
     current_value: Math.round(ownerPct),
     previous_value: prevOwnerPct !== null ? Math.round(prevOwnerPct) : null,
     threshold: 25,
-    triggered: ownerPct > 25,
+    triggered: ownerTransitioned || ownerCurrent === "high" || ownerCurrent === "critical",
   })
 
   // 4. Liquidity tightening
-  const netCashRatio = liquidity.total_inflows > 0
-    ? liquidity.net_cash_flow / liquidity.total_inflows
-    : 0
+  const netRatio = liquidity.total_inflows > 0 ? liquidity.net_cash_flow / liquidity.total_inflows : 0
+  const liqCurrent = liquidityBand(netRatio)
+  const prevNetRatio = previousLiquidity && previousLiquidity.total_inflows > 0
+    ? previousLiquidity.net_cash_flow / previousLiquidity.total_inflows : null
+  const liqPrev = prevNetRatio !== null ? liquidityBand(prevNetRatio) : null
+  const liqTransitioned = bandTransitioned(liqCurrent, liqPrev)
   signals.push({
     signal: "liquidity_tightening",
-    severity: netCashRatio < -0.1 ? "critical" : netCashRatio < 0.05 ? "warning" : "info",
-    description: `Net cash flow is ${Math.round(netCashRatio * 100)}% of inflows`,
-    current_value: Math.round(netCashRatio * 100),
-    previous_value: previousLiquidity && previousLiquidity.total_inflows > 0
-      ? Math.round((previousLiquidity.net_cash_flow / previousLiquidity.total_inflows) * 100)
-      : null,
+    severity: liqCurrent === "critical" || liqCurrent === "high" ? "critical" : liqCurrent === "elevated" ? "warning" : "info",
+    description: liqTransitioned && liqPrev
+      ? `Liquidity moved from ${liqPrev} to ${liqCurrent} (net ${Math.round(netRatio * 100)}% of inflows)`
+      : `Liquidity is ${liqCurrent} (net ${Math.round(netRatio * 100)}% of inflows)`,
+    current_band: liqCurrent,
+    previous_band: liqPrev,
+    current_value: Math.round(netRatio * 100),
+    previous_value: prevNetRatio !== null ? Math.round(prevNetRatio * 100) : null,
     threshold: 5,
-    triggered: netCashRatio < 0.05,
+    triggered: liqTransitioned || liqCurrent === "high" || liqCurrent === "critical",
   })
 
-  // 5. Settlement delay increase
-  const settlementPct = liquidity.total_inflows > 0
-    ? (liquidity.settlement_inflows / liquidity.total_inflows) * 100
-    : 0
+  // 5. Settlement drag
+  const settlePct = liquidity.total_inflows > 0
+    ? (liquidity.settlement_inflows / liquidity.total_inflows) * 100 : 0
+  const settleCurrent = settlementBand(settlePct)
   const prevSettlePct = previousLiquidity && previousLiquidity.total_inflows > 0
-    ? (previousLiquidity.settlement_inflows / previousLiquidity.total_inflows) * 100
-    : null
-  const settleDropped = prevSettlePct !== null && settlementPct < prevSettlePct * 0.7
+    ? (previousLiquidity.settlement_inflows / previousLiquidity.total_inflows) * 100 : null
+  const settlePrev = prevSettlePct !== null ? settlementBand(prevSettlePct) : null
+  const settleTransitioned = bandTransitioned(settleCurrent, settlePrev)
   signals.push({
-    signal: "settlement_delay_increase",
-    severity: settleDropped ? "warning" : "info",
-    description: `Settlement is ${Math.round(settlementPct)}% of inflows${settleDropped ? " (dropped from prior period)" : ""}`,
-    current_value: Math.round(settlementPct),
+    signal: "settlement_drag",
+    severity: settleTransitioned ? "warning" : "info",
+    description: settleTransitioned && settlePrev
+      ? `Settlement moved from ${settlePrev} to ${settleCurrent} (${Math.round(settlePct)}% of inflows)`
+      : `Settlement is ${settleCurrent} (${Math.round(settlePct)}% of inflows)`,
+    current_band: settleCurrent,
+    previous_band: settlePrev,
+    current_value: Math.round(settlePct),
     previous_value: prevSettlePct !== null ? Math.round(prevSettlePct) : null,
     threshold: 30,
-    triggered: settleDropped,
+    triggered: settleTransitioned,
   })
 
   return signals

@@ -22,6 +22,19 @@ type TaggedMovement = CanonicalMovement & { tag: MovementTag }
 export async function computeBusinessState(userId: string): Promise<BusinessState> {
   await ensureMovementsSchema()
 
+  type PlaidAcct = { account_id: string; name: string; type: string; subtype: string }
+  const acctLookup = new Map<string, PlaidAcct>()
+  try {
+    const acctRows = await query<PlaidAcct>(
+      `SELECT pa.account_id, pa.name, pa.type, pa.subtype
+       FROM plaid_accounts pa
+       JOIN plaid_items pi ON pa.item_id = pi.item_id
+       WHERE pi.user_id = $1`,
+      [userId]
+    ).then((r) => r.rows)
+    for (const a of acctRows) acctLookup.set(a.account_id, a)
+  } catch { /* plaid_accounts may not exist yet */ }
+
   const movementRows = await query<CanonicalMovement & { movement_type: string }>(
     `SELECT m.id, m.user_id, m.date AS occurred_at, m.direction, m.amount::float,
             m.currency, m.raw_description, m.movement_type,
@@ -34,6 +47,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
   ).then((r) => r.rows.map((row) => {
     const conf = (row.confidence as unknown as Record<string, number>) ?? {}
     const md = (row.metadata ?? {}) as Record<string, unknown>
+    const acctInfo = acctLookup.get(row.account_id ?? "")
     return {
       ...row,
       amount: typeof row.amount === "string" ? parseFloat(row.amount) : row.amount,
@@ -43,7 +57,12 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
       confidence: conf.score ?? 0,
       evidence_strength: conf.evidence_strength ?? 0,
       review_reasons: (Array.isArray(md.review_reasons) ? md.review_reasons : []) as ReviewReason[],
-      metadata: { ...md, cash_account_name: row.account_id },
+      metadata: {
+        ...md,
+        cash_account_name: acctInfo?.name ?? row.account_id,
+        account_type: acctInfo?.type ?? md.account_type ?? "unknown",
+        account_subtype: acctInfo?.subtype ?? md.account_subtype ?? null,
+      },
     } as CanonicalMovement
   }))
 
