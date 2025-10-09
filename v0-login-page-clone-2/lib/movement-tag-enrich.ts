@@ -21,6 +21,7 @@ import type {
   UnresolvedImpact,
   OwnerDependency,
   WorkingCapitalSignals,
+  SignalConfidence,
 } from "@/lib/movement-types"
 
 // ─── Entity context loaded from DB ──────────────────────────────────
@@ -119,7 +120,7 @@ const CLASS_TO_BASE: Record<string, BaseTag> = {
     hits_pnl: true, hits_working_capital: true,
   },
   bank_fee_refund: {
-    economic_class: "adjustment", cashflow_bucket: "opex_out", counterparty_role: "bank",
+    economic_class: "bank_fee_refund", cashflow_bucket: "opex_out", counterparty_role: "bank",
     is_operating: true, is_financing: false, is_investing: false, is_owner_related: false,
     hits_pnl: true, hits_working_capital: true,
   },
@@ -129,7 +130,7 @@ const CLASS_TO_BASE: Record<string, BaseTag> = {
     hits_pnl: false, hits_working_capital: false,
   },
   opening_balance: {
-    economic_class: "adjustment", cashflow_bucket: "unknown", counterparty_role: "bank",
+    economic_class: "opening_balance", cashflow_bucket: "unknown", counterparty_role: "bank",
     is_operating: false, is_financing: false, is_investing: false, is_owner_related: false,
     hits_pnl: false, hits_working_capital: false,
   },
@@ -180,6 +181,13 @@ function tagLevel1(m: CanonicalMovement): BaseTag | null {
   }
   if (m.movement_class === "bank_fee_refund") {
     tag.cashflow_bucket = "opex_out"
+  }
+  if (m.movement_class === "opening_balance") {
+    if (m.movement_type_detail === "account_verification") {
+      tag.economic_class = "account_verification"
+    } else if (m.movement_type_detail === "balance_adjustment") {
+      tag.economic_class = "system_adjustment"
+    }
   }
 
   return tag
@@ -545,28 +553,50 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
 // ─── Derived: Unresolved Impact (unknown = risk) ────────────────────
 
 function computeUnresolvedImpact(movements: CanonicalMovement[], tags: MovementTag[]): UnresolvedImpact {
-  let inflowTotal = 0
-  let outflowTotal = 0
+  let unresolvedIn = 0
+  let unresolvedOut = 0
   let count = 0
   let operatingExposure = 0
+  let totalInflow = 0
+  let operatingInflow = 0
+  let last30dCash = 0
+  let unresolvedLast30d = 0
+
+  const now = Date.now()
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000
 
   for (let i = 0; i < movements.length; i++) {
     const m = movements[i]
     const t = tags[i]
+    const ts = new Date(m.occurred_at).getTime()
+    const isRecent = !isNaN(ts) && (now - ts) <= thirtyDaysMs
+
+    if (m.direction === "inflow") {
+      totalInflow += m.amount
+      if (t.state_scope.affects_operating_performance) operatingInflow += m.amount
+    }
+    if (isRecent) last30dCash += m.amount
+
     if (t.economic_class !== "unknown") continue
 
     count++
-    if (m.direction === "inflow") inflowTotal += m.amount
-    else outflowTotal += m.amount
-
+    if (m.direction === "inflow") unresolvedIn += m.amount
+    else unresolvedOut += m.amount
     if (m.amount > 500) operatingExposure += m.amount
+    if (isRecent) unresolvedLast30d += m.amount
   }
 
+  const r2 = (n: number) => Math.round(n * 100) / 100
+  const pct = (num: number, den: number) => den > 0 ? Math.round((num / den) * 1000) / 10 : 0
+
   return {
-    unresolved_inflow_total: Math.round(inflowTotal * 100) / 100,
-    unresolved_outflow_total: Math.round(outflowTotal * 100) / 100,
+    unresolved_inflow_total: r2(unresolvedIn),
+    unresolved_outflow_total: r2(unresolvedOut),
     unresolved_count: count,
-    unresolved_operating_exposure: Math.round(operatingExposure * 100) / 100,
+    unresolved_operating_exposure: r2(operatingExposure),
+    unresolved_pct_of_inflows: pct(unresolvedIn, totalInflow),
+    unresolved_pct_of_operating_inflows: pct(unresolvedIn, operatingInflow),
+    unresolved_pct_of_last_30d: pct(unresolvedLast30d, last30dCash),
   }
 }
 
@@ -638,6 +668,17 @@ function computeWorkingCapitalSignals(movements: CanonicalMovement[], tags: Move
   inflowDates.sort(sortAsc)
   outflowDates.sort(sortAsc)
 
+  const allDates = [...inflowDates, ...outflowDates, ...settlementDates]
+  const dataSpanDays = allDates.length >= 2
+    ? Math.round((Math.max(...allDates) - Math.min(...allDates)) / (1000 * 60 * 60 * 24))
+    : 0
+
+  const minSample = Math.min(inflowDates.length, outflowDates.length, settlementDates.length)
+  const confidence: SignalConfidence =
+    dataSpanDays >= 60 && minSample >= 10 ? "high" :
+    dataSpanDays >= 30 && minSample >= 5 ? "medium" :
+    minSample >= 3 ? "low" : "insufficient_data"
+
   const avgSettlementLag = computeAvgLag(customerReceiptDates, settlementDates)
   const inflowCadence = computeCadence(inflowDates)
   const outflowCadence = computeCadence(outflowDates)
@@ -650,6 +691,9 @@ function computeWorkingCapitalSignals(movements: CanonicalMovement[], tags: Move
     avg_outflow_cadence_days: outflowCadence,
     inflow_regularity: inflowRegularity,
     outflow_regularity: outflowRegularity,
+    confidence,
+    sample_sizes: { settlements: settlementDates.length, revenue_inflows: inflowDates.length, spend_outflows: outflowDates.length },
+    data_span_days: dataSpanDays,
   }
 }
 
