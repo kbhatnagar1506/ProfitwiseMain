@@ -246,7 +246,6 @@ export function OnboardingFlow({
   const [movementDetailAiExplain, setMovementDetailAiExplain] = useState<string | null>(null)
   const [movementDetailAiLoading, setMovementDetailAiLoading] = useState(false)
   const [movementExplainCache, setMovementExplainCache] = useState<Record<string, string>>({})
-  const [movementExplainReadyCount, setMovementExplainReadyCount] = useState(0)
   type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; state_scope?: { affects_revenue: boolean; affects_spend: boolean; affects_liquidity: boolean; affects_operating_performance: boolean; affects_revenue_quality: boolean }; state_inclusion_policy?: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
   type TagStats = { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number; policy_include: number; policy_provisional: number; policy_exclude: number }
   type UnresolvedImpact = { unresolved_inflow_total: number; unresolved_outflow_total: number; unresolved_count: number; unresolved_operating_exposure: number; unresolved_pct_of_inflows: number; unresolved_pct_of_operating_inflows: number; unresolved_pct_of_last_30d: number }
@@ -801,48 +800,6 @@ export function OnboardingFlow({
 
     return () => { cancelled = true }
   }, [currentStep])
-
-  // Step 10: Batch explainability cache (batch load + incremental batch generate + auto-refresh)
-  useEffect(() => {
-    if (currentStep !== 10) return
-    const ids = (movementsData?.movements ?? []).slice(0, 40).map((m) => m.id)
-    if (ids.length === 0) return
-    let cancelled = false
-
-    const run = async () => {
-      try {
-        const list = ids.join(",")
-        const readRes = await fetch(`/api/movements/explain/batch?movement_ids=${encodeURIComponent(list)}`)
-        const readData = await readRes.json().catch(() => ({}))
-        if (cancelled) return
-        const fetched = (readData?.explanations ?? {}) as Record<string, string>
-        const readyCount = Object.keys(fetched).length
-        setMovementExplainCache((prev) => ({ ...prev, ...fetched }))
-        const prevReady = movementExplainReadyCount
-        setMovementExplainReadyCount(readyCount)
-
-        if (readyCount < ids.length) {
-          await fetch("/api/movements/explain/batch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ movement_ids: ids, batch_size: 6 }),
-          })
-        } else if (readyCount > prevReady) {
-          const movementRes = await fetch("/api/movements")
-          if (!cancelled && movementRes.ok) setMovementsData(await movementRes.json())
-        }
-      } catch {
-        // no-op: explainability is best-effort
-      }
-    }
-
-    run()
-    const interval = setInterval(run, 8000)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [currentStep, movementsData, movementExplainReadyCount])
 
   // Step 11: AR/AP & reconciliation — fetch reconciliation first (creates allocations), then AR/AP
   useEffect(() => {
@@ -2959,27 +2916,15 @@ export function OnboardingFlow({
                                     onClick={async () => {
                                       setMovementDetailAiLoading(true)
                                       try {
-                                        await fetch("/api/movements/explain/batch", {
+                                        const res = await fetch("/api/movements/explain", {
                                           method: "POST",
                                           headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({ movement_ids: [d.headline.movement_id], batch_size: 1 }),
+                                          body: JSON.stringify({ detail: d }),
                                         })
-                                        const read = await fetch(`/api/movements/explain/batch?movement_ids=${encodeURIComponent(d.headline.movement_id)}`)
-                                        const readData = await read.json().catch(() => ({}))
-                                        const exp = (readData?.explanations ?? {}) as Record<string, string>
-                                        const text = exp[d.headline.movement_id]
-                                        if (text) {
-                                          setMovementExplainCache((prev) => ({ ...prev, [d.headline.movement_id]: text }))
-                                          setMovementDetailAiExplain(text)
-                                        } else {
-                                          const res = await fetch("/api/movements/explain", {
-                                            method: "POST",
-                                            headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ detail: d }),
-                                          })
-                                          const data = await res.json().catch(() => ({}))
-                                          setMovementDetailAiExplain(res.ok ? (data.explanation ?? "No explanation returned.") : (data.error ?? "Failed to generate AI explanation"))
-                                        }
+                                        const data = await res.json().catch(() => ({}))
+                                        const text = res.ok ? (data.explanation ?? "No explanation returned.") : (data.error ?? "Failed to generate AI explanation")
+                                        setMovementExplainCache((prev) => ({ ...prev, [d.headline.movement_id]: text }))
+                                        setMovementDetailAiExplain(text)
                                       } finally {
                                         setMovementDetailAiLoading(false)
                                       }
@@ -2989,7 +2934,6 @@ export function OnboardingFlow({
                                   </Button>
                                 </div>
                                 <p className="text-xs text-gray-500">Plain-English narrative of how this movement was mapped, where certainty is strong, and what might still be wrong.</p>
-                                <p className="text-[11px] text-gray-600 mt-1">Batch cache ready: {movementExplainReadyCount} visible movement explanation(s).</p>
                                 {movementDetailAiExplain && <p className="mt-2 text-xs text-gray-200 whitespace-pre-wrap">{movementDetailAiExplain}</p>}
                               </section>
 
