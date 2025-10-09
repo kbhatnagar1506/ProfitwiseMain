@@ -104,6 +104,11 @@ const steps = [
     title: "Business semantics",
     description: "Every movement tagged with economic class, cashflow bucket, counterparty role, and structural flags.",
   },
+  {
+    id: 12,
+    title: "State objects",
+    description: "Revenue, Spend, and Liquidity states computed from frozen tags, plus transition detectors.",
+  },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -219,6 +224,14 @@ export function OnboardingFlow({
   const [tagLoading, setTagLoading] = useState(false)
   const [tagRunning, setTagRunning] = useState(false)
   const [tagError, setTagError] = useState<string | null>(null)
+  type TransitionSignal = { signal: string; severity: "info" | "warning" | "critical"; description: string; current_value: number; previous_value: number | null; threshold: number; triggered: boolean }
+  type RevenueState = { period_start: string; period_end: string; gross_revenue: number; contra_revenue: number; net_revenue: number; customer_count: number; avg_receipt: number; top_customer_pct: number; concentration_index: number; revenue_by_customer: { entity_id: string | null; name: string; total: number; count: number }[]; provisional_revenue: number; excluded_revenue: number }
+  type SpendState = { period_start: string; period_end: string; total_opex: number; total_cogs: number; total_spend: number; payroll: number; vendor_payments: number; bank_fees: number; taxes: number; processor_fees: number; vendor_count: number; avg_payment: number; top_vendor_pct: number; spend_by_vendor: { entity_id: string | null; name: string; total: number; count: number }[]; provisional_spend: number; excluded_spend: number }
+  type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; owner_inflows: number; owner_outflows: number; net_owner: number; excluded_cash: number }
+  type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; transitions: TransitionSignal[]; computed_at: string }
+  const [stateData, setStateData] = useState<BusinessState | null>(null)
+  const [stateLoading, setStateLoading] = useState(false)
+  const [stateError, setStateError] = useState<string | null>(null)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -677,6 +690,31 @@ export function OnboardingFlow({
         setTagError(err instanceof Error ? err.message : "Failed to run tagging")
         setTagLoading(false)
         setTagRunning(false)
+      })
+
+    return () => { cancelled = true }
+  }, [currentStep])
+
+  // Step 12: State objects (computed from frozen tags)
+  useEffect(() => {
+    if (currentStep !== 12) return
+    let cancelled = false
+
+    setStateLoading(true)
+    setStateError(null)
+    setStateData(null)
+
+    fetch("/api/state")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((data: BusinessState) => {
+        if (cancelled) return
+        setStateData(data)
+        setStateLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setStateError(err instanceof Error ? err.message : "Failed to load state")
+        setStateLoading(false)
       })
 
     return () => { cancelled = true }
@@ -2748,6 +2786,161 @@ export function OnboardingFlow({
         )
       }
 
+      case 12: {
+        const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        const badge = (severity: "info" | "warning" | "critical") =>
+          severity === "critical"
+            ? "text-red-300 bg-red-500/10 border-red-500/20"
+            : severity === "warning"
+              ? "text-amber-300 bg-amber-500/10 border-amber-500/20"
+              : "text-blue-300 bg-blue-500/10 border-blue-500/20"
+
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[11].description}</p>
+
+              {stateLoading && (
+                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Loading state objects…
+                </div>
+              )}
+
+              {stateError && !stateLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed: {stateError}</p>
+              )}
+            </div>
+
+            {!stateLoading && stateData && (
+              <div className="space-y-6">
+                {/* Revenue / Spend / Liquidity summary */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="text-xs uppercase tracking-wider text-gray-400">Revenue state</div>
+                    <div className="mt-2 text-2xl font-bold text-emerald-400">{money(stateData.revenue.net_revenue)}</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      Gross {money(stateData.revenue.gross_revenue)} · Contra {money(stateData.revenue.contra_revenue)}
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{stateData.revenue.customer_count}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Customers</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{stateData.revenue.top_customer_pct}%</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Top %</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{stateData.revenue.concentration_index}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">HHI</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="text-xs uppercase tracking-wider text-gray-400">Spend state</div>
+                    <div className="mt-2 text-2xl font-bold text-amber-400">{money(stateData.spend.total_spend)}</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      OpEx {money(stateData.spend.total_opex)} · COGS {money(stateData.spend.total_cogs)}
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.spend.payroll)}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Payroll</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.spend.vendor_payments)}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Vendors</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.spend.bank_fees)}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Bank fees</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="text-xs uppercase tracking-wider text-gray-400">Liquidity state</div>
+                    <div className="mt-2 text-2xl font-bold text-blue-300">{money(stateData.liquidity.net_cash_flow)}</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      In {money(stateData.liquidity.total_inflows)} · Out {money(stateData.liquidity.total_outflows)}
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.liquidity.net_operating)}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Net op</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.liquidity.net_financing)}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Net fin</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg px-2 py-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.liquidity.net_settlement)}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Net settle</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Transitions */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Transitions</h3>
+                    <div className="text-[10px] text-gray-500">Computed {stateData.computed_at.slice(0, 19).replace("T", " ")}</div>
+                  </div>
+
+                  <div className="space-y-2">
+                    {stateData.transitions.length === 0 && (
+                      <div className="text-sm text-gray-500">No transition signals.</div>
+                    )}
+
+                    {stateData.transitions.map((s) => (
+                      <div key={s.signal} className="flex items-start justify-between gap-3 bg-white/5 rounded-lg px-3 py-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`inline-block text-[10px] font-semibold border rounded px-1.5 py-0.5 ${badge(s.severity)}`}>
+                              {s.severity.toUpperCase()}
+                            </span>
+                            <div className="text-sm font-medium text-white truncate">{s.signal}</div>
+                            {s.triggered && <span className="text-[10px] text-red-300">TRIGGERED</span>}
+                          </div>
+                          <div className="text-xs text-gray-500 mt-1">{s.description}</div>
+                        </div>
+                        <div className="text-right text-xs text-gray-400 font-mono whitespace-nowrap">
+                          {s.current_value}{s.previous_value !== null ? ` (prev ${s.previous_value})` : ""}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Refresh */}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={stateLoading}
+                    onClick={() => {
+                      setStateLoading(true)
+                      setStateError(null)
+                      fetch("/api/state")
+                        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+                        .then((data: BusinessState) => { setStateData(data); setStateLoading(false) })
+                        .catch((err) => { setStateError(err instanceof Error ? err.message : "Failed to load state"); setStateLoading(false) })
+                    }}
+                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="text-sm font-medium text-white">{stateLoading ? "Loading…" : "Refresh state"}</div>
+                    <div className="text-xs text-gray-400">Recompute from latest tags</div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
       default:
         return (
           <div className="text-center py-12">
@@ -2764,7 +2957,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12
   return (
     <div
       className={
