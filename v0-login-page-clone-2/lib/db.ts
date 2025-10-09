@@ -954,6 +954,22 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_entity_alias_blacklist_user ON entity_alias_blacklist (user_id, entity_id)",
   )
+  // Cached movement explainability (batch generation + auto-refresh in UI)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS movement_explanations_cache (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      movement_id     UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
+      status          TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('processing', 'ready', 'error')),
+      explanation     TEXT,
+      error_message   TEXT,
+      updated_at      TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, movement_id)
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_movement_explanations_cache_user ON movement_explanations_cache (user_id, updated_at DESC)",
+  )
   // Backfill allocation URIs (idempotent)
   try {
     const { migrateAllocationUris } = await import("./allocation-migrate-uris")

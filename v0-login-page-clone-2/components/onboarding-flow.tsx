@@ -16,6 +16,7 @@ import {
 import Image from "next/image"
 import { Sparkles, Loader2 } from "lucide-react"
 import { displayLabelForCounterparty } from "@/lib/alias-normalize"
+import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
 import { useRouter } from "next/navigation"
 interface Integration {
@@ -232,6 +233,20 @@ export function OnboardingFlow({
   const [movementEditIntent, setMovementEditIntent] = useState("")
   const [movementEditLoading, setMovementEditLoading] = useState(false)
   const [movementEditMessage, setMovementEditMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [movementDetail, setMovementDetail] = useState<{
+    movementId: string
+    loading: boolean
+    error: string | null
+    detail: MovementDetailResponse | null
+  } | null>(null)
+  const [movementDetailRecatIntent, setMovementDetailRecatIntent] = useState("")
+  const [movementDetailRecatLoading, setMovementDetailRecatLoading] = useState(false)
+  const [movementDetailUnmergeLoading, setMovementDetailUnmergeLoading] = useState(false)
+  const [movementDetailPolicyLoading, setMovementDetailPolicyLoading] = useState(false)
+  const [movementDetailAiExplain, setMovementDetailAiExplain] = useState<string | null>(null)
+  const [movementDetailAiLoading, setMovementDetailAiLoading] = useState(false)
+  const [movementExplainCache, setMovementExplainCache] = useState<Record<string, string>>({})
+  const [movementExplainReadyCount, setMovementExplainReadyCount] = useState(0)
   type TaggedMovement = MovementRow & { tag?: { economic_class: string; cashflow_bucket: string; counterparty_role: string; state_scope?: { affects_revenue: boolean; affects_spend: boolean; affects_liquidity: boolean; affects_operating_performance: boolean; affects_revenue_quality: boolean }; state_inclusion_policy?: string; is_operating?: boolean; is_financing?: boolean; is_investing?: boolean; is_owner_related?: boolean; hits_pnl?: boolean; hits_working_capital?: boolean; is_recurring?: boolean; is_anomaly?: boolean; is_large_outlier?: boolean; is_first_seen_counterparty?: boolean; recurrence_family_id?: string | null; classification_confidence?: number; evidence_strength?: number; needs_review?: boolean; review_reasons?: string[] } }
   type TagStats = { total: number; deterministic: number; identity_aware: number; inferred: number; recurring: number; anomalies: number; first_seen: number; policy_include: number; policy_provisional: number; policy_exclude: number }
   type UnresolvedImpact = { unresolved_inflow_total: number; unresolved_outflow_total: number; unresolved_count: number; unresolved_operating_exposure: number; unresolved_pct_of_inflows: number; unresolved_pct_of_operating_inflows: number; unresolved_pct_of_last_30d: number }
@@ -276,6 +291,25 @@ export function OnboardingFlow({
   const [mappingRecon, setMappingRecon] = useState<MappingReconData | null>(null)
   const [mappingLoading, setMappingLoading] = useState(false)
   const [mappingError, setMappingError] = useState<string | null>(null)
+
+  const openMovementDetail = useCallback(async (movementId: string) => {
+    setMovementDetail({ movementId, loading: true, error: null, detail: null })
+    setMovementDetailRecatIntent("")
+    setMovementDetailAiExplain(movementExplainCache[movementId] ?? null)
+    try {
+      const res = await fetch(`/api/movements/${movementId}/detail`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? "Failed to load movement detail")
+      setMovementDetail({ movementId, loading: false, error: null, detail: data as MovementDetailResponse })
+    } catch (e) {
+      setMovementDetail({
+        movementId,
+        loading: false,
+        error: e instanceof Error ? e.message : "Failed to load movement detail",
+        detail: null,
+      })
+    }
+  }, [movementExplainCache])
 
   type ComponentBehavior = "recurring" | "episodic" | "seasonal" | "one_time"
   type CashflowComponent = { id: string; label: string; direction: "in" | "out"; category: string; behavior: ComponentBehavior; monthly_avg: number; monthly_count: number; trend: number; volatility: number; confidence: "high" | "medium" | "low"; seasonal_index: Record<number, number> | null }
@@ -767,6 +801,48 @@ export function OnboardingFlow({
 
     return () => { cancelled = true }
   }, [currentStep])
+
+  // Step 10: Batch explainability cache (batch load + incremental batch generate + auto-refresh)
+  useEffect(() => {
+    if (currentStep !== 10) return
+    const ids = (movementsData?.movements ?? []).slice(0, 40).map((m) => m.id)
+    if (ids.length === 0) return
+    let cancelled = false
+
+    const run = async () => {
+      try {
+        const list = ids.join(",")
+        const readRes = await fetch(`/api/movements/explain/batch?movement_ids=${encodeURIComponent(list)}`)
+        const readData = await readRes.json().catch(() => ({}))
+        if (cancelled) return
+        const fetched = (readData?.explanations ?? {}) as Record<string, string>
+        const readyCount = Object.keys(fetched).length
+        setMovementExplainCache((prev) => ({ ...prev, ...fetched }))
+        const prevReady = movementExplainReadyCount
+        setMovementExplainReadyCount(readyCount)
+
+        if (readyCount < ids.length) {
+          await fetch("/api/movements/explain/batch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ movement_ids: ids, batch_size: 6 }),
+          })
+        } else if (readyCount > prevReady) {
+          const movementRes = await fetch("/api/movements")
+          if (!cancelled && movementRes.ok) setMovementsData(await movementRes.json())
+        }
+      } catch {
+        // no-op: explainability is best-effort
+      }
+    }
+
+    run()
+    const interval = setInterval(run, 8000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [currentStep, movementsData, movementExplainReadyCount])
 
   // Step 11: AR/AP & reconciliation — fetch reconciliation first (creates allocations), then AR/AP
   useEffect(() => {
@@ -2421,7 +2497,16 @@ export function OnboardingFlow({
                               <div className="text-white truncate max-w-[140px]">{toName}</div>
                               {toType && <div className="text-[10px] text-gray-500 capitalize">{toType}</div>}
                             </td>
-                            <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[160px]">{m.raw_description ?? "\u2014"}</td>
+                            <td className="text-gray-400 px-3 py-1.5 text-xs max-w-[220px]">
+                              <div className="truncate">{m.raw_description ?? "\u2014"}</div>
+                              <button
+                                type="button"
+                                onClick={() => openMovementDetail(m.id)}
+                                className="mt-1 text-[10px] text-cyan-300 hover:text-cyan-200 underline underline-offset-2"
+                              >
+                                View details
+                              </button>
+                            </td>
                             <td className="px-3 py-1.5">
                               {(() => { const p = provenanceLabel(m.provenance ?? ""); return (
                                 <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
@@ -2479,7 +2564,16 @@ export function OnboardingFlow({
                               </span>
                             </td>
                           )}
-                          <td className="text-gray-400 px-3 py-1.5 text-xs truncate max-w-[200px]">{m.raw_description ?? "\u2014"}</td>
+                          <td className="text-gray-400 px-3 py-1.5 text-xs max-w-[220px]">
+                            <div className="truncate">{m.raw_description ?? "\u2014"}</div>
+                            <button
+                              type="button"
+                              onClick={() => openMovementDetail(m.id)}
+                              className="mt-1 text-[10px] text-cyan-300 hover:text-cyan-200 underline underline-offset-2"
+                            >
+                              View details
+                            </button>
+                          </td>
                           <td className="px-3 py-1.5">
                             {(() => { const p = provenanceLabel(m.provenance ?? ""); return (
                               <span title={p.title} className={`inline-flex rounded-md px-1 py-0.5 text-[9px] font-bold text-white ${p.color}`}>{p.text}</span>
@@ -2742,6 +2836,273 @@ export function OnboardingFlow({
                   </div>
                 )}
 
+                {movementDetail && (
+                  <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end justify-center p-0 sm:items-center sm:p-6">
+                    <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-white/15 bg-[#0B0D10] shadow-2xl">
+                      <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 border-b border-white/10 bg-[#0B0D10]/95">
+                        <h3 className="text-lg font-semibold text-white">Movement detail</h3>
+                        <button type="button" onClick={() => setMovementDetail(null)} className="text-sm text-gray-400 hover:text-white">Close</button>
+                      </div>
+                      <div className="p-5 space-y-5">
+                        {movementDetail.loading && <p className="text-sm text-gray-400">Loading detail...</p>}
+                        {movementDetail.error && <p className="text-sm text-red-300">{movementDetail.error}</p>}
+                        {movementDetail.detail && (() => {
+                          const d = movementDetail.detail
+                          const statusText =
+                            d.headline.status_badge === "included_pnl" ? "Included in P&L" :
+                            d.headline.status_badge === "included_non_pnl" ? "Included non-P&L" :
+                            d.headline.status_badge === "excluded_needs_review" ? "Excluded - needs review" :
+                            "Unresolved"
+                          return (
+                            <>
+                              <section className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <div className="text-2xl font-semibold text-white">
+                                    {`${d.headline.direction === "outflow" ? "-" : "+"}$${Math.abs(d.headline.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                  </div>
+                                  <div className="text-sm text-gray-400">{d.headline.date?.slice(0, 10)}</div>
+                                  <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-xs text-cyan-300">{statusText}</span>
+                                </div>
+                                <div className="mt-2 text-sm text-white">Canonical entity: {d.headline.canonical_entity_name ?? "Unresolved"}</div>
+                                <div className="text-xs text-gray-500">Raw counterparty: {d.headline.raw_counterparty ?? "—"}</div>
+                              </section>
+
+                              <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="rounded-lg border border-white/10 p-4">
+                                  <h4 className="text-sm font-medium text-white mb-2">Economic semantics</h4>
+                                  <p className="text-xs text-gray-400">Class: <span className="text-gray-200">{d.economic_semantics.economic_class ?? "—"}</span></p>
+                                  <p className="text-xs text-gray-400">Bucket: <span className="text-gray-200">{d.economic_semantics.cashflow_bucket ?? "—"}</span></p>
+                                  <p className="text-xs text-gray-400">Role: <span className="text-gray-200">{d.economic_semantics.counterparty_role ?? "—"}</span></p>
+                                  <p className="text-xs text-gray-400 mt-2">Policy: <span className="text-gray-200">{d.economic_semantics.policy_status ?? "—"}</span></p>
+                                </div>
+                                <div className="rounded-lg border border-white/10 p-4">
+                                  <h4 className="text-sm font-medium text-white mb-2">Confidence engine</h4>
+                                  <p className="text-xs text-gray-400">Class score: <span className="text-gray-200">{Math.round(d.confidence_engine.overall.classification_score * 100)}%</span></p>
+                                  <p className="text-xs text-gray-400">Evidence: <span className="text-gray-200">{Math.round(d.confidence_engine.overall.evidence_strength * 100)}%</span></p>
+                                  {d.confidence_engine.explanation_lines.slice(0, 3).map((line, idx) => (
+                                    <p key={idx} className="text-xs text-gray-500 mt-1">{line}</p>
+                                  ))}
+                                </div>
+                              </section>
+
+                              <section className="rounded-lg border border-white/10 p-4">
+                                <h4 className="text-sm font-medium text-white mb-2">Normalized bank info</h4>
+                                <p className="text-xs text-gray-400">Raw: <span className="text-gray-200">{d.normalized_bank_info.raw_bank_text ?? "—"}</span></p>
+                                <p className="text-xs text-gray-400">Scrubbed: <span className="text-gray-200">{d.normalized_bank_info.scrubbed_bank_text || "—"}</span></p>
+                                <p className="text-xs text-gray-400">Normalized: <span className="text-gray-200">{d.normalized_bank_info.normalized_display_name ?? "—"}</span></p>
+                                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                  <p className="text-gray-500">Precedence: <span className="text-gray-300">{d.normalized_bank_info.resolution_path.classification_precedence ?? "—"}</span></p>
+                                  <p className="text-gray-500">Alias signature: <span className="text-gray-300">{d.normalized_bank_info.resolution_path.alias_signature ?? "—"}</span></p>
+                                  <p className="text-gray-500">Canonical alias ID: <span className="text-gray-300">{d.normalized_bank_info.resolution_path.canonical_alias_id ?? "—"}</span></p>
+                                  <p className="text-gray-500">Entity ID: <span className="text-gray-300">{d.normalized_bank_info.resolution_path.counterparty_entity_id ?? "—"}</span></p>
+                                </div>
+                              </section>
+
+                              <section className="rounded-lg border border-white/10 p-4">
+                                <h4 className="text-sm font-medium text-white mb-2">Source mapping & evidence trail</h4>
+                                <p className="text-xs text-gray-500 mb-3">
+                                  Provenance: <span className="text-gray-300">{d.evidence_trail.provenance}</span>
+                                  {" · "}
+                                  Coalesced group: <span className="text-gray-300">{d.evidence_trail.coalesced_group_id ?? "—"}</span>
+                                </p>
+                                <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                                  {d.evidence_trail.observations.map((o, idx) => (
+                                    <div key={`${o.source}-${o.source_id}-${idx}`} className="rounded-md border border-white/10 bg-white/[0.02] p-2">
+                                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                                        <span className="text-[10px] uppercase rounded bg-white/10 px-1.5 py-0.5 text-gray-300">{o.source}</span>
+                                        <span className="text-[10px] text-gray-500">{o.source_type}</span>
+                                        <span className="text-[10px] text-cyan-300">ID: {o.source_id}</span>
+                                      </div>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-[11px]">
+                                        <p className="text-gray-400">Amount: <span className="text-gray-200">{o.amount == null ? "—" : `$${Number(o.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</span></p>
+                                        <p className="text-gray-400">Date: <span className="text-gray-200">{o.date ?? "—"}</span></p>
+                                        <p className="text-gray-400">Counterparty: <span className="text-gray-200">{o.counterparty ?? "—"}</span></p>
+                                        <p className="text-gray-400">Account: <span className="text-gray-200">{o.account_name ?? o.account_id ?? "—"}</span></p>
+                                      </div>
+                                      <p className="text-[11px] text-gray-500 mt-1 break-words">Raw: {o.raw_description ?? "—"}</p>
+                                      {Object.keys(o.metadata ?? {}).length > 0 && (
+                                        <pre className="mt-1 rounded bg-black/40 p-2 text-[10px] text-gray-400 overflow-x-auto">{JSON.stringify(o.metadata, null, 2)}</pre>
+                                      )}
+                                    </div>
+                                  ))}
+                                  {d.evidence_trail.observations.length === 0 && (
+                                    <p className="text-xs text-gray-500">No source observations available.</p>
+                                  )}
+                                </div>
+                              </section>
+
+                              <section className="rounded-lg border border-white/10 p-4">
+                                <h4 className="text-sm font-medium text-white mb-2">Confidence breakdown (all signals)</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs">
+                                  {Object.entries(d.confidence_engine.breakdown).map(([k, v]) => (
+                                    <p key={k} className="text-gray-400">
+                                      {k.replaceAll("_", " ")}:{" "}
+                                      <span className="text-gray-200">{v == null ? "—" : `${Math.round(v * 100)}%`}</span>
+                                    </p>
+                                  ))}
+                                </div>
+                                {d.confidence_engine.reasons.length > 0 && (
+                                  <div className="mt-2 text-xs text-yellow-300">
+                                    Reasons: {d.confidence_engine.reasons.join(", ")}
+                                  </div>
+                                )}
+                              </section>
+
+                              <section className="rounded-lg border border-white/10 p-4">
+                                <div className="flex items-center justify-between gap-2 mb-2">
+                                  <h4 className="text-sm font-medium text-white">AI explainability</h4>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={movementDetailAiLoading}
+                                    onClick={async () => {
+                                      setMovementDetailAiLoading(true)
+                                      try {
+                                        await fetch("/api/movements/explain/batch", {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ movement_ids: [d.headline.movement_id], batch_size: 1 }),
+                                        })
+                                        const read = await fetch(`/api/movements/explain/batch?movement_ids=${encodeURIComponent(d.headline.movement_id)}`)
+                                        const readData = await read.json().catch(() => ({}))
+                                        const exp = (readData?.explanations ?? {}) as Record<string, string>
+                                        const text = exp[d.headline.movement_id]
+                                        if (text) {
+                                          setMovementExplainCache((prev) => ({ ...prev, [d.headline.movement_id]: text }))
+                                          setMovementDetailAiExplain(text)
+                                        } else {
+                                          const res = await fetch("/api/movements/explain", {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ detail: d }),
+                                          })
+                                          const data = await res.json().catch(() => ({}))
+                                          setMovementDetailAiExplain(res.ok ? (data.explanation ?? "No explanation returned.") : (data.error ?? "Failed to generate AI explanation"))
+                                        }
+                                      } finally {
+                                        setMovementDetailAiLoading(false)
+                                      }
+                                    }}
+                                  >
+                                    {movementDetailAiLoading ? "Generating..." : "Generate AI explanation"}
+                                  </Button>
+                                </div>
+                                <p className="text-xs text-gray-500">Plain-English narrative of how this movement was mapped, where certainty is strong, and what might still be wrong.</p>
+                                <p className="text-[11px] text-gray-600 mt-1">Batch cache ready: {movementExplainReadyCount} visible movement explanation(s).</p>
+                                {movementDetailAiExplain && <p className="mt-2 text-xs text-gray-200 whitespace-pre-wrap">{movementDetailAiExplain}</p>}
+                              </section>
+
+                              <section className="rounded-lg border border-white/10 p-4">
+                                <h4 className="text-sm font-medium text-white mb-3">Controls</h4>
+                                <div className="flex flex-wrap gap-2">
+                                  <Input
+                                    value={movementDetailRecatIntent}
+                                    onChange={(e) => setMovementDetailRecatIntent(e.target.value)}
+                                    placeholder='Recategorize, e.g. "Set as owner draw"'
+                                    className="min-w-[260px] flex-1 bg-black/40 border-white/20 text-white placeholder:text-gray-500"
+                                  />
+                                  <Button
+                                    type="button"
+                                    disabled={!movementDetailRecatIntent.trim() || movementDetailRecatLoading}
+                                    onClick={async () => {
+                                      if (!movementDetailRecatIntent.trim()) return
+                                      setMovementDetailRecatLoading(true)
+                                      try {
+                                        await fetch("/api/movements/edit", {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ intent: movementDetailRecatIntent.trim(), movement_ids: [d.headline.movement_id] }),
+                                        })
+                                        await fetch("/api/movements/tag", { method: "POST" })
+                                        const refreshed = await fetch(`/api/movements/${d.headline.movement_id}/detail`)
+                                        const detailData = await refreshed.json()
+                                        if (refreshed.ok) setMovementDetail((prev) => prev ? { ...prev, detail: detailData, loading: false, error: null } : prev)
+                                        const movementRes = await fetch("/api/movements")
+                                        if (movementRes.ok) setMovementsData(await movementRes.json())
+                                        setMovementDetailRecatIntent("")
+                                      } finally {
+                                        setMovementDetailRecatLoading(false)
+                                      }
+                                    }}
+                                  >
+                                    {movementDetailRecatLoading ? "Saving..." : "Recategorize"}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={movementDetailUnmergeLoading || !d.controls.can_unmerge_entity}
+                                    onClick={async () => {
+                                      setMovementDetailUnmergeLoading(true)
+                                      try {
+                                        await fetch("/api/movements/unmerge", {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ movement_id: d.headline.movement_id, apply_to_all_with_same_alias: true }),
+                                        })
+                                        const movementRes = await fetch("/api/movements")
+                                        if (movementRes.ok) setMovementsData(await movementRes.json())
+                                        setMovementDetail(null)
+                                      } finally {
+                                        setMovementDetailUnmergeLoading(false)
+                                      }
+                                    }}
+                                  >
+                                    {movementDetailUnmergeLoading ? "Unmerging..." : "Unmerge entity"}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={movementDetailPolicyLoading || !d.controls.can_force_policy}
+                                    onClick={async () => {
+                                      setMovementDetailPolicyLoading(true)
+                                      try {
+                                        await fetch("/api/movements/override-policy", {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ movement_id: d.headline.movement_id, action: "force_include" }),
+                                        })
+                                        await fetch("/api/movements/tag", { method: "POST" })
+                                        const movementRes = await fetch("/api/movements")
+                                        if (movementRes.ok) setMovementsData(await movementRes.json())
+                                      } finally {
+                                        setMovementDetailPolicyLoading(false)
+                                      }
+                                    }}
+                                  >
+                                    Force include
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={movementDetailPolicyLoading || !d.controls.can_force_policy}
+                                    onClick={async () => {
+                                      setMovementDetailPolicyLoading(true)
+                                      try {
+                                        await fetch("/api/movements/override-policy", {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ movement_id: d.headline.movement_id, action: "force_exclude" }),
+                                        })
+                                        await fetch("/api/movements/tag", { method: "POST" })
+                                        const movementRes = await fetch("/api/movements")
+                                        if (movementRes.ok) setMovementsData(await movementRes.json())
+                                      } finally {
+                                        setMovementDetailPolicyLoading(false)
+                                      }
+                                    }}
+                                  >
+                                    Force exclude
+                                  </Button>
+                                </div>
+                              </section>
+                            </>
+                          )
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
