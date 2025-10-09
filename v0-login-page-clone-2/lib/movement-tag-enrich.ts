@@ -442,6 +442,33 @@ export async function tagMovements(userId: string): Promise<{
     } as CanonicalMovement
   }))
 
+  const movementIds = movements.map((m) => m.id)
+  const overridesByMovementId = new Map<string, {
+    is_user_overridden: boolean
+    user_override_policy_status: PolicyStatus | null
+    user_override_state_inclusion_policy: "include" | "include_provisional" | "exclude_and_review" | null
+    user_override_reason: string | null
+    user_override_at: string | null
+  }>()
+  if (movementIds.length > 0) {
+    const { rows: existingTagRows } = await query<{ movement_id: string; tag_data: Record<string, unknown> }>(
+      `SELECT movement_id, tag_data FROM movement_tags WHERE movement_id = ANY($1)`,
+      [movementIds],
+    )
+    for (const r of existingTagRows) {
+      const td = (r.tag_data ?? {}) as Record<string, unknown>
+      if (td.is_user_overridden === true) {
+        overridesByMovementId.set(r.movement_id, {
+          is_user_overridden: true,
+          user_override_policy_status: (td.user_override_policy_status as PolicyStatus | undefined) ?? null,
+          user_override_state_inclusion_policy: (td.user_override_state_inclusion_policy as "include" | "include_provisional" | "exclude_and_review" | undefined) ?? null,
+          user_override_reason: (td.user_override_reason as string | undefined) ?? null,
+          user_override_at: (td.user_override_at as string | undefined) ?? null,
+        })
+      }
+    }
+  }
+
   const ctx = await loadTagContext(userId, movements)
 
   // Resolve display names: entity > merchant_tags > counterparty (for AI context + display)
@@ -512,7 +539,7 @@ export async function tagMovements(userId: string): Promise<{
       }
     }
 
-    const policy = computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review, base.economic_class)
+    let policy = computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review, base.economic_class)
     const scope = computeStateScope(base.economic_class, base.cashflow_bucket, base.hits_working_capital)
 
     // Synthetic label detection: compound phrase with generic product (e.g. "X Performance Nutrition")
@@ -538,6 +565,16 @@ export async function tagMovements(userId: string): Promise<{
       policy_status = "included"
     }
 
+    const ov = overridesByMovementId.get(m.id)
+    if (ov?.is_user_overridden) {
+      if (ov.user_override_state_inclusion_policy) {
+        policy = ov.user_override_state_inclusion_policy
+      }
+      if (ov.user_override_policy_status) {
+        policy_status = ov.user_override_policy_status
+      }
+    }
+
     tags.push({
       movement_id: m.id,
 
@@ -557,7 +594,9 @@ export async function tagMovements(userId: string): Promise<{
       policy_status,
       classification_confidence: m.confidence,
       evidence_strength: m.evidence_strength,
-      needs_review: isSyntheticLabel || isOwnerVsSettlementCollision ? true : m.needs_review,
+      needs_review: ov?.is_user_overridden
+        ? policy_status === "excluded_for_review" || policy_status === "unresolved"
+        : (isSyntheticLabel || isOwnerVsSettlementCollision ? true : m.needs_review),
       review_reasons: isSyntheticLabel ? [...m.review_reasons, "synthetic_label"] : isOwnerVsSettlementCollision ? [...m.review_reasons, "owner_vs_processor_conflict"] : m.review_reasons,
 
       entity_id: m.entity_id,
@@ -592,7 +631,7 @@ export async function tagMovements(userId: string): Promise<{
   const working_capital = computeWorkingCapitalSignals(movements, tags)
 
   // Persist tags
-  await persistTags(userId, tags)
+  await persistTags(userId, tags, overridesByMovementId)
 
   log("movements.tag.done", { userId, ...stats, unresolved: unresolved_impact, owner_dep: owner_dependency.owner_dependency_ratio }, "movements")
   return { tags, stats, unresolved_impact, owner_dependency, working_capital }
@@ -600,7 +639,17 @@ export async function tagMovements(userId: string): Promise<{
 
 // ─── Persist tags to DB ─────────────────────────────────────────────
 
-async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
+async function persistTags(
+  userId: string,
+  tags: MovementTag[],
+  overridesByMovementId: Map<string, {
+    is_user_overridden: boolean
+    user_override_policy_status: PolicyStatus | null
+    user_override_state_inclusion_policy: "include" | "include_provisional" | "exclude_and_review" | null
+    user_override_reason: string | null
+    user_override_at: string | null
+  }>
+): Promise<void> {
   if (tags.length === 0) return
 
   await query("DELETE FROM movement_tags WHERE movement_id IN (SELECT id FROM movements WHERE user_id = $1)", [userId])
@@ -613,6 +662,7 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
     let idx = 0
 
     for (const t of batch) {
+      const ov = overridesByMovementId.get(t.movement_id)
       const offsets = Array.from({ length: 5 }, (_, k) => `$${idx + k + 1}`)
       values.push(`(${offsets.join(", ")})`)
       params.push(
@@ -650,6 +700,11 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
           settlement_subtype: t.settlement_subtype ?? null,
           expense_subtype: t.expense_subtype ?? null,
           display_name: t.display_name ?? null,
+          is_user_overridden: ov?.is_user_overridden ?? false,
+          user_override_policy_status: ov?.user_override_policy_status ?? null,
+          user_override_state_inclusion_policy: ov?.user_override_state_inclusion_policy ?? null,
+          user_override_reason: ov?.user_override_reason ?? null,
+          user_override_at: ov?.user_override_at ?? null,
         }),
       )
       idx += 5

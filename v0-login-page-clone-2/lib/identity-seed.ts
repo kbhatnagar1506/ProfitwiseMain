@@ -1057,6 +1057,11 @@ export async function buildMovementIdentityContext(userId: string): Promise<Move
     `SELECT entity_id, alias, alias_type, source, source_id FROM entity_aliases WHERE entity_id = ANY($1)`,
     [entityIds]
   )
+  const { rows: blacklisted } = await query<{ entity_id: string; alias: string }>(
+    `SELECT entity_id, alias FROM entity_alias_blacklist WHERE user_id = $1`,
+    [userId]
+  )
+  const blacklistedAliasKey = new Set(blacklisted.map((b) => `${b.entity_id}:${normalizeForMatch(b.alias)}`))
 
   const selfTypes = new Set(["internal"])
   const ownAccountTypes = new Set(["bank_account"])
@@ -1086,6 +1091,8 @@ export async function buildMovementIdentityContext(userId: string): Promise<Move
   for (const a of aliases) {
     const ent = entMap.get(a.entity_id)
     if (!ent) continue
+    const aliasNorm = normalizeForMatch(a.alias)
+    if (blacklistedAliasKey.has(`${a.entity_id}:${aliasNorm}`)) continue
 
     if (a.alias_type === "name" || a.alias_type === "merchant_string") {
       addEntry(a.alias, ent)

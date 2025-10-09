@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import Link from "next/link"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 
 /** Unsigned currency — tabular alignment */
 const money = (n: number) =>
@@ -73,6 +74,13 @@ type PaymentRow = {
   allocations: Allocation[]
 }
 
+type MovementDetailModalState = {
+  movementId: string
+  loading: boolean
+  error: string | null
+  detail: MovementDetailResponse | null
+}
+
 type ARSuggestion = { invoice_id: string; customer_name: string; amount_due: number; confidence: string; reasoning: string; gross_applied: number; fee_amount: number; net_applied: number }
 type APSuggestion = { obligation_id: string; vendor_name: string; confidence: string; reasoning: string }
 type LLMARMatch = { movement_id: string; invoice_id: string; confidence: string; reasoning: string }
@@ -117,18 +125,27 @@ export function ArApReconciliationView({
   const [llmMatching, setLlmMatching] = useState(false)
   const [llmResults, setLlmResults] = useState<{ ar: LLMARMatch[]; ap: LLMAPMatch[] } | null>(null)
   const [runSuggestions, setRunSuggestions] = useState<{ ar: RunARSuggestion[]; ap: RunAPSuggestion[] }>({ ar: [], ap: [] })
+  const [movementDetail, setMovementDetail] = useState<MovementDetailModalState | null>(null)
+  const [recatIntent, setRecatIntent] = useState("")
+  const [recatLoading, setRecatLoading] = useState(false)
+  const [unmergeLoading, setUnmergeLoading] = useState(false)
+  const [policyLoading, setPolicyLoading] = useState(false)
   const llmRunRef = useRef(false)
 
   const applyData = useCallback((data: Record<string, unknown>) => {
     setInvoices((data.invoices as InvoiceRow[]) ?? [])
     setBills((data.bills as BillRow[]) ?? [])
+    const matchedInflows = ((data.matched_inflows as Array<{ movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }>) ?? [])
+    const matchedOutflows = ((data.matched_outflows as Array<{ movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }>) ?? [])
+    const unmatchedInflows = ((data.unmatched_inflows as Array<{ movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }>) ?? [])
+    const unmatchedOutflows = ((data.unmatched_outflows as Array<{ movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }>) ?? [])
     const matched: PaymentRow[] = [
-      ...((data.matched_inflows as unknown[]) ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({ ...m, direction: "inflow" })),
-      ...((data.matched_outflows as unknown[]) ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({ ...m, direction: "outflow" })),
+      ...matchedInflows.map((m) => ({ ...m, direction: "inflow" })),
+      ...matchedOutflows.map((m) => ({ ...m, direction: "outflow" })),
     ]
     const unmatched: PaymentRow[] = [
-      ...((data.unmatched_inflows as unknown[]) ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow", allocations: [] })),
-      ...((data.unmatched_outflows as unknown[]) ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow", allocations: [] })),
+      ...unmatchedInflows.map((m) => ({ ...m, direction: "inflow", allocations: [] })),
+      ...unmatchedOutflows.map((m) => ({ ...m, direction: "outflow", allocations: [] })),
     ]
     setPayments([...matched, ...unmatched].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
     setUnmappedAr((data.unmapped_ar as { movement_id: string; amount: number; date: string; counterparty: string | null }[]) ?? [])
@@ -179,6 +196,24 @@ export function ArApReconciliationView({
         throw new Error("Failed")
       })
   }, [fetchReconciliation, applyData])
+
+  const openMovementDetail = useCallback(async (movementId: string) => {
+    setMovementDetail({ movementId, loading: true, error: null, detail: null })
+    setRecatIntent("")
+    try {
+      const res = await fetch(`/api/movements/${movementId}/detail`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? "Failed to load movement detail")
+      setMovementDetail({ movementId, loading: false, error: null, detail: data as MovementDetailResponse })
+    } catch (e) {
+      setMovementDetail({
+        movementId,
+        loading: false,
+        error: e instanceof Error ? e.message : "Failed to load movement detail",
+        detail: null,
+      })
+    }
+  }, [])
 
   useEffect(() => {
     setLoading(true)
@@ -667,6 +702,13 @@ export function ArApReconciliationView({
                           <p className="text-[10px] text-gray-500 font-mono mt-1 truncate" title={r.movement_id}>
                             {r.movement_id}
                           </p>
+                          <button
+                            type="button"
+                            onClick={() => openMovementDetail(r.movement_id)}
+                            className="mt-1 text-[10px] px-2 py-0.5 rounded-md bg-sky-500/15 text-sky-300 hover:bg-sky-500/25"
+                          >
+                            View details
+                          </button>
                         </TableCell>
                         <TableCell className={`py-3 align-top text-right text-sm text-gray-200 ${moneyClass}`}>{money(gross)}</TableCell>
                         <TableCell className={`py-3 align-top text-right text-sm ${totalFee > 0 ? "text-amber-400" : "text-gray-600"} ${moneyClass}`}>
@@ -881,6 +923,308 @@ export function ArApReconciliationView({
             >
               <p className="text-gray-400">No matches suggested by LLM.</p>
               <button onClick={() => setLlmResults(null)} className="mt-3 text-sm text-gray-400 hover:text-white">Close</button>
+            </div>
+          </div>
+        )}
+
+        {movementDetail && (
+          <div
+            className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+            onClick={() => setMovementDetail(null)}
+          >
+            <div
+              className="bg-zinc-900 border border-white/10 rounded-xl p-4 max-w-3xl w-full max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-white">Movement detail</h3>
+                  <p className="text-[11px] text-gray-500">Explainability drawer: what, why, and source receipts.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMovementDetail(null)}
+                  className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-gray-300"
+                >
+                  Close
+                </button>
+              </div>
+
+              {movementDetail.loading && (
+                <div className="flex items-center gap-2 py-6 text-gray-400">
+                  <div className="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Loading detail…
+                </div>
+              )}
+
+              {movementDetail.error && (
+                <p className="text-sm text-red-300">{movementDetail.error}</p>
+              )}
+
+              {movementDetail.detail && (
+                <div className="space-y-4">
+                  {/* 1) Headline */}
+                  <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">Canonical truth</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+                      <div>
+                        <p className="text-gray-500 text-[11px]">Amount</p>
+                        <p className={`text-white font-semibold ${moneyClass}`}>{money(movementDetail.detail.headline.amount)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 text-[11px]">Direction</p>
+                        <p className="text-white">{movementDetail.detail.headline.direction}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 text-[11px]">Date</p>
+                        <p className="text-white">{formatDate(movementDetail.detail.headline.date)}</p>
+                      </div>
+                      <div className="col-span-2 md:col-span-3">
+                        <p className="text-gray-500 text-[11px]">Canonical entity</p>
+                        <p className="text-white">{movementDetail.detail.headline.canonical_entity_name ?? "—"}</p>
+                      </div>
+                      <div className="col-span-2 md:col-span-3">
+                        <span className={`text-[10px] px-2 py-0.5 rounded ${
+                          movementDetail.detail.headline.status_badge === "included_pnl"
+                            ? "bg-emerald-500/20 text-emerald-300"
+                            : movementDetail.detail.headline.status_badge === "included_non_pnl"
+                              ? "bg-sky-500/20 text-sky-300"
+                              : movementDetail.detail.headline.status_badge === "unresolved"
+                                ? "bg-amber-500/20 text-amber-300"
+                                : "bg-red-500/20 text-red-300"
+                        }`}>
+                          {movementDetail.detail.headline.status_badge}
+                        </span>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* 2) Economic semantics */}
+                  <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">Economic semantics</p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                      <div><p className="text-gray-500">Economic class</p><p className="text-white">{movementDetail.detail.economic_semantics.economic_class ?? "—"}</p></div>
+                      <div><p className="text-gray-500">Bucket</p><p className="text-white">{movementDetail.detail.economic_semantics.cashflow_bucket ?? "—"}</p></div>
+                      <div><p className="text-gray-500">Role</p><p className="text-white">{movementDetail.detail.economic_semantics.counterparty_role ?? "—"}</p></div>
+                      <div><p className="text-gray-500">Policy</p><p className="text-white">{movementDetail.detail.economic_semantics.policy_status ?? "—"}</p></div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                      <span className={`px-2 py-0.5 rounded ${movementDetail.detail.economic_semantics.flags.hits_pnl ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 text-gray-400"}`}>Hits P&L</span>
+                      <span className={`px-2 py-0.5 rounded ${movementDetail.detail.economic_semantics.flags.hits_working_capital ? "bg-sky-500/20 text-sky-300" : "bg-white/10 text-gray-400"}`}>Working capital</span>
+                      <span className={`px-2 py-0.5 rounded ${movementDetail.detail.economic_semantics.flags.is_recurring ? "bg-violet-500/20 text-violet-300" : "bg-white/10 text-gray-400"}`}>Recurring</span>
+                      <span className={`px-2 py-0.5 rounded ${movementDetail.detail.economic_semantics.flags.is_owner_related ? "bg-rose-500/20 text-rose-300" : "bg-white/10 text-gray-400"}`}>Owner related</span>
+                    </div>
+                  </section>
+
+                  {/* 3) Evidence trail + normalized bank info */}
+                  <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">Evidence + normalized bank info</p>
+                    <div className="space-y-1.5 text-xs mb-2">
+                      <p><span className="text-gray-500">Raw bank text:</span> <span className="text-white">{movementDetail.detail.normalized_bank_info.raw_bank_text ?? "—"}</span></p>
+                      <p><span className="text-gray-500">Scrubbed text:</span> <span className="text-white">{movementDetail.detail.normalized_bank_info.scrubbed_bank_text || "—"}</span></p>
+                      <p><span className="text-gray-500">Normalized display:</span> <span className="text-white">{movementDetail.detail.normalized_bank_info.normalized_display_name ?? "—"}</span></p>
+                      <p><span className="text-gray-500">Resolver path:</span> <span className="text-white">{movementDetail.detail.normalized_bank_info.resolution_path.classification_precedence ?? "—"}</span></p>
+                    </div>
+                    <div className="space-y-2">
+                      {movementDetail.detail.evidence_trail.observations.map((o, idx) => (
+                        <div key={`${o.source_id}-${idx}`} className="rounded border border-white/10 bg-black/20 p-2 text-[11px]">
+                          <p className="text-gray-300">
+                            {o.source}/{o.source_type} · {o.source_id}
+                          </p>
+                          <p className="text-gray-500">{o.date ? formatDate(o.date) : "—"} · {o.amount != null ? money(o.amount) : "—"} · {o.counterparty ?? "—"}</p>
+                          <p className="text-gray-400 break-words">{o.raw_description ?? "—"}</p>
+                        </div>
+                      ))}
+                      {movementDetail.detail.evidence_trail.observations.length === 0 && (
+                        <p className="text-xs text-gray-500">No observations found.</p>
+                      )}
+                    </div>
+                  </section>
+
+                  {/* 4) Confidence */}
+                  <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">Confidence engine</p>
+                    <p className="text-sm text-white">
+                      Classification {Math.round(movementDetail.detail.confidence_engine.overall.classification_score * 100)}%
+                      {" / "}
+                      Evidence {Math.round(movementDetail.detail.confidence_engine.overall.evidence_strength * 100)}%
+                    </p>
+                    <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-2 text-[11px]">
+                      {Object.entries(movementDetail.detail.confidence_engine.breakdown).map(([k, v]) => (
+                        <div key={k} className="rounded border border-white/10 px-2 py-1">
+                          <p className="text-gray-500">{k}</p>
+                          <p className="text-white">{v == null ? "—" : `${Math.round(v * 100)}%`}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {movementDetail.detail.confidence_engine.explanation_lines.length > 0 && (
+                      <ul className="mt-2 list-disc list-inside text-[11px] text-gray-400">
+                        {movementDetail.detail.confidence_engine.explanation_lines.map((line, i) => (
+                          <li key={`${line}-${i}`}>{line}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+
+                  {/* 5) Controls */}
+                  <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">Control panel</p>
+                    <div className="space-y-2">
+                      <label className="block text-[11px] text-gray-400">Re-categorize (intent)</label>
+                      <input
+                        value={recatIntent}
+                        onChange={(e) => setRecatIntent(e.target.value)}
+                        placeholder="e.g. change this movement to owner_draw"
+                        className="w-full rounded bg-black/30 border border-white/10 px-2 py-1.5 text-sm text-white"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={recatLoading || !recatIntent.trim()}
+                          onClick={async () => {
+                            if (!movementDetail?.detail) return
+                            setRecatLoading(true)
+                            try {
+                              const editRes = await fetch("/api/movements/edit", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  intent: recatIntent.trim(),
+                                  movement_ids: [movementDetail.detail.headline.movement_id],
+                                }),
+                              })
+                              const editData = await editRes.json()
+                              if (!editRes.ok) throw new Error(editData?.error ?? "Failed to recategorize")
+                              const tagRes = await fetch("/api/movements/tag", { method: "POST" })
+                              if (!tagRes.ok) throw new Error("Retag failed")
+                              await refresh()
+                              await openMovementDetail(movementDetail.detail.headline.movement_id)
+                              setRecatIntent("")
+                            } catch (e) {
+                              setMovementDetail((m) => m ? { ...m, error: e instanceof Error ? e.message : "Failed to recategorize" } : null)
+                            } finally {
+                              setRecatLoading(false)
+                            }
+                          }}
+                          className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          {recatLoading ? "Applying..." : "Apply recategorize"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={unmergeLoading || !movementDetail.detail.controls.can_unmerge_entity}
+                          onClick={async () => {
+                            if (!movementDetail?.detail) return
+                            setUnmergeLoading(true)
+                            try {
+                              const previewRes = await fetch("/api/movements/unmerge", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  movement_id: movementDetail.detail.headline.movement_id,
+                                  apply_to_related: true,
+                                  reason: "manual_unmerge_from_detail_drawer",
+                                  preview_only: true,
+                                }),
+                              })
+                              const previewData = await previewRes.json()
+                              if (!previewRes.ok) throw new Error(previewData?.error ?? "Failed to preview unmerge")
+                              const yes = window.confirm(`Unmerge this entity link? This will affect ${previewData?.affected ?? 1} movement(s).`)
+                              if (!yes) return
+                              const res = await fetch("/api/movements/unmerge", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  movement_id: movementDetail.detail.headline.movement_id,
+                                  apply_to_related: true,
+                                  reason: "manual_unmerge_from_detail_drawer",
+                                }),
+                              })
+                              const data = await res.json()
+                              if (!res.ok) throw new Error(data?.error ?? "Failed to unmerge")
+                              await refresh()
+                              await openMovementDetail(movementDetail.detail.headline.movement_id)
+                            } catch (e) {
+                              setMovementDetail((m) => m ? { ...m, error: e instanceof Error ? e.message : "Failed to unmerge" } : null)
+                            } finally {
+                              setUnmergeLoading(false)
+                            }
+                          }}
+                          className="text-xs px-2 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50"
+                        >
+                          {unmergeLoading ? "Unmerging..." : "Unmerge entity"}
+                        </button>
+                        <button type="button" disabled className="text-xs px-2 py-1 rounded bg-white/10 text-gray-500 cursor-not-allowed">Split movement (soon)</button>
+                        <button
+                          type="button"
+                          disabled={policyLoading || !movementDetail.detail.controls.can_force_policy}
+                          onClick={async () => {
+                            if (!movementDetail?.detail) return
+                            setPolicyLoading(true)
+                            try {
+                              const nextOverride = movementDetail.detail.controls.current_overrides.forced_include ? "exclude" : "include"
+                              const res = await fetch("/api/movements/override-policy", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  movement_id: movementDetail.detail.headline.movement_id,
+                                  override: nextOverride,
+                                  reason: "manual_policy_toggle_from_detail_drawer",
+                                }),
+                              })
+                              const data = await res.json()
+                              if (!res.ok) throw new Error(data?.error ?? "Failed to update policy override")
+                              await refresh()
+                              await openMovementDetail(movementDetail.detail.headline.movement_id)
+                            } catch (e) {
+                              setMovementDetail((m) => m ? { ...m, error: e instanceof Error ? e.message : "Failed to update policy" } : null)
+                            } finally {
+                              setPolicyLoading(false)
+                            }
+                          }}
+                          className="text-xs px-2 py-1 rounded bg-sky-700 hover:bg-sky-600 disabled:opacity-50"
+                        >
+                          {policyLoading
+                            ? "Applying..."
+                            : movementDetail.detail.controls.current_overrides.forced_include
+                              ? "Force Exclude"
+                              : "Force Include"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={policyLoading || !movementDetail.detail.controls.can_force_policy}
+                          onClick={async () => {
+                            if (!movementDetail?.detail) return
+                            setPolicyLoading(true)
+                            try {
+                              const res = await fetch("/api/movements/override-policy", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  movement_id: movementDetail.detail.headline.movement_id,
+                                  override: "clear",
+                                  reason: "manual_policy_clear_from_detail_drawer",
+                                }),
+                              })
+                              const data = await res.json()
+                              if (!res.ok) throw new Error(data?.error ?? "Failed to clear policy override")
+                              await refresh()
+                              await openMovementDetail(movementDetail.detail.headline.movement_id)
+                            } catch (e) {
+                              setMovementDetail((m) => m ? { ...m, error: e instanceof Error ? e.message : "Failed to clear policy" } : null)
+                            } finally {
+                              setPolicyLoading(false)
+                            }
+                          }}
+                          className="text-xs px-2 py-1 rounded bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50"
+                        >
+                          Clear Override
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              )}
             </div>
           </div>
         )}
