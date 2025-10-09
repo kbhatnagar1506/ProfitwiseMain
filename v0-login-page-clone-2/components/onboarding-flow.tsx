@@ -124,6 +124,9 @@ const steps = [
   },
 ]
 
+// Keep Step 12–14 placeholdered while Step 11 (AP/AR) is re-enabled.
+const DISABLE_ADVANCED_STEPS_FROM_ONBOARDING = true
+
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
 
 function formatBalance(value: number | null): string {
@@ -279,12 +282,24 @@ export function OnboardingFlow({
   const [expandedObligationId, setExpandedObligationId] = useState<string | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
+  type MappingReconRow = {
+    movement_id: string
+    amount: number
+    date: string
+    counterparty: string | null
+    display_name?: string | null
+    allocations?: { gross: number; fee: number; net: number; entity_type?: string; entity_id?: string }[]
+  }
   type MappingReconData = {
     total_matched_inflows: number
     total_matched_outflows: number
     total_unmatched_inflows: number
     total_unmatched_outflows: number
     total_fees_paid: number
+    matched_inflows?: MappingReconRow[]
+    matched_outflows?: MappingReconRow[]
+    unmatched_inflows?: MappingReconRow[]
+    unmatched_outflows?: MappingReconRow[]
   }
   const [mappingArAp, setMappingArAp] = useState<{ ar: ARState; ap: APState } | null>(null)
   const [mappingRecon, setMappingRecon] = useState<MappingReconData | null>(null)
@@ -814,34 +829,15 @@ export function OnboardingFlow({
     setMappingArAp(null)
     setMappingRecon(null)
 
-    const pollReconciliation = (): Promise<Record<string, unknown>> =>
-      fetch("/api/ar-ap-reconciliation")
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed"))))
-        .then((data: Record<string, unknown>) => {
-          if (cancelled) return Promise.reject(new Error("Cancelled"))
-          if (data.status === "processing") {
-            return new Promise<Record<string, unknown>>((resolve, reject) => {
-              setTimeout(() => {
-                if (cancelled) return reject(new Error("Cancelled"))
-                pollReconciliation().then(resolve).catch(reject)
-              }, 2500)
-            })
-          }
-          return data
-        })
-
-    pollReconciliation()
-      .then((reconData) => {
+    fetch("/api/ar-ap-step")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP step failed"))))
+      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
         if (cancelled) return
-        setMappingRecon(reconData)
-        setMappingLoading(false)
-        return fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed"))))
-      })
-      .then((arApData) => {
-        if (cancelled) return
-        setArApData(arApData)
-        setMappingArAp(arApData)
+        setArApData({ ar: data.ar, ap: data.ap })
+        setMappingArAp({ ar: data.ar, ap: data.ap })
+        setMappingRecon(data.recon ?? null)
         setArApLoading(false)
+        setMappingLoading(false)
       })
       .catch((e) => {
         if (cancelled || (e instanceof Error && e.message === "Cancelled")) return
@@ -858,6 +854,12 @@ export function OnboardingFlow({
   // Step 12: State objects (computed from frozen tags)
   useEffect(() => {
     if (currentStep !== 12) return
+    if (DISABLE_ADVANCED_STEPS_FROM_ONBOARDING) {
+      setStateLoading(false)
+      setStateError(null)
+      setStateData(null)
+      return
+    }
     let cancelled = false
 
     setStateLoading(true)
@@ -883,6 +885,12 @@ export function OnboardingFlow({
   // Step 13 & 14: Cashflow forecast + Decisions (share forecast data)
   useEffect(() => {
     if (currentStep !== 13 && currentStep !== 14) return
+    if (DISABLE_ADVANCED_STEPS_FROM_ONBOARDING) {
+      setForecastLoading(false)
+      setForecastError(null)
+      setForecastData(null)
+      return
+    }
     let cancelled = false
 
     setForecastLoading(true)
@@ -1046,6 +1054,23 @@ export function OnboardingFlow({
   }
 
   const renderStepContent = () => {
+    if ([12, 13, 14].includes(currentStep)) {
+      const s = steps[currentStep - 1]
+      return (
+        <div className="space-y-6">
+          <div className="text-center">
+            <h2 className="text-2xl font-semibold text-white mb-1">{s.title}</h2>
+            <p className="text-gray-400 text-lg mb-5">{s.description}</p>
+            <div className="bg-white/5 border border-white/10 rounded-xl p-8 max-w-2xl mx-auto">
+              <p className="text-sm text-gray-300">
+                AR/AP reconciliation + state objects + cashflow forecast are temporarily disabled in onboarding.
+                You’ll see this placeholder until the new step implementation is wired in.
+              </p>
+            </div>
+          </div>
+        </div>
+      )
+    }
     switch (currentStep) {
       case 1:
         return (
