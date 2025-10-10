@@ -234,7 +234,10 @@ export function OnboardingFlow({
   type SettlementLagSignal = { avg_settlement_lag_days: number; sample_count: number; confidence: string }
   type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; period_net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; settlement_lag?: SettlementLagSignal; owner_inflows: number; owner_outflows: number; net_owner: number; cash_by_account: AccountCash[]; transfer_dependency_ratio: number; owner_support_ratio: number; operating_dependency_ratio: number; liquidity_regime: "strong" | "stable" | "tightening"; excluded_cash: number }
   type Insight = { id: string; type: "revenue" | "spend" | "liquidity" | "risk"; severity: "low" | "medium" | "high"; message: string; metric: number }
-  type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
+  type RiskLevel = "low" | "medium" | "high"
+  type RiskDimension = { level: RiskLevel; score: number; reason: string }
+  type RiskState = { liquidity_risk: RiskDimension; concentration_risk: RiskDimension; dependency_risk: RiskDimension; anomaly_risk: RiskDimension; uncertainty_risk: RiskDimension; overall: RiskLevel; overall_score: number }
+  type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; risk: RiskState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
@@ -2847,6 +2850,48 @@ export function OnboardingFlow({
                     </div>
                   </div>
                 )}
+
+                {/* ─── Financial Risk ─── */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Financial Risk</h3>
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                      stateData.risk.overall === "high" ? "bg-red-500/20 text-red-300 border border-red-500/30"
+                        : stateData.risk.overall === "medium" ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                        : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                    }`}>
+                      {stateData.risk.overall.toUpperCase()} RISK
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {(["liquidity_risk", "concentration_risk", "dependency_risk", "anomaly_risk", "uncertainty_risk"] as const).map((key) => {
+                      const dim = stateData.risk[key]
+                      const label = key.replace(/_risk$/, "").replace(/_/g, " ")
+                      const barColor = dim.level === "high" ? "bg-red-400" : dim.level === "medium" ? "bg-amber-400" : "bg-emerald-400"
+                      const textColor = dim.level === "high" ? "text-red-400" : dim.level === "medium" ? "text-amber-400" : "text-emerald-400"
+                      return (
+                        <div key={key}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm text-gray-300 capitalize">{label}</span>
+                            <span className={`text-xs font-semibold ${textColor}`}>{dim.level.toUpperCase()}</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mb-1">
+                            <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${Math.min(dim.score, 100)}%` }} />
+                          </div>
+                          <div className="text-[11px] text-gray-500">{dim.reason}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-white/10 text-center">
+                    <span className="text-xs text-gray-500">Overall risk score: </span>
+                    <span className={`text-sm font-bold ${
+                      stateData.risk.overall === "high" ? "text-red-400" : stateData.risk.overall === "medium" ? "text-amber-400" : "text-emerald-400"
+                    }`}>{stateData.risk.overall_score}/100</span>
+                  </div>
+                </div>
 
                 {/* ─── State Confidence ─── */}
                 <div className="flex items-center justify-center gap-6 text-xs">

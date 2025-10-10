@@ -9,6 +9,7 @@ import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/mo
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
 import { computeRevenueState, computeSpendState, computeLiquidityState, detectTransitions, computeStateConfidence, computeInsightBlock } from "./compute"
 import { computeInsights } from "./insight-engine"
+import { computeRiskState } from "./risk-engine"
 import type { BusinessState } from "./types"
 
 type TagRow = {
@@ -207,6 +208,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
     rolling: rollingSnapshots,
   })
   const state_confidence = computeStateConfidence(tagged)
+  const risk = computeRiskState(revenue, spend, liquidity, state_confidence)
   const insights = computeInsights(revenue, spend, liquidity)
   const insight_block = computeInsightBlock(revenue, spend, liquidity)
 
@@ -220,6 +222,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
     revenue,
     spend,
     liquidity,
+    risk,
     transitions,
     insights,
     state_confidence,
