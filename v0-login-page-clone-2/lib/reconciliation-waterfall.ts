@@ -1,4 +1,10 @@
 import { query, runInTransaction } from "./db"
+import {
+  buildStage4CandidatePayload,
+  fetchStage4EntityCorrelationMap,
+  fetchStage4GhostGaps,
+  fetchStage4VelocityStats,
+} from "./reconciliation-stage4-payload"
 
 type MovementResidualRow = {
   id: string
@@ -137,8 +143,13 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
 
   const movements = await fetchUnallocatedMovementCash(userId)
   const openEvents = await fetchOpenCashEventsForWaterfall(userId)
+  const [entityCorrelationMap, ghostByEventId, velocityByEntityEvent] = await Promise.all([
+    fetchStage4EntityCorrelationMap(userId),
+    fetchStage4GhostGaps(userId),
+    fetchStage4VelocityStats(userId),
+  ])
   const attributions: ReconciliationDraftAttribution[] = []
-  const reviewQueue: { movement_id: string; remaining_cash: number; candidate_event_ids: string[]; candidate_payload: unknown[] }[] = []
+  const reviewQueue: { movement_id: string; remaining_cash: number; candidate_event_ids: string[]; candidate_payload: unknown }[] = []
   const touchedEventIds = new Set<string>()
 
   let exactMatches = 0
@@ -291,18 +302,20 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
           .filter((e) => e.event_type === targetType && e.outstanding_num > 0.01)
           .sort((a, b) => a.expected_date.localeCompare(b.expected_date))
           .slice(0, 10)
+        const candidatePayload = buildStage4CandidatePayload({
+          movement,
+          remainingCash,
+          targetType,
+          candidates,
+          entityMap: entityCorrelationMap,
+          ghostByEventId,
+          velocityByEntityEvent,
+        })
         reviewQueue.push({
           movement_id: movement.id,
           remaining_cash: r2(remainingCash),
           candidate_event_ids: candidates.map((c) => c.id),
-          candidate_payload: candidates.map((c) => ({
-            id: c.id,
-            entity_id: c.entity_id,
-            canonical_name: c.canonical_name,
-            expected_date: c.expected_date,
-            outstanding_amount: r2(c.outstanding_num),
-            event_type: c.event_type,
-          })),
+          candidate_payload: candidatePayload,
         })
       }
     }
