@@ -109,6 +109,11 @@ const steps = [
     title: "State objects",
     description: "Revenue, Spend, and Liquidity states computed from frozen tags, plus transition detectors.",
   },
+  {
+    id: 13,
+    title: "Cashflow forecast",
+    description: "Simulate future cash based on behavioral component models, not simple time-series prediction.",
+  },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -241,6 +246,29 @@ export function OnboardingFlow({
   const [stateData, setStateData] = useState<BusinessState | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
+
+  type ComponentBehavior = "recurring" | "episodic" | "seasonal" | "one_time"
+  type CashflowComponent = { id: string; label: string; direction: "in" | "out"; category: string; behavior: ComponentBehavior; monthly_avg: number; monthly_count: number; trend: number; volatility: number; confidence: "high" | "medium" | "low"; seasonal_index: Record<number, number> | null }
+  type OutstandingInvoice = { invoice_id: string; source: string; customer_name: string; customer_source_id: string | null; entity_id: string | null; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: "open" | "overdue" | "partially_paid" }
+  type InvoiceSignal = { invoices: OutstandingInvoice[]; total_outstanding: number; total_overdue: number; overdue_count: number; avg_days_to_due: number | null }
+  type CustomerModel = { entity_id: string; name: string; avg_amount: number; payment_interval_days: number; interval_variance: number; last_payment_date: string; payment_count: number; probability_of_next: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_invoices: OutstandingInvoice[] }
+  type VendorModel = { entity_id: string; name: string; avg_amount: number; cadence: string; cadence_interval_days: number; is_recurring: boolean; last_payment_date: string; payment_count: number; next_expected_date: string | null; confidence: "high" | "medium" | "low" }
+  type SettlementModel = { avg_delay_days: number; delay_std: number; sample_count: number; confidence: string }
+  type TransferBehaviorModel = { avg_transfer_amount: number; transfer_count: number; trigger_pattern: string; avg_interval_days: number | null; primary_account: string | null; secondary_account: string | null; confidence: string }
+  type BehavioralModels = { customers: CustomerModel[]; vendors: VendorModel[]; settlement: SettlementModel; transfers: TransferBehaviorModel; recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]; invoice_signal: InvoiceSignal }
+  type ForecastMonth = { month: string; inflows: number; outflows: number; net: number; cumulative_net: number; components: { component_id: string; amount: number }[] }
+  type ScenarioResult = { scenario: "base" | "optimistic" | "pessimistic"; label: string; months: ForecastMonth[]; runway_months: number | null; ending_cash: number }
+  type ForecastEvent = { date: string; day_offset: number; type: string; entity: string; amount: number; direction: "in" | "out"; probability: number; confidence: "high" | "medium" | "low"; source_model: string }
+  type DailySimDay = { day: number; date: string; cash: number; inflows: number; outflows: number; events: { entity: string; amount: number; direction: "in" | "out" }[] }
+  type DailySimulation = { starting_cash: number; days: DailySimDay[]; min_cash: number; min_cash_day: number; ending_cash: number }
+  type MonteCarloPercentile = { day: number; p5: number; p25: number; p50: number; p75: number; p95: number }
+  type DayScenarioSnapshot = { scenario: "base" | "conservative" | "aggressive"; label: string; cash_14d: number; cash_30d: number; min_cash: number; min_cash_day: number }
+  type MonteCarloResult = { simulations: number; percentiles: MonteCarloPercentile[]; prob_below_zero_14d: number; prob_below_zero_30d: number; prob_above_starting_30d: number; expected_cash_30d: number; worst_case_cash_30d: number; best_case_cash_30d: number; day_scenarios: DayScenarioSnapshot[] }
+  type ForecastNarrative = { forecast: string; risk: string; insight: string; action: string; severity: "healthy" | "caution" | "danger" }
+  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string }
+  const [forecastData, setForecastData] = useState<CashflowForecast | null>(null)
+  const [forecastLoading, setForecastLoading] = useState(false)
+  const [forecastError, setForecastError] = useState<string | null>(null)
   const router = useRouter()
 
   const COMPANY_FORM_FIELDS: { key: string; label: string; placeholder: string }[] = [
@@ -724,6 +752,31 @@ export function OnboardingFlow({
         if (cancelled) return
         setStateError(err instanceof Error ? err.message : "Failed to load state")
         setStateLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [currentStep])
+
+  // Step 13: Cashflow forecast
+  useEffect(() => {
+    if (currentStep !== 13) return
+    let cancelled = false
+
+    setForecastLoading(true)
+    setForecastError(null)
+    setForecastData(null)
+
+    fetch("/api/forecast")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((data: CashflowForecast) => {
+        if (cancelled) return
+        setForecastData(data)
+        setForecastLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setForecastError(err instanceof Error ? err.message : "Failed to load forecast")
+        setForecastLoading(false)
       })
 
     return () => { cancelled = true }
@@ -3141,6 +3194,595 @@ export function OnboardingFlow({
         )
       }
 
+      case 13: {
+        const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        const behaviorLabel = (b: ComponentBehavior) => b === "recurring" ? "Recurring" : b === "episodic" ? "Episodic" : b === "seasonal" ? "Seasonal" : "One-time"
+        const confDot = (c: "high" | "medium" | "low") => c === "high" ? "bg-emerald-400" : c === "medium" ? "bg-amber-400" : "bg-red-400"
+        const scenarioColor = (s: string) => s === "optimistic" ? "text-emerald-400" : s === "pessimistic" ? "text-red-400" : "text-blue-400"
+        const scenarioBorder = (s: string) => s === "optimistic" ? "border-emerald-500/20" : s === "pessimistic" ? "border-red-500/20" : "border-blue-500/20"
+        const scenarioBg = (s: string) => s === "optimistic" ? "bg-emerald-500/10" : s === "pessimistic" ? "bg-red-500/10" : "bg-blue-500/10"
+
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
+
+              {forecastLoading && (
+                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Computing forecast…
+                </div>
+              )}
+
+              {forecastError && !forecastLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed: {forecastError}</p>
+              )}
+            </div>
+
+            {!forecastLoading && forecastData && (
+              <div className="space-y-6">
+                {/* ─── Data Quality ─── */}
+                <div className="flex items-center gap-4 text-xs text-gray-500">
+                  <span>Data span: {forecastData.data_span_days}d</span>
+                  <span>Components: {forecastData.components.length}</span>
+                  <span>Horizon: {forecastData.forecast_horizon_months} months</span>
+                </div>
+
+                {/* ─── Narrative: The Final Output ─── */}
+                {(() => {
+                  const n = forecastData.narrative
+                  const borderColor = n.severity === "danger" ? "border-red-500/30" : n.severity === "caution" ? "border-amber-500/30" : "border-emerald-500/30"
+                  const bgColor = n.severity === "danger" ? "bg-red-500/5" : n.severity === "caution" ? "bg-amber-500/5" : "bg-emerald-500/5"
+                  const accentColor = n.severity === "danger" ? "text-red-400" : n.severity === "caution" ? "text-amber-400" : "text-emerald-400"
+                  return (
+                    <div className={`border rounded-xl p-6 ${borderColor} ${bgColor}`}>
+                      <div className="space-y-4">
+                        <div className="flex items-start gap-3">
+                          <span className="text-lg mt-0.5">🔮</span>
+                          <div>
+                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Forecast</div>
+                            <div className={`text-sm font-semibold ${accentColor}`}>{n.forecast}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <span className="text-lg mt-0.5">⚠️</span>
+                          <div>
+                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Risk</div>
+                            <div className="text-sm text-gray-200">{n.risk}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <span className="text-lg mt-0.5">🧠</span>
+                          <div>
+                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Insight</div>
+                            <div className="text-sm text-gray-300">{n.insight}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <span className="text-lg mt-0.5">🎯</span>
+                          <div>
+                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Action</div>
+                            <div className="text-sm text-white font-medium">{n.action}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* ─── 30-Day Event Timeline ─── */}
+                {forecastData.events_30d.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Next 30 Days — Expected Events</h3>
+                      <div className="text-xs text-gray-500">{forecastData.events_30d.length} events</div>
+                    </div>
+
+                    {/* Summary bar */}
+                    {(() => {
+                      const totalIn = forecastData.events_30d.filter((e) => e.direction === "in").reduce((s, e) => s + e.amount * e.probability, 0)
+                      const totalOut = forecastData.events_30d.filter((e) => e.direction === "out").reduce((s, e) => s + e.amount * e.probability, 0)
+                      const net = totalIn - totalOut
+                      return (
+                        <div className="grid grid-cols-3 gap-3 mb-4 text-center">
+                          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg py-2">
+                            <div className="text-xs text-emerald-400/70">Expected in</div>
+                            <div className="text-sm font-bold font-mono text-emerald-400">{money(totalIn)}</div>
+                          </div>
+                          <div className="bg-red-500/10 border border-red-500/20 rounded-lg py-2">
+                            <div className="text-xs text-red-400/70">Expected out</div>
+                            <div className="text-sm font-bold font-mono text-red-400">{money(totalOut)}</div>
+                          </div>
+                          <div className={`${net >= 0 ? "bg-blue-500/10 border-blue-500/20" : "bg-amber-500/10 border-amber-500/20"} border rounded-lg py-2`}>
+                            <div className="text-xs text-gray-400">Expected net</div>
+                            <div className={`text-sm font-bold font-mono ${net >= 0 ? "text-blue-400" : "text-amber-400"}`}>{signedMoney(net)}</div>
+                          </div>
+                        </div>
+                      )
+                    })()}
+
+                    {/* Event list */}
+                    <div className="space-y-1 max-h-[400px] overflow-y-auto">
+                      {forecastData.events_30d.map((evt, i) => {
+                        const typeIcon = evt.type === "customer_payment" ? "↓" : evt.type === "vendor_payment" ? "↑" : evt.type === "recurring_expense" ? "↺" : evt.type === "settlement" ? "⇄" : evt.type === "transfer" ? "⇆" : "•"
+                        const typeColor = evt.direction === "in" ? "text-emerald-400" : "text-red-400"
+                        return (
+                          <div key={`${evt.date}-${evt.entity}-${i}`} className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02] hover:bg-white/5 transition-colors">
+                            <span className="text-xs font-mono text-gray-500 w-10 shrink-0">D+{evt.day_offset}</span>
+                            <span className={`text-sm shrink-0 ${typeColor}`}>{typeIcon}</span>
+                            <span className="text-xs text-gray-300 truncate flex-1">{evt.entity}</span>
+                            <span className="text-[10px] text-gray-600 shrink-0">{evt.type.replace(/_/g, " ")}</span>
+                            <span className="text-[10px] text-gray-600 shrink-0">{Math.round(evt.probability * 100)}%</span>
+                            <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${confDot(evt.confidence)}`} />
+                            <span className={`text-sm font-mono font-semibold shrink-0 w-20 text-right ${typeColor}`}>
+                              {evt.direction === "in" ? "+" : "-"}{money(evt.amount)}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Daily Cashflow Simulation ─── */}
+                {forecastData.daily_simulation.days.length > 0 && (() => {
+                  const sim = forecastData.daily_simulation
+                  const maxCash = Math.max(sim.starting_cash, ...sim.days.map((d) => d.cash))
+                  const minCash = Math.min(sim.starting_cash, ...sim.days.map((d) => d.cash))
+                  const range = Math.max(1, maxCash - minCash)
+                  const barHeight = (cash: number) => Math.max(2, ((cash - minCash) / range) * 100)
+
+                  return (
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Daily Cash Position — 30 Days</h3>
+                        <div className="flex items-center gap-4 text-xs">
+                          <span className="text-gray-500">Start: <span className="text-white font-mono">{money(sim.starting_cash)}</span></span>
+                          <span className="text-gray-500">End: <span className={`font-mono ${sim.ending_cash >= sim.starting_cash ? "text-emerald-400" : "text-red-400"}`}>{money(sim.ending_cash)}</span></span>
+                        </div>
+                      </div>
+
+                      {sim.min_cash < sim.starting_cash * 0.5 && (
+                        <div className="mb-3 flex items-center gap-2 text-xs">
+                          <span className="text-amber-400 font-semibold">LOW POINT</span>
+                          <span className="text-gray-400">Day {sim.min_cash_day}: {money(sim.min_cash)}</span>
+                        </div>
+                      )}
+
+                      {/* Bar chart */}
+                      <div className="flex items-end gap-[2px] h-24 mb-2">
+                        {sim.days.map((d) => {
+                          const h = barHeight(d.cash)
+                          const isMin = d.day === sim.min_cash_day && sim.min_cash < sim.starting_cash * 0.7
+                          const color = d.cash < 0 ? "bg-red-500" : isMin ? "bg-amber-400" : d.cash >= sim.starting_cash ? "bg-emerald-400/70" : "bg-blue-400/70"
+                          return (
+                            <div
+                              key={d.day}
+                              className={`flex-1 rounded-t-sm ${color} transition-all relative group cursor-default`}
+                              style={{ height: `${h}%` }}
+                            >
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 bg-gray-900 border border-white/20 rounded px-2 py-1.5 text-[10px] whitespace-nowrap shadow-lg">
+                                <div className="text-white font-semibold">D{d.day} — {d.date}</div>
+                                <div className="text-gray-400">Cash: <span className="text-white font-mono">{money(d.cash)}</span></div>
+                                {d.inflows > 0 && <div className="text-emerald-400">+{money(d.inflows)} in</div>}
+                                {d.outflows > 0 && <div className="text-red-400">-{money(d.outflows)} out</div>}
+                                {d.events.map((e, i) => (
+                                  <div key={i} className="text-gray-500">{e.direction === "in" ? "+" : "-"}{money(e.amount)} {e.entity}</div>
+                                ))}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      {/* Day labels */}
+                      <div className="flex gap-[2px] text-[8px] text-gray-600">
+                        {sim.days.map((d) => (
+                          <div key={d.day} className="flex-1 text-center">{d.day % 5 === 0 ? d.day : ""}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* ─── Monte Carlo Simulation ─── */}
+                {(() => {
+                  const mc = forecastData.monte_carlo
+                  const pctiles = mc.percentiles
+                  const allValues = pctiles.flatMap((p) => [p.p5, p.p95])
+                  const maxVal = Math.max(...allValues)
+                  const minVal = Math.min(...allValues)
+                  const range = Math.max(1, maxVal - minVal)
+                  const yPos = (v: number) => 100 - ((v - minVal) / range) * 100
+
+                  const probColor = (p: number) => p > 0.3 ? "text-red-400" : p > 0.1 ? "text-amber-400" : "text-emerald-400"
+
+                  return (
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Monte Carlo Simulation</h3>
+                          <p className="text-[10px] text-gray-500 mt-0.5">{mc.simulations} simulations with payment delays, amount variance, missed payments</p>
+                        </div>
+                      </div>
+
+                      {/* Probability queries */}
+                      <div className="grid grid-cols-3 gap-3 mb-5">
+                        <div className="bg-white/5 border border-white/10 rounded-lg p-3 text-center">
+                          <div className="text-[10px] text-gray-500 mb-1">P(cash &lt; 0) in 14d</div>
+                          <div className={`text-lg font-bold font-mono ${probColor(mc.prob_below_zero_14d)}`}>{Math.round(mc.prob_below_zero_14d * 100)}%</div>
+                        </div>
+                        <div className="bg-white/5 border border-white/10 rounded-lg p-3 text-center">
+                          <div className="text-[10px] text-gray-500 mb-1">P(cash &lt; 0) in 30d</div>
+                          <div className={`text-lg font-bold font-mono ${probColor(mc.prob_below_zero_30d)}`}>{Math.round(mc.prob_below_zero_30d * 100)}%</div>
+                        </div>
+                        <div className="bg-white/5 border border-white/10 rounded-lg p-3 text-center">
+                          <div className="text-[10px] text-gray-500 mb-1">P(cash &gt; start) in 30d</div>
+                          <div className={`text-lg font-bold font-mono ${mc.prob_above_starting_30d > 0.5 ? "text-emerald-400" : "text-amber-400"}`}>{Math.round(mc.prob_above_starting_30d * 100)}%</div>
+                        </div>
+                      </div>
+
+                      {/* Percentile fan chart */}
+                      <div className="relative h-32 mb-2">
+                        <svg viewBox="0 0 300 100" preserveAspectRatio="none" className="w-full h-full">
+                          {/* P5-P95 band */}
+                          <polygon
+                            points={
+                              pctiles.map((p, i) => `${(i / 29) * 300},${yPos(p.p95)}`).join(" ") + " " +
+                              [...pctiles].reverse().map((p, i) => `${((29 - i) / 29) * 300},${yPos(p.p5)}`).join(" ")
+                            }
+                            fill="rgba(59,130,246,0.08)"
+                          />
+                          {/* P25-P75 band */}
+                          <polygon
+                            points={
+                              pctiles.map((p, i) => `${(i / 29) * 300},${yPos(p.p75)}`).join(" ") + " " +
+                              [...pctiles].reverse().map((p, i) => `${((29 - i) / 29) * 300},${yPos(p.p25)}`).join(" ")
+                            }
+                            fill="rgba(59,130,246,0.15)"
+                          />
+                          {/* P50 median line */}
+                          <polyline
+                            points={pctiles.map((p, i) => `${(i / 29) * 300},${yPos(p.p50)}`).join(" ")}
+                            fill="none" stroke="rgb(96,165,250)" strokeWidth="1.5"
+                          />
+                          {/* Zero line if visible */}
+                          {minVal < 0 && (
+                            <line x1="0" y1={yPos(0)} x2="300" y2={yPos(0)} stroke="rgba(239,68,68,0.4)" strokeWidth="0.5" strokeDasharray="4,3" />
+                          )}
+                        </svg>
+
+                        {/* Y-axis labels */}
+                        <div className="absolute top-0 right-1 text-[8px] text-gray-600 font-mono">{money(maxVal)}</div>
+                        <div className="absolute bottom-0 right-1 text-[8px] text-gray-600 font-mono">{money(minVal)}</div>
+                      </div>
+
+                      {/* Legend */}
+                      <div className="flex items-center justify-center gap-4 text-[10px] text-gray-500 mb-4">
+                        <span className="flex items-center gap-1"><span className="w-3 h-1.5 rounded bg-blue-500/15 inline-block" /> P5–P95</span>
+                        <span className="flex items-center gap-1"><span className="w-3 h-1.5 rounded bg-blue-500/30 inline-block" /> P25–P75</span>
+                        <span className="flex items-center gap-1"><span className="w-3 h-0.5 rounded bg-blue-400 inline-block" /> Median</span>
+                      </div>
+
+                      {/* Summary stats */}
+                      <div className="grid grid-cols-3 gap-3 text-center text-xs">
+                        <div>
+                          <div className="text-gray-500">Expected (30d)</div>
+                          <div className="text-white font-mono font-semibold">{money(mc.expected_cash_30d)}</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Worst case (5th %ile)</div>
+                          <div className={`font-mono font-semibold ${mc.worst_case_cash_30d < 0 ? "text-red-400" : "text-amber-400"}`}>{money(mc.worst_case_cash_30d)}</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Best case (95th %ile)</div>
+                          <div className="text-emerald-400 font-mono font-semibold">{money(mc.best_case_cash_30d)}</div>
+                        </div>
+                      </div>
+
+                      {/* Day-level scenario comparison */}
+                      {mc.day_scenarios.length > 0 && (
+                        <div className="mt-5 pt-4 border-t border-white/10">
+                          <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Scenario Comparison</h4>
+                          <div className="grid grid-cols-3 gap-3">
+                            {mc.day_scenarios.map((sc) => {
+                              const color = sc.scenario === "aggressive" ? "emerald" : sc.scenario === "conservative" ? "red" : "blue"
+                              const borderCls = `border-${color}-500/20`
+                              const bgCls = `bg-${color}-500/10`
+                              const textCls = `text-${color}-400`
+                              return (
+                                <div key={sc.scenario} className={`border rounded-lg p-3 ${sc.scenario === "aggressive" ? "border-emerald-500/20 bg-emerald-500/10" : sc.scenario === "conservative" ? "border-red-500/20 bg-red-500/10" : "border-blue-500/20 bg-blue-500/10"}`}>
+                                  <div className={`text-xs font-bold uppercase mb-1 ${sc.scenario === "aggressive" ? "text-emerald-400" : sc.scenario === "conservative" ? "text-red-400" : "text-blue-400"}`}>{sc.scenario}</div>
+                                  <div className="text-[10px] text-gray-500 mb-2">{sc.label}</div>
+                                  <div className="space-y-1">
+                                    <div className="flex justify-between text-xs">
+                                      <span className="text-gray-400">14d</span>
+                                      <span className="text-white font-mono font-semibold">{money(sc.cash_14d)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-xs">
+                                      <span className="text-gray-400">30d</span>
+                                      <span className="text-white font-mono font-semibold">{money(sc.cash_30d)}</span>
+                                    </div>
+                                    {sc.min_cash_day > 0 && (
+                                      <div className="flex justify-between text-xs">
+                                        <span className="text-gray-500">Low D{sc.min_cash_day}</span>
+                                        <span className={`font-mono ${sc.min_cash < 0 ? "text-red-400" : "text-gray-400"}`}>{money(sc.min_cash)}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+
+                {/* ─── Outstanding Invoices Signal ─── */}
+                {forecastData.behavioral_models.invoice_signal.invoices.length > 0 && (() => {
+                  const sig = forecastData.behavioral_models.invoice_signal
+                  return (
+                    <div className="bg-white/5 border border-amber-500/20 rounded-xl p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-amber-400 uppercase tracking-wider">Outstanding Invoices</h3>
+                        <span className="text-xs text-gray-400">{sig.invoices.length} open</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-3 mb-4">
+                        <div>
+                          <div className="text-[10px] text-gray-500 uppercase">Total Due</div>
+                          <div className="text-lg font-mono font-bold text-white">{money(sig.total_outstanding)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-gray-500 uppercase">Overdue</div>
+                          <div className={`text-lg font-mono font-bold ${sig.total_overdue > 0 ? "text-red-400" : "text-emerald-400"}`}>{money(sig.total_overdue)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-gray-500 uppercase">Overdue Count</div>
+                          <div className={`text-lg font-mono font-bold ${sig.overdue_count > 0 ? "text-red-400" : "text-gray-400"}`}>{sig.overdue_count}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-gray-500 uppercase">Avg Days to Due</div>
+                          <div className="text-lg font-mono font-bold text-gray-300">{sig.avg_days_to_due != null ? `${Math.round(sig.avg_days_to_due)}d` : "—"}</div>
+                        </div>
+                      </div>
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                        {sig.invoices.slice(0, 15).map((inv) => (
+                          <div key={inv.invoice_id} className="flex items-center justify-between text-xs bg-white/5 rounded px-2.5 py-1.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${inv.status === "overdue" ? "bg-red-400" : inv.status === "partially_paid" ? "bg-amber-400" : "bg-emerald-400"}`} />
+                              <span className="text-gray-200 truncate">{inv.customer_name}</span>
+                              <span className="text-[9px] text-gray-600 uppercase">{inv.source}</span>
+                            </div>
+                            <div className="flex items-center gap-3 shrink-0">
+                              {inv.due_date && (
+                                <span className={`text-[10px] ${inv.status === "overdue" ? "text-red-400" : "text-gray-500"}`}>
+                                  {inv.status === "overdue" ? `${inv.days_overdue}d overdue` : `due ${inv.due_date.slice(5)}`}
+                                </span>
+                              )}
+                              <span className="font-mono text-white">{money(inv.amount_due)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* ─── Customer Models ─── */}
+                {forecastData.behavioral_models.customers.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-3">Customer Payment Models</h3>
+                    <div className="space-y-2">
+                      {forecastData.behavioral_models.customers.slice(0, 10).map((c) => (
+                        <div key={c.entity_id} className="bg-white/5 rounded-lg px-3 py-2.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`shrink-0 w-2 h-2 rounded-full ${confDot(c.confidence)}`} />
+                              <span className="text-sm text-white truncate">{c.name}</span>
+                              <span className="text-[10px] text-gray-500">{c.payment_count} payments</span>
+                              {c.outstanding_invoices.length > 0 && (
+                                <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded px-1.5 py-0.5">
+                                  {c.outstanding_invoices.length} invoice{c.outstanding_invoices.length > 1 ? "s" : ""} · {money(c.outstanding_invoices.reduce((s, i) => s + i.amount_due, 0))}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="text-sm font-mono text-emerald-400">{money(c.avg_amount)}<span className="text-gray-500"> avg</span></div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
+                            {c.payment_interval_days > 0 && <span>every ~{c.payment_interval_days}d ±{Math.round(c.interval_variance)}d</span>}
+                            <span>P(next) = {Math.round(c.probability_of_next * 100)}%</span>
+                            {c.next_expected_date && <span className="text-blue-400">next ≈ {c.next_expected_date}</span>}
+                            {c.payment_count > 0 && <span>last: {c.last_payment_date.slice(0, 10)}</span>}
+                            {c.payment_count === 0 && c.outstanding_invoices.length > 0 && <span className="text-amber-400">invoice-only (no payment history)</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Vendor Models ─── */}
+                {forecastData.behavioral_models.vendors.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-red-400 uppercase tracking-wider mb-3">Vendor Payment Models</h3>
+                    <div className="space-y-2">
+                      {forecastData.behavioral_models.vendors.slice(0, 10).map((v) => (
+                        <div key={v.entity_id} className="bg-white/5 rounded-lg px-3 py-2.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`shrink-0 w-2 h-2 rounded-full ${confDot(v.confidence)}`} />
+                              <span className="text-sm text-white truncate">{v.name}</span>
+                              <span className="text-[10px] text-gray-500 border border-white/10 rounded px-1 py-0.5">{v.cadence}</span>
+                              {v.is_recurring && <span className="text-[10px] text-amber-400">recurring</span>}
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="text-sm font-mono text-red-400">{money(v.avg_amount)}<span className="text-gray-500"> avg</span></div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
+                            <span>every ~{v.cadence_interval_days}d</span>
+                            <span>{v.payment_count} payments</span>
+                            {v.next_expected_date && <span className="text-blue-400">next ≈ {v.next_expected_date}</span>}
+                            <span>last: {v.last_payment_date.slice(0, 10)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Settlement + Transfer Models ─── */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-blue-400 uppercase tracking-wider mb-2">Settlement Model</h3>
+                    <div className="space-y-1.5 text-sm">
+                      <div className="flex justify-between"><span className="text-gray-400">Avg delay</span><span className="text-white font-mono">{forecastData.behavioral_models.settlement.avg_delay_days}d</span></div>
+                      <div className="flex justify-between"><span className="text-gray-400">Std deviation</span><span className="text-white font-mono">±{forecastData.behavioral_models.settlement.delay_std}d</span></div>
+                      <div className="flex justify-between"><span className="text-gray-400">Samples</span><span className="text-white font-mono">{forecastData.behavioral_models.settlement.sample_count}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-400">Confidence</span><span className={`font-mono ${forecastData.behavioral_models.settlement.confidence === "high" ? "text-emerald-400" : forecastData.behavioral_models.settlement.confidence === "medium" ? "text-amber-400" : "text-gray-500"}`}>{forecastData.behavioral_models.settlement.confidence}</span></div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-purple-400 uppercase tracking-wider mb-2">Transfer Behavior</h3>
+                    <div className="space-y-1.5 text-sm">
+                      <div className="flex justify-between"><span className="text-gray-400">Pattern</span><span className="text-white font-mono">{forecastData.behavioral_models.transfers.trigger_pattern.replace(/_/g, " ")}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-400">Avg amount</span><span className="text-white font-mono">{money(forecastData.behavioral_models.transfers.avg_transfer_amount)}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-400">Count</span><span className="text-white font-mono">{forecastData.behavioral_models.transfers.transfer_count}</span></div>
+                      {forecastData.behavioral_models.transfers.avg_interval_days && <div className="flex justify-between"><span className="text-gray-400">Interval</span><span className="text-white font-mono">~{forecastData.behavioral_models.transfers.avg_interval_days}d</span></div>}
+                      {forecastData.behavioral_models.transfers.primary_account && <div className="flex justify-between"><span className="text-gray-400">Primary</span><span className="text-white font-mono text-xs truncate max-w-[120px]">{forecastData.behavioral_models.transfers.primary_account}</span></div>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ─── Recurring Fixed Obligations ─── */}
+                {forecastData.behavioral_models.recurring_fixed.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-amber-400 uppercase tracking-wider mb-2">Recurring Fixed Obligations</h3>
+                    <div className="space-y-1">
+                      {forecastData.behavioral_models.recurring_fixed.slice(0, 8).map((rf, i) => (
+                        <div key={i} className="flex items-center justify-between text-sm py-1 border-b border-white/5 last:border-0">
+                          <span className="text-gray-300 truncate max-w-[200px]">{rf.label}</span>
+                          <span className="text-red-400 font-mono shrink-0">{money(rf.monthly_amount)}/mo</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Cashflow Components ─── */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                  <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4">Aggregate Components</h3>
+                  <div className="space-y-2">
+                    {forecastData.components
+                      .sort((a, b) => b.monthly_avg - a.monthly_avg)
+                      .map((c) => (
+                      <div key={c.id} className="flex items-center justify-between gap-3 bg-white/5 rounded-lg px-3 py-2.5">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`shrink-0 w-2 h-2 rounded-full ${confDot(c.confidence)}`} />
+                          <span className={`text-xs font-semibold ${c.direction === "in" ? "text-emerald-400" : "text-red-400"}`}>
+                            {c.direction === "in" ? "IN" : "OUT"}
+                          </span>
+                          <span className="text-sm text-white truncate">{c.label}</span>
+                          <span className="text-[10px] text-gray-500 border border-white/10 rounded px-1.5 py-0.5">
+                            {behaviorLabel(c.behavior)}
+                          </span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-mono text-white">{money(c.monthly_avg)}<span className="text-gray-500">/mo</span></div>
+                          <div className="text-[10px] text-gray-500">
+                            trend {c.trend > 0 ? "+" : ""}{(c.trend * 100).toFixed(1)}% · vol {(c.volatility * 100).toFixed(0)}%
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ─── Scenario Forecasts ─── */}
+                {forecastData.scenarios.map((sc) => (
+                  <div key={sc.scenario} className={`border rounded-xl p-5 ${scenarioBorder(sc.scenario)} ${scenarioBg(sc.scenario)}`}>
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className={`text-sm font-semibold uppercase tracking-wider ${scenarioColor(sc.scenario)}`}>
+                          {sc.scenario} case
+                        </h3>
+                        <p className="text-xs text-gray-500 mt-0.5">{sc.label}</p>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-lg font-bold font-mono ${sc.ending_cash >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                          {signedMoney(sc.ending_cash)}
+                        </div>
+                        <div className="text-[10px] text-gray-500">ending cash</div>
+                      </div>
+                    </div>
+
+                    {sc.runway_months !== null && (
+                      <div className="mb-3 flex items-center gap-2 text-xs">
+                        <span className="text-red-400 font-semibold">RUNWAY WARNING</span>
+                        <span className="text-gray-400">Cash runs out in ~{sc.runway_months} month{sc.runway_months !== 1 ? "s" : ""}</span>
+                      </div>
+                    )}
+
+                    {/* Monthly projection table */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-gray-500 border-b border-white/10">
+                            <th className="text-left py-1.5 pr-3">Month</th>
+                            <th className="text-right py-1.5 px-2">Inflows</th>
+                            <th className="text-right py-1.5 px-2">Outflows</th>
+                            <th className="text-right py-1.5 px-2">Net</th>
+                            <th className="text-right py-1.5 pl-2">Cumulative</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sc.months.map((m) => (
+                            <tr key={m.month} className="border-b border-white/5">
+                              <td className="py-1.5 pr-3 text-gray-400 font-mono">{m.month}</td>
+                              <td className="py-1.5 px-2 text-right text-emerald-400 font-mono">{money(m.inflows)}</td>
+                              <td className="py-1.5 px-2 text-right text-red-400 font-mono">{money(m.outflows)}</td>
+                              <td className={`py-1.5 px-2 text-right font-mono font-semibold ${m.net >= 0 ? "text-emerald-300" : "text-red-300"}`}>{signedMoney(m.net)}</td>
+                              <td className={`py-1.5 pl-2 text-right font-mono ${m.cumulative_net >= 0 ? "text-white" : "text-red-400 font-semibold"}`}>{signedMoney(m.cumulative_net)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+
+                {/* ─── Refresh ─── */}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={forecastLoading}
+                    onClick={() => {
+                      setForecastLoading(true)
+                      setForecastError(null)
+                      fetch("/api/forecast")
+                        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+                        .then((data: CashflowForecast) => { setForecastData(data); setForecastLoading(false) })
+                        .catch((err) => { setForecastError(err instanceof Error ? err.message : "Failed to load forecast"); setForecastLoading(false) })
+                    }}
+                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="text-sm font-medium text-white">{forecastLoading ? "Computing…" : "Refresh forecast"}</div>
+                    <div className="text-xs text-gray-400">Re-simulate from latest data</div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
       default:
         return (
           <div className="text-center py-12">
@@ -3157,7 +3799,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13
   return (
     <div
       className={

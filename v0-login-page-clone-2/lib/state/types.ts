@@ -159,6 +159,202 @@ export type RiskState = {
   overall_score: number
 }
 
+// ─── Forecast Types ──────────────────────────────────────────────────
+
+export type ComponentBehavior = "recurring" | "episodic" | "seasonal" | "one_time"
+
+export type CashflowComponent = {
+  id: string
+  label: string
+  direction: "in" | "out"
+  category: "customer_receipts" | "processor_payouts" | "financing_in" | "owner_contributions"
+    | "vendor_payments" | "recurring_expenses" | "processor_fees" | "debt_payments" | "transfers" | "other"
+  behavior: ComponentBehavior
+  monthly_avg: number
+  monthly_count: number
+  trend: number
+  volatility: number
+  confidence: "high" | "medium" | "low"
+  seasonal_index: Record<number, number> | null
+}
+
+// ─── Outstanding Invoice Signals ─────────────────────────────────────
+
+export type OutstandingInvoice = {
+  invoice_id: string
+  source: "qbo" | "xero" | "gmail" | "stripe"
+  customer_name: string
+  customer_source_id: string | null
+  entity_id: string | null
+  amount: number
+  amount_due: number
+  due_date: string | null
+  days_until_due: number | null
+  days_overdue: number | null
+  status: "open" | "overdue" | "partially_paid"
+}
+
+export type InvoiceSignal = {
+  invoices: OutstandingInvoice[]
+  total_outstanding: number
+  total_overdue: number
+  overdue_count: number
+  avg_days_to_due: number | null
+}
+
+// ─── Entity-Level Behavioral Models ─────────────────────────────────
+
+export type CustomerModel = {
+  entity_id: string
+  name: string
+  avg_amount: number
+  payment_interval_days: number
+  interval_variance: number
+  last_payment_date: string
+  payment_count: number
+  probability_of_next: number
+  next_expected_date: string | null
+  confidence: "high" | "medium" | "low"
+  outstanding_invoices: OutstandingInvoice[]
+}
+
+export type VendorModel = {
+  entity_id: string
+  name: string
+  avg_amount: number
+  cadence: "weekly" | "biweekly" | "monthly" | "quarterly" | "irregular"
+  cadence_interval_days: number
+  is_recurring: boolean
+  last_payment_date: string
+  payment_count: number
+  next_expected_date: string | null
+  confidence: "high" | "medium" | "low"
+}
+
+export type SettlementModel = {
+  avg_delay_days: number
+  delay_std: number
+  sample_count: number
+  confidence: "high" | "medium" | "low" | "insufficient"
+}
+
+export type TransferBehaviorModel = {
+  avg_transfer_amount: number
+  transfer_count: number
+  trigger_pattern: "low_balance" | "periodic" | "irregular" | "unknown"
+  avg_interval_days: number | null
+  primary_account: string | null
+  secondary_account: string | null
+  confidence: "high" | "medium" | "low"
+}
+
+export type BehavioralModels = {
+  customers: CustomerModel[]
+  vendors: VendorModel[]
+  settlement: SettlementModel
+  transfers: TransferBehaviorModel
+  recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]
+  invoice_signal: InvoiceSignal
+}
+
+export type ForecastEvent = {
+  date: string
+  day_offset: number
+  type: "customer_payment" | "vendor_payment" | "recurring_expense" | "debt_payment" | "settlement" | "transfer" | "processor_fee"
+  entity: string
+  amount: number
+  direction: "in" | "out"
+  probability: number
+  confidence: "high" | "medium" | "low"
+  source_model: "customer" | "vendor" | "recurring" | "settlement" | "transfer" | "aggregate"
+}
+
+export type ForecastMonth = {
+  month: string
+  inflows: number
+  outflows: number
+  net: number
+  cumulative_net: number
+  components: { component_id: string; amount: number }[]
+}
+
+export type ScenarioResult = {
+  scenario: "base" | "optimistic" | "pessimistic"
+  label: string
+  months: ForecastMonth[]
+  runway_months: number | null
+  ending_cash: number
+}
+
+export type DailySimDay = {
+  day: number
+  date: string
+  cash: number
+  inflows: number
+  outflows: number
+  events: { entity: string; amount: number; direction: "in" | "out" }[]
+}
+
+export type DailySimulation = {
+  starting_cash: number
+  days: DailySimDay[]
+  min_cash: number
+  min_cash_day: number
+  ending_cash: number
+}
+
+export type MonteCarloPercentile = {
+  day: number
+  p5: number
+  p25: number
+  p50: number
+  p75: number
+  p95: number
+}
+
+export type DayScenarioSnapshot = {
+  scenario: "base" | "conservative" | "aggressive"
+  label: string
+  cash_14d: number
+  cash_30d: number
+  min_cash: number
+  min_cash_day: number
+}
+
+export type MonteCarloResult = {
+  simulations: number
+  percentiles: MonteCarloPercentile[]
+  prob_below_zero_14d: number
+  prob_below_zero_30d: number
+  prob_above_starting_30d: number
+  expected_cash_30d: number
+  worst_case_cash_30d: number
+  best_case_cash_30d: number
+  day_scenarios: DayScenarioSnapshot[]
+}
+
+export type ForecastNarrative = {
+  forecast: string
+  risk: string
+  insight: string
+  action: string
+  severity: "healthy" | "caution" | "danger"
+}
+
+export type CashflowForecast = {
+  period_start: string
+  forecast_horizon_months: number
+  components: CashflowComponent[]
+  behavioral_models: BehavioralModels
+  events_30d: ForecastEvent[]
+  daily_simulation: DailySimulation
+  monte_carlo: MonteCarloResult
+  narrative: ForecastNarrative
+  scenarios: ScenarioResult[]
+  data_span_days: number
+  computed_at: string
+}
+
 export type BusinessState = {
   revenue: RevenueState
   spend: SpendState
