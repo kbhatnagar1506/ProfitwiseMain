@@ -3139,6 +3139,20 @@ export function OnboardingFlow({
         }
         const arInvoices = arApData?.ar.invoices ?? []
         const arOverdueFirst = [...arInvoices].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0))
+        const arReconSummary = arOverdueFirst.reduce(
+          (acc, inv) => {
+            const invExt = inv as { amount_collected?: number; amount_remaining?: number }
+            const collected = invExt.amount_collected ?? 0
+            const remaining = invExt.amount_remaining ?? Math.max(0, inv.amount_due - collected)
+            if (remaining <= 0.01) acc.paid_count += 1
+            else if (collected > 0.01) acc.partial_count += 1
+            else acc.open_count += 1
+            acc.collected_total += collected
+            acc.remaining_total += remaining
+            return acc
+          },
+          { paid_count: 0, partial_count: 0, open_count: 0, collected_total: 0, remaining_total: 0 },
+        )
         const apObligations = arApData?.ap.obligations ?? []
         const allReconRows = mappingRecon
           ? [
@@ -3195,6 +3209,33 @@ export function OnboardingFlow({
                   <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 border border-white/10">
                     <span className="text-white font-bold">{money(arApData.ar.total_outstanding - arApData.ap.total_expected_30d)}</span>
                     <span className="text-gray-400">Net expected</span>
+                  </div>
+                </div>
+
+                {/* ─── Reconciler AR summary ─── */}
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300 mb-2">Reconciler AR</div>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                    <div className="rounded-lg bg-white/5 px-3 py-2">
+                      <div className="text-[10px] text-gray-500">Paid invoices</div>
+                      <div className="font-semibold text-emerald-300">{arReconSummary.paid_count}</div>
+                    </div>
+                    <div className="rounded-lg bg-white/5 px-3 py-2">
+                      <div className="text-[10px] text-gray-500">Partial invoices</div>
+                      <div className="font-semibold text-amber-300">{arReconSummary.partial_count}</div>
+                    </div>
+                    <div className="rounded-lg bg-white/5 px-3 py-2">
+                      <div className="text-[10px] text-gray-500">Open invoices</div>
+                      <div className="font-semibold text-white">{arReconSummary.open_count}</div>
+                    </div>
+                    <div className="rounded-lg bg-white/5 px-3 py-2">
+                      <div className="text-[10px] text-gray-500">Collected</div>
+                      <div className="font-semibold text-emerald-300">{moneySmall(arReconSummary.collected_total)}</div>
+                    </div>
+                    <div className="rounded-lg bg-white/5 px-3 py-2">
+                      <div className="text-[10px] text-gray-500">Remaining</div>
+                      <div className="font-semibold text-white">{moneySmall(arReconSummary.remaining_total)}</div>
+                    </div>
                   </div>
                 </div>
 
