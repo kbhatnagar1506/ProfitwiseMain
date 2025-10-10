@@ -231,7 +231,8 @@ export function OnboardingFlow({
   type SpendState = { period_start: string; period_end: string; total_opex: number; total_cogs: number; direct_cost_candidates: number; total_spend: number; payroll: number; vendor_payments: number; bank_fees: number; taxes: number; processor_fees: number; recurring_obligations: number; recurring_obligation_count: number; non_recurring_spend: number; vendor_count: number; avg_payment: number; top_vendor_pct: number; supplier_concentration_index: number; spend_by_vendor: SpendBreakdownEntry[]; provisional_spend: number; excluded_spend: number }
   type AccountCash = { account_id: string; account_name: string; account_type: string; net_flow: number; inflows: number; outflows: number; movement_count: number }
   type StateConfidence = { revenue_confidence: number; spend_confidence: number; liquidity_confidence: number }
-  type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; period_net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; owner_inflows: number; owner_outflows: number; net_owner: number; cash_by_account: AccountCash[]; transfer_dependency_ratio: number; owner_support_ratio: number; operating_dependency_ratio: number; liquidity_regime: "strong" | "stable" | "tightening"; excluded_cash: number }
+  type SettlementLagSignal = { avg_settlement_lag_days: number; sample_count: number; confidence: string }
+  type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; period_net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; settlement_lag?: SettlementLagSignal; owner_inflows: number; owner_outflows: number; net_owner: number; cash_by_account: AccountCash[]; transfer_dependency_ratio: number; owner_support_ratio: number; operating_dependency_ratio: number; liquidity_regime: "strong" | "stable" | "tightening"; excluded_cash: number }
   type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; transitions: TransitionSignal[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
@@ -2967,6 +2968,9 @@ export function OnboardingFlow({
                     <div className="flex justify-between"><span className="text-gray-400">Net financing</span><span className="text-white font-mono">{money(stateData.liquidity.net_financing)}</span></div>
                     <div className="flex justify-between"><span className="text-gray-400">Net settlement</span><span className="text-white font-mono">{money(stateData.liquidity.net_settlement)}</span></div>
                     <div className="flex justify-between"><span className="text-gray-400">Net owner</span><span className="text-white font-mono">{money(stateData.liquidity.net_owner)}</span></div>
+                    {stateData.liquidity.settlement_lag && stateData.liquidity.settlement_lag.confidence !== "insufficient" && (
+                      <div className="flex justify-between"><span className="text-gray-400">Settlement lag (payment → bank)</span><span className="text-white font-mono">~{stateData.liquidity.settlement_lag.avg_settlement_lag_days.toFixed(1)}d ({stateData.liquidity.settlement_lag.sample_count} samples)</span></div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-4 gap-2 text-center mb-4">

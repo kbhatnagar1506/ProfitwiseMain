@@ -4,6 +4,7 @@
 // This is the single entry point for all state computation.
 
 import { query, ensureMovementsSchema } from "@/lib/db"
+import type { RevenueState, SpendState, LiquidityState } from "./types"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
 import { computeRevenueState, computeSpendState, computeLiquidityState, detectTransitions, computeStateConfidence, computeInsightBlock } from "./compute"
@@ -18,6 +19,69 @@ type TagRow = {
 }
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
+
+type StateSnapshot = {
+  revenue_state: RevenueState
+  spend_state: SpendState
+  liquidity_state: LiquidityState
+  period_start: string
+  period_end: string
+}
+
+async function fetchStateSnapshots(userId: string): Promise<{
+  priorSnapshot: StateSnapshot | null
+  rollingSnapshots: StateSnapshot[]
+}> {
+  const rows = await query<{
+    revenue_state: unknown
+    spend_state: unknown
+    liquidity_state: unknown
+    period_start: string
+    period_end: string
+  }>(
+    `SELECT revenue_state, spend_state, liquidity_state, period_start::text, period_end::text
+     FROM state_snapshots WHERE user_id = $1 ORDER BY snapshot_at DESC LIMIT 6`,
+    [userId]
+  ).then((r) => r.rows)
+
+  const prior = rows[0]
+  const priorSnapshot: StateSnapshot | null = prior
+    ? {
+        revenue_state: prior.revenue_state as RevenueState,
+        spend_state: prior.spend_state as SpendState,
+        liquidity_state: prior.liquidity_state as LiquidityState,
+        period_start: prior.period_start ?? "",
+        period_end: prior.period_end ?? "",
+      }
+    : null
+
+  const rollingSnapshots: StateSnapshot[] = rows.slice(0, 5).map((r) => ({
+    revenue_state: r.revenue_state as RevenueState,
+    spend_state: r.spend_state as SpendState,
+    liquidity_state: r.liquidity_state as LiquidityState,
+    period_start: r.period_start ?? "",
+    period_end: r.period_end ?? "",
+  }))
+
+  return { priorSnapshot, rollingSnapshots }
+}
+
+async function storeStateSnapshot(
+  userId: string,
+  revenue: RevenueState,
+  spend: SpendState,
+  liquidity: LiquidityState,
+  periodStart: string,
+  periodEnd: string,
+): Promise<void> {
+  const start = periodStart?.slice(0, 10) || null
+  const end = periodEnd?.slice(0, 10) || null
+  await query(
+    `INSERT INTO state_snapshots (user_id, revenue_state, spend_state, liquidity_state, period_start, period_end)
+     VALUES ($1, $2, $3, $4, $5::date, $6::date)`,
+    [userId, JSON.stringify(revenue), JSON.stringify(spend), JSON.stringify(liquidity), start, end]
+  )
+}
 
 export async function computeBusinessState(userId: string): Promise<BusinessState> {
   await ensureMovementsSchema()
@@ -135,9 +199,20 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
   const revenue = computeRevenueState(tagged, periodStart, periodEnd)
   const spend = computeSpendState(tagged, periodStart, periodEnd)
   const liquidity = computeLiquidityState(tagged, periodStart, periodEnd)
-  const transitions = detectTransitions(revenue, spend, liquidity)
+
+  const { priorSnapshot, rollingSnapshots } = await fetchStateSnapshots(userId)
+  const transitions = detectTransitions(revenue, spend, liquidity, {
+    prior: priorSnapshot,
+    rolling: rollingSnapshots,
+  })
   const state_confidence = computeStateConfidence(tagged)
   const insight_block = computeInsightBlock(revenue, spend, liquidity)
+
+  try {
+    await storeStateSnapshot(userId, revenue, spend, liquidity, periodStart, periodEnd)
+  } catch {
+    // Non-fatal: state computation succeeded, snapshot storage failed
+  }
 
   return {
     revenue,
