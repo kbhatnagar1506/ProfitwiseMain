@@ -11,9 +11,14 @@
 //   - Provisional movements are counted but tracked separately
 
 import type { MovementTag, CanonicalMovement } from "@/lib/movement-types"
-import type { RevenueState, SpendState, LiquidityState, TransitionSignal, SeverityBand, AccountCash, SpendBreakdownEntry } from "./types"
+import type { RevenueState, SpendState, LiquidityState, TransitionSignal, SeverityBand, AccountCash, SpendBreakdownEntry, LiquidityRegime } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
+
+const SUPPLIER_PATTERNS = [
+  /\b(wholesale|supply|inventory|material|shipping|freight|fulfillment|warehouse|merchandise|product\s*cost)\b/i,
+  /\b(usps|ups|fedex|dhl|shipstation|shipbob|flexport|amazon\s*ship)\b/i,
+]
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 const pct1 = (n: number, d: number) => d > 0 ? Math.round((n / d) * 1000) / 10 : 0
@@ -26,6 +31,7 @@ export function computeRevenueState(
   periodEnd: string,
 ): RevenueState {
   let grossRevenue = 0
+  let recurringRevenue = 0
   let contraRevenue = 0
   let provisionalRevenue = 0
   let excludedRevenue = 0
@@ -52,6 +58,7 @@ export function computeRevenueState(
 
     if (isRevIn) {
       grossRevenue += m.amount
+      if (t.is_recurring) recurringRevenue += m.amount
       if (t.state_inclusion_policy === "include_provisional") provisionalRevenue += m.amount
 
       const key = m.entity_id ?? m.raw_description ?? "unknown"
@@ -67,6 +74,7 @@ export function computeRevenueState(
   }
 
   const netRevenue = grossRevenue - contraRevenue
+  const repeatRevenueRatio = grossRevenue > 0 ? recurringRevenue / grossRevenue : 0
   const customers = [...customerTotals.values()].sort((a, b) => b.total - a.total)
   const customerCount = customers.length
   const avgReceipt = customerCount > 0 ? grossRevenue / customers.reduce((s, c) => s + c.count, 0) : 0
@@ -88,6 +96,7 @@ export function computeRevenueState(
     avg_receipt: r2(avgReceipt),
     top_customer_pct: pct1(topCustomerPct, 1),
     concentration_index: Math.round(hhi * 1000) / 1000,
+    repeat_revenue_ratio: Math.round(repeatRevenueRatio * 1000) / 1000,
     revenue_by_customer: customers.slice(0, 10).map((c) => ({
       entity_id: null,
       name: c.name,
@@ -108,6 +117,7 @@ export function computeSpendState(
 ): SpendState {
   let totalOpex = 0
   let totalCogs = 0
+  let directCostCandidates = 0
   let payroll = 0
   let vendorPayments = 0
   let bankFees = 0
@@ -120,6 +130,13 @@ export function computeSpendState(
   let nonRecurringSpend = 0
 
   const vendorTotals = new Map<string, { name: string; total: number; count: number }>()
+
+  function isDirectCostCandidate(m: TaggedMovement): boolean {
+    const desc = (m.raw_description ?? "").toLowerCase()
+    const cp = ((m.metadata?.counterparty as string) ?? "").toLowerCase()
+    const combined = `${desc} ${cp}`
+    return SUPPLIER_PATTERNS.some((p) => p.test(combined))
+  }
 
   for (const m of movements) {
     const t = m.tag
@@ -135,7 +152,10 @@ export function computeSpendState(
     if (t.cashflow_bucket === "opex_out") totalOpex += m.amount
     if (t.cashflow_bucket === "cogs_out") totalCogs += m.amount
 
-    if (t.economic_class === "vendor_payment") vendorPayments += m.amount
+    if (t.economic_class === "vendor_payment") {
+      vendorPayments += m.amount
+      if (t.is_recurring || isDirectCostCandidate(m)) directCostCandidates += m.amount
+    }
 
     switch (t.economic_class) {
       case "payroll": payroll += m.amount; break
@@ -189,6 +209,7 @@ export function computeSpendState(
     period_end: periodEnd,
     total_opex: r2(totalOpex),
     total_cogs: r2(totalCogs),
+    direct_cost_candidates: r2(directCostCandidates),
     total_spend: r2(totalSpend),
     payroll: r2(payroll),
     vendor_payments: r2(vendorPayments),
@@ -255,15 +276,16 @@ export function computeLiquidityState(
       if (isIn) ownerIn += amt; else ownerOut += amt
     }
 
-    // account_id from DB is actually the account name (stored as cash_account_name during classification)
-    const acctName = m.account_id || null
-    const acctKey = acctName ?? "unmapped"
+    // account_id from DB is the account name; when unresolved use explicit label
+    const acctName = (m.account_id && String(m.account_id).trim()) || null
+    const acctKey = acctName ?? "__external_unknown__"
     const acctType = (m.metadata?.account_type as string) ?? ""
+    const displayName = acctName ?? "External / unknown account"
     let acctEntry = accountFlows.get(acctKey)
     if (!acctEntry) {
       acctEntry = {
         account_id: acctKey,
-        account_name: acctName ?? "Unmapped account",
+        account_name: displayName,
         account_type: acctType,
         net_flow: 0, inflows: 0, outflows: 0, movement_count: 0,
       }
@@ -282,6 +304,8 @@ export function computeLiquidityState(
   const transferDependencyRatio = totalFlow > 0 ? transferVolume / totalFlow : 0
   const ownerSupportRatio = totalIn > 0 ? ownerIn / totalIn : 0
   const operatingDependencyRatio = totalIn > 0 ? opIn / totalIn : 0
+  const opRatio = totalIn > 0 ? (opIn - opOut) / totalIn : 0
+  const liquidityRegime: LiquidityRegime = opRatio > 0.4 ? "strong" : opRatio >= 0.2 ? "stable" : "tightening"
 
   return {
     period_start: periodStart,
@@ -305,6 +329,7 @@ export function computeLiquidityState(
     transfer_dependency_ratio: Math.round(transferDependencyRatio * 1000) / 1000,
     owner_support_ratio: Math.round(ownerSupportRatio * 1000) / 1000,
     operating_dependency_ratio: Math.round(operatingDependencyRatio * 1000) / 1000,
+    liquidity_regime: liquidityRegime,
     excluded_cash: r2(excludedCash),
   }
 }
@@ -419,6 +444,9 @@ export function detectTransitions(
       : `Concentration is ${concCurrent} (top customer ${revenue.top_customer_pct}%)`,
     current_band: concCurrent,
     previous_band: concPrev,
+    current_state: concCurrent,
+    previous_state: concPrev,
+    regime_change: !!concTransitioned,
     current_value: revenue.top_customer_pct,
     previous_value: previousRevenue?.top_customer_pct ?? null,
     threshold: 50,
@@ -430,14 +458,20 @@ export function detectTransitions(
   const spendRatio = prevSpend > 0 ? spend.total_spend / prevSpend : 1
   const spikeCurrent = spendSpikeBand(spendRatio)
   const spikePrev: SeverityBand = "low"
+  const spikeTransitioned = previousSpend && bandTransitioned(spikeCurrent, spikePrev)
   signals.push({
     signal: "abnormal_outflow_spike",
     severity: spikeCurrent === "critical" || spikeCurrent === "high" ? "critical" : spikeCurrent === "elevated" ? "warning" : "info",
-    description: spikeCurrent !== "low"
-      ? `Spend spike ${spikeCurrent} — ${Math.round(spendRatio * 100)}% of prior period`
-      : `Spend is stable at ${Math.round(spendRatio * 100)}% of prior period`,
+    description: spikeTransitioned
+      ? `Spend moved from stable → ${spikeCurrent} (${Math.round(spendRatio * 100)}% of prior)`
+      : spikeCurrent !== "low"
+        ? `Spend spike ${spikeCurrent} — ${Math.round(spendRatio * 100)}% of prior period`
+        : `Spend is stable at ${Math.round(spendRatio * 100)}% of prior period`,
     current_band: spikeCurrent,
     previous_band: previousSpend ? spikePrev : null,
+    current_state: spikeCurrent,
+    previous_state: previousSpend ? spikePrev : null,
+    regime_change: !!spikeTransitioned,
     current_value: Math.round(spendRatio * 100),
     previous_value: 100,
     threshold: 150,
@@ -459,32 +493,35 @@ export function detectTransitions(
       : `Owner support is ${ownerCurrent} (${Math.round(ownerPct)}% of inflows)`,
     current_band: ownerCurrent,
     previous_band: ownerPrev,
+    current_state: ownerCurrent,
+    previous_state: ownerPrev,
+    regime_change: !!ownerTransitioned,
     current_value: Math.round(ownerPct),
     previous_value: prevOwnerPct !== null ? Math.round(prevOwnerPct) : null,
     threshold: 25,
     triggered: ownerTransitioned || ownerCurrent === "high" || ownerCurrent === "critical",
   })
 
-  // 4. Liquidity tightening
-  const netRatio = liquidity.total_inflows > 0 ? liquidity.period_net_cash_flow / liquidity.total_inflows : 0
-  const liqCurrent = liquidityBand(netRatio)
-  const prevNetRatio = previousLiquidity && previousLiquidity.total_inflows > 0
-    ? previousLiquidity.period_net_cash_flow / previousLiquidity.total_inflows : null
-  const liqPrev = prevNetRatio !== null ? liquidityBand(prevNetRatio) : null
-  const liqTransitioned = bandTransitioned(liqCurrent, liqPrev)
-  const liqDir = bandDirection(liqCurrent, liqPrev)
+  // 4. Liquidity regime (strong / stable / tightening) — the real transition
+  const prevRegime = previousLiquidity?.liquidity_regime ?? null
+  const regimeChanged = prevRegime !== null && liquidity.liquidity_regime !== prevRegime
+  const regimeLabel = (r: LiquidityRegime) => r === "strong" ? "strong" : r === "stable" ? "stable" : "tightening"
   signals.push({
-    signal: "liquidity_tightening",
-    severity: liqCurrent === "critical" || liqCurrent === "high" ? "critical" : liqCurrent === "elevated" ? "warning" : "info",
-    description: liqTransitioned && liqPrev
-      ? `Liquidity ${liqDir}: ${liqPrev} → ${liqCurrent} (net ${Math.round(netRatio * 100)}% of inflows)`
-      : `Liquidity is ${liqCurrent} (net ${Math.round(netRatio * 100)}% of inflows)`,
-    current_band: liqCurrent,
-    previous_band: liqPrev,
-    current_value: Math.round(netRatio * 100),
-    previous_value: prevNetRatio !== null ? Math.round(prevNetRatio * 100) : null,
-    threshold: 5,
-    triggered: liqTransitioned || liqCurrent === "high" || liqCurrent === "critical",
+    signal: "liquidity_regime",
+    severity: liquidity.liquidity_regime === "tightening" ? "warning" : liquidity.liquidity_regime === "strong" ? "info" : "info",
+    description: regimeChanged && prevRegime
+      ? `Liquidity moved from ${regimeLabel(prevRegime)} → ${regimeLabel(liquidity.liquidity_regime)}`
+      : `Liquidity is ${regimeLabel(liquidity.liquidity_regime)} (operating surplus ${Math.round((liquidity.net_operating / (liquidity.total_inflows || 1)) * 100)}% of inflows)`,
+    current_band: liquidity.liquidity_regime === "strong" ? "low" : liquidity.liquidity_regime === "stable" ? "moderate" : "elevated",
+    previous_band: prevRegime ? (prevRegime === "strong" ? "low" : prevRegime === "stable" ? "moderate" : "elevated") : null,
+    current_state: regimeLabel(liquidity.liquidity_regime),
+    previous_state: prevRegime ? regimeLabel(prevRegime) : null,
+    regime_change: !!regimeChanged,
+    current_value: Math.round((liquidity.net_operating / (liquidity.total_inflows || 1)) * 100),
+    previous_value: previousLiquidity && previousLiquidity.total_inflows > 0
+      ? Math.round((previousLiquidity.net_operating / previousLiquidity.total_inflows) * 100) : null,
+    threshold: 20,
+    triggered: regimeChanged || liquidity.liquidity_regime === "tightening",
   })
 
   // 5. Settlement drag
@@ -504,29 +541,71 @@ export function detectTransitions(
       : `Settlement is ${settleCurrent} (${Math.round(settlePct)}% of inflows)`,
     current_band: settleCurrent,
     previous_band: settlePrev,
+    current_state: settleCurrent,
+    previous_state: settlePrev,
+    regime_change: !!settleTransitioned,
     current_value: Math.round(settlePct),
     previous_value: prevSettlePct !== null ? Math.round(prevSettlePct) : null,
     threshold: 30,
     triggered: settleTransitioned,
   })
 
-  // 6. Operating dependency (new killer metric as transition)
+  // 6. Operating dependency (killer metric)
   const opDepPct = liquidity.operating_dependency_ratio * 100
+  const opBand = opDepPct >= 80 ? "low" : opDepPct >= 60 ? "moderate" : opDepPct >= 40 ? "elevated" : "high"
+  const prevOpPct = previousLiquidity ? previousLiquidity.operating_dependency_ratio * 100 : null
+  const prevOpBand = prevOpPct !== null ? (prevOpPct >= 80 ? "low" : prevOpPct >= 60 ? "moderate" : prevOpPct >= 40 ? "elevated" : "high") : null
   signals.push({
     signal: "operating_dependency",
     severity: opDepPct < 50 ? "warning" : "info",
     description: `Business is ${Math.round(opDepPct)}% operating-driven, ${Math.round(100 - opDepPct)}% supported by non-operating flows`,
-    current_band: opDepPct >= 80 ? "low" : opDepPct >= 60 ? "moderate" : opDepPct >= 40 ? "elevated" : "high",
-    previous_band: previousLiquidity ? (
-      previousLiquidity.operating_dependency_ratio * 100 >= 80 ? "low" :
-      previousLiquidity.operating_dependency_ratio * 100 >= 60 ? "moderate" :
-      previousLiquidity.operating_dependency_ratio * 100 >= 40 ? "elevated" : "high"
-    ) : null,
+    current_band: opBand,
+    previous_band: prevOpBand,
+    current_state: `${Math.round(opDepPct)}% operating`,
+    previous_state: prevOpPct !== null ? `${Math.round(prevOpPct)}% operating` : null,
+    regime_change: prevOpBand !== null && opBand !== prevOpBand,
     current_value: Math.round(opDepPct),
-    previous_value: previousLiquidity ? Math.round(previousLiquidity.operating_dependency_ratio * 100) : null,
+    previous_value: prevOpPct !== null ? Math.round(prevOpPct) : null,
     threshold: 60,
     triggered: opDepPct < 60,
   })
 
   return signals
+}
+
+// ─── Insight Block ───────────────────────────────────────────────────
+
+export function computeInsightBlock(
+  revenue: RevenueState,
+  spend: SpendState,
+  liquidity: LiquidityState,
+): string {
+  const parts: string[] = []
+
+  const concLabel = revenue.top_customer_pct > 50 ? "highly" : revenue.top_customer_pct > 35 ? "moderately" : "lightly"
+  const top2 = revenue.revenue_by_customer.slice(0, 2).reduce((s, c) => s + c.total, 0)
+  const top2Pct = revenue.gross_revenue > 0 ? Math.round((top2 / revenue.gross_revenue) * 100) : 0
+  parts.push(`Revenue is ${concLabel} concentrated, with top ${revenue.revenue_by_customer.length >= 2 ? "2" : "1"} customer${revenue.revenue_by_customer.length >= 2 ? "s" : ""} contributing ~${top2Pct}%.`)
+
+  const opPct = Math.round(liquidity.operating_dependency_ratio * 100)
+  const transferPct = Math.round(liquidity.transfer_dependency_ratio * 100)
+  if (opPct >= 70) {
+    parts.push(`Cash flow is strong and primarily operating-driven (${opPct}%).`)
+  } else if (opPct >= 50) {
+    parts.push(`Cash flow is ${opPct}% operating-driven.`)
+  } else {
+    parts.push(`Cash flow is ${100 - opPct}% supported by non-operating flows.`)
+  }
+  if (transferPct > 15) {
+    parts.push(`Internal transfers support ~${transferPct}% of liquidity.`)
+  }
+
+  const vendorConc = spend.top_vendor_pct > 30 ? "highly" : spend.top_vendor_pct > 20 ? "moderately" : "lightly"
+  parts.push(`Vendor spend is ${vendorConc} concentrated, with the top supplier accounting for ${Math.round(spend.top_vendor_pct)}% of costs.`)
+
+  if (revenue.repeat_revenue_ratio >= 0.5) {
+    parts.push(`${Math.round(revenue.repeat_revenue_ratio * 100)}% of revenue is repeat.`)
+  }
+
+  return parts.join(" ")
 }

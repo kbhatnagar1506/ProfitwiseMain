@@ -15,6 +15,7 @@ export type RevenueState = {
   avg_receipt: number
   top_customer_pct: number
   concentration_index: number
+  repeat_revenue_ratio: number
 
   revenue_by_customer: { entity_id: string | null; name: string; total: number; count: number }[]
   provisional_revenue: number
@@ -35,6 +36,7 @@ export type SpendState = {
 
   total_opex: number
   total_cogs: number
+  direct_cost_candidates: number
   total_spend: number
 
   payroll: number
@@ -67,6 +69,8 @@ export type AccountCash = {
   movement_count: number
 }
 
+export type LiquidityRegime = "strong" | "stable" | "tightening"
+
 export type LiquidityState = {
   period_start: string
   period_end: string
@@ -95,6 +99,7 @@ export type LiquidityState = {
   transfer_dependency_ratio: number
   owner_support_ratio: number
   operating_dependency_ratio: number
+  liquidity_regime: LiquidityRegime
   excluded_cash: number
 }
 
@@ -112,6 +117,9 @@ export type TransitionSignal = {
   description: string
   current_band: SeverityBand
   previous_band: SeverityBand | null
+  current_state: string
+  previous_state: string | null
+  regime_change: boolean
   current_value: number
   previous_value: number | null
   threshold: number
@@ -124,5 +132,6 @@ export type BusinessState = {
   liquidity: LiquidityState
   transitions: TransitionSignal[]
   state_confidence: StateConfidence
+  insight_block: string
   computed_at: string
 }

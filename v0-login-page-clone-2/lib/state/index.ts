@@ -6,7 +6,7 @@
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
-import { computeRevenueState, computeSpendState, computeLiquidityState, detectTransitions, computeStateConfidence } from "./compute"
+import { computeRevenueState, computeSpendState, computeLiquidityState, detectTransitions, computeStateConfidence, computeInsightBlock } from "./compute"
 import type { BusinessState } from "./types"
 
 type TagRow = {
@@ -41,7 +41,10 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
   const movementRows = await query<CanonicalMovement & { movement_type: string }>(
     `SELECT m.id, m.user_id, m.date AS occurred_at, m.direction, m.amount::float,
             m.currency, m.raw_description, m.movement_type,
-            m.counterparty_entity_id AS entity_id, m.cash_account_id AS account_id,
+            m.counterparty_entity_id AS entity_id,
+            COALESCE(NULLIF(TRIM(m.cash_account_id), ''), 
+              (SELECT mo.account_name FROM movement_observations mo WHERE mo.movement_id = m.id AND mo.account_name IS NOT NULL AND TRIM(mo.account_name) != '' LIMIT 1)
+            ) AS account_id,
             m.pnl_eligible, m.confidence, m.review_needed AS needs_review,
             m.provenance, m.coalesced_group_id, m.metadata
      FROM movements m WHERE m.user_id = $1
@@ -134,6 +137,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
   const liquidity = computeLiquidityState(tagged, periodStart, periodEnd)
   const transitions = detectTransitions(revenue, spend, liquidity)
   const state_confidence = computeStateConfidence(tagged)
+  const insight_block = computeInsightBlock(revenue, spend, liquidity)
 
   return {
     revenue,
@@ -141,6 +145,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
     liquidity,
     transitions,
     state_confidence,
+    insight_block,
     computed_at: new Date().toISOString(),
   }
 }
