@@ -341,6 +341,69 @@ export type ForecastNarrative = {
   severity: "healthy" | "caution" | "danger"
 }
 
+// ─── Forecast Confidence ─────────────────────────────────────────────
+
+export type ForecastConfidence = {
+  score: number
+  label: "high" | "medium" | "low"
+  model_coverage: number
+  data_completeness: number
+  variance_penalty: number
+  reasons: string[]
+}
+
+// ─── Cash Runway ─────────────────────────────────────────────────────
+
+export type CashRunway = {
+  base_months: number | null
+  pessimistic_months: number | null
+  monthly_burn_rate: number
+  months_of_data: number
+}
+
+// ─── Sensitivity Analysis ────────────────────────────────────────────
+
+export type SensitivityDriver = {
+  entity: string
+  type: "customer" | "vendor" | "transfer" | "recurring" | "settlement"
+  impact_pct: number
+  direction: "positive" | "negative"
+  description: string
+}
+
+export type SensitivityAnalysis = {
+  drivers: SensitivityDriver[]
+  top_risk_driver: string
+  top_opportunity_driver: string
+}
+
+// ─── Intervention Engine ─────────────────────────────────────────────
+
+export type Intervention = {
+  id: string
+  label: string
+  type: "accelerate_collection" | "delay_payment" | "reduce_spend" | "increase_transfer"
+  entity: string | null
+  parameter_days: number | null
+  parameter_pct: number | null
+  impact_cash_14d: number
+  impact_cash_30d: number
+  impact_risk_reduction: number
+  description: string
+}
+
+// ─── Scenario Drivers ────────────────────────────────────────────────
+
+export type ScenarioDriver = {
+  factor: string
+  impact_amount: number
+  direction: "positive" | "negative"
+}
+
+export type ScenarioResultV2 = ScenarioResult & {
+  drivers: ScenarioDriver[]
+}
+
 export type CashflowForecast = {
   period_start: string
   forecast_horizon_months: number
@@ -353,6 +416,10 @@ export type CashflowForecast = {
   scenarios: ScenarioResult[]
   data_span_days: number
   computed_at: string
+  forecast_confidence: ForecastConfidence
+  cash_runway: CashRunway
+  sensitivity: SensitivityAnalysis
+  interventions: Intervention[]
 }
 
 export type BusinessState = {

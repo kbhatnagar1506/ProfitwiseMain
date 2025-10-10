@@ -34,10 +34,23 @@ import type {
   ForecastMonth,
   ScenarioResult,
   CashflowForecast,
+  ForecastConfidence,
+  CashRunway,
+  SensitivityDriver,
+  SensitivityAnalysis,
+  Intervention,
+  ScenarioDriver,
 } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
 type ComponentCategory = CashflowComponent["category"]
+
+function isInflow(m: TaggedMovement): boolean {
+  return m.direction === "inflow" || m.direction === ("in" as string)
+}
+function isOutflow(m: TaggedMovement): boolean {
+  return m.direction === "outflow" || m.direction === ("out" as string)
+}
 
 // ─── Utilities ──────────────────────────────────────────────────────
 
@@ -81,7 +94,7 @@ function toDateStr(d: unknown): string {
 function categorize(m: TaggedMovement): { category: ComponentCategory; direction: "in" | "out"; label: string } | null {
   const t = m.tag
   if (t.state_inclusion_policy === "exclude_and_review") return null
-  const dir = m.direction === "in" ? "in" as const : "out" as const
+  const dir = isInflow(m) ? "in" as const : "out" as const
 
   switch (t.economic_class) {
     case "customer_receipt": return { category: "customer_receipts", direction: "in", label: "Customer receipts" }
@@ -361,7 +374,7 @@ function buildSettlementModel(movements: TaggedMovement[]): SettlementModel {
   for (const m of movements) {
     const t = m.tag
     if (t.state_inclusion_policy === "exclude_and_review") continue
-    if (t.cashflow_bucket !== "settlement" || m.direction !== "in") continue
+    if (t.cashflow_bucket !== "settlement" || !isInflow(m)) continue
     const d = m.occurred_at
     if (!d) continue
     const ts = new Date(d).getTime()
@@ -469,7 +482,7 @@ function buildRecurringFixed(movements: TaggedMovement[]): BehavioralModels["rec
 
   for (const m of movements) {
     if (!m.tag.is_recurring) continue
-    if (m.direction !== "out") continue
+    if (!isOutflow(m)) continue
     if (m.tag.state_inclusion_policy === "exclude_and_review") continue
 
     const label = (m.metadata?.counterparty as string) ?? m.raw_description ?? "unknown"
@@ -783,11 +796,14 @@ function buildComponent(bucket: ComponentBucket, dataSpanDays: number): Cashflow
   if ((behavior === "recurring" || behavior === "seasonal") && monthValues.length >= 3 && volatility < 0.5) confidence = "high"
   else if (monthValues.length >= 2 && volatility < 1.0) confidence = "medium"
 
+  const cappedTrend = Math.max(-2, Math.min(2, trend))
+  const cappedVolatility = Math.min(3, volatility)
+
   return {
     id: `${bucket.category}_${bucket.direction}`,
     label: bucket.label, direction: bucket.direction, category: bucket.category,
     behavior, monthly_avg: r2(monthlyAvg), monthly_count: Math.round(monthlyCount * 10) / 10,
-    trend: Math.round(trend * 1000) / 1000, volatility: Math.round(volatility * 1000) / 1000, confidence,
+    trend: Math.round(cappedTrend * 1000) / 1000, volatility: Math.round(cappedVolatility * 1000) / 1000, confidence,
     seasonal_index,
   }
 }
@@ -1315,7 +1331,11 @@ function generateNarrative(
   } else if (models.settlement.avg_delay_days > 3 && models.settlement.confidence !== "insufficient") {
     insight = `Settlement cadence averaging ${models.settlement.avg_delay_days.toFixed(1)} days between payouts affects cash arrival timing`
   } else if (outflowTotal > 0) {
-    const recurringPct = outflowEvents.filter((e) => e.type === "recurring_expense").reduce((s, e) => s + e.amount, 0) / outflowTotal
+    const recurringVendorNames = new Set(models.vendors.filter((v) => v.is_recurring).map((v) => v.name))
+    const recurringAmount = outflowEvents.filter((e) =>
+      e.type === "recurring_expense" || (e.type === "vendor_payment" && recurringVendorNames.has(e.entity))
+    ).reduce((s, e) => s + e.amount, 0)
+    const recurringPct = recurringAmount / outflowTotal
     insight = `${Math.round(recurringPct * 100)}% of expected outflows are recurring obligations — spend base is ${recurringPct > 0.6 ? "highly fixed" : "moderately flexible"}`
   } else {
     insight = "Cash position is primarily driven by inflow timing — outflow obligations are minimal"
@@ -1361,6 +1381,325 @@ function generateNarrative(
   return { forecast, risk, insight, action, severity }
 }
 
+// ─── Step 9: Forecast Confidence ─────────────────────────────────────
+
+function computeForecastConfidence(
+  models: BehavioralModels,
+  components: CashflowComponent[],
+  events: ForecastEvent[],
+  dataSpanDays: number,
+): ForecastConfidence {
+  const reasons: string[] = []
+
+  // Model coverage: what % of cashflow categories have at least a medium-confidence model?
+  const totalCategories = components.length
+  const coveredCategories = components.filter((c) => c.confidence !== "low").length
+  const modelCoverage = totalCategories > 0 ? coveredCategories / totalCategories : 0
+
+  // Data completeness: how many months of history, entity coverage
+  const monthsOfData = Math.max(1, dataSpanDays / 30)
+  const dataCompleteness = Math.min(1, monthsOfData / 6)
+  if (monthsOfData < 3) reasons.push("Less than 3 months of transaction history")
+  if (monthsOfData < 1) reasons.push("Less than 1 month of data — forecast is speculative")
+
+  // Variance penalty: high-volatility components reduce confidence
+  const avgVolatility = components.length > 0
+    ? components.reduce((s, c) => s + c.volatility, 0) / components.length
+    : 0
+  const variancePenalty = Math.min(0.4, avgVolatility * 0.3)
+  if (avgVolatility > 0.8) reasons.push("High volatility in cashflow components")
+
+  // Customer model quality
+  const highConfCustomers = models.customers.filter((c) => c.confidence === "high").length
+  const customerCoverage = models.customers.length > 0 ? highConfCustomers / models.customers.length : 0
+  if (customerCoverage < 0.3) reasons.push("Most customer payment models are low confidence")
+
+  // Event density
+  if (events.length < 5) reasons.push("Very few predicted events in next 30 days")
+
+  const rawScore = (modelCoverage * 0.3 + dataCompleteness * 0.35 + customerCoverage * 0.15 + 0.2) - variancePenalty
+  const score = Math.max(0.05, Math.min(0.99, rawScore))
+
+  const label: ForecastConfidence["label"] = score >= 0.7 ? "high" : score >= 0.45 ? "medium" : "low"
+  if (reasons.length === 0) reasons.push("Forecast is based on sufficient data and stable models")
+
+  return {
+    score: r2(score),
+    label,
+    model_coverage: r2(modelCoverage),
+    data_completeness: r2(dataCompleteness),
+    variance_penalty: r2(variancePenalty),
+    reasons,
+  }
+}
+
+// ─── Step 10: Cash Runway ────────────────────────────────────────────
+
+function computeCashRunway(
+  scenarios: ScenarioResult[],
+  startingCash: number,
+  dataSpanDays: number,
+): CashRunway {
+  const baseScenario = scenarios.find((s) => s.scenario === "base")
+  const pessScenario = scenarios.find((s) => s.scenario === "pessimistic")
+
+  // Monthly burn rate from base scenario
+  const baseMonths = baseScenario?.months ?? []
+  const totalNet = baseMonths.reduce((s, m) => s + m.net, 0)
+  const avgMonthlyNet = baseMonths.length > 0 ? totalNet / baseMonths.length : 0
+  const monthlyBurn = avgMonthlyNet < 0 ? Math.abs(avgMonthlyNet) : 0
+
+  let baseRunway: number | null = null
+  if (monthlyBurn > 0) {
+    baseRunway = r2(startingCash / monthlyBurn)
+  } else if (avgMonthlyNet >= 0) {
+    baseRunway = null // cash positive — no runway concern
+  }
+
+  let pessRunway: number | null = pessScenario?.runway_months ?? null
+  if (pessRunway === null && pessScenario) {
+    const pessMonths = pessScenario.months
+    const pessNet = pessMonths.reduce((s, m) => s + m.net, 0) / Math.max(1, pessMonths.length)
+    if (pessNet < 0) pessRunway = r2(startingCash / Math.abs(pessNet))
+  }
+
+  return {
+    base_months: baseRunway,
+    pessimistic_months: pessRunway,
+    monthly_burn_rate: r2(monthlyBurn),
+    months_of_data: r2(dataSpanDays / 30),
+  }
+}
+
+// ─── Step 11: Sensitivity Analysis ───────────────────────────────────
+
+function computeSensitivity(
+  events: ForecastEvent[],
+  models: BehavioralModels,
+  mc: MonteCarloResult,
+  startingCash: number,
+): SensitivityAnalysis {
+  const drivers: SensitivityDriver[] = []
+  const baseCash30 = mc.expected_cash_30d
+  const totalCashFlow = Math.abs(baseCash30 - startingCash) || 1
+
+  // Customer impact: remove each customer's events and measure delta
+  for (const c of models.customers.slice(0, 5)) {
+    const customerEvents = events.filter((e) => e.entity === c.name && e.direction === "in")
+    const customerCash = customerEvents.reduce((s, e) => s + e.amount * e.probability, 0)
+    if (customerCash <= 0) continue
+    const impactPct = r2((customerCash / Math.max(1, Math.abs(baseCash30))) * 100)
+    drivers.push({
+      entity: c.name,
+      type: "customer",
+      impact_pct: Math.min(100, impactPct),
+      direction: "positive",
+      description: `${c.name} contributes ~$${Math.round(customerCash).toLocaleString()} in expected inflows`,
+    })
+  }
+
+  // Vendor impact: largest outflow vendors
+  for (const v of models.vendors.slice(0, 5)) {
+    const vendorEvents = events.filter((e) => e.entity === v.name && e.direction === "out")
+    const vendorCash = vendorEvents.reduce((s, e) => s + e.amount * e.probability, 0)
+    if (vendorCash <= 0) continue
+    const impactPct = r2((vendorCash / Math.max(1, Math.abs(baseCash30))) * 100)
+    drivers.push({
+      entity: v.name,
+      type: "vendor",
+      impact_pct: Math.min(100, impactPct),
+      direction: "negative",
+      description: `${v.name} drains ~$${Math.round(vendorCash).toLocaleString()} in expected outflows`,
+    })
+  }
+
+  // Transfer impact
+  const transferEvents = events.filter((e) => e.type === "transfer")
+  if (transferEvents.length > 0) {
+    const transferCash = transferEvents.reduce((s, e) => s + e.amount * e.probability, 0)
+    const impactPct = r2((transferCash / Math.max(1, Math.abs(baseCash30))) * 100)
+    drivers.push({
+      entity: "Internal transfers",
+      type: "transfer",
+      impact_pct: Math.min(100, impactPct),
+      direction: "positive",
+      description: `Transfers contribute ~$${Math.round(transferCash).toLocaleString()} — driven by ${models.transfers.trigger_pattern} pattern`,
+    })
+  }
+
+  // Recurring obligations impact
+  const recurringCash = models.recurring_fixed.reduce((s, r) => s + r.monthly_amount, 0)
+  if (recurringCash > 0) {
+    const impactPct = r2((recurringCash / Math.max(1, Math.abs(baseCash30))) * 100)
+    drivers.push({
+      entity: "Recurring obligations",
+      type: "recurring",
+      impact_pct: Math.min(100, impactPct),
+      direction: "negative",
+      description: `${models.recurring_fixed.length} recurring obligations total ~$${Math.round(recurringCash).toLocaleString()}/mo`,
+    })
+  }
+
+  drivers.sort((a, b) => b.impact_pct - a.impact_pct)
+
+  const topRisk = drivers.find((d) => d.direction === "negative")?.entity ?? "None identified"
+  const topOpp = drivers.find((d) => d.direction === "positive")?.entity ?? "None identified"
+
+  return {
+    drivers: drivers.slice(0, 8),
+    top_risk_driver: topRisk,
+    top_opportunity_driver: topOpp,
+  }
+}
+
+// ─── Step 12: Intervention Engine ────────────────────────────────────
+
+function computeInterventions(
+  events: ForecastEvent[],
+  models: BehavioralModels,
+  mc: MonteCarloResult,
+  startingCash: number,
+): Intervention[] {
+  const interventions: Intervention[] = []
+  const baseCash14 = mc.day_scenarios.find((s) => s.scenario === "base")?.cash_14d ?? mc.expected_cash_30d
+  const baseCash30 = mc.expected_cash_30d
+  const baseRisk30 = mc.prob_below_zero_30d
+
+  // Accelerate top customer collections (3 days earlier)
+  for (const c of models.customers.slice(0, 3)) {
+    if (c.probability_of_next < 0.3) continue
+    const expectedCash = c.avg_amount * c.probability_of_next
+    if (expectedCash < 100) continue
+    const impact14 = r2(expectedCash * 0.7)
+    const impact30 = r2(expectedCash * 0.5)
+    const riskReduction = baseRisk30 > 0 ? r2(Math.min(50, (expectedCash / Math.max(1, startingCash)) * 100)) : 0
+
+    interventions.push({
+      id: `accel_${c.entity_id}`,
+      label: `Accelerate ${c.name} by 3 days`,
+      type: "accelerate_collection",
+      entity: c.name,
+      parameter_days: 3,
+      parameter_pct: null,
+      impact_cash_14d: impact14,
+      impact_cash_30d: impact30,
+      impact_risk_reduction: riskReduction,
+      description: `If ${c.name} pays 3 days earlier, expected cash improves by ~$${Math.round(impact14).toLocaleString()} at day 14`,
+    })
+  }
+
+  // Delay top vendor payments (5 days)
+  for (const v of models.vendors.slice(0, 3)) {
+    if (!v.is_recurring && v.payment_count < 3) continue
+    const monthlyCash = v.avg_amount
+    if (monthlyCash < 100) continue
+    const impact14 = r2(monthlyCash * 0.5)
+    const impact30 = r2(monthlyCash * 0.3)
+    const riskReduction = baseRisk30 > 0 ? r2(Math.min(30, (monthlyCash / Math.max(1, startingCash)) * 80)) : 0
+
+    interventions.push({
+      id: `delay_${v.entity_id}`,
+      label: `Delay ${v.name} by 5 days`,
+      type: "delay_payment",
+      entity: v.name,
+      parameter_days: 5,
+      parameter_pct: null,
+      impact_cash_14d: impact14,
+      impact_cash_30d: impact30,
+      impact_risk_reduction: riskReduction,
+      description: `Delaying ${v.name} payments by 5 days frees ~$${Math.round(impact14).toLocaleString()} in the near term`,
+    })
+  }
+
+  // Reduce overall spend by 10%
+  const totalOutflowEvents = events.filter((e) => e.direction === "out")
+  const totalOutflow30 = totalOutflowEvents.reduce((s, e) => s + e.amount * e.probability, 0)
+  if (totalOutflow30 > 0) {
+    const savings = r2(totalOutflow30 * 0.1)
+    interventions.push({
+      id: "reduce_spend_10",
+      label: "Reduce overall spend by 10%",
+      type: "reduce_spend",
+      entity: null,
+      parameter_days: null,
+      parameter_pct: 10,
+      impact_cash_14d: r2(savings * 0.5),
+      impact_cash_30d: savings,
+      impact_risk_reduction: baseRisk30 > 0 ? r2(Math.min(40, (savings / Math.max(1, startingCash)) * 100)) : 0,
+      description: `A 10% spend reduction saves ~$${Math.round(savings).toLocaleString()} over 30 days`,
+    })
+  }
+
+  // Sort by impact
+  interventions.sort((a, b) => b.impact_cash_14d - a.impact_cash_14d)
+  return interventions.slice(0, 6)
+}
+
+// ─── Step 13: Scenario Drivers (WHY pessimistic is bad) ──────────────
+
+function computeScenarioDrivers(
+  models: BehavioralModels,
+  events: ForecastEvent[],
+  baseResult: ScenarioResult,
+  pessResult: ScenarioResult,
+): ScenarioDriver[] {
+  const drivers: ScenarioDriver[] = []
+  const baseEnding = baseResult.ending_cash
+  const pessEnding = pessResult.ending_cash
+  const gap = baseEnding - pessEnding
+  if (gap <= 0) return drivers
+
+  // Customer delay impact
+  const customerInflows = events.filter((e) => e.direction === "in" && e.source_model === "customer")
+  const customerTotal = customerInflows.reduce((s, e) => s + e.amount * e.probability, 0)
+  if (customerTotal > 0) {
+    const delayedAmount = r2(customerTotal * 0.25)
+    drivers.push({
+      factor: `Delayed customer payments (top ${Math.min(3, models.customers.length)} customers)`,
+      impact_amount: delayedAmount,
+      direction: "negative",
+    })
+  }
+
+  // Higher vendor outflows
+  const vendorOutflows = events.filter((e) => e.direction === "out" && e.source_model === "vendor")
+  const vendorTotal = vendorOutflows.reduce((s, e) => s + e.amount * e.probability, 0)
+  if (vendorTotal > 0) {
+    const higherCost = r2(vendorTotal * 0.12)
+    drivers.push({
+      factor: "Higher vendor costs (+12% stress)",
+      impact_amount: higherCost,
+      direction: "negative",
+    })
+  }
+
+  // Missing settlements
+  if (models.settlement.sample_count > 0) {
+    const settlementEvents = events.filter((e) => e.type === "settlement")
+    const settlementCash = settlementEvents.reduce((s, e) => s + e.amount * e.probability, 0)
+    if (settlementCash > 0) {
+      drivers.push({
+        factor: "Settlement timing delays",
+        impact_amount: r2(settlementCash * 0.15),
+        direction: "negative",
+      })
+    }
+  }
+
+  // No offsetting inflows
+  const recurringIn = events.filter((e) => e.direction === "in" && e.probability >= 0.9)
+  if (recurringIn.length === 0) {
+    drivers.push({
+      factor: "No highly predictable inflows to offset",
+      impact_amount: 0,
+      direction: "negative",
+    })
+  }
+
+  drivers.sort((a, b) => b.impact_amount - a.impact_amount)
+  return drivers
+}
+
 // ─── Public API ─────────────────────────────────────────────────────
 
 export function computeCashflowForecast(
@@ -1398,6 +1737,29 @@ export function computeCashflowForecast(
     runScenario(behavioral_models, components, horizonMonths, startingCash, config)
   )
 
+  // Forecast confidence
+  const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays)
+
+  // Cash runway
+  const cash_runway = computeCashRunway(scenarios, startingCash, dataSpanDays)
+
+  // Sensitivity analysis
+  const sensitivity = computeSensitivity(events_30d, behavioral_models, monte_carlo, startingCash)
+
+  // Intervention engine
+  const interventions = computeInterventions(events_30d, behavioral_models, monte_carlo, startingCash)
+
+  // Scenario drivers (WHY the pessimistic scenario is bad)
+  const baseScenario = scenarios.find((s) => s.scenario === "base")
+  const pessScenario = scenarios.find((s) => s.scenario === "pessimistic")
+  const pessDrivers = baseScenario && pessScenario
+    ? computeScenarioDrivers(behavioral_models, events_30d, baseScenario, pessScenario)
+    : []
+  // Attach drivers to pessimistic scenario (extend the object)
+  if (pessScenario && pessDrivers.length > 0) {
+    (pessScenario as ScenarioResult & { drivers?: ScenarioDriver[] }).drivers = pessDrivers
+  }
+
   return {
     period_start: periodStart,
     forecast_horizon_months: horizonMonths,
@@ -1410,5 +1772,9 @@ export function computeCashflowForecast(
     scenarios,
     data_span_days: dataSpanDays,
     computed_at: new Date().toISOString(),
+    forecast_confidence,
+    cash_runway,
+    sensitivity,
+    interventions,
   }
 }

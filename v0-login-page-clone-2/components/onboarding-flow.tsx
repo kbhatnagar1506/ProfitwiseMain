@@ -265,7 +265,14 @@ export function OnboardingFlow({
   type DayScenarioSnapshot = { scenario: "base" | "conservative" | "aggressive"; label: string; cash_14d: number; cash_30d: number; min_cash: number; min_cash_day: number }
   type MonteCarloResult = { simulations: number; percentiles: MonteCarloPercentile[]; prob_below_zero_14d: number; prob_below_zero_30d: number; prob_above_starting_30d: number; expected_cash_30d: number; worst_case_cash_30d: number; best_case_cash_30d: number; day_scenarios: DayScenarioSnapshot[] }
   type ForecastNarrative = { forecast: string; risk: string; insight: string; action: string; severity: "healthy" | "caution" | "danger" }
-  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string }
+  type ForecastConfidence = { score: number; label: "high" | "medium" | "low"; model_coverage: number; data_completeness: number; variance_penalty: number; reasons: string[] }
+  type CashRunway = { base_months: number | null; pessimistic_months: number | null; monthly_burn_rate: number; months_of_data: number }
+  type SensitivityDriver = { entity: string; type: string; impact_pct: number; direction: "positive" | "negative"; description: string }
+  type SensitivityAnalysis = { drivers: SensitivityDriver[]; top_risk_driver: string; top_opportunity_driver: string }
+  type Intervention = { id: string; label: string; type: string; entity: string | null; parameter_days: number | null; parameter_pct: number | null; impact_cash_14d: number; impact_cash_30d: number; impact_risk_reduction: number; description: string }
+  type ScenarioDriver = { factor: string; impact_amount: number; direction: "positive" | "negative" }
+  type ScenarioResultV2 = ScenarioResult & { drivers?: ScenarioDriver[] }
+  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[] }
   const [forecastData, setForecastData] = useState<CashflowForecast | null>(null)
   const [forecastLoading, setForecastLoading] = useState(false)
   const [forecastError, setForecastError] = useState<string | null>(null)
@@ -3223,11 +3230,16 @@ export function OnboardingFlow({
 
             {!forecastLoading && forecastData && (
               <div className="space-y-6">
-                {/* ─── Data Quality ─── */}
-                <div className="flex items-center gap-4 text-xs text-gray-500">
+                {/* ─── Data Quality + Forecast Confidence ─── */}
+                <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
                   <span>Data span: {forecastData.data_span_days}d</span>
                   <span>Components: {forecastData.components.length}</span>
                   <span>Horizon: {forecastData.forecast_horizon_months} months</span>
+                  {forecastData.forecast_confidence && (
+                    <span className={`font-semibold ${forecastData.forecast_confidence.label === "high" ? "text-emerald-400" : forecastData.forecast_confidence.label === "medium" ? "text-amber-400" : "text-red-400"}`}>
+                      Forecast confidence: {Math.round(forecastData.forecast_confidence.score * 100)}% ({forecastData.forecast_confidence.label})
+                    </span>
+                  )}
                 </div>
 
                 {/* ─── Narrative: The Final Output ─── */}
@@ -3697,7 +3709,9 @@ export function OnboardingFlow({
                         <div className="text-right shrink-0">
                           <div className="text-sm font-mono text-white">{money(c.monthly_avg)}<span className="text-gray-500">/mo</span></div>
                           <div className="text-[10px] text-gray-500">
-                            trend {c.trend > 0 ? "+" : ""}{(c.trend * 100).toFixed(1)}% · vol {(c.volatility * 100).toFixed(0)}%
+                            {Math.abs(c.trend) < 0.05 ? "stable" : c.trend > 0.3 ? "↑ growing" : c.trend > 0 ? "↗ slight growth" : c.trend < -0.3 ? "↓ declining" : "↘ slight decline"}
+                            {" · "}
+                            {c.volatility < 0.2 ? "steady" : c.volatility < 0.5 ? "moderate var." : c.volatility < 1 ? "high var." : "very volatile"}
                           </div>
                         </div>
                       </div>
@@ -3730,6 +3744,22 @@ export function OnboardingFlow({
                       </div>
                     )}
 
+                    {/* Scenario Drivers (WHY) */}
+                    {(sc as ScenarioResultV2).drivers && (sc as ScenarioResultV2).drivers!.length > 0 && (
+                      <div className="mb-3 bg-black/20 rounded-lg p-3">
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1.5">Driven by</div>
+                        <div className="space-y-1">
+                          {(sc as ScenarioResultV2).drivers!.map((d, i) => (
+                            <div key={i} className="flex items-center gap-2 text-xs">
+                              <span className="text-red-400">•</span>
+                              <span className="text-gray-300">{d.factor}</span>
+                              {d.impact_amount > 0 && <span className="text-red-400 font-mono ml-auto">-{money(d.impact_amount)}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Monthly projection table */}
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs">
@@ -3757,6 +3787,134 @@ export function OnboardingFlow({
                     </div>
                   </div>
                 ))}
+
+                {/* ─── Cash Runway ─── */}
+                {forecastData.cash_runway && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-white uppercase tracking-wider mb-3">Cash Runway</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-white/5 rounded-lg p-3 text-center">
+                        <div className="text-xs text-gray-500 mb-1">Base case</div>
+                        <div className={`text-xl font-bold font-mono ${forecastData.cash_runway.base_months === null ? "text-emerald-400" : forecastData.cash_runway.base_months > 6 ? "text-emerald-400" : forecastData.cash_runway.base_months > 3 ? "text-amber-400" : "text-red-400"}`}>
+                          {forecastData.cash_runway.base_months === null ? "∞" : `${forecastData.cash_runway.base_months.toFixed(1)} mo`}
+                        </div>
+                        {forecastData.cash_runway.base_months === null && (
+                          <div className="text-[10px] text-emerald-400/70">Cash positive</div>
+                        )}
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-3 text-center">
+                        <div className="text-xs text-gray-500 mb-1">Pessimistic</div>
+                        <div className={`text-xl font-bold font-mono ${forecastData.cash_runway.pessimistic_months === null ? "text-emerald-400" : forecastData.cash_runway.pessimistic_months > 3 ? "text-amber-400" : "text-red-400"}`}>
+                          {forecastData.cash_runway.pessimistic_months === null ? "∞" : `${forecastData.cash_runway.pessimistic_months.toFixed(1)} mo`}
+                        </div>
+                        {forecastData.cash_runway.pessimistic_months !== null && forecastData.cash_runway.pessimistic_months <= 3 && (
+                          <div className="text-[10px] text-red-400/70">Needs attention</div>
+                        )}
+                      </div>
+                    </div>
+                    {forecastData.cash_runway.monthly_burn_rate > 0 && (
+                      <div className="mt-3 text-xs text-gray-500 text-center">
+                        Monthly burn rate: <span className="text-red-400 font-mono">{money(forecastData.cash_runway.monthly_burn_rate)}</span>/mo
+                        {" · "}Data: {forecastData.cash_runway.months_of_data.toFixed(1)} months
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ─── Sensitivity Analysis ─── */}
+                {forecastData.sensitivity && forecastData.sensitivity.drivers.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-white uppercase tracking-wider mb-1">Top Drivers of Cash Position</h3>
+                    <p className="text-xs text-gray-500 mb-4">Which entities move your cash the most</p>
+                    <div className="space-y-2">
+                      {forecastData.sensitivity.drivers.map((d, i) => (
+                        <div key={i} className="flex items-center gap-3 bg-white/5 rounded-lg px-3 py-2.5">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className={`text-sm font-bold ${d.direction === "positive" ? "text-emerald-400" : "text-red-400"}`}>
+                              {d.direction === "positive" ? "↑" : "↓"}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="text-sm text-white truncate">{d.entity}</div>
+                              <div className="text-[10px] text-gray-500">{d.description}</div>
+                            </div>
+                          </div>
+                          <div className="shrink-0">
+                            <div className={`text-sm font-bold font-mono ${d.direction === "positive" ? "text-emerald-400" : "text-red-400"}`}>
+                              {d.impact_pct.toFixed(1)}%
+                            </div>
+                            <div className="text-[10px] text-gray-500">{d.type}</div>
+                          </div>
+                          <div className="w-20 h-2 bg-white/10 rounded-full overflow-hidden shrink-0">
+                            <div
+                              className={`h-full rounded-full ${d.direction === "positive" ? "bg-emerald-500" : "bg-red-500"}`}
+                              style={{ width: `${Math.min(100, d.impact_pct)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Intervention Engine (What-If Scenarios) ─── */}
+                {forecastData.interventions && forecastData.interventions.length > 0 && (
+                  <div className="bg-white/5 border border-cyan-500/20 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wider mb-1">Control Levers</h3>
+                    <p className="text-xs text-gray-500 mb-4">Simulated interventions to improve your cash position</p>
+                    <div className="space-y-2">
+                      {forecastData.interventions.map((iv) => (
+                        <div key={iv.id} className="bg-white/5 rounded-lg px-4 py-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="text-sm text-white font-medium">{iv.label}</div>
+                            <div className="text-emerald-400 font-mono font-bold text-sm">
+                              +{money(iv.impact_cash_14d)}
+                              <span className="text-[10px] text-gray-500 font-normal ml-1">@14d</span>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-400 mb-2">{iv.description}</div>
+                          <div className="flex items-center gap-4 text-[10px] text-gray-500">
+                            <span>30d impact: <span className="text-emerald-400 font-mono">+{money(iv.impact_cash_30d)}</span></span>
+                            {iv.impact_risk_reduction > 0 && (
+                              <span>Risk reduction: <span className="text-cyan-400 font-mono">-{iv.impact_risk_reduction.toFixed(1)}%</span></span>
+                            )}
+                            {iv.parameter_days && <span>Shift: {iv.parameter_days}d</span>}
+                            {iv.parameter_pct && <span>Change: {iv.parameter_pct}%</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Forecast Confidence Details ─── */}
+                {forecastData.forecast_confidence && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">Forecast Confidence Breakdown</h3>
+                    <div className="grid grid-cols-3 gap-3 mb-3">
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500">Model coverage</div>
+                        <div className="text-sm font-mono text-white">{Math.round(forecastData.forecast_confidence.model_coverage * 100)}%</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500">Data completeness</div>
+                        <div className="text-sm font-mono text-white">{Math.round(forecastData.forecast_confidence.data_completeness * 100)}%</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500">Variance penalty</div>
+                        <div className="text-sm font-mono text-red-400">-{Math.round(forecastData.forecast_confidence.variance_penalty * 100)}%</div>
+                      </div>
+                    </div>
+                    {forecastData.forecast_confidence.reasons.length > 0 && (
+                      <div className="space-y-1">
+                        {forecastData.forecast_confidence.reasons.map((r, i) => (
+                          <div key={i} className="text-xs text-gray-400 flex items-center gap-1.5">
+                            <span className="text-gray-600">•</span> {r}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* ─── Refresh ─── */}
                 <div className="flex justify-end">
