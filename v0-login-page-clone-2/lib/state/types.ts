@@ -19,7 +19,6 @@ export type RevenueState = {
   revenue_by_customer: { entity_id: string | null; name: string; total: number; count: number }[]
   provisional_revenue: number
   excluded_revenue: number
-  excluded_contra: number
 }
 
 export type SpendBreakdownEntry = {
@@ -36,9 +35,6 @@ export type SpendState = {
 
   total_opex: number
   total_cogs: number
-  direct_cost_candidates: number
-  overhead_candidates: number
-  unresolved_spend_mix: number
   total_spend: number
 
   payroll: number
@@ -47,14 +43,16 @@ export type SpendState = {
   taxes: number
   processor_fees: number
 
+  recurring_obligations: number
+  recurring_obligation_count: number
+  non_recurring_spend: number
+
   vendor_count: number
   avg_payment: number
   top_vendor_pct: number
   supplier_concentration_index: number
 
   spend_by_vendor: SpendBreakdownEntry[]
-  recurring_obligations: number
-  recurring_obligation_count: number
   provisional_spend: number
   excluded_spend: number
 }
@@ -75,7 +73,7 @@ export type LiquidityState = {
 
   total_inflows: number
   total_outflows: number
-  net_cash_flow: number
+  period_net_cash_flow: number
 
   operating_inflows: number
   operating_outflows: number
@@ -96,7 +94,14 @@ export type LiquidityState = {
   cash_by_account: AccountCash[]
   transfer_dependency_ratio: number
   owner_support_ratio: number
+  operating_dependency_ratio: number
   excluded_cash: number
+}
+
+export type StateConfidence = {
+  revenue_confidence: number
+  spend_confidence: number
+  liquidity_confidence: number
 }
 
 export type SeverityBand = "low" | "moderate" | "elevated" | "high" | "critical"
@@ -118,5 +123,6 @@ export type BusinessState = {
   spend: SpendState
   liquidity: LiquidityState
   transitions: TransitionSignal[]
+  state_confidence: StateConfidence
   computed_at: string
 }

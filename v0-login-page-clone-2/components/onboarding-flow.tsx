@@ -226,12 +226,13 @@ export function OnboardingFlow({
   const [tagError, setTagError] = useState<string | null>(null)
   type SeverityBand = "low" | "moderate" | "elevated" | "high" | "critical"
   type TransitionSignal = { signal: string; severity: "info" | "warning" | "critical"; description: string; current_band: SeverityBand; previous_band: SeverityBand | null; current_value: number; previous_value: number | null; threshold: number; triggered: boolean }
-  type RevenueState = { period_start: string; period_end: string; gross_revenue: number; contra_revenue: number; net_revenue: number; customer_count: number; avg_receipt: number; top_customer_pct: number; concentration_index: number; revenue_by_customer: { entity_id: string | null; name: string; total: number; count: number }[]; provisional_revenue: number; excluded_revenue: number; excluded_contra: number }
+  type RevenueState = { period_start: string; period_end: string; gross_revenue: number; contra_revenue: number; net_revenue: number; customer_count: number; avg_receipt: number; top_customer_pct: number; concentration_index: number; revenue_by_customer: { entity_id: string | null; name: string; total: number; count: number }[]; provisional_revenue: number; excluded_revenue: number }
   type SpendBreakdownEntry = { entity_id: string | null; name: string; total: number; count: number; pct_of_spend: number }
-  type SpendState = { period_start: string; period_end: string; total_opex: number; total_cogs: number; direct_cost_candidates: number; overhead_candidates: number; unresolved_spend_mix: number; total_spend: number; payroll: number; vendor_payments: number; bank_fees: number; taxes: number; processor_fees: number; vendor_count: number; avg_payment: number; top_vendor_pct: number; supplier_concentration_index: number; spend_by_vendor: SpendBreakdownEntry[]; recurring_obligations: number; recurring_obligation_count: number; provisional_spend: number; excluded_spend: number }
+  type SpendState = { period_start: string; period_end: string; total_opex: number; total_cogs: number; total_spend: number; payroll: number; vendor_payments: number; bank_fees: number; taxes: number; processor_fees: number; recurring_obligations: number; recurring_obligation_count: number; non_recurring_spend: number; vendor_count: number; avg_payment: number; top_vendor_pct: number; supplier_concentration_index: number; spend_by_vendor: SpendBreakdownEntry[]; provisional_spend: number; excluded_spend: number }
   type AccountCash = { account_id: string; account_name: string; account_type: string; net_flow: number; inflows: number; outflows: number; movement_count: number }
-  type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; owner_inflows: number; owner_outflows: number; net_owner: number; cash_by_account: AccountCash[]; transfer_dependency_ratio: number; owner_support_ratio: number; excluded_cash: number }
-  type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; transitions: TransitionSignal[]; computed_at: string }
+  type StateConfidence = { revenue_confidence: number; spend_confidence: number; liquidity_confidence: number }
+  type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; period_net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; owner_inflows: number; owner_outflows: number; net_owner: number; cash_by_account: AccountCash[]; transfer_dependency_ratio: number; owner_support_ratio: number; operating_dependency_ratio: number; excluded_cash: number }
+  type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; transitions: TransitionSignal[]; state_confidence: StateConfidence; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
@@ -2800,6 +2801,7 @@ export function OnboardingFlow({
         const bandColor = (b: SeverityBand) =>
           b === "critical" ? "text-red-400" : b === "high" ? "text-orange-400" : b === "elevated" ? "text-amber-400" : b === "moderate" ? "text-yellow-300" : "text-emerald-400"
         const pct = (n: number) => `${(n * 100).toFixed(1)}%`
+        const confColor = (c: number) => c >= 95 ? "text-emerald-400" : c >= 85 ? "text-yellow-300" : c >= 70 ? "text-amber-400" : "text-red-400"
 
         return (
           <div className="space-y-6">
@@ -2821,18 +2823,31 @@ export function OnboardingFlow({
 
             {!stateLoading && stateData && (
               <div className="space-y-6">
+                {/* ─── State Confidence ─── */}
+                <div className="flex items-center justify-center gap-6 text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-gray-500">Revenue confidence:</span>
+                    <span className={`font-semibold ${confColor(stateData.state_confidence.revenue_confidence)}`}>{stateData.state_confidence.revenue_confidence}%</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-gray-500">Spend confidence:</span>
+                    <span className={`font-semibold ${confColor(stateData.state_confidence.spend_confidence)}`}>{stateData.state_confidence.spend_confidence}%</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-gray-500">Liquidity confidence:</span>
+                    <span className={`font-semibold ${confColor(stateData.state_confidence.liquidity_confidence)}`}>{stateData.state_confidence.liquidity_confidence}%</span>
+                  </div>
+                </div>
+
                 {/* ─── Revenue State ─── */}
                 <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                   <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Revenue state</div>
                   <div className="flex items-baseline gap-3 mb-1">
                     <div className="text-3xl font-bold text-emerald-400">{money(stateData.revenue.net_revenue)}</div>
-                    <div className="text-xs text-gray-500">net</div>
+                    <div className="text-xs text-gray-500">net revenue</div>
                   </div>
                   <div className="text-xs text-gray-500 mb-4">
-                    Gross {money(stateData.revenue.gross_revenue)} · Contra {money(stateData.revenue.contra_revenue)}
-                    {stateData.revenue.excluded_contra > 0 && (
-                      <span className="text-amber-500"> (+ {money(stateData.revenue.excluded_contra)} excluded contra)</span>
-                    )}
+                    Gross {money(stateData.revenue.gross_revenue)} − Contra {money(stateData.revenue.contra_revenue)} = Net {money(stateData.revenue.net_revenue)}
                   </div>
                   <div className="grid grid-cols-4 gap-2 text-center mb-4">
                     <div className="bg-white/5 rounded-lg px-2 py-2">
@@ -2891,24 +2906,7 @@ export function OnboardingFlow({
                     <div className="flex justify-between"><span className="text-gray-400">Bank fees</span><span className="text-white font-mono">{money(stateData.spend.bank_fees)}</span></div>
                     <div className="flex justify-between"><span className="text-gray-400">Taxes</span><span className="text-white font-mono">{money(stateData.spend.taxes)}</span></div>
                     <div className="flex justify-between"><span className="text-gray-400">Recurring ({stateData.spend.recurring_obligation_count})</span><span className="text-white font-mono">{money(stateData.spend.recurring_obligations)}</span></div>
-                  </div>
-
-                  <div className="bg-white/5 rounded-lg p-3 mb-4">
-                    <div className="text-[10px] uppercase text-gray-500 mb-2">Cost structure (heuristic)</div>
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div>
-                        <div className="text-sm font-semibold text-blue-300">{money(stateData.spend.direct_cost_candidates)}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Direct cost est.</div>
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold text-purple-300">{money(stateData.spend.overhead_candidates)}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Overhead est.</div>
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold text-gray-400">{money(stateData.spend.unresolved_spend_mix)}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Unresolved</div>
-                      </div>
-                    </div>
+                    <div className="flex justify-between"><span className="text-gray-400">Non-recurring</span><span className="text-white font-mono">{money(stateData.spend.non_recurring_spend)}</span></div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 text-center mb-4">
@@ -2945,8 +2943,8 @@ export function OnboardingFlow({
                 <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                   <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Liquidity state</div>
                   <div className="flex items-baseline gap-3 mb-1">
-                    <div className="text-3xl font-bold text-blue-300">{money(stateData.liquidity.net_cash_flow)}</div>
-                    <div className="text-xs text-gray-500">net cash flow</div>
+                    <div className="text-3xl font-bold text-blue-300">{money(stateData.liquidity.period_net_cash_flow)}</div>
+                    <div className="text-xs text-gray-500">period net cash flow</div>
                   </div>
                   <div className="text-xs text-gray-500 mb-4">
                     In {money(stateData.liquidity.total_inflows)} · Out {money(stateData.liquidity.total_outflows)}
@@ -2959,14 +2957,18 @@ export function OnboardingFlow({
                     <div className="flex justify-between"><span className="text-gray-400">Net owner</span><span className="text-white font-mono">{money(stateData.liquidity.net_owner)}</span></div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-center mb-4">
+                  <div className="grid grid-cols-3 gap-2 text-center mb-4">
+                    <div className="bg-white/5 rounded-lg px-2 py-2">
+                      <div className={`text-sm font-semibold ${stateData.liquidity.operating_dependency_ratio >= 0.7 ? "text-emerald-400" : stateData.liquidity.operating_dependency_ratio >= 0.5 ? "text-yellow-300" : "text-red-400"}`}>{pct(stateData.liquidity.operating_dependency_ratio)}</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">Operating driven</div>
+                    </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className="text-sm font-semibold text-white">{pct(stateData.liquidity.transfer_dependency_ratio)}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Transfer dependency</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">Transfer dep.</div>
                     </div>
                     <div className="bg-white/5 rounded-lg px-2 py-2">
                       <div className={`text-sm font-semibold ${stateData.liquidity.owner_support_ratio > 0.25 ? "text-amber-400" : "text-white"}`}>{pct(stateData.liquidity.owner_support_ratio)}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Owner support ratio</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">Owner support</div>
                     </div>
                   </div>
 
@@ -2978,7 +2980,7 @@ export function OnboardingFlow({
                           <div key={i} className="flex items-center justify-between text-xs">
                             <div className="flex items-center gap-2 min-w-0 max-w-[55%]">
                               <span className="text-gray-300 truncate">{a.account_name}</span>
-                              <span className="text-[10px] text-gray-600 shrink-0">{a.account_type}</span>
+                              {a.account_type && <span className="text-[10px] text-gray-600 shrink-0">{a.account_type}</span>}
                             </div>
                             <div className="text-right font-mono">
                               <span className={a.net_flow >= 0 ? "text-emerald-400" : "text-red-400"}>{a.net_flow >= 0 ? "+" : "-"}{money(Math.abs(a.net_flow))}</span>
