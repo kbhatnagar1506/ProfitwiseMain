@@ -343,6 +343,13 @@ export type ForecastNarrative = {
 
 // ─── Forecast Confidence ─────────────────────────────────────────────
 
+export type ComponentConfidence = {
+  area: string
+  score: number
+  label: "high" | "medium" | "low"
+  reason: string
+}
+
 export type ForecastConfidence = {
   score: number
   label: "high" | "medium" | "low"
@@ -350,6 +357,7 @@ export type ForecastConfidence = {
   data_completeness: number
   variance_penalty: number
   reasons: string[]
+  by_component: ComponentConfidence[]
 }
 
 // ─── Cash Runway ─────────────────────────────────────────────────────
