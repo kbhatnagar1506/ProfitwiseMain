@@ -6,6 +6,7 @@ import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/mo
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
 import type { OutstandingInvoice } from "@/lib/state/types"
 import { computeCashflowForecast } from "@/lib/state/forecast-engine"
+import type { IdentityContext } from "@/lib/state/forecast-engine"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -137,7 +138,7 @@ export async function GET() {
     } else {
       startingCash = 0
       for (const m of tagged) {
-        startingCash += m.direction === "in" ? m.amount : -m.amount
+        startingCash += (m.direction === "inflow" || m.direction === ("in" as string)) ? m.amount : -m.amount
       }
     }
 
@@ -322,7 +323,68 @@ export async function GET() {
       }
     } catch { /* Gmail invoices may not be available */ }
 
-    const forecast = computeCashflowForecast(tagged, startingCash, 6, outstandingInvoices)
+    // Build rich identity context from the entity graph
+    const identityCtx: IdentityContext = {
+      entityNames: new Map(),
+      entityTypes: new Map(),
+      aliasToEntityId: new Map(),
+      counterpartyByMovement: new Map(),
+      familyMembers: new Map(),
+    }
+
+    try {
+      const entityRows = await query<{ id: string; display_name: string | null; canonical_name: string; entity_type: string }>(
+        `SELECT id, display_name, canonical_name, entity_type FROM entities WHERE user_id = $1`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const e of entityRows) {
+        const name = e.display_name || e.canonical_name
+        if (name) identityCtx.entityNames.set(e.id, name)
+        identityCtx.entityTypes.set(e.id, e.entity_type)
+      }
+    } catch { /* entities table may not exist */ }
+
+    // All aliases → reverse map for entity deduplication
+    try {
+      const aliasRows = await query<{ entity_id: string; alias: string; alias_type: string }>(
+        `SELECT ea.entity_id, ea.alias, ea.alias_type FROM entity_aliases ea
+         JOIN entities e ON e.id = ea.entity_id WHERE e.user_id = $1`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const a of aliasRows) {
+        identityCtx.aliasToEntityId.set(`${a.alias_type}:${a.alias.toLowerCase()}`, a.entity_id)
+      }
+    } catch { /* entity_aliases may not exist */ }
+
+    // Counterparty names from movement_observations (richer than raw_description)
+    try {
+      const obsRows = await query<{ movement_id: string; counterparty: string | null }>(
+        `SELECT mo.movement_id, mo.counterparty FROM movement_observations mo
+         WHERE mo.movement_id IN (SELECT id FROM movements WHERE user_id = $1)
+           AND mo.counterparty IS NOT NULL AND TRIM(mo.counterparty) != ''`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const o of obsRows) {
+        if (o.counterparty) identityCtx.counterpartyByMovement.set(o.movement_id, o.counterparty)
+      }
+    } catch { /* movement_observations may not exist */ }
+
+    // Movement family membership for recurrence grouping
+    try {
+      const famRows = await query<{ family_key: string; occurrence_count: number; dominant_type: string; pattern: string }>(
+        `SELECT family_key, occurrence_count, dominant_type, pattern FROM movement_families WHERE user_id = $1`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const f of famRows) {
+        identityCtx.familyMembers.set(f.family_key, {
+          occurrences: f.occurrence_count,
+          dominantType: f.dominant_type,
+          pattern: f.pattern,
+        })
+      }
+    } catch { /* movement_families may not exist */ }
+
+    const forecast = computeCashflowForecast(tagged, startingCash, 6, outstandingInvoices, identityCtx)
     return NextResponse.json(forecast)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

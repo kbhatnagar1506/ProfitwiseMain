@@ -92,25 +92,97 @@ function toDateStr(d: unknown): string {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function displayName(raw: string): string {
-  if (!raw || raw === "unknown") return "Unknown"
-  if (UUID_RE.test(raw)) return "Unnamed entity"
-  // Clean up common messy patterns
+export type IdentityContext = {
+  entityNames: Map<string, string>
+  entityTypes: Map<string, string>
+  aliasToEntityId: Map<string, string>
+  counterpartyByMovement: Map<string, string>
+  familyMembers: Map<string, { occurrences: number; dominantType: string; pattern: string }>
+}
+
+let _ctx: IdentityContext = {
+  entityNames: new Map(),
+  entityTypes: new Map(),
+  aliasToEntityId: new Map(),
+  counterpartyByMovement: new Map(),
+  familyMembers: new Map(),
+}
+
+function setIdentityContext(ctx: IdentityContext) { _ctx = ctx }
+
+function cleanDescriptor(raw: string): string {
   let name = raw
     .replace(/^PREAUTHORIZED ACH CREDIT\s*/i, "")
     .replace(/^ACH CREDIT\s*/i, "")
     .replace(/^ACH DEBIT\s*/i, "")
     .replace(/^WIRE (CREDIT|DEBIT)\s*/i, "")
+    .replace(/^ONLINE (PAYMENT|TRANSFER)\s*/i, "")
     .replace(/\s+ST-[A-Z0-9]+$/i, "")
     .replace(/\s+\d{6,}$/, "")
     .replace(/\s{2,}/g, " ")
     .trim()
-  if (!name || UUID_RE.test(name)) return "Unnamed entity"
-  // Title case if all-caps
+  if (!name) return ""
   if (name === name.toUpperCase() && name.length > 3) {
     name = name.split(/[\s/]+/).map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" ")
   }
   return name.slice(0, 40)
+}
+
+function resolveEntityId(m: TaggedMovement): string {
+  // Prefer typed IDs from tag_data (these are entity graph UUIDs)
+  const t = m.tag
+  if (t.customer_id) return t.customer_id
+  if (t.vendor_id) return t.vendor_id
+  if (m.entity_id) return m.entity_id
+
+  // Try alias reverse lookup from counterparty string to collapse fragmented entries
+  const cp = observedCounterparty(m)
+  if (cp) {
+    for (const prefix of ["name", "merchant_string", "account_ref"]) {
+      const resolved = _ctx.aliasToEntityId.get(`${prefix}:${cp.toLowerCase()}`)
+      if (resolved) return resolved
+    }
+  }
+
+  // Fall back to raw description as grouping key
+  return m.raw_description ?? "unknown"
+}
+
+function observedCounterparty(m: TaggedMovement): string | null {
+  const fromObs = _ctx.counterpartyByMovement.get(m.id)
+  if (fromObs) return fromObs
+  const fromMeta = m.metadata?.counterparty as string | undefined
+  if (fromMeta && !UUID_RE.test(fromMeta)) return fromMeta
+  return null
+}
+
+function resolveEntityName(entityId: string | undefined | null, counterparty: string | undefined | null, rawDesc: string | undefined | null, role: string = "entity"): string {
+  // 1. Canonical name from identity graph
+  if (entityId && _ctx.entityNames.has(entityId)) return _ctx.entityNames.get(entityId)!
+
+  // 2. Try alias reverse lookup → graph name
+  if (counterparty) {
+    const aliasKey = `name:${counterparty.toLowerCase()}`
+    const resolved = _ctx.aliasToEntityId.get(aliasKey)
+    if (resolved && _ctx.entityNames.has(resolved)) return _ctx.entityNames.get(resolved)!
+  }
+
+  // 3. Counterparty from observation/metadata (if clean)
+  if (counterparty && !UUID_RE.test(counterparty)) {
+    const cleaned = cleanDescriptor(counterparty)
+    if (cleaned.length >= 2) return cleaned
+  }
+
+  // 4. Cleaned descriptor
+  if (rawDesc && !UUID_RE.test(rawDesc)) {
+    const cleaned = cleanDescriptor(rawDesc)
+    if (cleaned.length >= 2) return cleaned
+  }
+
+  // 5. Role-based fallback with short ID fragment (never "Unnamed entity")
+  const shortId = (entityId ?? "").slice(0, 4).toUpperCase() || Math.random().toString(36).slice(2, 6).toUpperCase()
+  const roleLabel = role === "customer" ? "Customer" : role === "vendor" ? "Vendor" : role === "processor" ? "Processor" : "Entity"
+  return `${roleLabel} #${shortId}`
 }
 
 // ─── Step 1: Decompose (same as v1) ────────────────────────────────
@@ -150,19 +222,24 @@ function sigmoidDecay(overdueRatio: number): number {
 }
 
 function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = []): CustomerModel[] {
-  const byEntity = new Map<string, { name: string; payments: { amount: number; date: string }[] }>()
+  const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; isAnomaly: boolean; isFirstSeen: boolean }[] }>()
 
   for (const m of movements) {
     if (m.tag.economic_class !== "customer_receipt") continue
     if (m.tag.state_inclusion_policy === "exclude_and_review") continue
     if (m.tag.counterparty_role === "owner") continue
 
-    const key = m.entity_id ?? m.raw_description ?? "unknown"
-    const rawName = (m.metadata?.counterparty as string) ?? key
-    const name = displayName(rawName)
+    const key = resolveEntityId(m)
+    const cp = observedCounterparty(m)
+    const name = resolveEntityName(key, cp, m.raw_description, "customer")
     let entry = byEntity.get(key)
     if (!entry) { entry = { name, payments: [] }; byEntity.set(key, entry) }
-    entry.payments.push({ amount: m.amount, date: toDateStr(m.occurred_at) })
+    entry.payments.push({
+      amount: m.amount,
+      date: toDateStr(m.occurred_at),
+      isAnomaly: m.tag.is_anomaly ?? false,
+      isFirstSeen: m.tag.is_first_seen_counterparty ?? false,
+    })
   }
 
   const models: CustomerModel[] = []
@@ -172,8 +249,12 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     const payments = data.payments.sort((a, b) => a.date.localeCompare(b.date))
     if (payments.length === 0) continue
 
-    const amounts = payments.map((p) => p.amount)
-    const avgAmount = amounts.reduce((a, b) => a + b, 0) / amounts.length
+    // Filter anomalous amounts for a stable average, but keep all for cadence
+    const normalPayments = payments.filter((p) => !p.isAnomaly)
+    const amountsForAvg = (normalPayments.length >= 2 ? normalPayments : payments).map((p) => p.amount)
+    const avgAmount = amountsForAvg.reduce((a, b) => a + b, 0) / amountsForAvg.length
+
+    const isFirstSeenOnly = payments.length === 1 && payments[0].isFirstSeen
 
     const intervals: number[] = []
     for (let i = 1; i < payments.length; i++) {
@@ -206,6 +287,7 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     // Amount trend: if recent payments are declining, dampen probability
     if (payments.length >= 4) {
       const mid = Math.floor(payments.length / 2)
+      const amounts = payments.map((p) => p.amount)
       const firstHalfAvg = amounts.slice(0, mid).reduce((a, b) => a + b, 0) / mid
       const secondHalfAvg = amounts.slice(mid).reduce((a, b) => a + b, 0) / (amounts.length - mid)
       if (firstHalfAvg > 0) {
@@ -214,6 +296,9 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
         else if (amountTrend < 0.8) probability *= 0.85
       }
     }
+
+    // First-seen counterparty with single payment: lower probability until pattern established
+    if (isFirstSeenOnly) probability *= 0.4
 
     probability = Math.max(0.02, Math.min(0.98, probability))
 
@@ -322,19 +407,25 @@ function detectCadence(avgInterval: number): VendorModel["cadence"] {
 }
 
 function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
-  const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; recurring: boolean }[] }>()
+  const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; recurring: boolean; isAnomaly: boolean; familyKey: string | null }[] }>()
 
   for (const m of movements) {
     const ec = m.tag.economic_class
     if (ec !== "vendor_payment" && ec !== "payroll" && ec !== "processor_fee" && ec !== "debt_payment") continue
     if (m.tag.state_inclusion_policy === "exclude_and_review") continue
 
-    const key = m.entity_id ?? m.raw_description ?? "unknown"
-    const rawName = (m.metadata?.counterparty as string) ?? key
-    const name = displayName(rawName)
+    const key = resolveEntityId(m)
+    const cp = observedCounterparty(m)
+    const name = resolveEntityName(key, cp, m.raw_description, "vendor")
     let entry = byEntity.get(key)
     if (!entry) { entry = { name, payments: [] }; byEntity.set(key, entry) }
-    entry.payments.push({ amount: m.amount, date: toDateStr(m.occurred_at), recurring: m.tag.is_recurring ?? false })
+    entry.payments.push({
+      amount: m.amount,
+      date: toDateStr(m.occurred_at),
+      recurring: m.tag.is_recurring ?? false,
+      isAnomaly: m.tag.is_anomaly ?? false,
+      familyKey: m.tag.recurrence_family_id ?? null,
+    })
   }
 
   const models: VendorModel[] = []
@@ -343,9 +434,19 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
     const payments = data.payments.sort((a, b) => a.date.localeCompare(b.date))
     if (payments.length === 0) continue
 
-    const amounts = payments.map((p) => p.amount)
-    const avgAmount = amounts.reduce((a, b) => a + b, 0) / amounts.length
-    const isRecurring = payments.filter((p) => p.recurring).length > payments.length * 0.5
+    // Filter anomalies for amount calculation, keep all for cadence
+    const normalPayments = payments.filter((p) => !p.isAnomaly)
+    const amountsForAvg = (normalPayments.length >= 2 ? normalPayments : payments).map((p) => p.amount)
+    const avgAmount = amountsForAvg.reduce((a, b) => a + b, 0) / amountsForAvg.length
+    const taggedRecurring = payments.filter((p) => p.recurring).length > payments.length * 0.5
+
+    // Use movement family data for stronger recurrence signal
+    const familyKeys = new Set(payments.map((p) => p.familyKey).filter(Boolean))
+    let familyRecurring = false
+    for (const fk of familyKeys) {
+      const fam = _ctx.familyMembers.get(fk!)
+      if (fam && fam.occurrences >= 3) { familyRecurring = true; break }
+    }
 
     const intervals: number[] = []
     for (let i = 1; i < payments.length; i++) {
@@ -355,6 +456,14 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
     const avgInterval = intervals.length > 0
       ? intervals.reduce((a, b) => a + b, 0) / intervals.length
       : 0
+
+    // Detect cadence regularity: if interval CV is low, payments are effectively recurring
+    const intervalStdDev = intervals.length > 1
+      ? Math.sqrt(intervals.reduce((s, v) => s + (v - avgInterval) ** 2, 0) / intervals.length)
+      : avgInterval
+    const intervalCV = avgInterval > 0 ? intervalStdDev / avgInterval : 999
+    const cadenceRegular = intervals.length >= 2 && intervalCV < 0.5
+    const isRecurring = taggedRecurring || cadenceRegular || familyRecurring
 
     const lastDate = payments[payments.length - 1].date
     const cadence = detectCadence(avgInterval)
@@ -366,9 +475,14 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
       if (nextDate < now) nextDate = addDays(now, Math.max(1, avgInterval * 0.5))
     }
 
+    // Vendor confidence: cadence regularity + family knowledge + payment count
     let confidence: "high" | "medium" | "low" = "low"
     if (payments.length >= 5 && isRecurring) confidence = "high"
+    else if (payments.length >= 4 && cadenceRegular) confidence = "high"
+    else if (payments.length >= 3 && familyRecurring) confidence = "high"
+    else if (payments.length >= 3 && isRecurring) confidence = "medium"
     else if (payments.length >= 3) confidence = "medium"
+    else if (payments.length >= 2 && (taggedRecurring || familyRecurring)) confidence = "medium"
 
     models.push({
       entity_id: entityId,
@@ -407,7 +521,7 @@ function buildSettlementModel(movements: TaggedMovement[]): SettlementModel {
     const ts = new Date(d).getTime()
     if (isNaN(ts)) continue
 
-    const processor = m.entity_id ?? t.processor_id ?? "default"
+    const processor = resolveEntityId(m)
     let dates = byProcessor.get(processor)
     if (!dates) { dates = []; byProcessor.set(processor, dates) }
     dates.push(ts)
@@ -512,7 +626,9 @@ function buildRecurringFixed(movements: TaggedMovement[]): BehavioralModels["rec
     if (!isOutflow(m)) continue
     if (m.tag.state_inclusion_policy === "exclude_and_review") continue
 
-    const label = displayName((m.metadata?.counterparty as string) ?? m.raw_description ?? "unknown")
+    const key = resolveEntityId(m)
+    const cp = observedCounterparty(m)
+    const label = resolveEntityName(key, cp, m.raw_description, "vendor")
     let g = groups.get(label)
     if (!g) { g = { amounts: [], dates: [] }; groups.set(label, g) }
     g.amounts.push(m.amount)
@@ -728,7 +844,7 @@ function decomposeMovements(movements: TaggedMovement[]): ComponentBucket[] {
     if (!bucket) { bucket = { ...cat, movements: [] }; buckets.set(key, bucket) }
     bucket.movements.push({
       amount: m.amount, date: toDateStr(m.occurred_at),
-      entity: m.entity_id ?? m.raw_description ?? "unknown",
+      entity: resolveEntityId(m),
       is_recurring: m.tag.is_recurring ?? false,
     })
   }
@@ -1365,7 +1481,14 @@ function generateNarrative(
       e.type === "recurring_expense" || (e.type === "vendor_payment" && recurringVendorNames.has(e.entity))
     ).reduce((s, e) => s + e.amount, 0)
     const recurringPct = recurringAmount / outflowTotal
-    insight = `${Math.round(recurringPct * 100)}% of expected outflows are recurring obligations — spend base is ${recurringPct > 0.6 ? "highly fixed" : "moderately flexible"}`
+    const pctRound = Math.round(recurringPct * 100)
+    if (recurringPct >= 0.95) {
+      insight = `Near-term outflows are dominated by recurring obligations (~${pctRound}% of modeled spend) — spend base is highly fixed`
+    } else if (recurringPct > 0.6) {
+      insight = `~${pctRound}% of expected outflows come from recurring patterns — spend base is largely fixed with some variable spend`
+    } else {
+      insight = `~${pctRound}% of expected outflows are recurring — spend base is moderately flexible`
+    }
   } else {
     insight = "Cash position is primarily driven by inflow timing — outflow obligations are minimal"
   }
@@ -1468,17 +1591,35 @@ function computeForecastConfidence(
     reason: custTotal === 0 ? "No customer models" : `${custHigh} high / ${custMed} medium / ${custTotal - custHigh - custMed} low confidence models`,
   })
 
-  // Vendor forecast confidence
+  // Vendor forecast confidence — weighted by spend impact (top vendors matter more)
   const vendHigh = models.vendors.filter((v) => v.confidence === "high").length
   const vendMed = models.vendors.filter((v) => v.confidence === "medium").length
   const vendTotal = models.vendors.length
-  const vendScore = vendTotal > 0 ? (vendHigh * 1 + vendMed * 0.6) / vendTotal : 0
+  const totalVendorSpend = models.vendors.reduce((s, v) => s + v.avg_amount * v.payment_count, 0)
+  let vendScore: number
+  if (vendTotal === 0) {
+    vendScore = 0
+  } else if (totalVendorSpend > 0) {
+    // Spend-weighted confidence: high-spend vendors with high confidence matter more
+    let weightedConf = 0
+    for (const v of models.vendors) {
+      const weight = (v.avg_amount * v.payment_count) / totalVendorSpend
+      const conf = v.confidence === "high" ? 1 : v.confidence === "medium" ? 0.6 : 0.2
+      weightedConf += weight * conf
+    }
+    vendScore = weightedConf
+  } else {
+    vendScore = (vendHigh * 1 + vendMed * 0.6) / vendTotal
+  }
   const vendLabel: ComponentConfidence["label"] = vendScore >= 0.7 ? "high" : vendScore >= 0.4 ? "medium" : "low"
+  const vendLow = vendTotal - vendHigh - vendMed
   by_component.push({
     area: "Vendor forecasts",
     score: r2(vendScore),
     label: vendLabel,
-    reason: vendTotal === 0 ? "No vendor models" : `${vendHigh} high / ${vendMed} medium / ${vendTotal - vendHigh - vendMed} low confidence models`,
+    reason: vendTotal === 0
+      ? "No vendor models"
+      : `${vendHigh} high / ${vendMed} medium / ${vendLow} low confidence — spend-weighted`,
   })
 
   // Settlement confidence
@@ -1561,13 +1702,28 @@ function computeSensitivity(
   startingCash: number,
 ): SensitivityAnalysis {
   const drivers: SensitivityDriver[] = []
+  const seenEntities = new Set<string>()
   const baseCash30 = mc.expected_cash_30d
-  const totalCashFlow = Math.abs(baseCash30 - startingCash) || 1
 
-  // Customer impact: remove each customer's events and measure delta
-  for (const c of models.customers.slice(0, 5)) {
-    const customerEvents = events.filter((e) => e.entity === c.name && e.direction === "in")
-    const customerCash = customerEvents.reduce((s, e) => s + e.amount * e.probability, 0)
+  // Aggregate inflows by entity name to deduplicate
+  const inflowByEntity = new Map<string, number>()
+  const outflowByEntity = new Map<string, number>()
+  for (const e of events) {
+    const key = e.entity.toLowerCase()
+    const expected = e.amount * e.probability
+    if (e.direction === "in") {
+      inflowByEntity.set(key, (inflowByEntity.get(key) ?? 0) + expected)
+    } else {
+      outflowByEntity.set(key, (outflowByEntity.get(key) ?? 0) + expected)
+    }
+  }
+
+  // Customer impact: deduplicated by name
+  for (const c of models.customers.slice(0, 8)) {
+    const key = c.name.toLowerCase()
+    if (seenEntities.has(key)) continue
+    seenEntities.add(key)
+    const customerCash = inflowByEntity.get(key) ?? 0
     if (customerCash <= 0) continue
     const impactPct = r2((customerCash / Math.max(1, Math.abs(baseCash30))) * 100)
     drivers.push({
@@ -1579,10 +1735,12 @@ function computeSensitivity(
     })
   }
 
-  // Vendor impact: largest outflow vendors
-  for (const v of models.vendors.slice(0, 5)) {
-    const vendorEvents = events.filter((e) => e.entity === v.name && e.direction === "out")
-    const vendorCash = vendorEvents.reduce((s, e) => s + e.amount * e.probability, 0)
+  // Vendor impact: deduplicated by name
+  for (const v of models.vendors.slice(0, 8)) {
+    const key = v.name.toLowerCase()
+    if (seenEntities.has(key)) continue
+    seenEntities.add(key)
+    const vendorCash = outflowByEntity.get(key) ?? 0
     if (vendorCash <= 0) continue
     const impactPct = r2((vendorCash / Math.max(1, Math.abs(baseCash30))) * 100)
     drivers.push({
@@ -1788,7 +1946,9 @@ export function computeCashflowForecast(
   startingCash: number,
   horizonMonths: number = 6,
   invoices: OutstandingInvoice[] = [],
+  identityCtx: IdentityContext = { entityNames: new Map(), entityTypes: new Map(), aliasToEntityId: new Map(), counterpartyByMovement: new Map(), familyMembers: new Map() },
 ): CashflowForecast {
+  setIdentityContext(identityCtx)
   const dates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
   const periodStart = dates[0] ?? new Date().toISOString().slice(0, 10)
   const periodEnd = dates[dates.length - 1] ?? new Date().toISOString().slice(0, 10)
