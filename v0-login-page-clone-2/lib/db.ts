@@ -833,12 +833,6 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_movement ON movement_attributions (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user ON movement_attributions (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_component_entity ON movement_attributions (component_type, entity_id)")
-  // Stage-4 accept idempotency: prevent duplicate LLM reconciliation packet inserts.
-  await p.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_stage4_accept_unique
-     ON movement_attributions (user_id, movement_id, reference_id, component_type)
-     WHERE source = 'llm' AND metadata->>'match_method' = 'review_queue_accept'`,
-  )
   // Cash events bridge (forecast / decisions)
   await p.query(`
     CREATE TABLE IF NOT EXISTS cash_events (
@@ -1044,23 +1038,6 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_movement_explanations_cache_user ON movement_explanations_cache (user_id, updated_at DESC)",
   )
-  // Unresolved reconciliation leftovers for Stage 4 AI review.
-  await p.query(`
-    CREATE TABLE IF NOT EXISTS reconciliation_review_queue (
-      id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      movement_id           UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
-      remaining_cash        NUMERIC NOT NULL,
-      candidate_event_ids   TEXT[] NOT NULL DEFAULT '{}',
-      candidate_payload     JSONB NOT NULL DEFAULT '[]'::jsonb,
-      status                TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved', 'rejected')),
-      resolution            JSONB NOT NULL DEFAULT '{}'::jsonb,
-      created_at            TIMESTAMPTZ DEFAULT NOW(),
-      updated_at            TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE (user_id, movement_id, status)
-    )
-  `)
-  await p.query("CREATE INDEX IF NOT EXISTS idx_recon_review_queue_user_status ON reconciliation_review_queue (user_id, status, created_at DESC)")
   // Backfill allocation URIs (idempotent)
   try {
     const { migrateAllocationUris } = await import("./allocation-migrate-uris")
