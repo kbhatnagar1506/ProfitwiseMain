@@ -3507,7 +3507,7 @@ export function OnboardingFlow({
                       </Table>
                     </div>
                     <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500 text-center">
-                      {allReconRows.length} bank transaction{allReconRows.length !== 1 ? "s" : ""}
+                      {matchedReconRows.length} bank transaction{matchedReconRows.length !== 1 ? "s" : ""}
                     </div>
                   </div>
                 )}
