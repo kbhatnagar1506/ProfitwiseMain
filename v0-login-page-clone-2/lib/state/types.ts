@@ -270,6 +270,8 @@ export type RecurrenceModel = {
   amount_std: number | null
 }
 
+export type VendorCluster = "fixed_obligation" | "variable_recurring" | "project_based" | "one_off" | "bill_driven"
+
 export type VendorModel = {
   entity_id: string
   name: string
@@ -278,11 +280,31 @@ export type VendorModel = {
   cadence_interval_days: number
   is_recurring: boolean
   recurrence: RecurrenceModel
+  cluster: VendorCluster
+  flexibility_score: number
   last_payment_date: string
   payment_count: number
   next_expected_date: string | null
   confidence: "high" | "medium" | "low"
   outstanding_bills: OutstandingBill[]
+}
+
+export type CalibrationAdjustment = {
+  bucket_range: string
+  predicted_avg: number
+  actual_rate: number
+  adjustment_factor: number
+}
+
+export type CustomerCohort = {
+  archetype: CustomerArchetype
+  member_count: number
+  total_revenue: number
+  avg_payment_count: number
+  avg_amount: number
+  avg_interval_days: number
+  avg_probability: number
+  cohort_confidence: "high" | "medium" | "low"
 }
 
 export type ProcessorSettlementProfile = {
@@ -319,6 +341,8 @@ export type BehavioralModels = {
   transfers: TransferBehaviorModel
   recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]
   invoice_signal: InvoiceSignal
+  calibration_adjustments: CalibrationAdjustment[]
+  customer_cohorts: CustomerCohort[]
 }
 
 export type EventReasoning = {

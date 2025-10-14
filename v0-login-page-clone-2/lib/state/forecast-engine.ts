@@ -25,6 +25,7 @@ import type {
   RecurrenceModel,
   RecurrenceType,
   VendorModel,
+  VendorCluster,
   SettlementModel,
   ProcessorSettlementProfile,
   TransferBehaviorModel,
@@ -52,6 +53,8 @@ import type {
   ScenarioDriver,
   BacktestResult,
   CalibrationResult,
+  CalibrationAdjustment,
+  CustomerCohort,
 } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
@@ -646,6 +649,74 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
   return models.sort((a, b) => b.avg_amount * b.payment_count - a.avg_amount * a.payment_count)
 }
 
+// ─── Step 2a-ii: Customer Cohort Clustering ─────────────────────────
+//
+// Instead of 73 weak individual models, collapse into ~6 strong archetype
+// cohorts. Each cohort pools behavior across members to give a stronger
+// signal. Individual models still exist but cohort stats inform confidence.
+
+function buildCustomerCohorts(customers: CustomerModel[]): CustomerCohort[] {
+  const byArchetype = new Map<CustomerArchetype, CustomerModel[]>()
+  for (const c of customers) {
+    let arr = byArchetype.get(c.archetype)
+    if (!arr) { arr = []; byArchetype.set(c.archetype, arr) }
+    arr.push(c)
+  }
+
+  const cohorts: CustomerCohort[] = []
+  for (const [archetype, members] of byArchetype) {
+    if (members.length === 0) continue
+    const totalRevenue = members.reduce((s, c) => s + c.avg_amount * Math.max(1, c.payment_count), 0)
+    const avgPaymentCount = members.reduce((s, c) => s + c.payment_count, 0) / members.length
+    const avgAmount = members.reduce((s, c) => s + c.avg_amount, 0) / members.length
+    const avgInterval = members.filter((c) => c.payment_interval_days > 0).length > 0
+      ? members.reduce((s, c) => s + c.payment_interval_days, 0) / members.filter((c) => c.payment_interval_days > 0).length
+      : 0
+    const avgProb = members.reduce((s, c) => s + c.probability_of_next, 0) / members.length
+
+    const highConf = members.filter((c) => c.confidence === "high").length
+    const medConf = members.filter((c) => c.confidence === "medium").length
+    const cohortConf: CustomerCohort["cohort_confidence"] =
+      highConf / members.length > 0.5 ? "high"
+        : (highConf + medConf) / members.length > 0.5 ? "medium"
+          : "low"
+
+    cohorts.push({
+      archetype,
+      member_count: members.length,
+      total_revenue: r2(totalRevenue),
+      avg_payment_count: r2(avgPaymentCount),
+      avg_amount: r2(avgAmount),
+      avg_interval_days: Math.round(avgInterval),
+      avg_probability: r2(avgProb),
+      cohort_confidence: cohortConf,
+    })
+  }
+
+  return cohorts.sort((a, b) => b.total_revenue - a.total_revenue)
+}
+
+// For low_data customers, boost their probability if their cohort
+// has a stronger signal than their individual model.
+function applyCohortBoost(customers: CustomerModel[], cohorts: CustomerCohort[]): CustomerModel[] {
+  const cohortMap = new Map<CustomerArchetype, CustomerCohort>()
+  for (const c of cohorts) cohortMap.set(c.archetype, c)
+
+  return customers.map((cust) => {
+    if (cust.archetype !== "low_data") return cust
+    // Low-data customers borrow confidence from the low_data cohort
+    const cohort = cohortMap.get("low_data")
+    if (!cohort || cohort.member_count < 3) return cust
+    // If this customer has zero payments but the cohort has a signal,
+    // use cohort average probability as a floor
+    if (cust.payment_count === 0 && cohort.avg_probability > cust.probability_of_next) {
+      const boostedProb = r2(Math.min(0.6, (cust.probability_of_next + cohort.avg_probability) / 2))
+      return { ...cust, probability_of_next: boostedProb }
+    }
+    return cust
+  })
+}
+
 // ─── Step 2b: Vendor Behavioral Models ──────────────────────────────
 
 function detectCadence(avgInterval: number): VendorModel["cadence"] {
@@ -864,6 +935,11 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
       if (confidence === "low") confidence = "medium"
     }
 
+    // Vendor clustering: classify by obligation type
+    const cluster = classifyVendorCluster(recurrence, vendorBills, payments.length, amountStd, avgAmount)
+    // Flexibility score: how easy is it to defer/reduce this vendor?
+    const flexibility = computeFlexibilityScore(recurrence, vendorBills, cluster, payments.length)
+
     models.push({
       entity_id: entityId,
       name: data.name,
@@ -872,6 +948,8 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
       cadence_interval_days: Math.round(avgInterval),
       is_recurring: isRecurring,
       recurrence,
+      cluster,
+      flexibility_score: r2(flexibility),
       last_payment_date: lastDate,
       payment_count: payments.length,
       next_expected_date: nextDate,
@@ -881,6 +959,52 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
   }
 
   return models.sort((a, b) => b.avg_amount * b.payment_count - a.avg_amount * a.payment_count)
+}
+
+function classifyVendorCluster(
+  recurrence: RecurrenceModel,
+  bills: OutstandingBill[],
+  paymentCount: number,
+  amountStd: number,
+  avgAmount: number,
+): VendorCluster {
+  // Bill-driven: has outstanding AP with due dates
+  if (bills.length > 0 && bills.some((b) => b.due_date)) return "bill_driven"
+  // Fixed obligation: hard recurring, low amount variance
+  const amountCV = avgAmount > 0 ? amountStd / avgAmount : 999
+  if (recurrence.recurrence_type === "hard" && amountCV < 0.15) return "fixed_obligation"
+  // Variable recurring: soft or hard with amount variance
+  if ((recurrence.recurrence_type === "hard" || recurrence.recurrence_type === "soft") && amountCV >= 0.15) return "variable_recurring"
+  // One-off: 1-2 payments, no recurrence signal
+  if (paymentCount <= 2 && recurrence.recurrence_type !== "hard" && recurrence.recurrence_type !== "soft") return "one_off"
+  // Project-based: episodic pattern
+  return "project_based"
+}
+
+function computeFlexibilityScore(
+  recurrence: RecurrenceModel,
+  bills: OutstandingBill[],
+  cluster: VendorCluster,
+  paymentCount: number,
+): number {
+  // 0 = cannot defer at all, 1 = fully discretionary
+  let score = 0.5
+
+  if (cluster === "fixed_obligation") score -= 0.3
+  else if (cluster === "bill_driven") score -= 0.2
+  else if (cluster === "variable_recurring") score += 0.0
+  else if (cluster === "project_based") score += 0.2
+  else if (cluster === "one_off") score += 0.3
+
+  // Hard recurring = contractual obligation, low flexibility
+  if (recurrence.recurrence_type === "hard") score -= 0.15
+  else if (recurrence.recurrence_type === "episodic") score += 0.1
+  // Overdue bills = must pay, no flexibility
+  if (bills.some((b) => b.status === "overdue")) score -= 0.2
+  // Few payments = possibly negotiable
+  if (paymentCount <= 2) score += 0.1
+
+  return Math.max(0, Math.min(1, score))
 }
 
 // ─── Step 2c: Settlement Delay Model ────────────────────────────────
@@ -1116,8 +1240,17 @@ function buildInvoiceSignal(invoices: OutstandingInvoice[]): InvoiceSignal {
   }
 }
 
-function buildBehavioralModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], bills: OutstandingBill[] = []): BehavioralModels {
-  const customers = buildCustomerModels(movements, invoices)
+function buildBehavioralModels(
+  movements: TaggedMovement[],
+  invoices: OutstandingInvoice[] = [],
+  bills: OutstandingBill[] = [],
+  priorCalibration: CalibrationResult | null = null,
+): BehavioralModels {
+  let customers = buildCustomerModels(movements, invoices)
+  const cohorts = buildCustomerCohorts(customers)
+  customers = applyCohortBoost(customers, cohorts)
+  const calibration_adjustments = buildCalibrationAdjustments(priorCalibration)
+
   return {
     customers,
     vendors: buildVendorModels(movements, bills),
@@ -1125,6 +1258,8 @@ function buildBehavioralModels(movements: TaggedMovement[], invoices: Outstandin
     transfers: buildTransferModel(movements),
     recurring_fixed: buildRecurringFixed(movements),
     invoice_signal: buildInvoiceSignal(invoices),
+    calibration_adjustments,
+    customer_cohorts: cohorts,
   }
 }
 
@@ -1571,14 +1706,18 @@ function simulateMonthFromModels(
   }
 
   // Vendor payments: simulate from entity models, weighted by recurrence confidence
+  // and filtered by cluster type — only project forward vendors with real signals.
   let vendorTotal = 0
   for (const v of models.vendors) {
     const recConf = v.recurrence?.recurrence_confidence ?? 0.3
     const recType = v.recurrence?.recurrence_type ?? "unknown"
+    const cluster = v.cluster ?? "project_based"
+
+    // One-off vendors don't project into future months
+    if (cluster === "one_off") continue
 
     if (!v.next_expected_date) {
-      // Only project vendors with at least soft recurrence and reasonable confidence
-      if (recType === "hard" || recType === "soft") {
+      if (recType === "hard" || recType === "soft" || cluster === "fixed_obligation") {
         if (v.cadence_interval_days > 0 && v.cadence_interval_days <= 45) {
           vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * recConf
         }
@@ -1586,7 +1725,9 @@ function simulateMonthFromModels(
       continue
     }
     if (v.next_expected_date >= monthStart && v.next_expected_date < monthEnd) {
-      vendorTotal += v.avg_amount * Math.max(0.5, recConf)
+      // Bill-driven and fixed obligations are near-certain; others weight by confidence
+      const certaintyMult = (cluster === "bill_driven" || cluster === "fixed_obligation") ? 0.95 : Math.max(0.5, recConf)
+      vendorTotal += v.avg_amount * certaintyMult
     } else if ((recType === "hard" || recType === "soft") && v.cadence_interval_days > 0 && v.cadence_interval_days <= 31) {
       vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * recConf
     }
@@ -2303,27 +2444,43 @@ function computeForecastConfidence(
     reason: `Avg component volatility: ${(avgVolatility * 100).toFixed(0)}%`,
   })
 
-  // ── 8. Backtest confidence (weight: 0.10) ──
-  // accuracy_score is 0-100, normalize to 0-1 for the composite
-  const backtestScore = backtest ? Math.min(1, backtest.accuracy_score / 100) : 0
+  // ── 8. Backtest & calibration confidence (weight: 0.15) ──
+  // Backtest tests directional accuracy; calibration tests probability honesty.
+  // Both matter — a directionally correct but overconfident forecast is still wrong.
+  const backtestRaw = backtest ? Math.min(1, backtest.accuracy_score / 100) : 0
+  const calibrationPenalty = backtest?.calibration
+    ? Math.min(0.3, backtest.calibration.calibration_error * 0.5)
+    : 0
+  const backtestScore = Math.max(0, backtestRaw - calibrationPenalty)
+
+  const calibrationNote = backtest?.calibration
+    ? `, ECE ${(backtest.calibration.calibration_error * 100).toFixed(0)}%${backtest.calibration.is_overconfident ? " (overconfident)" : backtest.calibration.is_underconfident ? " (underconfident)" : ""}`
+    : ""
+  if (backtest?.calibration && backtest.calibration.calibration_error > 0.3) {
+    reasons.push(`Probability calibration is weak (ECE ${(backtest.calibration.calibration_error * 100).toFixed(0)}%)`)
+  }
   by_component.push({
     area: "Backtest accuracy", score: r2(backtestScore),
-    label: backtestScore >= 0.7 ? "high" : backtestScore >= 0.4 ? "medium" : "low",
+    label: backtestScore >= 0.6 ? "high" : backtestScore >= 0.35 ? "medium" : "low",
     reason: backtest
-      ? `${backtest.days_tested}d tested, direction accuracy ${(backtest.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest.mean_absolute_error.toLocaleString()}`
+      ? `${backtest.days_tested}d tested, direction accuracy ${(backtest.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest.mean_absolute_error.toLocaleString()}${calibrationNote}`
       : "No backtest data available",
   })
 
   // ── Weighted composite score ──
+  // Weights: inflow 0.20, outflow 0.20, settlement 0.10, identity 0.05,
+  // recurrence 0.10, data span 0.10, stability 0.10, backtest 0.15
+  // Identity lowered (it's usually near 1.0 and uninformative)
+  // Backtest raised (it's the only empirical measure)
   const weightedScore =
     inflowScore * 0.20 +
     outflowScore * 0.20 +
     settScore * 0.10 +
-    identityScore * 0.10 +
+    identityScore * 0.05 +
     recurrenceScore * 0.10 +
     dataSpanScore * 0.10 +
     varianceScore * 0.10 +
-    backtestScore * 0.10
+    backtestScore * 0.15
 
   const score = Math.max(0.05, Math.min(0.99, weightedScore))
   const label: ForecastConfidence["label"] = score >= 0.7 ? "high" : score >= 0.45 ? "medium" : "low"
@@ -2333,12 +2490,18 @@ function computeForecastConfidence(
     ? components.filter((c) => c.confidence !== "low").length / components.length : 0
   const dataCompleteness = dataSpanScore
 
-  // Build diagnostic sentence
+  // Build diagnostic sentence — actionable, not just descriptive
   const weakest = by_component.reduce((min, c) => c.score < min.score ? c : min, by_component[0])
   const strongest = by_component.reduce((max, c) => c.score > max.score ? c : max, by_component[0])
-  const diagnosis = score < 0.45
-    ? `Forecast is ${label} confidence because ${weakest.area.toLowerCase()} is weak (${(weakest.score * 100).toFixed(0)}%) — ${weakest.reason}`
-    : `Forecast is ${label} confidence — strongest: ${strongest.area.toLowerCase()} (${(strongest.score * 100).toFixed(0)}%), weakest: ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%)`
+
+  let diagnosis: string
+  if (score < 0.3) {
+    diagnosis = `Forecast is unreliable — ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%) is dragging confidence. ${weakest.reason}. More transaction history needed.`
+  } else if (score < 0.45) {
+    diagnosis = `Forecast is ${label} confidence — weakest area: ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%). ${weakest.reason}.`
+  } else {
+    diagnosis = `Forecast is ${label} confidence — strongest: ${strongest.area.toLowerCase()} (${(strongest.score * 100).toFixed(0)}%), weakest: ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%)`
+  }
 
   return {
     score: r2(score), label,
@@ -2633,6 +2796,55 @@ function computeScenarioDrivers(
   return drivers
 }
 
+// ─── Calibration Feedback Loop ───────────────────────────────────────
+//
+// After backtesting, compute adjustment factors per probability bucket.
+// If we predict 80% but only 30% actually occur, the adjustment = 0.30/0.80 = 0.375.
+// These factors are stored and applied to future event probabilities,
+// making the next forecast more honest.
+
+function buildCalibrationAdjustments(calibration: CalibrationResult | null): CalibrationAdjustment[] {
+  if (!calibration || calibration.total_events_evaluated < 10) return []
+
+  return calibration.buckets
+    .filter((b) => b.count >= 3)
+    .map((b) => {
+      const predicted = b.predicted_prob
+      const actual = b.actual_rate
+      // Blend toward actual but don't overcorrect: 70% correction, 30% original
+      const blendedFactor = predicted > 0.01
+        ? Math.max(0.1, Math.min(2.0, 0.3 + 0.7 * (actual / predicted)))
+        : 1.0
+      return {
+        bucket_range: b.range,
+        predicted_avg: predicted,
+        actual_rate: actual,
+        adjustment_factor: r2(blendedFactor),
+      }
+    })
+}
+
+function applyCalibrationToEvents(events: ForecastEvent[], adjustments: CalibrationAdjustment[]): ForecastEvent[] {
+  if (adjustments.length === 0) return events
+
+  const bucketRanges = [
+    { range: "0-20%", lo: 0, hi: 0.2 },
+    { range: "20-40%", lo: 0.2, hi: 0.4 },
+    { range: "40-60%", lo: 0.4, hi: 0.6 },
+    { range: "60-80%", lo: 0.6, hi: 0.8 },
+    { range: "80-100%", lo: 0.8, hi: 1.01 },
+  ]
+
+  return events.map((e) => {
+    const bucket = bucketRanges.find((b) => e.probability >= b.lo && e.probability < b.hi)
+    if (!bucket) return e
+    const adj = adjustments.find((a) => a.bucket_range === bucket.range)
+    if (!adj || Math.abs(adj.adjustment_factor - 1.0) < 0.05) return e
+    const calibratedProb = r2(Math.max(0.02, Math.min(0.98, e.probability * adj.adjustment_factor)))
+    return { ...e, probability: calibratedProb }
+  })
+}
+
 // ─── Backtesting ────────────────────────────────────────────────────
 //
 // Replay: take historical movements up to N days ago, build a forecast,
@@ -2859,11 +3071,20 @@ export function computeCashflowForecast(
   const buckets = decomposeMovements(movements)
   const components = buckets.map((b) => buildComponent(b, dataSpanDays))
 
-  // Entity-level behavioral models (enhanced with invoice + bill data)
-  const behavioral_models = buildBehavioralModels(movements, invoices, bills)
+  // Run a preliminary backtest to get calibration data.
+  // This is used to feed calibration adjustments into the behavioral models
+  // so that event probabilities are auto-corrected before the final forecast.
+  const prelimBacktest = runBacktest(movements, invoices, bills)
+  const priorCalibration = prelimBacktest?.calibration ?? null
+
+  // Entity-level behavioral models (enhanced with invoice + bill + calibration data)
+  const behavioral_models = buildBehavioralModels(movements, invoices, bills, priorCalibration)
 
   // Event generation: discrete 30-day forecast
-  const events_30d = generateEvents30d(behavioral_models, components)
+  let events_30d = generateEvents30d(behavioral_models, components)
+
+  // Apply calibration adjustments: correct probabilities based on backtest accuracy
+  events_30d = applyCalibrationToEvents(events_30d, behavioral_models.calibration_adjustments)
 
   // Daily cashflow simulation: cash[t+1] = cash[t] + inflows[t] - outflows[t]
   const daily_simulation = simulateDaily(events_30d, startingCash)
@@ -2908,8 +3129,8 @@ export function computeCashflowForecast(
     transitions: [], balance_source: "derived", account_balances: [],
   }
 
-  // Backtest: replay last 14 days to measure forecast accuracy
-  const backtest = runBacktest(movements, invoices, bills)
+  // Reuse the preliminary backtest (already computed for calibration feedback)
+  const backtest = prelimBacktest
 
   // Forecast confidence (8-component weighted, with backtest input)
   const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest)
