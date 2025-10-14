@@ -24,6 +24,7 @@ import type {
   TransferBehaviorModel,
   BehavioralModels,
   OutstandingInvoice,
+  OutstandingBill,
   InvoiceSignal,
   ForecastEvent,
   DailySimDay,
@@ -36,11 +37,13 @@ import type {
   ScenarioResult,
   CashflowForecast,
   ForecastConfidence,
+  ForecastContext,
   CashRunway,
   SensitivityDriver,
   SensitivityAnalysis,
   Intervention,
   ScenarioDriver,
+  BacktestResult,
 } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
@@ -191,6 +194,10 @@ function categorize(m: TaggedMovement): { category: ComponentCategory; direction
   const t = m.tag
   if (t.state_inclusion_policy === "exclude_and_review") return null
   const dir = isInflow(m) ? "in" as const : "out" as const
+  const scope = t.state_scope
+
+  // Use state_scope for precise flow gating when available
+  if (scope && !scope.affects_liquidity && t.economic_class !== "transfer") return null
 
   switch (t.economic_class) {
     case "customer_receipt": return { category: "customer_receipts", direction: "in", label: "Customer receipts" }
@@ -222,7 +229,7 @@ function sigmoidDecay(overdueRatio: number): number {
 }
 
 function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = []): CustomerModel[] {
-  const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; isAnomaly: boolean; isFirstSeen: boolean }[] }>()
+  const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; isAnomaly: boolean; isOutlier: boolean; isFirstSeen: boolean; confidence: number }[] }>()
 
   for (const m of movements) {
     if (m.tag.economic_class !== "customer_receipt") continue
@@ -238,7 +245,9 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
       amount: m.amount,
       date: toDateStr(m.occurred_at),
       isAnomaly: m.tag.is_anomaly ?? false,
+      isOutlier: m.tag.is_large_outlier ?? false,
       isFirstSeen: m.tag.is_first_seen_counterparty ?? false,
+      confidence: m.tag.classification_confidence ?? 0,
     })
   }
 
@@ -249,10 +258,16 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     const payments = data.payments.sort((a, b) => a.date.localeCompare(b.date))
     if (payments.length === 0) continue
 
-    // Filter anomalous amounts for a stable average, but keep all for cadence
-    const normalPayments = payments.filter((p) => !p.isAnomaly)
-    const amountsForAvg = (normalPayments.length >= 2 ? normalPayments : payments).map((p) => p.amount)
-    const avgAmount = amountsForAvg.reduce((a, b) => a + b, 0) / amountsForAvg.length
+    // Filter anomalous/outlier amounts for a stable average; weight by confidence
+    const normalPayments = payments.filter((p) => !p.isAnomaly && !p.isOutlier)
+    const usePayments = normalPayments.length >= 2 ? normalPayments : payments
+    let weightedSum = 0, weightSum = 0
+    for (const p of usePayments) {
+      const w = Math.max(0.1, Math.min(1, p.confidence))
+      weightedSum += p.amount * w
+      weightSum += w
+    }
+    const avgAmount = weightSum > 0 ? weightedSum / weightSum : usePayments.reduce((s, p) => s + p.amount, 0) / usePayments.length
 
     const isFirstSeenOnly = payments.length === 1 && payments[0].isFirstSeen
 
@@ -312,9 +327,18 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     if (payments.length >= 5 && intervalVariance < avgInterval * 0.5) confidence = "high"
     else if (payments.length >= 3) confidence = "medium"
 
-    // Match outstanding invoices to this customer by entity_id or name
+    // Collect invoice_ids from tag_data for this customer's movements (T9: direct linkage)
+    const linkedInvoiceIds = new Set<string>()
+    for (const m of movements) {
+      if (m.tag.economic_class !== "customer_receipt") continue
+      if (resolveEntityId(m) !== entityId) continue
+      if (m.tag.invoice_id) linkedInvoiceIds.add(m.tag.invoice_id)
+    }
+
+    // Match outstanding invoices: tag-linked, entity_id, or name match
     const normName = data.name.toLowerCase().replace(/[^a-z0-9]/g, "")
     const customerInvoices = invoices.filter((inv) => {
+      if (linkedInvoiceIds.has(inv.invoice_id)) return true
       if (inv.entity_id && inv.entity_id === entityId) return true
       const invName = inv.customer_name.toLowerCase().replace(/[^a-z0-9]/g, "")
       return invName.length >= 3 && (normName.includes(invName) || invName.includes(normName))
@@ -406,8 +430,8 @@ function detectCadence(avgInterval: number): VendorModel["cadence"] {
   return "irregular"
 }
 
-function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
-  const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; recurring: boolean; isAnomaly: boolean; familyKey: string | null }[] }>()
+function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[] = []): VendorModel[] {
+  const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; recurring: boolean; isAnomaly: boolean; isOutlier: boolean; confidence: number; familyKey: string | null }[] }>()
 
   for (const m of movements) {
     const ec = m.tag.economic_class
@@ -424,6 +448,8 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
       date: toDateStr(m.occurred_at),
       recurring: m.tag.is_recurring ?? false,
       isAnomaly: m.tag.is_anomaly ?? false,
+      isOutlier: m.tag.is_large_outlier ?? false,
+      confidence: m.tag.classification_confidence ?? 0,
       familyKey: m.tag.recurrence_family_id ?? null,
     })
   }
@@ -434,10 +460,16 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
     const payments = data.payments.sort((a, b) => a.date.localeCompare(b.date))
     if (payments.length === 0) continue
 
-    // Filter anomalies for amount calculation, keep all for cadence
-    const normalPayments = payments.filter((p) => !p.isAnomaly)
-    const amountsForAvg = (normalPayments.length >= 2 ? normalPayments : payments).map((p) => p.amount)
-    const avgAmount = amountsForAvg.reduce((a, b) => a + b, 0) / amountsForAvg.length
+    // Filter anomalies/outliers; confidence-weight the rest
+    const normalPayments = payments.filter((p) => !p.isAnomaly && !p.isOutlier)
+    const usePayments = normalPayments.length >= 2 ? normalPayments : payments
+    let vWeightedSum = 0, vWeightTotal = 0
+    for (const p of usePayments) {
+      const w = Math.max(0.1, Math.min(1, p.confidence))
+      vWeightedSum += p.amount * w
+      vWeightTotal += w
+    }
+    const avgAmount = vWeightTotal > 0 ? vWeightedSum / vWeightTotal : usePayments.reduce((s, p) => s + p.amount, 0) / usePayments.length
     const taggedRecurring = payments.filter((p) => p.recurring).length > payments.length * 0.5
 
     // Use movement family data for stronger recurrence signal
@@ -484,6 +516,37 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
     else if (payments.length >= 3) confidence = "medium"
     else if (payments.length >= 2 && (taggedRecurring || familyRecurring)) confidence = "medium"
 
+    // Collect bill_ids from tag_data for this vendor's movements (T9: direct linkage)
+    const linkedBillIds = new Set<string>()
+    for (const m of movements) {
+      const ec = m.tag.economic_class
+      if (ec !== "vendor_payment" && ec !== "payroll" && ec !== "processor_fee" && ec !== "debt_payment") continue
+      if (resolveEntityId(m) !== entityId) continue
+      if (m.tag.bill_id) linkedBillIds.add(m.tag.bill_id)
+    }
+
+    // Match outstanding bills: tag-linked, entity_id, or name match
+    const normName = data.name.toLowerCase().replace(/[^a-z0-9]/g, "")
+    const vendorBills = bills.filter((b) => {
+      if (linkedBillIds.has(b.bill_id)) return true
+      if (b.entity_id && b.entity_id === entityId) return true
+      const bName = b.vendor_name.toLowerCase().replace(/[^a-z0-9]/g, "")
+      return bName.length >= 3 && (normName.includes(bName) || bName.includes(normName))
+    })
+
+    // Bill boost: if vendor has outstanding bills, override next_expected_date with due date
+    if (vendorBills.length > 0) {
+      const now = new Date().toISOString().slice(0, 10)
+      const earliestDue = vendorBills.filter((b) => b.due_date).sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
+      if (earliestDue?.due_date && earliestDue.due_date >= now) {
+        const dueOffset = daysBetween(now, earliestDue.due_date)
+        if (dueOffset <= 30) nextDate = earliestDue.due_date
+      } else if (earliestDue?.status === "overdue") {
+        nextDate = addDays(new Date().toISOString().slice(0, 10), 2)
+      }
+      if (confidence === "low") confidence = "medium"
+    }
+
     models.push({
       entity_id: entityId,
       name: data.name,
@@ -495,6 +558,7 @@ function buildVendorModels(movements: TaggedMovement[]): VendorModel[] {
       payment_count: payments.length,
       next_expected_date: nextDate,
       confidence,
+      outstanding_bills: vendorBills,
     })
   }
 
@@ -590,7 +654,31 @@ function buildTransferModel(movements: TaggedMovement[]): TransferBehaviorModel 
   } else if (intervals.length >= 3 && cv < 0.7) {
     triggerPattern = "irregular"
   }
-  // If cv >= 0.7 or too few intervals, stays "unknown" — we don't guess "low_balance"
+
+  // Detect low_balance pattern: transfers cluster after large outflow days.
+  // Check if transfers tend to follow days with high net outflows (reactive sweeps).
+  if (triggerPattern === "irregular" || triggerPattern === "unknown") {
+    const allMovements = movements.filter((m) => m.tag.economic_class !== "transfer")
+    const netByDate = new Map<string, number>()
+    for (const m of allMovements) {
+      const d = toDateStr(m.occurred_at)
+      const sign = isInflow(m) ? 1 : -1
+      netByDate.set(d, (netByDate.get(d) ?? 0) + m.amount * sign)
+    }
+    let lowBalanceTriggers = 0
+    for (const t of sorted) {
+      // Look at net flow in the 3 days before the transfer
+      let priorNet = 0
+      for (let lookback = 1; lookback <= 3; lookback++) {
+        const priorDate = addDays(t.date, -lookback)
+        priorNet += netByDate.get(priorDate) ?? 0
+      }
+      if (priorNet < -avgAmount * 0.3) lowBalanceTriggers++
+    }
+    if (sorted.length >= 3 && lowBalanceTriggers / sorted.length > 0.5) {
+      triggerPattern = "low_balance"
+    }
+  }
 
   // Detect primary/secondary accounts by frequency
   const acctCounts = new Map<string, number>()
@@ -604,6 +692,7 @@ function buildTransferModel(movements: TaggedMovement[]): TransferBehaviorModel 
   let confidence: "high" | "medium" | "low" = "low"
   if (transfers.length >= 10 && triggerPattern === "periodic") confidence = "high"
   else if (transfers.length >= 5 && triggerPattern !== "unknown") confidence = "medium"
+  else if (transfers.length >= 4 && triggerPattern === "low_balance") confidence = "medium"
 
   return {
     avg_transfer_amount: r2(avgAmount),
@@ -667,11 +756,11 @@ function buildInvoiceSignal(invoices: OutstandingInvoice[]): InvoiceSignal {
   }
 }
 
-function buildBehavioralModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = []): BehavioralModels {
+function buildBehavioralModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], bills: OutstandingBill[] = []): BehavioralModels {
   const customers = buildCustomerModels(movements, invoices)
   return {
     customers,
-    vendors: buildVendorModels(movements),
+    vendors: buildVendorModels(movements, bills),
     settlement: buildSettlementModel(movements),
     transfers: buildTransferModel(movements),
     recurring_fixed: buildRecurringFixed(movements),
@@ -748,7 +837,24 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
   }
 
   // Vendor payment events
+  const vendorBillEntities = new Set<string>()
   for (const v of models.vendors) {
+    // Bill-driven events: use actual due dates and amounts from AP bills
+    if (v.outstanding_bills.length > 0) {
+      vendorBillEntities.add(v.entity_id)
+      for (const bill of v.outstanding_bills) {
+        if (!bill.due_date) continue
+        const offset = daysBetween(today, bill.due_date)
+        if (offset < 0 || offset > 30) continue
+        events.push({
+          date: bill.due_date, day_offset: offset, type: "vendor_payment",
+          entity: v.name, amount: r2(bill.amount_due),
+          direction: "out", probability: bill.status === "overdue" ? 0.95 : 0.9,
+          confidence: "high", source_model: "vendor",
+        })
+      }
+      continue
+    }
     if (!v.is_recurring && v.payment_count < 3) continue
     const prob = v.is_recurring ? 0.9 : 0.6
     generateRepeating(v.last_payment_date, v.cadence_interval_days, 5, (date, offset) => {
@@ -797,6 +903,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
 
   // Transfer events: conditional based on trigger pattern
   if (models.transfers.transfer_count >= 3 && models.transfers.trigger_pattern !== "unknown") {
+    const transferEntity = models.transfers.primary_account ?? "Internal transfer"
     if (models.transfers.trigger_pattern === "periodic" && models.transfers.avg_interval_days) {
       generateRepeating(
         addDays(today, -models.transfers.avg_interval_days),
@@ -805,7 +912,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
         (date, offset) => {
           events.push({
             date, day_offset: offset, type: "transfer",
-            entity: models.transfers.primary_account ?? "Internal transfer",
+            entity: transferEntity,
             amount: r2(models.transfers.avg_transfer_amount),
             direction: "in", probability: 0.7,
             confidence: models.transfers.confidence as "high" | "medium" | "low",
@@ -813,12 +920,31 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
           })
         },
       )
+    } else if (models.transfers.trigger_pattern === "low_balance") {
+      // Reactive transfers: place after large outflow clusters in the forecast
+      const outflowDays = new Map<number, number>()
+      for (const e of events) {
+        if (e.direction === "out") outflowDays.set(e.day_offset, (outflowDays.get(e.day_offset) ?? 0) + e.amount * e.probability)
+      }
+      const sortedOutflowDays = [...outflowDays.entries()].sort((a, b) => b[1] - a[1])
+      let transfersPlaced = 0
+      for (const [outDay] of sortedOutflowDays) {
+        if (transfersPlaced >= 2) break
+        const triggerDay = Math.min(30, outDay + 2)
+        events.push({
+          date: addDays(today, triggerDay), day_offset: triggerDay, type: "transfer",
+          entity: transferEntity,
+          amount: r2(models.transfers.avg_transfer_amount),
+          direction: "in", probability: 0.6,
+          confidence: "medium", source_model: "transfer",
+        })
+        transfersPlaced++
+      }
     } else if (models.transfers.trigger_pattern === "irregular") {
-      // Irregular transfers: approximate as mid-month event with low confidence
       const offset = 15
       events.push({
         date: addDays(today, offset), day_offset: offset, type: "transfer",
-        entity: models.transfers.primary_account ?? "Internal transfer",
+        entity: transferEntity,
         amount: r2(models.transfers.avg_transfer_amount),
         direction: "in", probability: 0.4,
         confidence: "low", source_model: "transfer",
@@ -1054,10 +1180,11 @@ function simulateMonthFromModels(
 // cash[t+1] = cash[t] + inflows[t] - outflows[t]
 // Runs day-by-day for 30 days using generated events.
 //
-// Uses the p50 (median) from Monte Carlo for the deterministic view.
-// Events with probability >= 0.7 are included at full amount (likely to happen).
-// Events with probability < 0.7 are excluded (uncertain — Monte Carlo handles them).
-// This avoids the misleading "partial payment" effect of expected-value math.
+// Uses expected value: amount × probability for each event.
+// High-probability events (≥0.8) contribute near full amount.
+// Low-probability events still contribute proportionally rather than
+// being zeroed out, which gives a more accurate deterministic projection.
+// Monte Carlo handles the full distribution of outcomes.
 
 function simulateDaily(events: ForecastEvent[], startingCash: number): DailySimulation {
   const today = new Date().toISOString().slice(0, 10)
@@ -1082,11 +1209,11 @@ function simulateDaily(events: ForecastEvent[], startingCash: number): DailySimu
     const eventSummaries: DailySimDay["events"] = []
 
     for (const e of dayEvents) {
-      if (e.probability < 0.7) continue
-      const amount = r2(e.amount)
-      if (e.direction === "in") dayInflows += amount
-      else dayOutflows += amount
-      eventSummaries.push({ entity: e.entity, amount, direction: e.direction })
+      const ev = r2(e.amount * e.probability)
+      if (ev < 1) continue
+      if (e.direction === "in") dayInflows += ev
+      else dayOutflows += ev
+      eventSummaries.push({ entity: e.entity, amount: ev, direction: e.direction })
     }
 
     cash = r2(cash + dayInflows - dayOutflows)
@@ -1303,23 +1430,37 @@ type ScenarioConfig = {
   trend_dampening: number
 }
 
-const SCENARIOS: ScenarioConfig[] = [
-  {
-    scenario: "base", label: "Base case",
-    customer_prob_mult: 1.0, inflow_amount_mult: 1.0,
-    outflow_amount_mult: 1.0, trend_dampening: 1.0,
-  },
-  {
-    scenario: "optimistic", label: "Optimistic — faster collections, stable costs",
-    customer_prob_mult: 1.15, inflow_amount_mult: 1.08,
-    outflow_amount_mult: 0.95, trend_dampening: 1.2,
-  },
-  {
-    scenario: "pessimistic", label: "Pessimistic — delayed collections, cost pressure",
-    customer_prob_mult: 0.75, inflow_amount_mult: 0.88,
-    outflow_amount_mult: 1.12, trend_dampening: 0.5,
-  },
-]
+function buildScenarios(ctx: ForecastContext | null): ScenarioConfig[] {
+  // Risk-aware scenario biases: higher risk → more aggressive pessimistic stress
+  const riskScore = ctx?.risk_score ?? 0
+  const concRisk = ctx?.concentration_risk_score ?? 0
+  const depRisk = ctx?.dependency_risk_score ?? 0
+  const regime = ctx?.liquidity_regime ?? "stable"
+  const hasTransitions = (ctx?.transitions ?? []).some((t) => t.regime_change)
+
+  // Pessimistic multipliers get worse with higher risk
+  const pessInflowMult = 0.88 - (concRisk > 50 ? 0.08 : 0) - (hasTransitions ? 0.05 : 0)
+  const pessOutflowMult = 1.12 + (depRisk > 50 ? 0.06 : 0) + (regime === "tightening" ? 0.04 : 0)
+  const pessCustProb = 0.75 - (riskScore > 60 ? 0.10 : riskScore > 40 ? 0.05 : 0)
+
+  return [
+    {
+      scenario: "base", label: "Base case",
+      customer_prob_mult: 1.0, inflow_amount_mult: 1.0,
+      outflow_amount_mult: 1.0, trend_dampening: 1.0,
+    },
+    {
+      scenario: "optimistic", label: "Optimistic — faster collections, stable costs",
+      customer_prob_mult: 1.15, inflow_amount_mult: 1.08,
+      outflow_amount_mult: 0.95, trend_dampening: 1.2,
+    },
+    {
+      scenario: "pessimistic", label: `Pessimistic — risk-adjusted${riskScore > 50 ? " (elevated risk)" : ""}`,
+      customer_prob_mult: r2(pessCustProb), inflow_amount_mult: r2(pessInflowMult),
+      outflow_amount_mult: r2(pessOutflowMult), trend_dampening: 0.5,
+    },
+  ]
+}
 
 function runScenario(
   models: BehavioralModels,
@@ -1401,6 +1542,7 @@ function generateNarrative(
   models: BehavioralModels,
   events: ForecastEvent[],
   startingCash: number,
+  ctx: ForecastContext | null = null,
 ): ForecastNarrative {
   // Guard: if no events or no simulation data, return safe defaults
   if (events.length === 0 || mc.percentiles.length === 0) {
@@ -1451,6 +1593,16 @@ function generateNarrative(
     risk = `Cash range in 30 days: ${money(mc.worst_case_cash_30d)} to ${money(mc.best_case_cash_30d)} (${money(spread)} spread)`
   }
 
+  // Enrich risk with state context
+  if (ctx) {
+    if (ctx.concentration_risk_score > 50) {
+      risk += ` · Revenue concentration elevated (top customer ${ctx.top_customer_pct}%)`
+    }
+    if (ctx.dependency_risk_score > 50) {
+      risk += ` · Operating dependency only ${Math.round(ctx.operating_dependency_ratio * 100)}%`
+    }
+  }
+
   // ── Insight ──
   let insight: string
   const inflowEvents = events.filter((e) => e.direction === "in")
@@ -1491,6 +1643,20 @@ function generateNarrative(
     }
   } else {
     insight = "Cash position is primarily driven by inflow timing — outflow obligations are minimal"
+  }
+
+  // Enrich insight with state-level context
+  if (ctx) {
+    if (ctx.repeat_revenue_ratio < 0.4 && ctx.repeat_revenue_ratio > 0) {
+      insight += ` · Revenue retention is weak (${Math.round(ctx.repeat_revenue_ratio * 100)}% repeat)`
+    }
+    if (ctx.recurring_spend_ratio > 0.8) {
+      insight += ` · Spend base is ${Math.round(ctx.recurring_spend_ratio * 100)}% fixed obligations`
+    }
+    const regimeTransition = ctx.transitions.find((t) => t.regime_change)
+    if (regimeTransition) {
+      insight += ` · ${regimeTransition.description}`
+    }
   }
 
   // ── Action ──
@@ -1939,6 +2105,105 @@ function computeScenarioDrivers(
   return drivers
 }
 
+// ─── Backtesting ────────────────────────────────────────────────────
+//
+// Replay: take historical movements up to N days ago, build a forecast,
+// then compare predicted vs actual for the next N days.
+// This gives a real accuracy metric, not a heuristic.
+
+function runBacktest(movements: TaggedMovement[], invoices: OutstandingInvoice[], bills: OutstandingBill[]): BacktestResult | null {
+  const testDays = 14
+  const allDates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
+  if (allDates.length < 30) return null
+
+  const lastDate = allDates[allDates.length - 1]
+  const cutoffDate = addDays(lastDate, -testDays)
+
+  // Split: training set (before cutoff) and test set (after cutoff)
+  const training = movements.filter((m) => toDateStr(m.occurred_at) <= cutoffDate)
+  const testSet = movements.filter((m) => toDateStr(m.occurred_at) > cutoffDate)
+
+  if (training.length < 20 || testSet.length < 5) return null
+
+  // Build behavioral models from training data only
+  const models = buildBehavioralModels(training, invoices, bills)
+
+  // Compute starting cash at cutoff
+  let startCash = 0
+  for (const m of training) {
+    startCash += isInflow(m) ? m.amount : -m.amount
+  }
+
+  // Generate forecast from cutoff point
+  const buckets = decomposeMovements(training)
+  const dataSpan = daysBetween(allDates[0], cutoffDate)
+  const components = buckets.map((b) => buildComponent(b, dataSpan))
+  const events = generateEvents30d(models, components)
+
+  // Simulate predicted daily cash
+  const predictedDailyNet = new Array<number>(testDays + 1).fill(0)
+  for (const e of events) {
+    if (e.day_offset < 1 || e.day_offset > testDays) continue
+    const ev = e.amount * e.probability
+    predictedDailyNet[e.day_offset] += e.direction === "in" ? ev : -ev
+  }
+
+  // Compute actual daily net from test set
+  const actualDailyNet = new Array<number>(testDays + 1).fill(0)
+  for (const m of testSet) {
+    const d = toDateStr(m.occurred_at)
+    const offset = daysBetween(cutoffDate, d)
+    if (offset >= 1 && offset <= testDays) {
+      actualDailyNet[offset] += isInflow(m) ? m.amount : -m.amount
+    }
+  }
+
+  // Compute accuracy metrics
+  let absErrorSum = 0
+  let directionMatches = 0
+  let activeDays = 0
+
+  for (let d = 1; d <= testDays; d++) {
+    const pred = predictedDailyNet[d]
+    const actual = actualDailyNet[d]
+    if (Math.abs(actual) < 1 && Math.abs(pred) < 1) continue
+    activeDays++
+    absErrorSum += Math.abs(pred - actual)
+    if ((pred >= 0 && actual >= 0) || (pred < 0 && actual < 0)) directionMatches++
+  }
+
+  if (activeDays < 3) return null
+
+  const mae = absErrorSum / activeDays
+  const directionAccuracy = directionMatches / activeDays
+
+  // Total predicted vs actual for the period
+  const totalPredicted = predictedDailyNet.reduce((s, v) => s + v, 0)
+  const totalActual = actualDailyNet.reduce((s, v) => s + v, 0)
+  const totalScale = Math.max(Math.abs(totalActual), 1)
+  const relativeError = Math.abs(totalPredicted - totalActual) / totalScale
+
+  // Accuracy score: 0-100, combining direction accuracy and relative error
+  const score = Math.round(
+    Math.max(0, Math.min(100,
+      (directionAccuracy * 60) + ((1 - Math.min(1, relativeError)) * 40)
+    ))
+  )
+
+  let details: string
+  if (score >= 75) details = `Strong backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
+  else if (score >= 50) details = `Moderate backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
+  else details = `Weak backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)} — forecast may be unreliable`
+
+  return {
+    accuracy_score: score,
+    days_tested: activeDays,
+    mean_absolute_error: r2(mae),
+    direction_accuracy: r2(directionAccuracy),
+    details,
+  }
+}
+
 // ─── Public API ─────────────────────────────────────────────────────
 
 export function computeCashflowForecast(
@@ -1947,6 +2212,8 @@ export function computeCashflowForecast(
   horizonMonths: number = 6,
   invoices: OutstandingInvoice[] = [],
   identityCtx: IdentityContext = { entityNames: new Map(), entityTypes: new Map(), aliasToEntityId: new Map(), counterpartyByMovement: new Map(), familyMembers: new Map() },
+  bills: OutstandingBill[] = [],
+  forecastCtx: ForecastContext | null = null,
 ): CashflowForecast {
   setIdentityContext(identityCtx)
   const dates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
@@ -1958,8 +2225,8 @@ export function computeCashflowForecast(
   const buckets = decomposeMovements(movements)
   const components = buckets.map((b) => buildComponent(b, dataSpanDays))
 
-  // Entity-level behavioral models (enhanced with invoice data)
-  const behavioral_models = buildBehavioralModels(movements, invoices)
+  // Entity-level behavioral models (enhanced with invoice + bill data)
+  const behavioral_models = buildBehavioralModels(movements, invoices, bills)
 
   // Event generation: discrete 30-day forecast
   const events_30d = generateEvents30d(behavioral_models, components)
@@ -1970,11 +2237,11 @@ export function computeCashflowForecast(
   // Monte Carlo: 500 simulations with payment delays, amount variance, missed payments
   const monte_carlo = runMonteCarlo(events_30d, startingCash, 500)
 
-  // Narrative: deterministic Forecast / Risk / Insight / Action
-  const narrative = generateNarrative(monte_carlo, daily_simulation, behavioral_models, events_30d, startingCash)
+  // Narrative: deterministic Forecast / Risk / Insight / Action (enriched with state context)
+  const narrative = generateNarrative(monte_carlo, daily_simulation, behavioral_models, events_30d, startingCash, forecastCtx)
 
-  // Run scenarios using behavioral simulation
-  const scenarios = SCENARIOS.map((config) =>
+  // Run risk-aware scenarios
+  const scenarios = buildScenarios(forecastCtx).map((config) =>
     runScenario(behavioral_models, components, horizonMonths, startingCash, config)
   )
 
@@ -1996,10 +2263,22 @@ export function computeCashflowForecast(
   const pessDrivers = baseScenario && pessScenario
     ? computeScenarioDrivers(behavioral_models, events_30d, baseScenario, pessScenario)
     : []
-  // Attach drivers to pessimistic scenario (extend the object)
   if (pessScenario && pessDrivers.length > 0) {
     (pessScenario as ScenarioResult & { drivers?: ScenarioDriver[] }).drivers = pessDrivers
   }
+
+  // Build context for downstream (default if not provided from state API)
+  const context: ForecastContext = forecastCtx ?? {
+    risk_score: 0, risk_level: "low",
+    concentration_risk_score: 0, dependency_risk_score: 0, liquidity_risk_score: 0,
+    top_customer_pct: 0, repeat_revenue_ratio: 0,
+    operating_dependency_ratio: 1, transfer_dependency_ratio: 0,
+    recurring_spend_ratio: 0, liquidity_regime: "stable",
+    transitions: [], balance_source: "derived", account_balances: [],
+  }
+
+  // Backtest: replay last 14 days to measure forecast accuracy
+  const backtest = runBacktest(movements, invoices, bills)
 
   return {
     period_start: periodStart,
@@ -2017,5 +2296,7 @@ export function computeCashflowForecast(
     cash_runway,
     sensitivity,
     interventions,
+    context,
+    backtest,
   }
 }

@@ -229,6 +229,7 @@ export type VendorModel = {
   payment_count: number
   next_expected_date: string | null
   confidence: "high" | "medium" | "low"
+  outstanding_bills: OutstandingBill[]
 }
 
 export type SettlementModel = {
@@ -412,6 +413,53 @@ export type ScenarioResultV2 = ScenarioResult & {
   drivers: ScenarioDriver[]
 }
 
+export type OutstandingBill = {
+  bill_id: string
+  source: "qbo" | "xero" | "gmail"
+  vendor_name: string
+  vendor_source_id: string | null
+  entity_id: string | null
+  amount: number
+  amount_due: number
+  due_date: string | null
+  days_until_due: number | null
+  days_overdue: number | null
+  status: "open" | "overdue" | "partially_paid"
+}
+
+export type AccountBalance = {
+  account_id: string
+  name: string
+  type: string
+  subtype: string | null
+  balance: number
+}
+
+export type ForecastContext = {
+  risk_score: number
+  risk_level: "low" | "medium" | "high"
+  concentration_risk_score: number
+  dependency_risk_score: number
+  liquidity_risk_score: number
+  top_customer_pct: number
+  repeat_revenue_ratio: number
+  operating_dependency_ratio: number
+  transfer_dependency_ratio: number
+  recurring_spend_ratio: number
+  liquidity_regime: LiquidityRegime
+  transitions: TransitionSignal[]
+  balance_source: "plaid" | "derived"
+  account_balances: AccountBalance[]
+}
+
+export type BacktestResult = {
+  accuracy_score: number
+  days_tested: number
+  mean_absolute_error: number
+  direction_accuracy: number
+  details: string
+}
+
 export type CashflowForecast = {
   period_start: string
   forecast_horizon_months: number
@@ -428,6 +476,8 @@ export type CashflowForecast = {
   cash_runway: CashRunway
   sensitivity: SensitivityAnalysis
   interventions: Intervention[]
+  context: ForecastContext
+  backtest: BacktestResult | null
 }
 
 export type BusinessState = {

@@ -252,7 +252,8 @@ export function OnboardingFlow({
   type OutstandingInvoice = { invoice_id: string; source: string; customer_name: string; customer_source_id: string | null; entity_id: string | null; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: "open" | "overdue" | "partially_paid" }
   type InvoiceSignal = { invoices: OutstandingInvoice[]; total_outstanding: number; total_overdue: number; overdue_count: number; avg_days_to_due: number | null }
   type CustomerModel = { entity_id: string; name: string; avg_amount: number; payment_interval_days: number; interval_variance: number; last_payment_date: string; payment_count: number; probability_of_next: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_invoices: OutstandingInvoice[] }
-  type VendorModel = { entity_id: string; name: string; avg_amount: number; cadence: string; cadence_interval_days: number; is_recurring: boolean; last_payment_date: string; payment_count: number; next_expected_date: string | null; confidence: "high" | "medium" | "low" }
+  type OutstandingBill = { bill_id: string; source: string; vendor_name: string; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: string }
+  type VendorModel = { entity_id: string; name: string; avg_amount: number; cadence: string; cadence_interval_days: number; is_recurring: boolean; last_payment_date: string; payment_count: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_bills?: OutstandingBill[] }
   type SettlementModel = { avg_delay_days: number; delay_std: number; sample_count: number; confidence: string }
   type TransferBehaviorModel = { avg_transfer_amount: number; transfer_count: number; trigger_pattern: string; avg_interval_days: number | null; primary_account: string | null; secondary_account: string | null; confidence: string }
   type BehavioralModels = { customers: CustomerModel[]; vendors: VendorModel[]; settlement: SettlementModel; transfers: TransferBehaviorModel; recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]; invoice_signal: InvoiceSignal }
@@ -265,14 +266,18 @@ export function OnboardingFlow({
   type DayScenarioSnapshot = { scenario: "base" | "conservative" | "aggressive"; label: string; cash_14d: number; cash_30d: number; min_cash: number; min_cash_day: number }
   type MonteCarloResult = { simulations: number; percentiles: MonteCarloPercentile[]; prob_below_zero_14d: number; prob_below_zero_30d: number; prob_above_starting_30d: number; expected_cash_30d: number; worst_case_cash_30d: number; best_case_cash_30d: number; day_scenarios: DayScenarioSnapshot[] }
   type ForecastNarrative = { forecast: string; risk: string; insight: string; action: string; severity: "healthy" | "caution" | "danger" }
-  type ForecastConfidence = { score: number; label: "high" | "medium" | "low"; model_coverage: number; data_completeness: number; variance_penalty: number; reasons: string[] }
+  type ComponentConfidence = { area: string; score: number; label: "high" | "medium" | "low"; reason: string }
+  type ForecastConfidence = { score: number; label: "high" | "medium" | "low"; model_coverage: number; data_completeness: number; variance_penalty: number; reasons: string[]; by_component: ComponentConfidence[] }
   type CashRunway = { base_months: number | null; pessimistic_months: number | null; monthly_burn_rate: number; months_of_data: number }
   type SensitivityDriver = { entity: string; type: string; impact_pct: number; direction: "positive" | "negative"; description: string }
   type SensitivityAnalysis = { drivers: SensitivityDriver[]; top_risk_driver: string; top_opportunity_driver: string }
   type Intervention = { id: string; label: string; type: string; entity: string | null; parameter_days: number | null; parameter_pct: number | null; impact_cash_14d: number; impact_cash_30d: number; impact_risk_reduction: number; description: string }
   type ScenarioDriver = { factor: string; impact_amount: number; direction: "positive" | "negative" }
   type ScenarioResultV2 = ScenarioResult & { drivers?: ScenarioDriver[] }
-  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[] }
+  type AccountBalance = { account_id: string; name: string; type: string; subtype: string | null; balance: number }
+  type ForecastContext = { risk_score: number; risk_level: string; concentration_risk_score: number; dependency_risk_score: number; liquidity_risk_score: number; top_customer_pct: number; repeat_revenue_ratio: number; operating_dependency_ratio: number; transfer_dependency_ratio: number; recurring_spend_ratio: number; liquidity_regime: string; balance_source: string; account_balances: AccountBalance[]; transitions: { signal: string; severity: string; description: string; regime_change: boolean }[] }
+  type BacktestResult = { accuracy_score: number; days_tested: number; mean_absolute_error: number; direction_accuracy: number; details: string }
+  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[]; context?: ForecastContext; backtest?: BacktestResult | null }
   const [forecastData, setForecastData] = useState<CashflowForecast | null>(null)
   const [forecastLoading, setForecastLoading] = useState(false)
   const [forecastError, setForecastError] = useState<string | null>(null)
@@ -3241,12 +3246,35 @@ export function OnboardingFlow({
                   <span>Data span: {forecastData.data_span_days}d</span>
                   <span>Components: {forecastData.components.length}</span>
                   <span>Horizon: {forecastData.forecast_horizon_months} months</span>
+                  {forecastData.context && (
+                    <span className="text-gray-400">Balance: <span className={forecastData.context.balance_source === "plaid" ? "text-emerald-400" : "text-amber-400"}>{forecastData.context.balance_source === "plaid" ? "Live (Plaid)" : "Derived"}</span></span>
+                  )}
                   {forecastData.forecast_confidence && (
                     <span className={`font-semibold ${forecastData.forecast_confidence.label === "high" ? "text-emerald-400" : forecastData.forecast_confidence.label === "medium" ? "text-amber-400" : "text-red-400"}`}>
                       Forecast confidence: {Math.round(forecastData.forecast_confidence.score * 100)}% ({forecastData.forecast_confidence.label})
                     </span>
                   )}
                 </div>
+                {/* ─── Context: Risk & Account Balances ─── */}
+                {forecastData.context && (forecastData.context.risk_score > 0 || forecastData.context.account_balances.length > 0) && (
+                  <div className="flex flex-wrap gap-3 text-[10px] text-gray-400 mt-1">
+                    {forecastData.context.risk_score > 0 && (
+                      <span>Risk: <span className={forecastData.context.risk_level === "high" ? "text-red-400 font-semibold" : forecastData.context.risk_level === "medium" ? "text-amber-400" : "text-emerald-400"}>{forecastData.context.risk_level} ({forecastData.context.risk_score})</span></span>
+                    )}
+                    {forecastData.context.liquidity_regime !== "stable" && (
+                      <span>Regime: <span className={forecastData.context.liquidity_regime === "tightening" ? "text-red-400" : "text-emerald-400"}>{forecastData.context.liquidity_regime}</span></span>
+                    )}
+                    {forecastData.sensitivity?.top_risk_driver && (
+                      <span>Top risk: <span className="text-red-300">{forecastData.sensitivity.top_risk_driver}</span></span>
+                    )}
+                    {forecastData.sensitivity?.top_opportunity_driver && (
+                      <span>Top opportunity: <span className="text-emerald-300">{forecastData.sensitivity.top_opportunity_driver}</span></span>
+                    )}
+                    {forecastData.context.account_balances.length > 0 && forecastData.context.account_balances.map((ab) => (
+                      <span key={ab.account_id}>{ab.name}: <span className="text-white font-mono">${Math.round(ab.balance).toLocaleString()}</span></span>
+                    ))}
+                  </div>
+                )}
 
                 {/* ─── Narrative: The Final Output ─── */}
                 {(() => {
@@ -3332,9 +3360,11 @@ export function OnboardingFlow({
                           <div className="space-y-1 mb-4">
                             {events7d.slice(0, 8).map((evt, i) => {
                               const typeColor = evt.direction === "in" ? "text-emerald-400" : "text-red-400"
+                              const confDot = evt.confidence === "high" ? "bg-emerald-500" : evt.confidence === "medium" ? "bg-amber-500" : "bg-red-500"
                               return (
                                 <div key={`7d-${evt.date}-${evt.entity}-${i}`} className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02]">
                                   <span className="text-xs font-mono text-gray-500 w-8 shrink-0">D+{evt.day_offset}</span>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${confDot} shrink-0`} title={`${evt.confidence} confidence (${evt.source_model})`} />
                                   <span className={`text-xs truncate flex-1 ${typeColor}`}>{evt.entity}</span>
                                   <span className="text-[10px] text-gray-600 shrink-0">{Math.round(evt.probability * 100)}%</span>
                                   <span className={`text-sm font-mono font-semibold shrink-0 w-20 text-right ${typeColor}`}>
@@ -3352,9 +3382,11 @@ export function OnboardingFlow({
                       <div className="space-y-1 mb-3">
                         {topByImpact.map((evt, i) => {
                           const typeColor = evt.direction === "in" ? "text-emerald-400" : "text-red-400"
+                          const confDot = evt.confidence === "high" ? "bg-emerald-500" : evt.confidence === "medium" ? "bg-amber-500" : "bg-red-500"
                           return (
                             <div key={`top-${evt.date}-${evt.entity}-${i}`} className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02]">
                               <span className="text-xs font-mono text-gray-500 w-8 shrink-0">D+{evt.day_offset}</span>
+                              <span className={`w-1.5 h-1.5 rounded-full ${confDot} shrink-0`} title={`${evt.confidence} confidence (${evt.source_model})`} />
                               <span className={`text-xs truncate flex-1 ${typeColor}`}>{evt.entity}</span>
                               <span className="text-[10px] text-gray-600 shrink-0">{evt.type.replace(/_/g, " ")}</span>
                               <span className="text-[10px] text-gray-600 shrink-0">{Math.round(evt.probability * 100)}%</span>
@@ -3695,6 +3727,9 @@ export function OnboardingFlow({
                               <span className="text-sm text-white truncate">{v.name}</span>
                               <span className="text-[10px] text-gray-500 border border-white/10 rounded px-1 py-0.5">{v.cadence}</span>
                               {v.is_recurring && <span className="text-[10px] text-amber-400">recurring</span>}
+                              {v.outstanding_bills && v.outstanding_bills.length > 0 && (
+                                <span className="text-[10px] text-red-300 border border-red-500/30 rounded px-1 py-0.5">{v.outstanding_bills.length} bill{v.outstanding_bills.length > 1 ? "s" : ""} due</span>
+                              )}
                             </div>
                             <div className="text-right shrink-0">
                               <div className="text-sm font-mono text-red-400">{money(v.avg_amount)}<span className="text-gray-500"> avg</span></div>
@@ -3705,6 +3740,9 @@ export function OnboardingFlow({
                             <span>{v.payment_count} payments</span>
                             {v.next_expected_date && <span className="text-blue-400">next ≈ {v.next_expected_date}</span>}
                             <span>last: {v.last_payment_date.slice(0, 10)}</span>
+                            {v.outstanding_bills && v.outstanding_bills.length > 0 && (
+                              <span className="text-red-300">${v.outstanding_bills.reduce((s, b) => s + b.amount_due, 0).toLocaleString()} outstanding</span>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -4015,6 +4053,30 @@ export function OnboardingFlow({
                         ))}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* ─── Backtest Accuracy ─── */}
+                {forecastData.backtest && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Backtest Accuracy</h3>
+                      <span className={`text-lg font-mono font-bold ${forecastData.backtest.accuracy_score >= 75 ? "text-emerald-400" : forecastData.backtest.accuracy_score >= 50 ? "text-amber-400" : "text-red-400"}`}>
+                        {forecastData.backtest.accuracy_score}%
+                      </span>
+                    </div>
+                    <div className="flex gap-4 text-[11px] text-gray-400 mb-2">
+                      <span>Days tested: {forecastData.backtest.days_tested}</span>
+                      <span>Direction accuracy: {Math.round(forecastData.backtest.direction_accuracy * 100)}%</span>
+                      <span>MAE: ${Math.round(forecastData.backtest.mean_absolute_error).toLocaleString()}</span>
+                    </div>
+                    <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${forecastData.backtest.accuracy_score >= 75 ? "bg-emerald-500" : forecastData.backtest.accuracy_score >= 50 ? "bg-amber-500" : "bg-red-500"}`}
+                        style={{ width: `${forecastData.backtest.accuracy_score}%` }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-2">{forecastData.backtest.details}</p>
                   </div>
                 )}
 

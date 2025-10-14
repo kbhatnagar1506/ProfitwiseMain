@@ -4,9 +4,10 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema, ensureQBOSchema } from "@/lib/db"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
-import type { OutstandingInvoice } from "@/lib/state/types"
+import type { OutstandingInvoice, OutstandingBill, AccountBalance, ForecastContext, TransitionSignal } from "@/lib/state/types"
 import { computeCashflowForecast } from "@/lib/state/forecast-engine"
 import type { IdentityContext } from "@/lib/state/forecast-engine"
+import { computeBusinessState } from "@/lib/state"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -323,6 +324,236 @@ export async function GET() {
       }
     } catch { /* Gmail invoices may not be available */ }
 
+    // ── Stripe outstanding invoices (AR) ──
+    try {
+      type StripeInvRow = { entity_id: string; data: Record<string, unknown> }
+      const stripeRows = await query<StripeInvRow>(
+        `SELECT se.entity_id, se.data FROM stripe_entities se
+         WHERE se.user_id = $1 AND se.entity_type = 'invoice'`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const row of stripeRows) {
+        const d = row.data
+        const amountDue = parseFloat(String(d.amount_due ?? 0)) / 100
+        if (amountDue <= 0) continue
+        const total = parseFloat(String(d.total ?? d.amount_due ?? 0)) / 100
+        const custEmail = String((d.customer_email as string) ?? "")
+        const custName = String(d.customer_name ?? custEmail ?? "Unknown")
+        const dueTimestamp = d.due_date as number | null
+        const dueDate = dueTimestamp ? new Date(dueTimestamp * 1000).toISOString().slice(0, 10) : null
+        let daysToDue: number | null = null
+        let daysOverdue: number | null = null
+        let status: OutstandingInvoice["status"] = "open"
+        if (dueDate) {
+          const diff = Math.round((new Date(dueDate).getTime() - new Date(today).getTime()) / 86_400_000)
+          if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
+          else daysToDue = diff
+        }
+        if (amountDue < total && amountDue > 0) status = "partially_paid"
+        outstandingInvoices.push({
+          invoice_id: row.entity_id, source: "stripe",
+          customer_name: custName, customer_source_id: String(d.customer ?? ""),
+          entity_id: null, amount: total, amount_due: amountDue,
+          due_date: dueDate, days_until_due: daysToDue,
+          days_overdue: daysOverdue, status,
+        })
+      }
+    } catch { /* Stripe invoices may not be available */ }
+
+    // Stripe subscriptions → recurring revenue signals
+    try {
+      type StripeSubRow = { entity_id: string; data: Record<string, unknown> }
+      const subRows = await query<StripeSubRow>(
+        `SELECT se.entity_id, se.data FROM stripe_entities se
+         WHERE se.user_id = $1 AND se.entity_type = 'subscription'
+         AND se.data->>'status' IN ('active', 'trialing')`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const row of subRows) {
+        const d = row.data
+        const plan = d.plan as Record<string, unknown> | undefined
+        const amount = plan ? parseFloat(String(plan.amount ?? 0)) / 100 : 0
+        if (amount <= 0) continue
+        const interval = String(plan?.interval ?? "month")
+        const custName = String(d.customer_name ?? d.customer_email ?? "Stripe subscriber")
+        const currentPeriodEnd = d.current_period_end as number | null
+        const nextDate = currentPeriodEnd ? new Date(currentPeriodEnd * 1000).toISOString().slice(0, 10) : null
+        if (nextDate) {
+          const offset = Math.round((new Date(nextDate).getTime() - new Date(today).getTime()) / 86_400_000)
+          if (offset >= 0 && offset <= 30) {
+            outstandingInvoices.push({
+              invoice_id: `stripe_sub_${row.entity_id}`,
+              source: "stripe",
+              customer_name: custName,
+              customer_source_id: String(d.customer ?? ""),
+              entity_id: null,
+              amount,
+              amount_due: amount,
+              due_date: nextDate,
+              days_until_due: offset,
+              days_overdue: null,
+              status: "open",
+            })
+          }
+        }
+      }
+    } catch { /* Stripe subscriptions may not be available */ }
+
+    // ── Outstanding AP Bills (QBO, Xero, Gmail) ──
+    const outstandingBills: OutstandingBill[] = []
+
+    // QBO Bills
+    try {
+      type QboBillRow = { entity_id: string; data: Record<string, unknown> }
+      const billRows = await query<QboBillRow>(
+        `SELECT e.entity_id, e.data FROM qbo_entities e
+         JOIN qbo_connections c ON c.realm_id = e.realm_id
+         WHERE c.user_id = $1 AND e.entity_type = 'Bill'`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const row of billRows) {
+        const d = row.data
+        const balance = parseFloat(String(d.Balance ?? 0))
+        if (balance <= 0) continue
+        const totalAmt = parseFloat(String(d.TotalAmt ?? balance))
+        const vendRef = d.VendorRef as Record<string, unknown> | undefined
+        const vendName = String(vendRef?.name ?? vendRef?.value ?? "Unknown")
+        const vendSourceId = vendRef?.value != null ? String(vendRef.value) : null
+        const dueDate = (d.DueDate as string) ?? null
+        let daysToDue: number | null = null
+        let daysOverdue: number | null = null
+        let status: OutstandingBill["status"] = "open"
+        if (dueDate) {
+          const diff = Math.round((new Date(dueDate).getTime() - new Date(today).getTime()) / 86_400_000)
+          if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
+          else daysToDue = diff
+        }
+        if (balance < totalAmt && balance > 0) status = "partially_paid"
+        const entityId = vendSourceId ? (sourceIdToEntity.get(vendSourceId) ?? null) : null
+        outstandingBills.push({
+          bill_id: row.entity_id, source: "qbo",
+          vendor_name: vendName, vendor_source_id: vendSourceId,
+          entity_id: entityId, amount: totalAmt, amount_due: balance,
+          due_date: dueDate, days_until_due: daysToDue,
+          days_overdue: daysOverdue, status,
+        })
+      }
+    } catch { /* QBO Bills may not be available */ }
+
+    // Xero Bills
+    try {
+      type XeroBillRow = { entity_id: string; data: Record<string, unknown> }
+      const xeroBillRows = await query<XeroBillRow>(
+        `SELECT e.entity_id, e.data FROM xero_entities e
+         JOIN xero_connections xc ON xc.tenant_id = e.tenant_id
+         WHERE xc.user_id = $1 AND e.entity_type = 'Bill'`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const row of xeroBillRows) {
+        const d = row.data
+        const amountDue = parseFloat(String(d.AmountDue ?? 0))
+        if (amountDue <= 0) continue
+        const total = parseFloat(String(d.Total ?? amountDue))
+        const contact = d.Contact as Record<string, unknown> | undefined
+        const vendName = String(contact?.Name ?? "Unknown")
+        const dueDate = (d.DueDateString as string) ?? (d.DueDate as string) ?? null
+        let daysToDue: number | null = null
+        let daysOverdue: number | null = null
+        let status: OutstandingBill["status"] = "open"
+        if (dueDate) {
+          const cleanDate = dueDate.slice(0, 10)
+          const diff = Math.round((new Date(cleanDate).getTime() - new Date(today).getTime()) / 86_400_000)
+          if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
+          else daysToDue = diff
+        }
+        if (amountDue < total && amountDue > 0) status = "partially_paid"
+        outstandingBills.push({
+          bill_id: row.entity_id, source: "xero",
+          vendor_name: vendName, vendor_source_id: null,
+          entity_id: null, amount: total, amount_due: amountDue,
+          due_date: dueDate?.slice(0, 10) ?? null, days_until_due: daysToDue,
+          days_overdue: daysOverdue, status,
+        })
+      }
+    } catch { /* Xero Bills may not be available */ }
+
+    // Gmail AP bills
+    try {
+      const gmailApRows = await query<{ extracted_invoice: Record<string, unknown> }>(
+        `SELECT extracted_invoice FROM gmail_synced_messages
+         WHERE user_id = $1 AND extracted_invoice IS NOT NULL
+         AND extracted_invoice->>'side' = 'AP'
+         AND extracted_invoice->>'status' IN ('open', 'partially_paid')`,
+        [user.id]
+      ).then((r) => r.rows)
+      for (const row of gmailApRows) {
+        const d = row.extracted_invoice
+        const amountDue = parseFloat(String(d.amount_outstanding ?? d.total ?? 0))
+        if (amountDue <= 0) continue
+        const total = parseFloat(String(d.total ?? amountDue))
+        const vendName = String(d.counterparty_name ?? "Unknown")
+        const dueDate = (d.due_date as string) ?? null
+        let daysToDue: number | null = null
+        let daysOverdue: number | null = null
+        let status: OutstandingBill["status"] = "open"
+        if (dueDate) {
+          const diff = Math.round((new Date(dueDate).getTime() - new Date(today).getTime()) / 86_400_000)
+          if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
+          else daysToDue = diff
+        }
+        outstandingBills.push({
+          bill_id: `gmail_ap_${d.invoice_number ?? Date.now()}`, source: "gmail",
+          vendor_name: vendName, vendor_source_id: null,
+          entity_id: null, amount: total, amount_due: amountDue,
+          due_date: dueDate, days_until_due: daysToDue,
+          days_overdue: daysOverdue, status,
+        })
+      }
+    } catch { /* Gmail AP may not be available */ }
+
+    // ── Per-account balances ──
+    const accountBalances: AccountBalance[] = []
+    for (const [, acct] of acctByName) {
+      if (acct.type !== "depository") continue
+      const bal = acct.current_balance ?? acct.available_balance
+      if (bal == null) continue
+      if (accountBalances.some((a) => a.account_id === acct.account_id)) continue
+      accountBalances.push({
+        account_id: acct.account_id, name: acct.name,
+        type: acct.type, subtype: acct.subtype ?? null, balance: bal,
+      })
+    }
+
+    // ── Load state/risk context for scenario biases ──
+    let forecastCtx: ForecastContext = {
+      risk_score: 0, risk_level: "low",
+      concentration_risk_score: 0, dependency_risk_score: 0, liquidity_risk_score: 0,
+      top_customer_pct: 0, repeat_revenue_ratio: 0,
+      operating_dependency_ratio: 1, transfer_dependency_ratio: 0,
+      recurring_spend_ratio: 0, liquidity_regime: "stable",
+      transitions: [], balance_source: plaidTotalBalance != null ? "plaid" : "derived",
+      account_balances: accountBalances,
+    }
+    try {
+      const state = await computeBusinessState(user.id)
+      forecastCtx = {
+        risk_score: state.risk?.overall_score ?? 0,
+        risk_level: state.risk?.overall ?? "low",
+        concentration_risk_score: state.risk?.concentration_risk?.score ?? 0,
+        dependency_risk_score: state.risk?.dependency_risk?.score ?? 0,
+        liquidity_risk_score: state.risk?.liquidity_risk?.score ?? 0,
+        top_customer_pct: state.revenue?.top_customer_pct ?? 0,
+        repeat_revenue_ratio: state.revenue?.repeat_revenue_ratio ?? 0,
+        operating_dependency_ratio: state.liquidity?.operating_dependency_ratio ?? 1,
+        transfer_dependency_ratio: state.liquidity?.transfer_dependency_ratio ?? 0,
+        recurring_spend_ratio: state.spend?.total_spend > 0 ? (state.spend?.recurring_obligations ?? 0) / state.spend.total_spend : 0,
+        liquidity_regime: state.liquidity?.liquidity_regime ?? "stable",
+        transitions: (state.transitions ?? []) as TransitionSignal[],
+        balance_source: plaidTotalBalance != null ? "plaid" : "derived",
+        account_balances: accountBalances,
+      }
+    } catch { /* state computation may fail — use defaults */ }
+
     // Build rich identity context from the entity graph
     const identityCtx: IdentityContext = {
       entityNames: new Map(),
@@ -384,7 +615,7 @@ export async function GET() {
       }
     } catch { /* movement_families may not exist */ }
 
-    const forecast = computeCashflowForecast(tagged, startingCash, 6, outstandingInvoices, identityCtx)
+    const forecast = computeCashflowForecast(tagged, startingCash, 6, outstandingInvoices, identityCtx, outstandingBills, forecastCtx)
     return NextResponse.json(forecast)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
