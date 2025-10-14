@@ -204,9 +204,49 @@ export type InvoiceSignal = {
 
 // ─── Entity-Level Behavioral Models ─────────────────────────────────
 
+export type CustomerArchetype =
+  | "clockwork"      // tight interval, low variance — cadence model
+  | "bursty"         // payments cluster then go silent — hazard model
+  | "episodic"       // project-based, large irregular — opportunity-weighted
+  | "slow_reliable"  // pays but always late — invoice-aging model
+  | "volatile"       // erratic amounts and timing
+  | "low_data"       // <3 payments, use invoice-driven model
+
+export type CustomerFeatures = {
+  payment_count: number
+  invoice_count: number
+  paid_vs_unpaid_ratio: number
+  avg_days_to_pay: number
+  std_days_to_pay: number
+  amount_mean: number
+  amount_std: number
+  interval_cv: number
+  recent_trend: "accelerating" | "decelerating" | "stable" | "insufficient"
+  last_payment_recency_days: number
+  overdue_count: number
+  weekday_bias: number | null
+}
+
+export type InvoiceForecast = {
+  invoice_id: string
+  customer_name: string
+  amount_due: number
+  due_date: string | null
+  days_overdue: number | null
+  customer_dso: number
+  probability_7d: number
+  probability_14d: number
+  probability_30d: number
+  expected_collection_date: string
+  expected_amount: number
+  reasoning: string
+}
+
 export type CustomerModel = {
   entity_id: string
   name: string
+  archetype: CustomerArchetype
+  features: CustomerFeatures
   avg_amount: number
   payment_interval_days: number
   interval_variance: number
@@ -216,6 +256,18 @@ export type CustomerModel = {
   next_expected_date: string | null
   confidence: "high" | "medium" | "low"
   outstanding_invoices: OutstandingInvoice[]
+  invoice_forecasts: InvoiceForecast[]
+}
+
+export type RecurrenceType = "hard" | "soft" | "episodic" | "seasonal" | "invoice_triggered" | "unknown"
+
+export type RecurrenceModel = {
+  recurrence_type: RecurrenceType
+  recurrence_confidence: number
+  expected_interval_days: number | null
+  interval_std_days: number | null
+  amount_mean: number | null
+  amount_std: number | null
 }
 
 export type VendorModel = {
@@ -225,6 +277,7 @@ export type VendorModel = {
   cadence: "weekly" | "biweekly" | "monthly" | "quarterly" | "irregular"
   cadence_interval_days: number
   is_recurring: boolean
+  recurrence: RecurrenceModel
   last_payment_date: string
   payment_count: number
   next_expected_date: string | null
@@ -232,11 +285,21 @@ export type VendorModel = {
   outstanding_bills: OutstandingBill[]
 }
 
+export type ProcessorSettlementProfile = {
+  processor: string
+  avg_delay_days: number
+  delay_std: number
+  sample_count: number
+  weekday_pattern: Record<number, number> | null
+  fee_rate: number | null
+}
+
 export type SettlementModel = {
   avg_delay_days: number
   delay_std: number
   sample_count: number
   confidence: "high" | "medium" | "low" | "insufficient"
+  by_processor: ProcessorSettlementProfile[]
 }
 
 export type TransferBehaviorModel = {
@@ -258,6 +321,16 @@ export type BehavioralModels = {
   invoice_signal: InvoiceSignal
 }
 
+export type EventReasoning = {
+  basis: string
+  payment_history?: string
+  interval_info?: string
+  amount_range?: string
+  recurrence_info?: string
+  invoice_info?: string
+  risk_factors?: string[]
+}
+
 export type ForecastEvent = {
   date: string
   day_offset: number
@@ -268,6 +341,7 @@ export type ForecastEvent = {
   probability: number
   confidence: "high" | "medium" | "low"
   source_model: "customer" | "vendor" | "recurring" | "settlement" | "transfer" | "aggregate"
+  reasoning: EventReasoning
 }
 
 export type ForecastMonth = {
@@ -359,6 +433,16 @@ export type ForecastConfidence = {
   variance_penalty: number
   reasons: string[]
   by_component: ComponentConfidence[]
+  diagnosis: string
+}
+
+export type CalibrationResult = {
+  total_events_evaluated: number
+  buckets: { range: string; predicted_prob: number; actual_rate: number; count: number }[]
+  calibration_error: number
+  is_overconfident: boolean
+  is_underconfident: boolean
+  details: string
 }
 
 // ─── Cash Runway ─────────────────────────────────────────────────────
@@ -458,6 +542,7 @@ export type BacktestResult = {
   mean_absolute_error: number
   direction_accuracy: number
   details: string
+  calibration: CalibrationResult | null
 }
 
 export type CashflowForecast = {

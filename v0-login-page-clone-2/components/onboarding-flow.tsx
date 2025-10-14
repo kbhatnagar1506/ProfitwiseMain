@@ -251,15 +251,21 @@ export function OnboardingFlow({
   type CashflowComponent = { id: string; label: string; direction: "in" | "out"; category: string; behavior: ComponentBehavior; monthly_avg: number; monthly_count: number; trend: number; volatility: number; confidence: "high" | "medium" | "low"; seasonal_index: Record<number, number> | null }
   type OutstandingInvoice = { invoice_id: string; source: string; customer_name: string; customer_source_id: string | null; entity_id: string | null; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: "open" | "overdue" | "partially_paid" }
   type InvoiceSignal = { invoices: OutstandingInvoice[]; total_outstanding: number; total_overdue: number; overdue_count: number; avg_days_to_due: number | null }
-  type CustomerModel = { entity_id: string; name: string; avg_amount: number; payment_interval_days: number; interval_variance: number; last_payment_date: string; payment_count: number; probability_of_next: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_invoices: OutstandingInvoice[] }
+  type CustomerArchetype = "clockwork" | "bursty" | "episodic" | "slow_reliable" | "volatile" | "low_data"
+  type CustomerFeatures = { payment_count: number; invoice_count: number; paid_vs_unpaid_ratio: number; avg_days_to_pay: number; std_days_to_pay: number; amount_mean: number; amount_std: number; interval_cv: number; recent_trend: string; last_payment_recency_days: number; overdue_count: number; weekday_bias: number | null }
+  type InvoiceForecast = { invoice_id: string; customer_name: string; amount_due: number; due_date: string | null; days_overdue: number | null; customer_dso: number; probability_7d: number; probability_14d: number; probability_30d: number; expected_collection_date: string; expected_amount: number; reasoning: string }
+  type CustomerModel = { entity_id: string; name: string; archetype: CustomerArchetype; features: CustomerFeatures; avg_amount: number; payment_interval_days: number; interval_variance: number; last_payment_date: string; payment_count: number; probability_of_next: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_invoices: OutstandingInvoice[]; invoice_forecasts: InvoiceForecast[] }
   type OutstandingBill = { bill_id: string; source: string; vendor_name: string; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: string }
-  type VendorModel = { entity_id: string; name: string; avg_amount: number; cadence: string; cadence_interval_days: number; is_recurring: boolean; last_payment_date: string; payment_count: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_bills?: OutstandingBill[] }
-  type SettlementModel = { avg_delay_days: number; delay_std: number; sample_count: number; confidence: string }
+  type RecurrenceModel = { recurrence_type: string; recurrence_confidence: number; expected_interval_days: number | null; interval_std_days: number | null; amount_mean: number | null; amount_std: number | null }
+  type VendorModel = { entity_id: string; name: string; avg_amount: number; cadence: string; cadence_interval_days: number; is_recurring: boolean; recurrence: RecurrenceModel; last_payment_date: string; payment_count: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_bills?: OutstandingBill[] }
+  type ProcessorSettlementProfile = { processor: string; avg_delay_days: number; delay_std: number; sample_count: number; weekday_pattern: Record<number, number> | null; fee_rate: number | null }
+  type SettlementModel = { avg_delay_days: number; delay_std: number; sample_count: number; confidence: string; by_processor?: ProcessorSettlementProfile[] }
   type TransferBehaviorModel = { avg_transfer_amount: number; transfer_count: number; trigger_pattern: string; avg_interval_days: number | null; primary_account: string | null; secondary_account: string | null; confidence: string }
   type BehavioralModels = { customers: CustomerModel[]; vendors: VendorModel[]; settlement: SettlementModel; transfers: TransferBehaviorModel; recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]; invoice_signal: InvoiceSignal }
   type ForecastMonth = { month: string; inflows: number; outflows: number; net: number; cumulative_net: number; components: { component_id: string; amount: number }[] }
   type ScenarioResult = { scenario: "base" | "optimistic" | "pessimistic"; label: string; months: ForecastMonth[]; runway_months: number | null; ending_cash: number }
-  type ForecastEvent = { date: string; day_offset: number; type: string; entity: string; amount: number; direction: "in" | "out"; probability: number; confidence: "high" | "medium" | "low"; source_model: string }
+  type EventReasoning = { basis: string; payment_history?: string; interval_info?: string; amount_range?: string; recurrence_info?: string; invoice_info?: string; risk_factors?: string[] }
+  type ForecastEvent = { date: string; day_offset: number; type: string; entity: string; amount: number; direction: "in" | "out"; probability: number; confidence: "high" | "medium" | "low"; source_model: string; reasoning?: EventReasoning }
   type DailySimDay = { day: number; date: string; cash: number; inflows: number; outflows: number; events: { entity: string; amount: number; direction: "in" | "out" }[] }
   type DailySimulation = { starting_cash: number; days: DailySimDay[]; min_cash: number; min_cash_day: number; ending_cash: number }
   type MonteCarloPercentile = { day: number; p5: number; p25: number; p50: number; p75: number; p95: number }
@@ -267,7 +273,7 @@ export function OnboardingFlow({
   type MonteCarloResult = { simulations: number; percentiles: MonteCarloPercentile[]; prob_below_zero_14d: number; prob_below_zero_30d: number; prob_above_starting_30d: number; expected_cash_30d: number; worst_case_cash_30d: number; best_case_cash_30d: number; day_scenarios: DayScenarioSnapshot[] }
   type ForecastNarrative = { forecast: string; risk: string; insight: string; action: string; severity: "healthy" | "caution" | "danger" }
   type ComponentConfidence = { area: string; score: number; label: "high" | "medium" | "low"; reason: string }
-  type ForecastConfidence = { score: number; label: "high" | "medium" | "low"; model_coverage: number; data_completeness: number; variance_penalty: number; reasons: string[]; by_component: ComponentConfidence[] }
+  type ForecastConfidence = { score: number; label: "high" | "medium" | "low"; model_coverage: number; data_completeness: number; variance_penalty: number; reasons: string[]; by_component: ComponentConfidence[]; diagnosis?: string }
   type CashRunway = { base_months: number | null; pessimistic_months: number | null; monthly_burn_rate: number; months_of_data: number }
   type SensitivityDriver = { entity: string; type: string; impact_pct: number; direction: "positive" | "negative"; description: string }
   type SensitivityAnalysis = { drivers: SensitivityDriver[]; top_risk_driver: string; top_opportunity_driver: string }
@@ -276,7 +282,9 @@ export function OnboardingFlow({
   type ScenarioResultV2 = ScenarioResult & { drivers?: ScenarioDriver[] }
   type AccountBalance = { account_id: string; name: string; type: string; subtype: string | null; balance: number }
   type ForecastContext = { risk_score: number; risk_level: string; concentration_risk_score: number; dependency_risk_score: number; liquidity_risk_score: number; top_customer_pct: number; repeat_revenue_ratio: number; operating_dependency_ratio: number; transfer_dependency_ratio: number; recurring_spend_ratio: number; liquidity_regime: string; balance_source: string; account_balances: AccountBalance[]; transitions: { signal: string; severity: string; description: string; regime_change: boolean }[] }
-  type BacktestResult = { accuracy_score: number; days_tested: number; mean_absolute_error: number; direction_accuracy: number; details: string }
+  type CalibrationBucket = { range: string; predicted_prob: number; actual_rate: number; count: number }
+  type CalibrationResult = { total_events_evaluated: number; buckets: CalibrationBucket[]; calibration_error: number; is_overconfident: boolean; is_underconfident: boolean; details: string }
+  type BacktestResult = { accuracy_score: number; days_tested: number; mean_absolute_error: number; direction_accuracy: number; details: string; calibration?: CalibrationResult | null }
   type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[]; context?: ForecastContext; backtest?: BacktestResult | null }
   const [forecastData, setForecastData] = useState<CashflowForecast | null>(null)
   const [forecastLoading, setForecastLoading] = useState(false)
@@ -3382,17 +3390,25 @@ export function OnboardingFlow({
                       <div className="space-y-1 mb-3">
                         {topByImpact.map((evt, i) => {
                           const typeColor = evt.direction === "in" ? "text-emerald-400" : "text-red-400"
-                          const confDot = evt.confidence === "high" ? "bg-emerald-500" : evt.confidence === "medium" ? "bg-amber-500" : "bg-red-500"
+                          const cDot = evt.confidence === "high" ? "bg-emerald-500" : evt.confidence === "medium" ? "bg-amber-500" : "bg-red-500"
+                          const r = evt.reasoning
+                          const tooltipParts = [r?.basis, r?.payment_history, r?.interval_info, r?.invoice_info, r?.recurrence_info].filter(Boolean)
+                          const tooltip = tooltipParts.join(" | ")
                           return (
-                            <div key={`top-${evt.date}-${evt.entity}-${i}`} className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02]">
-                              <span className="text-xs font-mono text-gray-500 w-8 shrink-0">D+{evt.day_offset}</span>
-                              <span className={`w-1.5 h-1.5 rounded-full ${confDot} shrink-0`} title={`${evt.confidence} confidence (${evt.source_model})`} />
-                              <span className={`text-xs truncate flex-1 ${typeColor}`}>{evt.entity}</span>
-                              <span className="text-[10px] text-gray-600 shrink-0">{evt.type.replace(/_/g, " ")}</span>
-                              <span className="text-[10px] text-gray-600 shrink-0">{Math.round(evt.probability * 100)}%</span>
-                              <span className={`text-sm font-mono font-semibold shrink-0 w-20 text-right ${typeColor}`}>
-                                {evt.direction === "in" ? "+" : "-"}{money(evt.amount)}
-                              </span>
+                            <div key={`top-${evt.date}-${evt.entity}-${i}`}>
+                              <div className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02]" title={tooltip}>
+                                <span className="text-xs font-mono text-gray-500 w-8 shrink-0">D+{evt.day_offset}</span>
+                                <span className={`w-1.5 h-1.5 rounded-full ${cDot} shrink-0`} />
+                                <span className={`text-xs truncate flex-1 ${typeColor}`}>{evt.entity}</span>
+                                <span className="text-[10px] text-gray-600 shrink-0">{evt.type.replace(/_/g, " ")}</span>
+                                <span className="text-[10px] text-gray-600 shrink-0">{Math.round(evt.probability * 100)}%</span>
+                                <span className={`text-sm font-mono font-semibold shrink-0 w-20 text-right ${typeColor}`}>
+                                  {evt.direction === "in" ? "+" : "-"}{money(evt.amount)}
+                                </span>
+                              </div>
+                              {r && (
+                                <div className="text-[9px] text-gray-600 px-2 pb-0.5">{r.basis}{r.invoice_info ? ` · ${r.invoice_info}` : ""}</div>
+                              )}
                             </div>
                           )
                         })}
@@ -3684,16 +3700,30 @@ export function OnboardingFlow({
                   <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                     <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-3">Customer Payment Models</h3>
                     <div className="space-y-2">
-                      {forecastData.behavioral_models.customers.slice(0, 10).map((c) => (
+                      {forecastData.behavioral_models.customers.slice(0, 10).map((c) => {
+                        const archetypeColors: Record<string, string> = {
+                          clockwork: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+                          bursty: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+                          episodic: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+                          slow_reliable: "bg-purple-500/20 text-purple-300 border-purple-500/30",
+                          volatile: "bg-red-500/20 text-red-300 border-red-500/30",
+                          low_data: "bg-gray-500/20 text-gray-300 border-gray-500/30",
+                        }
+                        return (
                         <div key={c.entity_id} className="bg-white/5 rounded-lg px-3 py-2.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className={`shrink-0 w-2 h-2 rounded-full ${confDot(c.confidence)}`} />
                               <span className="text-sm text-white truncate">{c.name}</span>
+                              {c.archetype && (
+                                <span className={`text-[9px] border rounded px-1.5 py-0.5 ${archetypeColors[c.archetype] ?? "bg-gray-500/20 text-gray-300 border-gray-500/30"}`}>
+                                  {c.archetype.replace("_", " ")}
+                                </span>
+                              )}
                               <span className="text-[10px] text-gray-500">{c.payment_count} payments</span>
                               {c.outstanding_invoices.length > 0 && (
                                 <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded px-1.5 py-0.5">
-                                  {c.outstanding_invoices.length} invoice{c.outstanding_invoices.length > 1 ? "s" : ""} · {money(c.outstanding_invoices.reduce((s, i) => s + i.amount_due, 0))}
+                                  {c.outstanding_invoices.length} inv · {money(c.outstanding_invoices.reduce((s, i) => s + i.amount_due, 0))}
                                 </span>
                               )}
                             </div>
@@ -3706,10 +3736,25 @@ export function OnboardingFlow({
                             <span>P(next) = {Math.round(c.probability_of_next * 100)}%</span>
                             {c.next_expected_date && <span className="text-blue-400">next ≈ {c.next_expected_date}</span>}
                             {c.payment_count > 0 && <span>last: {c.last_payment_date.slice(0, 10)}</span>}
-                            {c.payment_count === 0 && c.outstanding_invoices.length > 0 && <span className="text-amber-400">invoice-only (no payment history)</span>}
+                            {c.payment_count === 0 && c.outstanding_invoices.length > 0 && <span className="text-amber-400">invoice-only</span>}
+                            {c.features && c.features.recent_trend !== "insufficient" && <span className={c.features.recent_trend === "accelerating" ? "text-emerald-400" : c.features.recent_trend === "decelerating" ? "text-red-400" : "text-gray-400"}>trend: {c.features.recent_trend}</span>}
                           </div>
+                          {c.invoice_forecasts && c.invoice_forecasts.length > 0 && (
+                            <div className="mt-1.5 pl-4 border-l border-white/5">
+                              {c.invoice_forecasts.slice(0, 3).map((f) => (
+                                <div key={f.invoice_id} className="text-[10px] text-gray-500 flex gap-2">
+                                  <span className="text-amber-400">{money(f.amount_due)}</span>
+                                  <span>P(7d)={Math.round(f.probability_7d * 100)}%</span>
+                                  <span>P(14d)={Math.round(f.probability_14d * 100)}%</span>
+                                  <span>P(30d)={Math.round(f.probability_30d * 100)}%</span>
+                                  <span className="text-gray-600">DSO {f.customer_dso}d</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -3719,14 +3764,24 @@ export function OnboardingFlow({
                   <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                     <h3 className="text-sm font-semibold text-red-400 uppercase tracking-wider mb-3">Vendor Payment Models</h3>
                     <div className="space-y-2">
-                      {forecastData.behavioral_models.vendors.slice(0, 10).map((v) => (
+                      {forecastData.behavioral_models.vendors.slice(0, 10).map((v) => {
+                        const recColors: Record<string, string> = {
+                          hard: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+                          soft: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+                          episodic: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+                          seasonal: "bg-purple-500/20 text-purple-300 border-purple-500/30",
+                          invoice_triggered: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30",
+                          unknown: "bg-gray-500/20 text-gray-300 border-gray-500/30",
+                        }
+                        const recType = v.recurrence?.recurrence_type ?? "unknown"
+                        return (
                         <div key={v.entity_id} className="bg-white/5 rounded-lg px-3 py-2.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className={`shrink-0 w-2 h-2 rounded-full ${confDot(v.confidence)}`} />
                               <span className="text-sm text-white truncate">{v.name}</span>
-                              <span className="text-[10px] text-gray-500 border border-white/10 rounded px-1 py-0.5">{v.cadence}</span>
-                              {v.is_recurring && <span className="text-[10px] text-amber-400">recurring</span>}
+                              <span className={`text-[9px] border rounded px-1.5 py-0.5 ${recColors[recType] ?? recColors.unknown}`}>{recType.replace("_", " ")}</span>
+                              {v.recurrence && <span className="text-[10px] text-gray-500">{Math.round(v.recurrence.recurrence_confidence * 100)}% rec.conf</span>}
                               {v.outstanding_bills && v.outstanding_bills.length > 0 && (
                                 <span className="text-[10px] text-red-300 border border-red-500/30 rounded px-1 py-0.5">{v.outstanding_bills.length} bill{v.outstanding_bills.length > 1 ? "s" : ""} due</span>
                               )}
@@ -3745,7 +3800,8 @@ export function OnboardingFlow({
                             )}
                           </div>
                         </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -3760,6 +3816,22 @@ export function OnboardingFlow({
                       <div className="flex justify-between"><span className="text-gray-400">Samples</span><span className="text-white font-mono">{forecastData.behavioral_models.settlement.sample_count}</span></div>
                       <div className="flex justify-between"><span className="text-gray-400">Confidence</span><span className={`font-mono ${forecastData.behavioral_models.settlement.confidence === "high" ? "text-emerald-400" : forecastData.behavioral_models.settlement.confidence === "medium" ? "text-amber-400" : "text-gray-500"}`}>{forecastData.behavioral_models.settlement.confidence}</span></div>
                     </div>
+                    {forecastData.behavioral_models.settlement.by_processor && forecastData.behavioral_models.settlement.by_processor.length > 0 && (
+                      <div className="mt-3 pt-2 border-t border-white/5 space-y-1.5">
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider">Per-Processor</div>
+                        {forecastData.behavioral_models.settlement.by_processor.slice(0, 5).map((p, i) => (
+                          <div key={i} className="flex items-center justify-between text-[11px]">
+                            <span className="text-gray-300 truncate max-w-[120px]">{p.processor}</span>
+                            <div className="flex gap-2 text-gray-500">
+                              <span className="text-white font-mono">{p.avg_delay_days}d</span>
+                              <span>±{p.delay_std}d</span>
+                              <span>{p.sample_count} samples</span>
+                              {p.fee_rate != null && <span className="text-amber-400">{(p.fee_rate * 100).toFixed(1)}% fee</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
@@ -4007,43 +4079,36 @@ export function OnboardingFlow({
                 {/* ─── Forecast Confidence Details ─── */}
                 {forecastData.forecast_confidence && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">Forecast Confidence</h3>
+                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-2">Forecast Confidence</h3>
 
-                    {/* Per-component confidence */}
+                    {/* Diagnosis sentence */}
+                    {forecastData.forecast_confidence.diagnosis && (
+                      <p className="text-xs text-gray-300 mb-3 italic">{forecastData.forecast_confidence.diagnosis}</p>
+                    )}
+
+                    {/* 8-component confidence breakdown */}
                     {forecastData.forecast_confidence.by_component && forecastData.forecast_confidence.by_component.length > 0 && (
                       <div className="space-y-2 mb-4">
                         {forecastData.forecast_confidence.by_component.map((cc, i) => (
-                          <div key={i} className="flex items-center gap-3">
-                            <div className="text-xs text-gray-400 w-36 shrink-0">{cc.area}</div>
-                            <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${cc.label === "high" ? "bg-emerald-500" : cc.label === "medium" ? "bg-amber-500" : "bg-red-500"}`}
-                                style={{ width: `${Math.round(cc.score * 100)}%` }}
-                              />
+                          <div key={i}>
+                            <div className="flex items-center gap-3">
+                              <div className="text-xs text-gray-400 w-36 shrink-0">{cc.area}</div>
+                              <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${cc.label === "high" ? "bg-emerald-500" : cc.label === "medium" ? "bg-amber-500" : "bg-red-500"}`}
+                                  style={{ width: `${Math.round(cc.score * 100)}%` }}
+                                />
+                              </div>
+                              <div className={`text-xs font-mono w-10 text-right ${cc.label === "high" ? "text-emerald-400" : cc.label === "medium" ? "text-amber-400" : "text-red-400"}`}>
+                                {Math.round(cc.score * 100)}%
+                              </div>
                             </div>
-                            <div className={`text-xs font-mono w-10 text-right ${cc.label === "high" ? "text-emerald-400" : cc.label === "medium" ? "text-amber-400" : "text-red-400"}`}>
-                              {Math.round(cc.score * 100)}%
-                            </div>
+                            <div className="text-[10px] text-gray-600 pl-[9.5rem]">{cc.reason}</div>
                           </div>
                         ))}
                       </div>
                     )}
 
-                    {/* Overall metrics */}
-                    <div className="grid grid-cols-3 gap-3 mb-3">
-                      <div className="text-center">
-                        <div className="text-[10px] text-gray-500">Model coverage</div>
-                        <div className="text-xs font-mono text-white">{Math.round(forecastData.forecast_confidence.model_coverage * 100)}%</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-[10px] text-gray-500">Data completeness</div>
-                        <div className="text-xs font-mono text-white">{Math.round(forecastData.forecast_confidence.data_completeness * 100)}%</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-[10px] text-gray-500">Variance penalty</div>
-                        <div className="text-xs font-mono text-red-400">-{Math.round(forecastData.forecast_confidence.variance_penalty * 100)}%</div>
-                      </div>
-                    </div>
                     {forecastData.forecast_confidence.reasons.length > 0 && (
                       <div className="space-y-1">
                         {forecastData.forecast_confidence.reasons.map((r, i) => (
@@ -4056,11 +4121,11 @@ export function OnboardingFlow({
                   </div>
                 )}
 
-                {/* ─── Backtest Accuracy ─── */}
+                {/* ─── Backtest Accuracy & Calibration ─── */}
                 {forecastData.backtest && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Backtest Accuracy</h3>
+                      <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Backtest & Calibration</h3>
                       <span className={`text-lg font-mono font-bold ${forecastData.backtest.accuracy_score >= 75 ? "text-emerald-400" : forecastData.backtest.accuracy_score >= 50 ? "text-amber-400" : "text-red-400"}`}>
                         {forecastData.backtest.accuracy_score}%
                       </span>
@@ -4077,6 +4142,38 @@ export function OnboardingFlow({
                       />
                     </div>
                     <p className="text-[10px] text-gray-500 mt-2">{forecastData.backtest.details}</p>
+
+                    {/* Calibration: predicted vs actual probability buckets */}
+                    {forecastData.backtest.calibration && (
+                      <div className="mt-3 pt-3 border-t border-white/5">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[11px] text-gray-400 font-semibold">Probability Calibration</span>
+                          <span className={`text-[10px] font-mono ${forecastData.backtest.calibration.calibration_error < 0.15 ? "text-emerald-400" : forecastData.backtest.calibration.calibration_error < 0.3 ? "text-amber-400" : "text-red-400"}`}>
+                            ECE: {(forecastData.backtest.calibration.calibration_error * 100).toFixed(1)}%
+                            {forecastData.backtest.calibration.is_overconfident && " (overconfident)"}
+                            {forecastData.backtest.calibration.is_underconfident && " (underconfident)"}
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          {forecastData.backtest.calibration.buckets.map((b, i) => (
+                            <div key={i} className="flex items-center gap-2 text-[10px]">
+                              <span className="text-gray-500 w-14 shrink-0">{b.range}</span>
+                              <div className="flex-1 h-3 bg-white/5 rounded relative overflow-hidden">
+                                <div className="absolute inset-y-0 left-0 bg-blue-500/40 rounded" style={{ width: `${Math.round(b.predicted_prob * 100)}%` }} />
+                                <div className="absolute inset-y-0 left-0 bg-emerald-500/60 rounded" style={{ width: `${Math.round(b.actual_rate * 100)}%`, height: "50%", top: "25%" }} />
+                              </div>
+                              <span className="text-blue-400 w-8 text-right font-mono">{Math.round(b.predicted_prob * 100)}%</span>
+                              <span className="text-emerald-400 w-8 text-right font-mono">{Math.round(b.actual_rate * 100)}%</span>
+                              <span className="text-gray-600 w-6 text-right">n={b.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex gap-3 mt-1 text-[9px] text-gray-600">
+                          <span><span className="inline-block w-2 h-2 bg-blue-500/40 rounded mr-1" />predicted</span>
+                          <span><span className="inline-block w-2 h-2 bg-emerald-500/60 rounded mr-1" />actual</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
