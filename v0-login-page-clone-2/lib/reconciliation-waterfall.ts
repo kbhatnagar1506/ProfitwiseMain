@@ -1,4 +1,10 @@
 import { query, runInTransaction } from "./db"
+import {
+  buildStage4CandidatePayload,
+  fetchStage4EntityCorrelationMap,
+  fetchStage4GhostGaps,
+  fetchStage4VelocityStats,
+} from "./reconciliation-stage4-payload"
 
 type MovementResidualRow = {
   id: string
@@ -35,6 +41,7 @@ type ReconciliationDraftAttribution = {
 
 type WaterfallOptions = {
   dryRun?: boolean
+  minAiReviewAmount?: number
 }
 
 export type WaterfallResult = {
@@ -132,10 +139,17 @@ async function fetchOpenCashEventsForWaterfall(userId: string): Promise<(OpenCas
 
 export async function runReconciliationWaterfall(userId: string, options: WaterfallOptions = {}): Promise<WaterfallResult> {
   const dryRun = options.dryRun === true
+  const minAiReviewAmount = options.minAiReviewAmount ?? 1000
 
   const movements = await fetchUnallocatedMovementCash(userId)
   const openEvents = await fetchOpenCashEventsForWaterfall(userId)
+  const [entityCorrelationMap, ghostByEventId, velocityByEntityEvent] = await Promise.all([
+    fetchStage4EntityCorrelationMap(userId),
+    fetchStage4GhostGaps(userId),
+    fetchStage4VelocityStats(userId),
+  ])
   const attributions: ReconciliationDraftAttribution[] = []
+  const reviewQueue: { movement_id: string; remaining_cash: number; candidate_event_ids: string[]; candidate_payload: unknown }[] = []
   const touchedEventIds = new Set<string>()
 
   let exactMatches = 0
@@ -279,10 +293,31 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
       }
     }
 
-    // Unresolved after deterministic stages (1-3)
+    // Stage 4 queue
     if (remainingCash > 0.01) {
       unresolvedCount++
       unresolvedAmount += remainingCash
+      if (remainingCash >= minAiReviewAmount) {
+        const candidates = openEvents
+          .filter((e) => e.event_type === targetType && e.outstanding_num > 0.01)
+          .sort((a, b) => a.expected_date.localeCompare(b.expected_date))
+          .slice(0, 10)
+        const candidatePayload = buildStage4CandidatePayload({
+          movement,
+          remainingCash,
+          targetType,
+          candidates,
+          entityMap: entityCorrelationMap,
+          ghostByEventId,
+          velocityByEntityEvent,
+        })
+        reviewQueue.push({
+          movement_id: movement.id,
+          remaining_cash: r2(remainingCash),
+          candidate_event_ids: candidates.map((c) => c.id),
+          candidate_payload: candidatePayload,
+        })
+      }
     }
   }
 
@@ -326,6 +361,21 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
         )
       }
 
+      for (const r of reviewQueue) {
+        await client.query(
+          `INSERT INTO reconciliation_review_queue (
+             user_id, movement_id, remaining_cash, candidate_event_ids, candidate_payload, status, resolution, updated_at
+           )
+           VALUES ($1,$2,$3,$4::text[],$5::jsonb,'pending','{}'::jsonb,NOW())
+           ON CONFLICT (user_id, movement_id, status)
+           DO UPDATE SET
+             remaining_cash = EXCLUDED.remaining_cash,
+             candidate_event_ids = EXCLUDED.candidate_event_ids,
+             candidate_payload = EXCLUDED.candidate_payload,
+             updated_at = NOW()`,
+          [userId, r.movement_id, r.remaining_cash, r.candidate_event_ids, JSON.stringify(r.candidate_payload)],
+        )
+      }
     })
   }
 
