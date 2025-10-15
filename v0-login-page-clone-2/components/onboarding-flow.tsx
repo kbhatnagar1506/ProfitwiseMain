@@ -325,59 +325,8 @@ export function OnboardingFlow({
     ar_suggestions: number
     ap_suggestions: number
     waterfall?: BrainRunWaterfall | null
-    stage4?: {
-      queued_count: number
-      suggested_count: number
-      failed_count: number
-    } | null
   }
   const [brainRunResult, setBrainRunResult] = useState<BrainRunResult | null>(null)
-  type Stage4Suggestion = {
-    event_id: string
-    entity_id: string
-    canonical_name: string
-    confidence: number
-    reasoning: string
-    allocation_plan: {
-      gross_amount: number
-      net_amount: number
-      fee_amount: number
-      component_type: "ar" | "ap"
-    }
-  }
-  type Stage4QueueItem = {
-    id: string
-    movement_id: string
-    remaining_cash: number
-    status: "pending" | "resolved" | "rejected"
-    candidate_payload: unknown
-    resolution: {
-      suggestions?: Stage4Suggestion[]
-      reason?: string
-      resolved_at?: string
-      rejected_at?: string
-    }
-  }
-  type Stage4Summary = {
-    pending_count: number
-    pending_amount: number
-    resolved_count: number
-    rejected_count: number
-    suggested_count: number
-  }
-  const [stage4Summary, setStage4Summary] = useState<Stage4Summary | null>(null)
-  const [stage4QueueItems, setStage4QueueItems] = useState<Stage4QueueItem[]>([])
-  const [stage4Loading, setStage4Loading] = useState(false)
-  const [stage4Error, setStage4Error] = useState<string | null>(null)
-  const [stage4ApplyingQueueId, setStage4ApplyingQueueId] = useState<string | null>(null)
-
-  const fetchStage4Queue = useCallback(async () => {
-    const res = await fetch("/api/ar-ap-reconciliation/review-queue?includeRecent=true")
-    const data = await res.json()
-    if (!res.ok) throw new Error(data?.error ?? "Failed to load Stage 4 queue")
-    setStage4Summary((data.summary ?? null) as Stage4Summary | null)
-    setStage4QueueItems(Array.isArray(data.items) ? (data.items as Stage4QueueItem[]) : [])
-  }, [])
 
   const openMovementDetail = useCallback(async (movementId: string) => {
     setMovementDetail({ movementId, loading: true, error: null, detail: null })
@@ -902,10 +851,6 @@ export function OnboardingFlow({
     setMappingArAp(null)
     setMappingRecon(null)
     setBrainRunResult(null)
-    setStage4Summary(null)
-    setStage4QueueItems([])
-    setStage4Error(null)
-    setStage4Loading(true)
 
     fetch("/api/brain", {
       method: "POST",
@@ -915,8 +860,6 @@ export function OnboardingFlow({
         runWaterfall: true,
         waterfallDryRun: false,
         waterfallMinAiReviewAmount: 1000,
-        runStage4Suggestions: true,
-        stage4BatchSize: 60,
       }),
     })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Brain run failed"))))
@@ -925,30 +868,25 @@ export function OnboardingFlow({
         setBrainRunResult(brainData)
         return fetch("/api/ar-ap-step").then((res) => (res.ok ? res.json() : Promise.reject(new Error("AR/AP step failed"))))
       })
-      .then(async (data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
+      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
         if (cancelled) return
         setArApData({ ar: data.ar, ap: data.ap })
         setMappingArAp({ ar: data.ar, ap: data.ap })
         setMappingRecon(data.recon ?? null)
-        await fetchStage4Queue()
-        if (cancelled) return
         setArApLoading(false)
         setMappingLoading(false)
-        setStage4Loading(false)
       })
       .catch((e) => {
         if (cancelled || (e instanceof Error && e.message === "Cancelled")) return
         const msg = e instanceof Error ? e.message : "Failed to load"
         setMappingError(msg)
         setArApError(msg)
-        setStage4Error(msg)
         setArApLoading(false)
         setMappingLoading(false)
-        setStage4Loading(false)
       })
 
     return () => { cancelled = true }
-  }, [currentStep, fetchStage4Queue])
+  }, [currentStep])
 
   // Step 12: State objects (computed from frozen tags)
   useEffect(() => {
@@ -1171,12 +1109,6 @@ export function OnboardingFlow({
                   <div className="mt-1 text-xs text-gray-300">
                     Saved to Postgres. Allocations: {brainRunResult.allocation_count}. Waterfall updated events: {brainRunResult.waterfall?.updated_events ?? 0}.
                   </div>
-                  {stage4Summary && (
-                    <div className="mt-1 text-xs text-gray-300">
-                      Stage 4 pending: {stage4Summary.pending_count} (${stage4Summary.pending_amount.toLocaleString()}) ·
-                      Suggested: {stage4Summary.suggested_count} · Resolved: {stage4Summary.resolved_count}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -3256,130 +3188,12 @@ export function OnboardingFlow({
                     Allocations: {brainRunResult.allocation_count} · Cash events synced: {brainRunResult.cash_events_synced ? "yes" : "no"} ·
                     Waterfall unresolved: {brainRunResult.waterfall?.unresolved_count ?? 0} (${(brainRunResult.waterfall?.unresolved_amount ?? 0).toLocaleString()})
                   </div>
-                  {brainRunResult.stage4 && (
-                    <div className="mt-1 text-xs text-gray-300">
-                      Stage 4 queued: {brainRunResult.stage4.queued_count} · suggested: {brainRunResult.stage4.suggested_count} · failed: {brainRunResult.stage4.failed_count}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
 
             {!arApLoading && !mappingLoading && (arApData || mappingRecon) && (
               <div className="space-y-6">
-                {!stage4Loading && (
-                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-300">Suggested Resolutions (Stage 4)</div>
-                      {stage4Summary && (
-                        <div className="text-[11px] text-gray-400">
-                          Pending {stage4Summary.pending_count} · Suggested {stage4Summary.suggested_count} · Resolved {stage4Summary.resolved_count}
-                        </div>
-                      )}
-                    </div>
-                    {stage4Error && <div className="mt-2 text-xs text-red-300">{stage4Error}</div>}
-                    {stage4QueueItems.filter((q) => q.status === "pending").slice(0, 8).length === 0 ? (
-                      <div className="mt-2 text-xs text-gray-500">No pending Stage 4 suggestions.</div>
-                    ) : (
-                      <div className="mt-3 space-y-2">
-                        {stage4QueueItems
-                          .filter((q) => q.status === "pending")
-                          .slice(0, 8)
-                          .map((q) => {
-                            const suggestions = q.resolution?.suggestions ?? []
-                            const top = suggestions[0]
-                            return (
-                              <div key={q.id} className="rounded-lg border border-white/10 bg-black/20 p-3">
-                                <div className="text-xs text-gray-300">
-                                  Movement {q.movement_id.slice(0, 8)}… · residual {moneySmall(q.remaining_cash)}
-                                </div>
-                                {top ? (
-                                  <div className="mt-1 text-xs text-gray-200">
-                                    Suggest: <span className="text-violet-300">{top.canonical_name}</span> · {top.allocation_plan.component_type.toUpperCase()} ·
-                                    gross {moneySmall(top.allocation_plan.gross_amount)} · conf {(top.confidence * 100).toFixed(0)}%
-                                  </div>
-                                ) : (
-                                  <div className="mt-1 text-xs text-gray-500">No confidence-above-threshold suggestion available.</div>
-                                )}
-                                {top?.reasoning && <div className="mt-1 text-[11px] text-gray-400">{top.reasoning}</div>}
-                                <div className="mt-2 flex items-center gap-2">
-                                  <Button
-                                    size="sm"
-                                    disabled={!top || stage4ApplyingQueueId === q.id}
-                                    onClick={async () => {
-                                      if (!top) return
-                                      setStage4ApplyingQueueId(q.id)
-                                      setStage4Error(null)
-                                      try {
-                                        const res = await fetch("/api/ar-ap-reconciliation/review-queue/resolve", {
-                                          method: "POST",
-                                          headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({
-                                            queue_id: q.id,
-                                            action: "accept",
-                                            selected_event_ids: [top.event_id],
-                                            reason: "accepted_from_step11",
-                                          }),
-                                        })
-                                        const out = await res.json()
-                                        if (!res.ok) throw new Error(out?.error ?? "Accept failed")
-                                        await Promise.all([
-                                          fetch("/api/ar-ap-step")
-                                            .then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP refresh failed"))))
-                                            .then((data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
-                                              setArApData({ ar: data.ar, ap: data.ap })
-                                              setMappingArAp({ ar: data.ar, ap: data.ap })
-                                              setMappingRecon(data.recon ?? null)
-                                            }),
-                                          fetchStage4Queue(),
-                                        ])
-                                      } catch (err) {
-                                        setStage4Error(err instanceof Error ? err.message : "Accept failed")
-                                      } finally {
-                                        setStage4ApplyingQueueId(null)
-                                      }
-                                    }}
-                                  >
-                                    Accept
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={stage4ApplyingQueueId === q.id}
-                                    onClick={async () => {
-                                      setStage4ApplyingQueueId(q.id)
-                                      setStage4Error(null)
-                                      try {
-                                        const res = await fetch("/api/ar-ap-reconciliation/review-queue/resolve", {
-                                          method: "POST",
-                                          headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({
-                                            queue_id: q.id,
-                                            action: "reject",
-                                            reason: "rejected_from_step11",
-                                          }),
-                                        })
-                                        const out = await res.json()
-                                        if (!res.ok) throw new Error(out?.error ?? "Reject failed")
-                                        await fetchStage4Queue()
-                                      } catch (err) {
-                                        setStage4Error(err instanceof Error ? err.message : "Reject failed")
-                                      } finally {
-                                        setStage4ApplyingQueueId(null)
-                                      }
-                                    }}
-                                  >
-                                    Reject
-                                  </Button>
-                                </div>
-                              </div>
-                            )
-                          })}
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {arApData && (
                 <>
                 {/* ─── Summary bar ─── */}

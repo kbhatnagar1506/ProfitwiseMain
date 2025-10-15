@@ -9,7 +9,6 @@ import { syncCashEventsForUser, refreshEntityCashProfilesFromAttributions } from
 import type { OutstandingInvoice } from "./state/types"
 import type { APObligation } from "./state/ar-ap"
 import { runReconciliationWaterfall, type WaterfallResult } from "./reconciliation-waterfall"
-import { generateStage4Suggestions, type Stage4SuggestionSummary } from "./reconciliation-stage4-suggestions"
 
 export type FinancialBrainOptions = AttributionEngineOptions & {
   /** When set, rebuild cash_events from these documents (skip if both empty). */
@@ -21,10 +20,6 @@ export type FinancialBrainOptions = AttributionEngineOptions & {
   waterfallDryRun?: boolean
   /** Stage-4 queue threshold for unresolved leftovers. */
   waterfallMinAiReviewAmount?: number
-  /** Run Stage-4 suggestion generation over pending queue rows. */
-  runStage4Suggestions?: boolean
-  /** Pending queue rows to process for Stage-4 suggestion generation. */
-  stage4BatchSize?: number
 }
 
 export type FinancialBrainResult = {
@@ -32,7 +27,6 @@ export type FinancialBrainResult = {
   cash_events_synced: boolean
   entity_profiles_refreshed: boolean
   waterfall: WaterfallResult | null
-  stage4: Stage4SuggestionSummary | null
 }
 
 /**
@@ -48,13 +42,10 @@ export async function runFinancialBrain(userId: string, options: FinancialBrainO
     runWaterfall: runWaterfallOpt,
     waterfallDryRun: waterfallDryRunOpt,
     waterfallMinAiReviewAmount,
-    runStage4Suggestions: runStage4SuggestionsOpt,
-    stage4BatchSize,
     ...engineOpts
   } = options
   const runWaterfall = runWaterfallOpt === true
   const waterfallDryRun = waterfallDryRunOpt === true
-  const runStage4Suggestions = runStage4SuggestionsOpt === true
   const attribution = await runAttributionEngine(userId, engineOpts)
 
   let cash_events_synced = false
@@ -74,10 +65,5 @@ export async function runFinancialBrain(userId: string, options: FinancialBrainO
     })
   }
 
-  let stage4: Stage4SuggestionSummary | null = null
-  if (runStage4Suggestions) {
-    stage4 = await generateStage4Suggestions(userId, { batchSize: stage4BatchSize })
-  }
-
-  return { attribution, cash_events_synced, entity_profiles_refreshed, waterfall, stage4 }
+  return { attribution, cash_events_synced, entity_profiles_refreshed, waterfall }
 }
