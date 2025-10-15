@@ -113,7 +113,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
             ) AS account_id,
             m.pnl_eligible, m.confidence, m.review_needed AS needs_review,
             m.provenance, m.coalesced_group_id, m.metadata
-     FROM movements m WHERE m.user_id = $1
+     FROM movements m WHERE m.user_id = $1 AND m.duplicate_of IS NULL
      ORDER BY m.date ASC`,
     [userId]
   ).then((r) => r.rows.map((row) => {
@@ -142,7 +142,7 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
 
   const tagRows = await query<TagRow>(
     `SELECT movement_id, economic_class, cashflow_bucket, counterparty_role, tag_data
-     FROM movement_tags WHERE movement_id IN (SELECT id FROM movements WHERE user_id = $1)`,
+     FROM movement_tags WHERE movement_id IN (SELECT id FROM movements WHERE user_id = $1 AND duplicate_of IS NULL)`,
     [userId]
   ).then((r) => r.rows)
 

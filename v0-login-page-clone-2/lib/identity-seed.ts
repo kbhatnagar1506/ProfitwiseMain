@@ -11,6 +11,7 @@
 
 import { query, ensureIdentitySchema } from "./db"
 import { log } from "./logger"
+import { normalizeForMatch } from "./alias-normalize"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
@@ -549,10 +550,6 @@ Output ONLY valid JSON array. No markdown, no explanation.`
 
 // ─── Resolution engine ─────────────────────────────────────────────
 
-function normalizeForMatch(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, "").trim()
-}
-
 function stripParenthetical(s: string): string {
   return s.replace(/\s*\([^)]*\)\s*$/, "").trim()
 }
@@ -952,10 +949,6 @@ export type MovementIdentityEntry = {
 
 export type MovementIdentityContext = Map<string, MovementIdentityEntry>
 
-function normKey(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, "")
-}
-
 /**
  * Builds a pre-computed lookup from every known counterparty string to the
  * identity entry the movement engine needs. The movement engine never touches
@@ -989,7 +982,7 @@ export async function buildMovementIdentityContext(userId: string): Promise<Move
   const entMap = new Map(entities.map((e) => [e.id, e]))
 
   const addEntry = (key: string, ent: typeof entities[number]) => {
-    const k = normKey(key)
+    const k = normalizeForMatch(key)
     if (k.length < 2) return
     if (ctx.has(k) && (ctx.get(k)!.confidence >= ent.confidence)) return
     ctx.set(k, {
@@ -1033,7 +1026,7 @@ export async function buildMovementIdentityContext(userId: string): Promise<Move
 
     // Stripe entity_id (cus_xxx) → customer entity (for payment_intent resolution)
     if (a.source === "stripe" && a.source_id) {
-      const stripeKey = normKey(a.source_id)
+      const stripeKey = normalizeForMatch(a.source_id)
       if (stripeKey.length >= 4 && !ctx.has(stripeKey)) {
         ctx.set(stripeKey, {
           entity_id: ent.id,
@@ -1046,6 +1039,19 @@ export async function buildMovementIdentityContext(userId: string): Promise<Move
       }
     }
   }
+
+  // Owner containment: store owner entries for runtime "JACK RUBENSTEIN" → "Jack" matching
+  const ownerEntries = entities
+    .filter((e) => e.entity_type === "owner")
+    .map((e) => ({
+      entity_id: e.id,
+      role: "owner" as CounterpartyRole,
+      canonical_name: e.canonical_name,
+      confidence: e.confidence,
+      is_self: false,
+      is_own_account: false,
+    }))
+  ;(ctx as Map<string, MovementIdentityEntry> & { _ownerEntries?: MovementIdentityEntry[] })._ownerEntries = ownerEntries
 
   return ctx
 }

@@ -29,6 +29,8 @@ import {
   type MovementIdentityEntry,
   type SelfContext,
 } from "./identity-seed"
+import { normalizeForMatch } from "./alias-normalize"
+import { enrichUnresolved } from "./unresolved-enrich"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
@@ -37,7 +39,6 @@ const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 const NON_PNL_TYPES = [
   "internal_transfer",
   "processor_payout",
-  "processor_fee_settlement",
   "credit_card_payment",
   "loan_funding",
   "loan_principal_payment",
@@ -53,6 +54,7 @@ const PNL_TYPES = [
   "cash_in_customer",
   "cash_out_vendor",
   "cash_out_operating_expense",
+  "processor_fee_settlement",
   "cash_out_refund",
   "cash_in_refund",
   "cash_in_interest",
@@ -524,6 +526,9 @@ async function extractStripeObservations(userId: string): Promise<SourceObservat
     }
 
     const txnType = (d.type ?? row.entity_type) as string
+    const invoiceId = row.entity_type === "invoice" ? row.entity_id : (d.invoice as string) ?? null
+    const paymentIntentId = row.entity_type === "payment_intent" ? row.entity_id : (d.payment_intent as string) ?? null
+    const orderId = (d.metadata?.order_id as string) ?? (d.order as string) ?? invoiceId ?? paymentIntentId
 
     obs.push({
       source: "stripe",
@@ -540,7 +545,14 @@ async function extractStripeObservations(userId: string): Promise<SourceObservat
       account_id: null,
       account_type: null,
       account_subtype: null,
-      metadata: { stripe_type: txnType, status: d.status, stripe_customer_id: d.customer ?? null },
+      metadata: {
+        stripe_type: txnType,
+        status: d.status,
+        stripe_customer_id: d.customer ?? null,
+        order_id: orderId,
+        invoice_id: invoiceId,
+        payment_intent_id: paymentIntentId,
+      },
     })
   }
 
@@ -610,10 +622,20 @@ async function extractXeroObservations(userId: string): Promise<SourceObservatio
 // Bank sources have highest priority as the primary observation
 const SOURCE_PRIORITY: Record<string, number> = { plaid: 4, stripe: 3, qbo: 2, xero: 1 }
 
+// Normalize vendor/counterparty name: strip invoice boilerplate (plan #4)
+function normalizeVendorName(s: string): string {
+  return s
+    .replace(/\b(?:invoices?inv|oices?inv|inv\.?)\b/gi, "")
+    .replace(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{0,4}\b/gi, "")
+    .replace(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 function counterpartyMatchScore(a: string | null, b: string | null): number {
   if (!a || !b) return 0.5
-  const na = normKey(a)
-  const nb = normKey(b)
+  const na = normKey(normalizeVendorName(a))
+  const nb = normKey(normalizeVendorName(b))
   if (na === nb) return 1.0
   if (na.length < 3 || nb.length < 3) return 0
   const shorter = na.length <= nb.length ? na : nb
@@ -622,6 +644,18 @@ function counterpartyMatchScore(a: string | null, b: string | null): number {
     return shorter.length / longer.length
   }
   return 0
+}
+
+function extractOrderId(obs: SourceObservation): string | null {
+  const m = obs.metadata ?? {}
+  return (m.order_id as string) ?? (m.invoice_id as string) ?? (m.payment_intent_id as string) ?? null
+}
+
+function orderIdsMatch(a: SourceObservation, b: SourceObservation): boolean {
+  const oa = extractOrderId(a)
+  const ob = extractOrderId(b)
+  if (!oa || !ob) return false
+  return oa === ob
 }
 
 function dateDistance(a: string, b: string): number {
@@ -660,13 +694,17 @@ function coalesceObservations(observations: SourceObservation[]): CanonicalMovem
       const evidenceGroup = [primary]
       used.add(primary._idx)
 
-      // Try to find cross-source matches within ±1 day
+      // Try to find matches within ±1 day (plan #3, #4: order_id, vendor normalization)
       for (let j = i + 1; j < group.length; j++) {
         if (used.has(group[j]._idx)) continue
         const candidate = group[j]
 
-        // Same source: never coalesce (these are genuinely separate transactions)
-        if (candidate.source === primary.source) continue
+        // Same source: coalesce when order_id matches OR when vendor name matches (same-source vendor coalescing)
+        const sameSource = candidate.source === primary.source
+        if (sameSource && !orderIdsMatch(primary, candidate)) {
+          const cpScore = counterpartyMatchScore(primary.counterparty, candidate.counterparty)
+          if (cpScore < 0.4) continue // same source, no order_id, vendor doesn't match → skip
+        }
 
         // Must have same sign (both inflow or both outflow)
         if (Math.sign(candidate.amount) !== Math.sign(primary.amount)) continue
@@ -674,10 +712,13 @@ function coalesceObservations(observations: SourceObservation[]): CanonicalMovem
         // Date must be within 1 day
         if (dateDistance(primary.date, candidate.date) > 1) continue
 
-        // Counterparty: require similarity OR at least one side blank
+        // Counterparty: require similarity OR at least one side blank OR order_id match
+        // Relaxed: when either has order_id/invoice_id/payment_intent_id, allow even if counterparty differs
+        const orderMatch = orderIdsMatch(primary, candidate)
+        const eitherHasOrderId = !!extractOrderId(primary) || !!extractOrderId(candidate)
         const cpScore = counterpartyMatchScore(primary.counterparty, candidate.counterparty)
         const eitherBlank = !primary.counterparty || !candidate.counterparty
-        if (cpScore < 0.4 && !eitherBlank) continue
+        if (!orderMatch && cpScore < 0.4 && !eitherBlank && !eitherHasOrderId) continue
 
         evidenceGroup.push(candidate)
         used.add(candidate._idx)
@@ -946,10 +987,10 @@ function resolveCounterpartyIdentity(
   if (m.raw_description && m.raw_description !== m.counterparty) candidates.push(m.raw_description)
 
   for (const c of candidates) {
-    const key = normKey(c)
+    const key = normalizeForMatch(c)
     if (key.length < 2) continue
 
-    // 1. Exact match (O(1))
+    // 1. Exact match (O(1)) — plan #5 alias normalization
     const exact = ctx.get(key)
     if (exact) return exact
 
@@ -976,6 +1017,15 @@ function resolveCounterpartyIdentity(
     if (key.length >= 5 && key.length <= 20) {
       const directHit = ctx.get(key)
       if (directHit) return directHit
+    }
+
+    // 4. Owner containment: "JACK RUBENSTEIN" contains "jack" → match owner "Jack"
+    const ownerEntries = (ctx as Map<string, unknown> & { _ownerEntries?: MovementIdentityEntry[] })._ownerEntries
+    if (ownerEntries && key.length >= 6) {
+      for (const entry of ownerEntries) {
+        const ownerNorm = normalizeForMatch(entry.canonical_name)
+        if (ownerNorm.length >= 4 && key.includes(ownerNorm)) return entry
+      }
     }
   }
 
@@ -1310,6 +1360,12 @@ function classifyFallback(m: CanonicalMovement): ClassifyResult {
 
   if (TRANSFER_PATTERNS.some((p) => p.test(desc))) {
     return { type: "unknown_transfer_candidate", signals: { pattern_strength: 0.15, source_authority: srcAuth * 0.5 } }
+  }
+
+  // Unresolved enrichment: Zelle/Venmo/Cash App → transfer
+  const enrich = enrichUnresolved(m)
+  if (enrich?.suggested_type === "internal_transfer" && enrich.confidence >= 0.65) {
+    return { type: "unknown_transfer_candidate", signals: { pattern_strength: enrich.confidence, source_authority: srcAuth * 0.6 } }
   }
 
   const t = m.direction === "inflow" ? "unknown_inflow" as const : "unknown_outflow" as const
@@ -1844,13 +1900,48 @@ export async function classifyMovements(userId: string): Promise<{
   // Step 9: Persist families
   await persistFamilies(userId, families)
 
+  // Step 9b: Cross-bucket duplicate detection (plan #8) — same event, different interpretation
+  const CROSS_BUCKET_PAIRS: [string, string][] = [
+    ["cash_out_vendor", "credit_card_payment"],
+    ["cash_out_operating_expense", "credit_card_payment"],
+    ["owner_contribution", "merchant_deposit_resolved"],
+    ["owner_contribution", "merchant_deposit_unresolved"],
+  ]
+  const pairSet = new Set<string>()
+  for (const [a, b] of CROSS_BUCKET_PAIRS) {
+    pairSet.add(`${a}:${b}`)
+    pairSet.add(`${b}:${a}`)
+  }
+  const duplicateIndices = new Set<number>()
+  for (let i = 0; i < classified.length; i++) {
+    if (duplicateIndices.has(i)) continue
+    const a = classified[i]
+    const amt = a.amount.toFixed(2)
+    const dateA = new Date(a.date).getTime()
+    for (let j = i + 1; j < classified.length; j++) {
+      if (duplicateIndices.has(j)) continue
+      const b = classified[j]
+      if (b.amount.toFixed(2) !== amt) continue
+      const dateB = new Date(b.date).getTime()
+      if (Math.abs(dateA - dateB) > 3 * 86400000) continue // within 3 days
+      const key = `${a.movement_type}:${b.movement_type}`
+      if (!pairSet.has(key)) continue
+      const confA = a.confidence?.score ?? 0
+      const confB = b.confidence?.score ?? 0
+      const toRemove = confA >= confB ? j : i
+      duplicateIndices.add(toRemove)
+      if (toRemove === i) break
+    }
+  }
+  const toPersist = classified.filter((_, i) => !duplicateIndices.has(i))
+
   // Step 10: Batch persist — two tables: movements + movement_observations
   // First delete old data for this user
   await query("DELETE FROM movements WHERE user_id = $1", [userId])
 
   const BATCH_SIZE = 50
-  for (let i = 0; i < classified.length; i += BATCH_SIZE) {
-    const batch = classified.slice(i, i + BATCH_SIZE)
+  for (let i = 0; i < toPersist.length; i += BATCH_SIZE) {
+    const batch = toPersist.slice(i, i + BATCH_SIZE)
 
     // Insert movements
     const mvtValues: string[] = []

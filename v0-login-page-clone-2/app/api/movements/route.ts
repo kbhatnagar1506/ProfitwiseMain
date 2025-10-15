@@ -91,7 +91,7 @@ export async function GET() {
             ) AS observations
      FROM movements m
      LEFT JOIN movement_observations o ON o.movement_id = m.id
-     WHERE m.user_id = $1
+     WHERE m.user_id = $1 AND m.duplicate_of IS NULL
      GROUP BY m.id
      ORDER BY m.date DESC, m.created_at DESC`,
     [userId]
@@ -127,7 +127,7 @@ export async function GET() {
   type SummaryDbRow = { movement_type: string; pnl_eligible: boolean; count: number; total_amount: string }
   const summaryRows = await query<SummaryDbRow>(
     `SELECT movement_type, pnl_eligible, COUNT(*)::int as count, SUM(amount)::text as total_amount
-     FROM movements WHERE user_id = $1
+     FROM movements WHERE user_id = $1 AND duplicate_of IS NULL
      GROUP BY movement_type, pnl_eligible
      ORDER BY count DESC`,
     [userId]
@@ -141,5 +141,57 @@ export async function GET() {
     pnl_eligible: row.pnl_eligible,
   }))
 
-  return NextResponse.json({ movements: movementsWithTags, summary })
+  // When tags exist, compute authoritative summary from tagged movements (plan #1, #6)
+  type TaggedMovement = (typeof movementsWithTags)[number] & { tag?: { hits_pnl?: boolean; economic_class?: string; state_inclusion_policy?: string; needs_review?: boolean } }
+  let summaryFromTags: {
+    pnl_count: number
+    non_pnl_count: number
+    excluded_for_review: number
+    unresolved: number
+    coalesced_count: number
+    class_counts: Record<string, { count: number; total_amount: number }>
+  } | null = null
+
+  if (tagRows.length > 0) {
+    const classCounts: Record<string, { count: number; total_amount: number }> = {}
+    let pnlCount = 0
+    let nonPnlCount = 0
+    let excludedForReview = 0
+    let unresolved = 0
+    let coalescedCount = 0
+
+    for (const m of movementsWithTags as TaggedMovement[]) {
+      const tag = m.tag
+      if (!tag) continue
+
+      const ec = tag.economic_class ?? "unknown"
+      const hitsPnl = tag.hits_pnl ?? false
+      const policy = tag.state_inclusion_policy ?? "exclude_and_review"
+      const needsReview = tag.needs_review ?? false
+
+      const mc = m.movement_class
+      if (!classCounts[mc]) classCounts[mc] = { count: 0, total_amount: 0 }
+      classCounts[mc].count++
+      classCounts[mc].total_amount += m.amount
+
+      if (hitsPnl) pnlCount++
+      else if (ec !== "unknown") nonPnlCount++
+
+      if (ec === "unknown") unresolved++
+      else if (policy === "exclude_and_review" || needsReview) excludedForReview++
+
+      if (m.provenance === "coalesced") coalescedCount++
+    }
+
+    summaryFromTags = {
+      pnl_count: pnlCount,
+      non_pnl_count: nonPnlCount,
+      excluded_for_review: excludedForReview,
+      unresolved,
+      coalesced_count: coalescedCount,
+      class_counts: classCounts,
+    }
+  }
+
+  return NextResponse.json({ movements: movementsWithTags, summary, summary_from_tags: summaryFromTags })
 }
