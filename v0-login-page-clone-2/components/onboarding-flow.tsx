@@ -915,9 +915,8 @@ export function OnboardingFlow({
         runWaterfall: true,
         waterfallDryRun: false,
         waterfallMinAiReviewAmount: 1000,
-        // Keep the blocking brain run under Heroku's 30s timeout.
-        // Stage 4 suggestions are loaded from review queue after the core run.
-        runStage4Suggestions: false,
+        runStage4Suggestions: true,
+        stage4BatchSize: 60,
       }),
     })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Brain run failed"))))
