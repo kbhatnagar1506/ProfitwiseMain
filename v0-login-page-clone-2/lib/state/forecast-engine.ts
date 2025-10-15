@@ -25,7 +25,6 @@ import type {
   RecurrenceModel,
   RecurrenceType,
   VendorModel,
-  VendorObligationType,
   SettlementModel,
   ProcessorSettlementProfile,
   TransferBehaviorModel,
@@ -53,12 +52,6 @@ import type {
   ScenarioDriver,
   BacktestResult,
   CalibrationResult,
-  CalibrationFamily,
-  CalibrationPoint,
-  CalibrationTable,
-  CustomerCohort,
-  ContributionBucket,
-  ForecastAudit,
 } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
@@ -653,74 +646,6 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
   return models.sort((a, b) => b.avg_amount * b.payment_count - a.avg_amount * a.payment_count)
 }
 
-// ─── Step 2a-ii: Customer Cohort Clustering ─────────────────────────
-//
-// Instead of 73 weak individual models, collapse into ~6 strong archetype
-// cohorts. Each cohort pools behavior across members to give a stronger
-// signal. Individual models still exist but cohort stats inform confidence.
-
-function buildCustomerCohorts(customers: CustomerModel[]): CustomerCohort[] {
-  const byArchetype = new Map<CustomerArchetype, CustomerModel[]>()
-  for (const c of customers) {
-    let arr = byArchetype.get(c.archetype)
-    if (!arr) { arr = []; byArchetype.set(c.archetype, arr) }
-    arr.push(c)
-  }
-
-  const cohorts: CustomerCohort[] = []
-  for (const [archetype, members] of byArchetype) {
-    if (members.length === 0) continue
-    const totalRevenue = members.reduce((s, c) => s + c.avg_amount * Math.max(1, c.payment_count), 0)
-    const avgPaymentCount = members.reduce((s, c) => s + c.payment_count, 0) / members.length
-    const avgAmount = members.reduce((s, c) => s + c.avg_amount, 0) / members.length
-    const avgInterval = members.filter((c) => c.payment_interval_days > 0).length > 0
-      ? members.reduce((s, c) => s + c.payment_interval_days, 0) / members.filter((c) => c.payment_interval_days > 0).length
-      : 0
-    const avgProb = members.reduce((s, c) => s + c.probability_of_next, 0) / members.length
-
-    const highConf = members.filter((c) => c.confidence === "high").length
-    const medConf = members.filter((c) => c.confidence === "medium").length
-    const cohortConf: CustomerCohort["cohort_confidence"] =
-      highConf / members.length > 0.5 ? "high"
-        : (highConf + medConf) / members.length > 0.5 ? "medium"
-          : "low"
-
-    cohorts.push({
-      archetype,
-      member_count: members.length,
-      total_revenue: r2(totalRevenue),
-      avg_payment_count: r2(avgPaymentCount),
-      avg_amount: r2(avgAmount),
-      avg_interval_days: Math.round(avgInterval),
-      avg_probability: r2(avgProb),
-      cohort_confidence: cohortConf,
-    })
-  }
-
-  return cohorts.sort((a, b) => b.total_revenue - a.total_revenue)
-}
-
-// For low_data customers, boost their probability if their cohort
-// has a stronger signal than their individual model.
-function applyCohortBoost(customers: CustomerModel[], cohorts: CustomerCohort[]): CustomerModel[] {
-  const cohortMap = new Map<CustomerArchetype, CustomerCohort>()
-  for (const c of cohorts) cohortMap.set(c.archetype, c)
-
-  return customers.map((cust) => {
-    if (cust.archetype !== "low_data") return cust
-    // Low-data customers borrow confidence from the low_data cohort
-    const cohort = cohortMap.get("low_data")
-    if (!cohort || cohort.member_count < 3) return cust
-    // If this customer has zero payments but the cohort has a signal,
-    // use cohort average probability as a floor
-    if (cust.payment_count === 0 && cohort.avg_probability > cust.probability_of_next) {
-      const boostedProb = r2(Math.min(0.6, (cust.probability_of_next + cohort.avg_probability) / 2))
-      return { ...cust, probability_of_next: boostedProb }
-    }
-    return cust
-  })
-}
-
 // ─── Step 2b: Vendor Behavioral Models ──────────────────────────────
 
 function detectCadence(avgInterval: number): VendorModel["cadence"] {
@@ -939,10 +864,6 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
       if (confidence === "low") confidence = "medium"
     }
 
-    const amountCV = avgAmount > 0 ? amountStd / avgAmount : 999
-    const obligation = classifyVendorObligation(recurrence, vendorBills, payments.length, amountCV, intervalCV, data.payments)
-    const flexibility = computeFlexibilityScore(obligation)
-
     models.push({
       entity_id: entityId,
       name: data.name,
@@ -951,8 +872,6 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
       cadence_interval_days: Math.round(avgInterval),
       is_recurring: isRecurring,
       recurrence,
-      obligation,
-      flexibility_score: r2(flexibility),
       last_payment_date: lastDate,
       payment_count: payments.length,
       next_expected_date: nextDate,
@@ -962,61 +881,6 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
   }
 
   return models.sort((a, b) => b.avg_amount * b.payment_count - a.avg_amount * a.payment_count)
-}
-
-function classifyVendorObligation(
-  recurrence: RecurrenceModel,
-  bills: OutstandingBill[],
-  paymentCount: number,
-  amountCV: number,
-  intervalCV: number,
-  payments: { recurring: boolean }[],
-): VendorObligationType {
-  // invoice_linked: has outstanding AP bills with due dates — the bill IS the signal
-  if (bills.length > 0 && bills.some((b) => b.due_date)) return "invoice_linked"
-
-  // hard_obligation: tight interval AND tight amount AND enough history
-  if (recurrence.recurrence_type === "hard" && amountCV < 0.10 && intervalCV < 0.20 && paymentCount >= 4) {
-    return "hard_obligation"
-  }
-
-  // soft_recurring: regular pattern but with moderate variance
-  if ((recurrence.recurrence_type === "hard" || recurrence.recurrence_type === "soft") &&
-      amountCV >= 0.10 && amountCV < 0.40) {
-    return "soft_recurring"
-  }
-
-  // inventory_purchase: detect COGS-like patterns — large episodic payments
-  // from vendors with recurring tag but high amount variance (restocking)
-  if (paymentCount >= 3 && amountCV >= 0.40 &&
-      payments.some((p) => p.recurring) &&
-      recurrence.recurrence_type !== "unknown") {
-    return "inventory_purchase"
-  }
-
-  // opportunistic: few payments, no bills, episodic or unknown pattern
-  if (paymentCount <= 3 && bills.length === 0 &&
-      (recurrence.recurrence_type === "episodic" || recurrence.recurrence_type === "unknown")) {
-    return "opportunistic"
-  }
-
-  // soft_recurring catch-all for vendors with some pattern
-  if (recurrence.recurrence_type === "soft" || recurrence.recurrence_type === "hard") {
-    return "soft_recurring"
-  }
-
-  return "unknown"
-}
-
-function computeFlexibilityScore(obligation: VendorObligationType): number {
-  switch (obligation) {
-    case "hard_obligation": return 0.05
-    case "invoice_linked": return 0.15
-    case "inventory_purchase": return 0.30
-    case "soft_recurring": return 0.40
-    case "opportunistic": return 0.85
-    case "unknown": return 0.50
-  }
 }
 
 // ─── Step 2c: Settlement Delay Model ────────────────────────────────
@@ -1252,16 +1116,8 @@ function buildInvoiceSignal(invoices: OutstandingInvoice[]): InvoiceSignal {
   }
 }
 
-function buildBehavioralModels(
-  movements: TaggedMovement[],
-  invoices: OutstandingInvoice[] = [],
-  bills: OutstandingBill[] = [],
-  calibrationTables: CalibrationTable[] = [],
-): BehavioralModels {
-  let customers = buildCustomerModels(movements, invoices)
-  const cohorts = buildCustomerCohorts(customers)
-  customers = applyCohortBoost(customers, cohorts)
-
+function buildBehavioralModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], bills: OutstandingBill[] = []): BehavioralModels {
+  const customers = buildCustomerModels(movements, invoices)
   return {
     customers,
     vendors: buildVendorModels(movements, bills),
@@ -1269,8 +1125,6 @@ function buildBehavioralModels(
     transfers: buildTransferModel(movements),
     recurring_fixed: buildRecurringFixed(movements),
     invoice_signal: buildInvoiceSignal(invoices),
-    calibration_tables: calibrationTables,
-    customer_cohorts: cohorts,
   }
 }
 
@@ -1371,31 +1225,25 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
     }
   }
 
-  // Vendor payment events — obligation-type-specific probability and amount logic
+  // Vendor payment events with recurrence reasoning
   const vendorBillEntities = new Set<string>()
   for (const v of models.vendors) {
-    const obl = v.obligation ?? "unknown"
-    const recConf = v.recurrence.recurrence_confidence
     const vendReasoning: EventReasoning = {
-      basis: `${obl.replace("_", " ")} obligation, ${v.recurrence.recurrence_type} recurrence (conf ${r2(recConf)}), ${v.payment_count} payments`,
+      basis: `${v.recurrence.recurrence_type} recurrence (conf ${r2(v.recurrence.recurrence_confidence)}), ${v.payment_count} payments`,
       payment_history: `${v.payment_count} payments, avg $${v.avg_amount.toLocaleString()}`,
       interval_info: v.cadence_interval_days > 0 ? `${v.cadence} cadence (~${v.cadence_interval_days}d)` : undefined,
       amount_range: v.recurrence.amount_std && v.recurrence.amount_mean
         ? `$${Math.max(0, v.recurrence.amount_mean - v.recurrence.amount_std).toLocaleString()} – $${(v.recurrence.amount_mean + v.recurrence.amount_std).toLocaleString()}`
         : `~$${v.avg_amount.toLocaleString()}`,
-      recurrence_info: obl === "hard_obligation" ? "Contractual — non-negotiable"
-        : obl === "invoice_linked" ? "Bill-driven — amount and timing from AP"
-        : obl === "soft_recurring" ? "Regular but deferrable"
-        : obl === "inventory_purchase" ? "Inventory/COGS — scales with revenue"
-        : obl === "opportunistic" ? "Discretionary — can skip"
-        : "Insufficient data to classify",
-      risk_factors: obl === "opportunistic" ? ["Timing uncertain — discretionary spend"]
-        : obl === "unknown" ? ["Unclassified vendor — low forecast reliability"]
-        : undefined,
+      recurrence_info: v.recurrence.recurrence_type === "hard" ? "Tight recurring obligation"
+        : v.recurrence.recurrence_type === "soft" ? "Somewhat regular payments"
+        : v.recurrence.recurrence_type === "seasonal" ? "Seasonal payment pattern"
+        : v.recurrence.recurrence_type === "episodic" ? "Irregular/project payments"
+        : "Unknown recurrence pattern",
+      risk_factors: v.recurrence.recurrence_type === "episodic" ? ["Timing uncertain — episodic vendor"] : undefined,
     }
 
-    // invoice_linked: use bill data directly
-    if (obl === "invoice_linked" && v.outstanding_bills.length > 0) {
+    if (v.outstanding_bills.length > 0) {
       vendorBillEntities.add(v.entity_id)
       for (const bill of v.outstanding_bills) {
         if (!bill.due_date) continue
@@ -1404,7 +1252,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
         events.push({
           date: bill.due_date, day_offset: offset, type: "vendor_payment",
           entity: v.name, amount: r2(bill.amount_due),
-          direction: "out", probability: bill.status === "overdue" ? 0.95 : 0.90,
+          direction: "out", probability: bill.status === "overdue" ? 0.95 : 0.9,
           confidence: "high", source_model: "vendor",
           reasoning: {
             ...vendReasoning,
@@ -1416,37 +1264,20 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
       continue
     }
 
-    // Obligation-type-specific probability
-    let prob: number
-    let maxEvents: number
-    if (obl === "hard_obligation") {
-      prob = 0.95
-      maxEvents = 5
-    } else if (obl === "soft_recurring") {
-      prob = r2(Math.min(0.85, 0.70 * recConf + 0.15))
-      maxEvents = 4
-    } else if (obl === "inventory_purchase") {
-      prob = r2(Math.min(0.75, 0.50 + recConf * 0.2))
-      maxEvents = 3
-    } else if (obl === "opportunistic") {
-      prob = r2(Math.max(0.20, recConf * 0.5))
-      maxEvents = 1
-    } else if (obl === "unknown") {
-      prob = 0.30
-      maxEvents = 1
-    } else {
-      if (!v.is_recurring && v.payment_count < 3) continue
-      prob = r2(Math.min(0.70, 0.40 + recConf * 0.3))
-      maxEvents = 3
-    }
+    if (!v.is_recurring && v.payment_count < 3) continue
+    const recConf = v.recurrence.recurrence_confidence
+    const recType = v.recurrence.recurrence_type
+    const prob = recType === "hard" ? Math.min(0.95, 0.85 + recConf * 0.1)
+      : recType === "soft" ? Math.min(0.85, 0.6 + recConf * 0.2)
+      : recType === "episodic" ? Math.min(0.6, 0.3 + recConf * 0.3)
+      : recType === "seasonal" ? Math.min(0.7, 0.4 + recConf * 0.2)
+      : v.is_recurring ? 0.65 : 0.4
 
-    if (v.cadence_interval_days <= 0 && !v.next_expected_date) continue
-
-    generateRepeating(v.last_payment_date, v.cadence_interval_days, maxEvents, (date, offset) => {
+    generateRepeating(v.last_payment_date, v.cadence_interval_days, 5, (date, offset) => {
       events.push({
         date, day_offset: offset, type: "vendor_payment",
         entity: v.name, amount: r2(v.avg_amount),
-        direction: "out", probability: prob,
+        direction: "out", probability: r2(prob),
         confidence: v.confidence, source_model: "vendor",
         reasoning: vendReasoning,
       })
@@ -1708,7 +1539,6 @@ function simulateMonthFromModels(
   monthStart: string,
   monthEnd: string,
   scenarioMult: { inflow: number; outflow: number },
-  monthIdx: number = 0,
 ): { inflows: number; outflows: number; componentAmounts: { component_id: string; amount: number }[] } {
   let inflows = 0
   let outflows = 0
@@ -1740,45 +1570,25 @@ function simulateMonthFromModels(
     componentAmounts.push({ component_id: "customer_receipts_in", amount: r2(customerTotal) })
   }
 
-  // Vendor payments: obligation-type-specific projection rules per month
+  // Vendor payments: simulate from entity models, weighted by recurrence confidence
   let vendorTotal = 0
   for (const v of models.vendors) {
     const recConf = v.recurrence?.recurrence_confidence ?? 0.3
-    const obl = v.obligation ?? "unknown"
-
-    // Obligation-type determines if/how vendor projects into future months
-    let mult = 0
-    if (obl === "hard_obligation") {
-      mult = 1.0
-    } else if (obl === "invoice_linked") {
-      mult = 0.95
-    } else if (obl === "soft_recurring") {
-      mult = recConf * Math.max(0.5, 1 - monthIdx * 0.05)
-    } else if (obl === "inventory_purchase") {
-      // Scale with inflow projection: if inflows are lower, inventory drops proportionally
-      const inflowRatio = inflows > 0 ? Math.min(1.2, inflows / Math.max(1, v.avg_amount * 3)) : 0.8
-      mult = Math.min(1.0, recConf * inflowRatio)
-    } else if (obl === "opportunistic") {
-      const scenLabel = scenarioMult.outflow > 1 ? "pessimistic" : scenarioMult.outflow < 1 ? "optimistic" : "base"
-      mult = scenLabel === "pessimistic" ? 0.50 : scenLabel === "optimistic" ? 0.10 : 0.30
-      if (monthIdx > 0) mult = 0
-    } else {
-      // unknown: month 1 only at 20%, then 0
-      mult = monthIdx === 0 ? 0.20 : 0
-    }
-
-    if (mult <= 0) continue
+    const recType = v.recurrence?.recurrence_type ?? "unknown"
 
     if (!v.next_expected_date) {
-      if (v.cadence_interval_days > 0 && v.cadence_interval_days <= 45 && mult > 0) {
-        vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * mult
+      // Only project vendors with at least soft recurrence and reasonable confidence
+      if (recType === "hard" || recType === "soft") {
+        if (v.cadence_interval_days > 0 && v.cadence_interval_days <= 45) {
+          vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * recConf
+        }
       }
       continue
     }
     if (v.next_expected_date >= monthStart && v.next_expected_date < monthEnd) {
-      vendorTotal += v.avg_amount * mult
-    } else if (v.cadence_interval_days > 0 && v.cadence_interval_days <= 31 && mult > 0) {
-      vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * mult
+      vendorTotal += v.avg_amount * Math.max(0.5, recConf)
+    } else if ((recType === "hard" || recType === "soft") && v.cadence_interval_days > 0 && v.cadence_interval_days <= 31) {
+      vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * recConf
     }
   }
   if (vendorTotal > 0) {
@@ -2139,7 +1949,6 @@ function runScenario(
     const { inflows, outflows, componentAmounts } = simulateMonthFromModels(
       models, components, monthStart, monthEnd,
       { inflow: config.inflow_amount_mult * trendFactor, outflow: config.outflow_amount_mult },
-      i,
     )
 
     // Adjust customer inflows by probability multiplier
@@ -2213,17 +2022,17 @@ function generateNarrative(
   const cash14 = base?.cash_14d ?? mc.percentiles[13]?.p50 ?? startingCash
   const cash30 = base?.cash_30d ?? mc.expected_cash_30d
 
-  // ── Forecast (three-tier: floor / expected / upside) ──
-  const highConfEvents = events.filter((e) => e.probability >= 0.7)
-  const lowConfEvents = events.filter((e) => e.probability < 0.4 && e.direction === "in")
-  let floorCash = startingCash
-  for (const e of highConfEvents) {
-    const ev = e.amount * e.probability
-    floorCash += e.direction === "in" ? ev : -ev
+  // ── Forecast ──
+  const delta14 = cash14 - startingCash
+  const absDelta = money(Math.abs(delta14))
+  let forecast: string
+  if (Math.abs(delta14) < startingCash * 0.01) {
+    forecast = `Projected cash in 14 days: ${money(cash14)} (roughly flat from ${money(startingCash)})`
+  } else if (delta14 >= 0) {
+    forecast = `Projected cash in 14 days: ${money(cash14)} (+${absDelta} from ${money(startingCash)})`
+  } else {
+    forecast = `Projected cash in 14 days: ${money(cash14)} (-${absDelta} from ${money(startingCash)})`
   }
-  const upsideCash = cash14 + lowConfEvents.reduce((s, e) => s + e.amount * e.probability, 0)
-
-  let forecast = `High-confidence floor: ${money(Math.round(floorCash))} | Expected: ${money(cash14)} | Upside: ${money(Math.round(upsideCash))}`
 
   // ── Risk ──
   let risk: string
@@ -2494,43 +2303,27 @@ function computeForecastConfidence(
     reason: `Avg component volatility: ${(avgVolatility * 100).toFixed(0)}%`,
   })
 
-  // ── 8. Backtest & calibration confidence (weight: 0.15) ──
-  // Backtest tests directional accuracy; calibration tests probability honesty.
-  // Both matter — a directionally correct but overconfident forecast is still wrong.
-  const backtestRaw = backtest ? Math.min(1, backtest.accuracy_score / 100) : 0
-  const calibrationPenalty = backtest?.calibration
-    ? Math.min(0.3, backtest.calibration.calibration_error * 0.5)
-    : 0
-  const backtestScore = Math.max(0, backtestRaw - calibrationPenalty)
-
-  const calibrationNote = backtest?.calibration
-    ? `, ECE ${(backtest.calibration.calibration_error * 100).toFixed(0)}%${backtest.calibration.is_overconfident ? " (overconfident)" : backtest.calibration.is_underconfident ? " (underconfident)" : ""}`
-    : ""
-  if (backtest?.calibration && backtest.calibration.calibration_error > 0.3) {
-    reasons.push(`Probability calibration is weak (ECE ${(backtest.calibration.calibration_error * 100).toFixed(0)}%)`)
-  }
+  // ── 8. Backtest confidence (weight: 0.10) ──
+  // accuracy_score is 0-100, normalize to 0-1 for the composite
+  const backtestScore = backtest ? Math.min(1, backtest.accuracy_score / 100) : 0
   by_component.push({
     area: "Backtest accuracy", score: r2(backtestScore),
-    label: backtestScore >= 0.6 ? "high" : backtestScore >= 0.35 ? "medium" : "low",
+    label: backtestScore >= 0.7 ? "high" : backtestScore >= 0.4 ? "medium" : "low",
     reason: backtest
-      ? `${backtest.days_tested}d tested, direction accuracy ${(backtest.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest.mean_absolute_error.toLocaleString()}${calibrationNote}`
+      ? `${backtest.days_tested}d tested, direction accuracy ${(backtest.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest.mean_absolute_error.toLocaleString()}`
       : "No backtest data available",
   })
 
   // ── Weighted composite score ──
-  // Weights: inflow 0.20, outflow 0.20, settlement 0.10, identity 0.05,
-  // recurrence 0.10, data span 0.10, stability 0.10, backtest 0.15
-  // Identity lowered (it's usually near 1.0 and uninformative)
-  // Backtest raised (it's the only empirical measure)
   const weightedScore =
     inflowScore * 0.20 +
     outflowScore * 0.20 +
     settScore * 0.10 +
-    identityScore * 0.05 +
+    identityScore * 0.10 +
     recurrenceScore * 0.10 +
     dataSpanScore * 0.10 +
     varianceScore * 0.10 +
-    backtestScore * 0.15
+    backtestScore * 0.10
 
   const score = Math.max(0.05, Math.min(0.99, weightedScore))
   const label: ForecastConfidence["label"] = score >= 0.7 ? "high" : score >= 0.45 ? "medium" : "low"
@@ -2540,18 +2333,12 @@ function computeForecastConfidence(
     ? components.filter((c) => c.confidence !== "low").length / components.length : 0
   const dataCompleteness = dataSpanScore
 
-  // Build diagnostic sentence — actionable, not just descriptive
+  // Build diagnostic sentence
   const weakest = by_component.reduce((min, c) => c.score < min.score ? c : min, by_component[0])
   const strongest = by_component.reduce((max, c) => c.score > max.score ? c : max, by_component[0])
-
-  let diagnosis: string
-  if (score < 0.3) {
-    diagnosis = `Forecast is unreliable — ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%) is dragging confidence. ${weakest.reason}. More transaction history needed.`
-  } else if (score < 0.45) {
-    diagnosis = `Forecast is ${label} confidence — weakest area: ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%). ${weakest.reason}.`
-  } else {
-    diagnosis = `Forecast is ${label} confidence — strongest: ${strongest.area.toLowerCase()} (${(strongest.score * 100).toFixed(0)}%), weakest: ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%)`
-  }
+  const diagnosis = score < 0.45
+    ? `Forecast is ${label} confidence because ${weakest.area.toLowerCase()} is weak (${(weakest.score * 100).toFixed(0)}%) — ${weakest.reason}`
+    : `Forecast is ${label} confidence — strongest: ${strongest.area.toLowerCase()} (${(strongest.score * 100).toFixed(0)}%), weakest: ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%)`
 
   return {
     score: r2(score), label,
@@ -2846,160 +2633,6 @@ function computeScenarioDrivers(
   return drivers
 }
 
-// ─── Calibration System: Per-Family Isotonic Regression ──────────────
-//
-// Instead of a single global bucket adjustment, we group backtest events
-// by CalibrationFamily, create 10 fine-grained buckets per family,
-// apply the Pool Adjacent Violators (isotonic regression) to guarantee
-// the calibration mapping is monotonically increasing, then interpolate
-// per-event during event generation. Target: ECE under 15%.
-
-function eventToFamily(eventType: ForecastEvent["type"]): CalibrationFamily {
-  switch (eventType) {
-    case "customer_payment": return "customer_payment"
-    case "vendor_payment": return "vendor_payment"
-    case "recurring_expense": case "debt_payment": case "processor_fee": return "recurring_expense"
-    case "settlement": return "settlement"
-    case "transfer": return "transfer"
-    default: return "other"
-  }
-}
-
-function poolAdjacentViolators(points: CalibrationPoint[]): CalibrationPoint[] {
-  if (points.length <= 1) return points
-  const result: { predicted: number; actual: number; count: number }[] = points.map((p) => ({ ...p }))
-  let changed = true
-  while (changed) {
-    changed = false
-    for (let i = 1; i < result.length; i++) {
-      if (result[i].actual < result[i - 1].actual) {
-        const merged = {
-          predicted: (result[i - 1].predicted * result[i - 1].count + result[i].predicted * result[i].count) / (result[i - 1].count + result[i].count),
-          actual: (result[i - 1].actual * result[i - 1].count + result[i].actual * result[i].count) / (result[i - 1].count + result[i].count),
-          count: result[i - 1].count + result[i].count,
-        }
-        result.splice(i - 1, 2, merged)
-        changed = true
-        break
-      }
-    }
-  }
-  return result.map((p) => ({ predicted: r2(p.predicted), actual: r2(p.actual), count: p.count }))
-}
-
-function buildCalibrationTables(calibration: CalibrationResult | null, events: ForecastEvent[], testSet: TaggedMovement[], cutoffDate: string, testDays: number): CalibrationTable[] {
-  if (!calibration || calibration.total_events_evaluated < 10) return []
-
-  const families: CalibrationFamily[] = ["customer_payment", "vendor_payment", "recurring_expense", "settlement", "transfer", "other"]
-  const bucketCount = 10
-  const bucketWidth = 1.0 / bucketCount
-
-  // Build actual occurrence map same as runCalibration
-  const actualByDay = new Map<string, Set<string>>()
-  for (const m of testSet) {
-    const d = toDateStr(m.occurred_at)
-    const offset = daysBetween(cutoffDate, d)
-    if (offset < 1 || offset > testDays) continue
-    const key = `${offset}`
-    if (!actualByDay.has(key)) actualByDay.set(key, new Set())
-    const daySet = actualByDay.get(key)!
-    const entityId = resolveEntityId(m)
-    daySet.add(entityId.toLowerCase().replace(/[^a-z0-9]/g, ""))
-    const cp = observedCounterparty(m)
-    if (cp) daySet.add(cp.toLowerCase().replace(/[^a-z0-9]/g, ""))
-    const displayName = resolveEntityName(entityId, cp, m.raw_description, "unknown")
-    daySet.add(displayName.toLowerCase().replace(/[^a-z0-9]/g, ""))
-    const dir = isInflow(m) ? "in" : "out"
-    daySet.add(`${displayName.toLowerCase().replace(/[^a-z0-9]/g, "")}_${dir}`)
-  }
-
-  function didOccur(e: ForecastEvent): boolean {
-    const entityKey = e.entity.toLowerCase().replace(/[^a-z0-9]/g, "")
-    const dirKey = `${entityKey}_${e.direction}`
-    for (let delta = -1; delta <= 1; delta++) {
-      const checkDay = `${e.day_offset + delta}`
-      const dayEntities = actualByDay.get(checkDay)
-      if (!dayEntities) continue
-      if (dayEntities.has(dirKey) || dayEntities.has(entityKey)) return true
-      if (entityKey.length >= 3) {
-        for (const ae of dayEntities) {
-          if (ae.length >= 3 && (ae.includes(entityKey) || entityKey.includes(ae))) return true
-        }
-      }
-    }
-    return false
-  }
-
-  const tables: CalibrationTable[] = []
-  for (const family of families) {
-    const familyEvents = events.filter((e) => e.day_offset >= 1 && e.day_offset <= testDays && eventToFamily(e.type) === family)
-    if (familyEvents.length < 5) continue
-
-    const rawBuckets: { predicted: number; actualCount: number; totalCount: number }[] = []
-    for (let i = 0; i < bucketCount; i++) {
-      const lo = i * bucketWidth
-      const hi = (i + 1) * bucketWidth + (i === bucketCount - 1 ? 0.01 : 0)
-      const inBucket = familyEvents.filter((e) => e.probability >= lo && e.probability < hi)
-      if (inBucket.length === 0) continue
-      const predictedAvg = inBucket.reduce((s, e) => s + e.probability, 0) / inBucket.length
-      const actualCount = inBucket.filter((e) => didOccur(e)).length
-      rawBuckets.push({ predicted: predictedAvg, actualCount, totalCount: inBucket.length })
-    }
-    if (rawBuckets.length < 2) continue
-
-    const rawPoints: CalibrationPoint[] = rawBuckets.map((b) => ({
-      predicted: r2(b.predicted),
-      actual: r2(b.actualCount / b.totalCount),
-      count: b.totalCount,
-    }))
-
-    const isotonicPoints = poolAdjacentViolators(rawPoints)
-    const sampleCount = familyEvents.length
-
-    let ece = 0
-    for (const p of isotonicPoints) {
-      ece += (p.count / sampleCount) * Math.abs(p.predicted - p.actual)
-    }
-
-    tables.push({ family, points: isotonicPoints, ece: r2(ece), sample_count: sampleCount })
-  }
-  return tables
-}
-
-function calibrateEventProbability(event: ForecastEvent, tables: CalibrationTable[]): number {
-  if (tables.length === 0) return event.probability
-
-  const family = eventToFamily(event.type)
-  let table = tables.find((t) => t.family === family && t.sample_count >= 5)
-  if (!table) {
-    // Fall back to the global table with most samples
-    table = tables.reduce((best, t) => t.sample_count > best.sample_count ? t : best, tables[0])
-  }
-  if (!table || table.points.length === 0) return event.probability
-
-  const p = event.probability
-  const pts = table.points
-
-  // Exact or boundary cases
-  if (pts.length === 1) return r2(Math.max(0.02, Math.min(0.98, pts[0].actual)))
-  if (p <= pts[0].predicted) return r2(Math.max(0.02, Math.min(0.98, pts[0].actual)))
-  if (p >= pts[pts.length - 1].predicted) return r2(Math.max(0.02, Math.min(0.98, pts[pts.length - 1].actual)))
-
-  // Linear interpolation between nearest calibration points
-  for (let i = 1; i < pts.length; i++) {
-    if (p <= pts[i].predicted) {
-      const lo = pts[i - 1]
-      const hi = pts[i]
-      const range = hi.predicted - lo.predicted
-      if (range < 0.001) return r2(Math.max(0.02, Math.min(0.98, lo.actual)))
-      const t = (p - lo.predicted) / range
-      const calibrated = lo.actual + t * (hi.actual - lo.actual)
-      return r2(Math.max(0.02, Math.min(0.98, calibrated)))
-    }
-  }
-  return event.probability
-}
-
 // ─── Backtesting ────────────────────────────────────────────────────
 //
 // Replay: take historical movements up to N days ago, build a forecast,
@@ -3110,16 +2743,13 @@ function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cuto
   else if (isUnderconfident) details += " — probabilities are underconfident (actual > predicted)"
   else details += " — probabilities are reasonably calibrated"
 
-  return { total_events_evaluated: totalEvents, buckets: calibrationBuckets, calibration_error: calibrationError, is_overconfident: isOverconfident, is_underconfident: isUnderconfident, details, by_family: [] }
+  return { total_events_evaluated: totalEvents, buckets: calibrationBuckets, calibration_error: calibrationError, is_overconfident: isOverconfident, is_underconfident: isUnderconfident, details }
 }
 
 function runBacktest(movements: TaggedMovement[], invoices: OutstandingInvoice[], bills: OutstandingBill[]): BacktestResult | null {
+  const testDays = 14
   const allDates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
   if (allDates.length < 30) return null
-
-  const dataSpanDays = daysBetween(allDates[0], allDates[allDates.length - 1])
-  const testDays = Math.min(Math.floor(dataSpanDays / 3), 30)
-  if (testDays < 7) return null
 
   const lastDate = allDates[allDates.length - 1]
   const cutoffDate = addDays(lastDate, -testDays)
@@ -3189,20 +2819,10 @@ function runBacktest(movements: TaggedMovement[], invoices: OutstandingInvoice[]
   // Probability calibration: are our stated probabilities truthful?
   const calibration = runCalibration(events, testSet, cutoffDate, testDays)
 
-  // Build per-family isotonic calibration tables
-  if (calibration) {
-    const calTables = buildCalibrationTables(calibration, events, testSet, cutoffDate, testDays)
-    calibration.by_family = calTables
-    if (calTables.length > 0) {
-      const familySummary = calTables.map((t) => `${t.family}: ECE ${(t.ece * 100).toFixed(0)}% (n=${t.sample_count})`).join(", ")
-      calibration.details += `. Per-family: ${familySummary}`
-    }
-  }
-
   let details: string
-  if (score >= 75) details = `Strong backtest: ${testDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
-  else if (score >= 50) details = `Moderate backtest: ${testDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
-  else details = `Weak backtest: ${testDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)} — forecast may be unreliable`
+  if (score >= 75) details = `Strong backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
+  else if (score >= 50) details = `Moderate backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)}`
+  else details = `Weak backtest: ${activeDays}d tested, ${Math.round(directionAccuracy * 100)}% direction accuracy, MAE $${Math.round(mae)} — forecast may be unreliable`
 
   if (calibration) {
     details += `. ${calibration.details}`
@@ -3215,108 +2835,6 @@ function runBacktest(movements: TaggedMovement[], invoices: OutstandingInvoice[]
     direction_accuracy: r2(directionAccuracy),
     details,
     calibration,
-  }
-}
-
-// ─── Forecast Audit Layer ────────────────────────────────────────────
-//
-// Decomposes the forecast into confidence tiers, contribution waterfall,
-// and explainability metadata. Answers: what drove this number, from which
-// confidence tier, and how much is explainable vs uncertain.
-
-function buildForecastAudit(events: ForecastEvent[], startingCash: number, dailySim: DailySimulation): ForecastAudit {
-  const day14Cash = dailySim.days[13]?.cash ?? dailySim.ending_cash
-  const day30Cash = dailySim.ending_cash
-
-  // High-confidence floor: run mini sim with only P >= 0.7 events
-  const hiConfEvents = events.filter((e) => e.probability >= 0.7)
-  let floorCash14 = startingCash
-  let floorCash30 = startingCash
-  const dailyHiConf = new Array(31).fill(0)
-  for (const e of hiConfEvents) {
-    if (e.day_offset < 1 || e.day_offset > 30) continue
-    const ev = e.amount * e.probability
-    dailyHiConf[e.day_offset] += e.direction === "in" ? ev : -ev
-  }
-  let runCash = startingCash
-  for (let d = 1; d <= 30; d++) {
-    runCash += dailyHiConf[d]
-    if (d === 14) floorCash14 = runCash
-    if (d === 30) floorCash30 = runCash
-  }
-
-  // Low-confidence upside: sum expected value of P < 0.4 inflow events
-  const loConfInflows = events.filter((e) => e.probability < 0.4 && e.direction === "in" && e.day_offset >= 1 && e.day_offset <= 30)
-  const loConf14 = loConfInflows.filter((e) => e.day_offset <= 14).reduce((s, e) => s + e.amount * e.probability, 0)
-  const loConf30 = loConfInflows.reduce((s, e) => s + e.amount * e.probability, 0)
-
-  // Contribution waterfall: group by entity, sort by impact magnitude
-  const entityMap = new Map<string, { in: number; out: number; probSum: number; count: number }>()
-  for (const e of events) {
-    if (e.day_offset < 1 || e.day_offset > 30) continue
-    const entry = entityMap.get(e.entity) ?? { in: 0, out: 0, probSum: 0, count: 0 }
-    const ev = e.amount * e.probability
-    if (e.direction === "in") entry.in += ev
-    else entry.out += ev
-    entry.probSum += e.probability
-    entry.count++
-    entityMap.set(e.entity, entry)
-  }
-  const totalAbsFlow = Array.from(entityMap.values()).reduce((s, v) => s + v.in + v.out, 0) || 1
-  const waterfall: ContributionBucket[] = Array.from(entityMap.entries())
-    .map(([label, v]) => {
-      const netAmount = v.in - v.out
-      const absAmount = v.in + v.out
-      const avgProb = v.count > 0 ? v.probSum / v.count : 0.5
-      const tier: "high" | "medium" | "low" = avgProb >= 0.7 ? "high" : avgProb >= 0.4 ? "medium" : "low"
-      return {
-        label,
-        amount: r2(Math.abs(netAmount)),
-        direction: netAmount >= 0 ? "in" as const : "out" as const,
-        confidence_tier: tier,
-        pct_of_total: r2(absAmount / totalAbsFlow),
-      }
-    })
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, 15)
-
-  // Confidence mix: % of total expected value from high/medium/low confidence events
-  let highVal = 0, medVal = 0, lowVal = 0
-  for (const e of events) {
-    if (e.day_offset < 1 || e.day_offset > 30) continue
-    const ev = e.amount * e.probability
-    if (e.probability >= 0.7) highVal += ev
-    else if (e.probability >= 0.4) medVal += ev
-    else lowVal += ev
-  }
-  const totalVal = highVal + medVal + lowVal || 1
-
-  // Explainability: % of events with non-empty reasoning basis
-  const reasonedEvents = events.filter((e) => e.day_offset >= 1 && e.day_offset <= 30 && e.reasoning?.basis)
-  const allEvents30 = events.filter((e) => e.day_offset >= 1 && e.day_offset <= 30)
-
-  // Top assumptions: 3-5 events with highest sensitivity (flipping their outcome changes cash most)
-  const sortedByImpact = [...allEvents30].sort((a, b) => (b.amount * b.probability) - (a.amount * a.probability))
-  const topAssumptions = sortedByImpact.slice(0, 5).map((e) => {
-    const ev = r2(e.amount * e.probability)
-    return `${e.entity} (${e.direction === "in" ? "+" : "-"}$${ev.toLocaleString()}, ${Math.round(e.probability * 100)}% prob)`
-  })
-
-  return {
-    high_confidence_floor_14d: r2(floorCash14),
-    high_confidence_floor_30d: r2(floorCash30),
-    expected_case_14d: r2(day14Cash),
-    expected_case_30d: r2(day30Cash),
-    low_confidence_upside_14d: r2(day14Cash + loConf14),
-    low_confidence_upside_30d: r2(day30Cash + loConf30),
-    contribution_waterfall: waterfall,
-    confidence_mix: {
-      high_pct: r2(highVal / totalVal),
-      medium_pct: r2(medVal / totalVal),
-      low_pct: r2(lowVal / totalVal),
-    },
-    explainability_ratio: r2(allEvents30.length > 0 ? reasonedEvents.length / allEvents30.length : 0),
-    top_assumptions: topAssumptions,
   }
 }
 
@@ -3341,21 +2859,11 @@ export function computeCashflowForecast(
   const buckets = decomposeMovements(movements)
   const components = buckets.map((b) => buildComponent(b, dataSpanDays))
 
-  // Run a preliminary backtest to get calibration data.
-  // The backtest builds per-family isotonic calibration tables used to correct probabilities.
-  const prelimBacktest = runBacktest(movements, invoices, bills)
-  const calTables = prelimBacktest?.calibration?.by_family ?? []
-
-  // Entity-level behavioral models (enhanced with invoice + bill + calibration tables)
-  const behavioral_models = buildBehavioralModels(movements, invoices, bills, calTables)
+  // Entity-level behavioral models (enhanced with invoice + bill data)
+  const behavioral_models = buildBehavioralModels(movements, invoices, bills)
 
   // Event generation: discrete 30-day forecast
-  let events_30d = generateEvents30d(behavioral_models, components)
-
-  // Apply per-event isotonic calibration: correct probabilities using per-family tables
-  if (calTables.length > 0) {
-    events_30d = events_30d.map((e) => ({ ...e, probability: calibrateEventProbability(e, calTables) }))
-  }
+  const events_30d = generateEvents30d(behavioral_models, components)
 
   // Daily cashflow simulation: cash[t+1] = cash[t] + inflows[t] - outflows[t]
   const daily_simulation = simulateDaily(events_30d, startingCash)
@@ -3400,14 +2908,11 @@ export function computeCashflowForecast(
     transitions: [], balance_source: "derived", account_balances: [],
   }
 
-  // Reuse the preliminary backtest (already computed for calibration feedback)
-  const backtest = prelimBacktest
+  // Backtest: replay last 14 days to measure forecast accuracy
+  const backtest = runBacktest(movements, invoices, bills)
 
   // Forecast confidence (8-component weighted, with backtest input)
   const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest)
-
-  // Forecast audit layer: confidence tiers, contribution waterfall, explainability
-  const audit = buildForecastAudit(events_30d, startingCash, daily_simulation)
 
   return {
     period_start: periodStart,
@@ -3427,6 +2932,5 @@ export function computeCashflowForecast(
     interventions,
     context,
     backtest,
-    audit,
   }
 }
