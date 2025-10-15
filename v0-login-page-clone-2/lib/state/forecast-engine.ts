@@ -376,13 +376,13 @@ function buildInvoiceForecasts(
       reasoning = `${archetype} payer — wide timing variance (CV ${r2(features.interval_cv)}), probability spread across horizon`
     } else if (archetype === "low_data") {
       if (daysOverdue > 0) {
-        p7 = 0.25; p14 = 0.4; p30 = 0.55
+        p7 = 0.18; p14 = 0.3; p30 = 0.4
         expectedDate = addDays(now, 7)
         reasoning = `Low-data customer, ${daysOverdue}d overdue — sparse history penalty applied`
       } else {
-        p7 = daysUntilDue <= 5 ? 0.2 : 0.08
-        p14 = daysUntilDue <= 10 ? 0.3 : 0.15
-        p30 = 0.4
+        p7 = daysUntilDue <= 5 ? 0.15 : 0.05
+        p14 = daysUntilDue <= 10 ? 0.22 : 0.1
+        p30 = 0.3
         expectedDate = inv.due_date ?? addDays(now, 14)
         reasoning = `Low-data customer (<3 payments) — anchored to invoice due date with confidence haircut`
       }
@@ -517,11 +517,11 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     } else if (archetype === "volatile") {
       probability = daysSinceLast < 30 ? 0.3 : daysSinceLast < 60 ? 0.2 : 0.1
     } else {
-      // low_data: anchor to invoices
+      // low_data: anchor to invoices with heavy discount
       if (customerInvoices.length > 0) {
-        probability = customerInvoices.some((i) => i.status === "overdue") ? 0.55 : 0.4
+        probability = customerInvoices.some((i) => i.status === "overdue") ? 0.4 : 0.3
       } else {
-        probability = payments.length === 1 && daysSinceLast < 60 ? 0.2 : 0.1
+        probability = payments.length === 1 && daysSinceLast < 60 ? 0.15 : 0.08
       }
     }
 
@@ -549,21 +549,28 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     else if (archetype === "bursty" && payments.length >= 4) confidence = "medium"
     else if (payments.length >= 3) confidence = "medium"
 
-    // Invoice boost
+    // Invoice boost — scaled by archetype and history quality
     if (customerInvoices.length > 0) {
       const earliestDue = customerInvoices
         .filter((i) => i.due_date)
         .sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
 
-      if (probability < 0.8) probability = Math.min(0.98, probability + 0.25)
-      if (confidence === "low") confidence = "medium"
+      // Boost is smaller for low-data/volatile customers (we don't know if they'll pay)
+      const invoiceBoost = archetype === "clockwork" ? 0.2
+        : archetype === "slow_reliable" ? 0.15
+        : archetype === "bursty" ? 0.1
+        : archetype === "low_data" ? 0.08
+        : archetype === "volatile" ? 0.05
+        : 0.1
+      if (probability < 0.8) probability = Math.min(0.9, probability + invoiceBoost)
+      if (confidence === "low" && payments.length >= 2) confidence = "medium"
 
       if (earliestDue?.due_date && earliestDue.due_date >= now) {
         const dueOffset = daysBetween(now, earliestDue.due_date)
         if (dueOffset <= 30) nextDate = earliestDue.due_date
       } else if (earliestDue?.status === "overdue") {
         nextDate = addDays(now, 3)
-        probability = Math.min(0.98, probability + 0.1)
+        probability = Math.min(0.9, probability + 0.05)
       }
     }
 
@@ -635,7 +642,7 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
       interval_variance: 0,
       last_payment_date: now,
       payment_count: 0,
-      probability_of_next: custInvs.some((i) => i.status === "overdue") ? 0.55 : 0.4,
+      probability_of_next: custInvs.some((i) => i.status === "overdue") ? 0.4 : 0.3,
       next_expected_date: earliest?.due_date ?? addDays(now, 14),
       confidence: "low",
       outstanding_invoices: custInvs,
@@ -1147,11 +1154,14 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
   ) {
     if (intervalDays <= 0) return
     let nextDate = addDays(lastDate, intervalDays)
-    if (nextDate < today) nextDate = addDays(today, Math.max(1, Math.round(intervalDays * 0.3)))
+    // If next date is past, advance by full intervals until we're in the future
+    while (nextDate < today) {
+      nextDate = addDays(nextDate, intervalDays)
+    }
     let count = 0
     while (nextDate <= horizon && count < maxOccurrences) {
       const offset = daysBetween(today, nextDate)
-      if (offset >= 0) emitFn(nextDate, offset)
+      if (offset >= 1) emitFn(nextDate, offset)
       nextDate = addDays(nextDate, intervalDays)
       count++
     }
@@ -1185,13 +1195,15 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
       // Use invoice forecasts when available
       const invForecasts = c.invoice_forecasts.length > 0 ? c.invoice_forecasts : []
 
-      for (const inv of openInvs) {
+      for (let ii = 0; ii < openInvs.length; ii++) {
+        const inv = openInvs[ii]
         const invFc = invForecasts.find((f) => f.invoice_id === inv.invoice_id)
         const dueDate = invFc?.expected_collection_date ?? inv.due_date ?? c.next_expected_date ?? addDays(today, 14)
-        let eventDate = dueDate < today ? addDays(today, 2) : dueDate
+        // Spread overdue invoices across days 2-7 instead of clustering on D+1
+        let eventDate = dueDate < today ? addDays(today, Math.min(7, 2 + ii * 2)) : dueDate
         if (eventDate > horizon) continue
         const offset = daysBetween(today, eventDate)
-        if (offset < 0) continue
+        if (offset < 1) continue
 
         const prob = invFc
           ? (offset <= 7 ? invFc.probability_7d : offset <= 14 ? invFc.probability_14d : invFc.probability_30d)
@@ -1245,18 +1257,24 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
 
     if (v.outstanding_bills.length > 0) {
       vendorBillEntities.add(v.entity_id)
-      for (const bill of v.outstanding_bills) {
+      for (let bi = 0; bi < v.outstanding_bills.length; bi++) {
+        const bill = v.outstanding_bills[bi]
         if (!bill.due_date) continue
-        const offset = daysBetween(today, bill.due_date)
-        if (offset < 0 || offset > 30) continue
+        let offset = daysBetween(today, bill.due_date)
+        if (offset < 0) offset = 1
+        if (offset > 30) continue
+        // Stagger bills landing on the same date: spread by vendor to avoid cliff
+        const stagger = bi * 1
+        const adjustedOffset = Math.min(30, offset + stagger)
+        const adjustedDate = addDays(today, adjustedOffset)
         events.push({
-          date: bill.due_date, day_offset: offset, type: "vendor_payment",
+          date: adjustedDate, day_offset: adjustedOffset, type: "vendor_payment",
           entity: v.name, amount: r2(bill.amount_due),
-          direction: "out", probability: bill.status === "overdue" ? 0.95 : 0.9,
+          direction: "out", probability: bill.status === "overdue" ? 0.92 : 0.85,
           confidence: "high", source_model: "vendor",
           reasoning: {
             ...vendReasoning,
-            invoice_info: `Bill $${bill.amount_due.toLocaleString()}, ${bill.status}${bill.days_overdue ? ` (${bill.days_overdue}d overdue)` : ""}`,
+            invoice_info: `AP bill due ${bill.due_date} · Bill $${bill.amount_due.toLocaleString()}, ${bill.status}${bill.days_overdue ? ` (${bill.days_overdue}d overdue)` : ""}`,
             basis: `AP bill due ${bill.due_date}`,
           },
         })
@@ -1267,11 +1285,13 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
     if (!v.is_recurring && v.payment_count < 3) continue
     const recConf = v.recurrence.recurrence_confidence
     const recType = v.recurrence.recurrence_type
-    const prob = recType === "hard" ? Math.min(0.95, 0.85 + recConf * 0.1)
-      : recType === "soft" ? Math.min(0.85, 0.6 + recConf * 0.2)
-      : recType === "episodic" ? Math.min(0.6, 0.3 + recConf * 0.3)
+    // Don't generate repeating events for episodic/unknown vendors
+    if (recType === "episodic" || recType === "unknown") continue
+    if (recConf < 0.2) continue
+    const prob = recType === "hard" ? Math.min(0.92, 0.8 + recConf * 0.1)
+      : recType === "soft" ? Math.min(0.8, 0.55 + recConf * 0.2)
       : recType === "seasonal" ? Math.min(0.7, 0.4 + recConf * 0.2)
-      : v.is_recurring ? 0.65 : 0.4
+      : v.is_recurring ? 0.6 : 0.35
 
     generateRepeating(v.last_payment_date, v.cadence_interval_days, 5, (date, offset) => {
       events.push({
@@ -1539,29 +1559,32 @@ function simulateMonthFromModels(
   monthStart: string,
   monthEnd: string,
   scenarioMult: { inflow: number; outflow: number },
+  monthIndex: number = 0,
 ): { inflows: number; outflows: number; componentAmounts: { component_id: string; amount: number }[] } {
   let inflows = 0
   let outflows = 0
   const componentAmounts: { component_id: string; amount: number }[] = []
 
+  // Time decay: further-out months are less certain
+  const monthDecay = 1 / (1 + monthIndex * 0.12)
+
   // Customer receipts: simulate from entity models, weighted by probability and archetype
   let customerTotal = 0
   for (const c of models.customers) {
-    if (!c.next_expected_date) continue
-    // For future months beyond the first, apply decay based on archetype
-    const isFirstMonth = c.next_expected_date >= monthStart && c.next_expected_date < monthEnd
-    if (isFirstMonth) {
+    const archDecay = c.archetype === "clockwork" ? 0.92
+      : c.archetype === "slow_reliable" ? 0.8
+      : c.archetype === "bursty" ? 0.55
+      : c.archetype === "episodic" ? 0.3
+      : c.archetype === "volatile" ? 0.2
+      : 0.15 // low_data
+
+    if (c.next_expected_date && c.next_expected_date >= monthStart && c.next_expected_date < monthEnd) {
       customerTotal += c.avg_amount * c.probability_of_next
-    } else if (c.payment_interval_days > 0 && c.payment_interval_days <= 31) {
-      // Archetype-adjusted repeat probability for outer months
-      const archDecay = c.archetype === "clockwork" ? 0.9
-        : c.archetype === "slow_reliable" ? 0.8
-        : c.archetype === "bursty" ? 0.5
-        : c.archetype === "episodic" ? 0.3
-        : c.archetype === "volatile" ? 0.25
-        : 0.2
-      const paymentsInMonth = 30 / c.payment_interval_days
-      customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth * archDecay
+    } else if (c.payment_interval_days > 0 && c.payment_interval_days <= 60) {
+      const paymentsInMonth = Math.min(4, 30 / c.payment_interval_days)
+      customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth * archDecay * monthDecay
+    } else if (c.archetype === "low_data" && c.outstanding_invoices.length > 0 && monthIndex === 0) {
+      customerTotal += c.avg_amount * c.probability_of_next * 0.5
     }
   }
   if (customerTotal > 0) {
@@ -1570,25 +1593,27 @@ function simulateMonthFromModels(
     componentAmounts.push({ component_id: "customer_receipts_in", amount: r2(customerTotal) })
   }
 
-  // Vendor payments: simulate from entity models, weighted by recurrence confidence
+  // Track vendor entity IDs projected here to avoid double-counting with recurring_fixed
+  const projectedVendorNames = new Set<string>()
+
+  // Vendor payments: only project vendors with real recurrence evidence
   let vendorTotal = 0
   for (const v of models.vendors) {
     const recConf = v.recurrence?.recurrence_confidence ?? 0.3
     const recType = v.recurrence?.recurrence_type ?? "unknown"
 
-    if (!v.next_expected_date) {
-      // Only project vendors with at least soft recurrence and reasonable confidence
-      if (recType === "hard" || recType === "soft") {
-        if (v.cadence_interval_days > 0 && v.cadence_interval_days <= 45) {
-          vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * recConf
-        }
-      }
-      continue
-    }
-    if (v.next_expected_date >= monthStart && v.next_expected_date < monthEnd) {
+    // Skip episodic/unknown vendors from monthly projection — they are noise
+    if (recType === "episodic" || recType === "unknown") continue
+    // Require minimum confidence to project
+    if (recConf < 0.25) continue
+
+    if (v.next_expected_date && v.next_expected_date >= monthStart && v.next_expected_date < monthEnd) {
       vendorTotal += v.avg_amount * Math.max(0.5, recConf)
-    } else if ((recType === "hard" || recType === "soft") && v.cadence_interval_days > 0 && v.cadence_interval_days <= 31) {
-      vendorTotal += v.avg_amount * (30 / v.cadence_interval_days) * recConf
+      projectedVendorNames.add(v.name.toLowerCase())
+    } else if ((recType === "hard" || recType === "soft" || recType === "seasonal") && v.cadence_interval_days > 0 && v.cadence_interval_days <= 45) {
+      const paymentsInMonth = Math.min(4, 30 / v.cadence_interval_days)
+      vendorTotal += v.avg_amount * paymentsInMonth * recConf * monthDecay
+      projectedVendorNames.add(v.name.toLowerCase())
     }
   }
   if (vendorTotal > 0) {
@@ -1597,9 +1622,10 @@ function simulateMonthFromModels(
     componentAmounts.push({ component_id: "vendor_payments_out", amount: r2(vendorTotal) })
   }
 
-  // Recurring fixed obligations
+  // Recurring fixed obligations — exclude those already counted via vendor models
   let recurringTotal = 0
   for (const rf of models.recurring_fixed) {
+    if (projectedVendorNames.has(rf.label.toLowerCase())) continue
     recurringTotal += rf.monthly_amount
   }
   if (recurringTotal > 0) {
@@ -1617,9 +1643,8 @@ function simulateMonthFromModels(
 
     let amount = comp.monthly_avg
     if (comp.behavior === "one_time") continue
-    if (comp.behavior === "episodic") amount *= 0.7
+    if (comp.behavior === "episodic") amount *= 0.5 * monthDecay
 
-    // Apply seasonal adjustment if this component has a seasonal index
     if (comp.behavior === "seasonal" && comp.seasonal_index) {
       const idx = comp.seasonal_index[targetMonth]
       if (idx != null) amount *= idx
@@ -1943,12 +1968,12 @@ function runScenario(
     const monthEndDate = new Date(futureDate.getFullYear(), futureDate.getMonth() + 1, 0)
     const monthEnd = monthEndDate.toISOString().slice(0, 10)
 
-    // Apply trend decay per month: further out months converge toward mean
     const trendFactor = 1 + (config.trend_dampening * (1 / (1 + i * 0.3)))
 
     const { inflows, outflows, componentAmounts } = simulateMonthFromModels(
       models, components, monthStart, monthEnd,
       { inflow: config.inflow_amount_mult * trendFactor, outflow: config.outflow_amount_mult },
+      i,
     )
 
     // Adjust customer inflows by probability multiplier
