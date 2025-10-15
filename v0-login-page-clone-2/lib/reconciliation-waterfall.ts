@@ -114,29 +114,120 @@ function dateProximity(movementDate: string, expectedDate: string): number {
 }
 
 type CandidateTier = "id" | "name" | "amount_date"
+type DecisionBand = "certified" | "high_confidence" | "suggested" | "low_noise"
+type ConfidenceBreakdown = {
+  identity: number
+  amount: number
+  temporal: number
+  behavioral: number
+  penalties: number
+  final_score: number
+  band: DecisionBand
+}
 type ScoredCandidate = {
   event: OpenCashEventRow & { amount_num: number; outstanding_num: number; canonical_name: string }
   score: number
   tier: CandidateTier
+  breakdown: ConfidenceBreakdown
 }
+
+const SCORE_WEIGHTS = {
+  identity: 0.4,
+  amount: 0.35,
+  temporal: 0.15,
+  behavioral: 0.1,
+} as const
+
+const AUTO_RECONCILE_MIN = 0.8
 
 function scoreCandidate(
   movement: MovementResidualRow & { available_cash_num: number },
   event: OpenCashEventRow & { outstanding_num: number; canonical_name: string },
   movementEntityId: string | null,
-): { score: number; tier: CandidateTier } {
+): { score: number; tier: CandidateTier; breakdown: ConfidenceBreakdown } {
+  // Penalty hard stop: AR must be inflow, AP must be outflow.
+  if ((event.event_type === "ar" && movement.direction !== "inflow") || (event.event_type === "ap" && movement.direction !== "outflow")) {
+    return {
+      score: 0,
+      tier: "amount_date",
+      breakdown: {
+        identity: 0,
+        amount: 0,
+        temporal: 0,
+        behavioral: 0,
+        penalties: 1,
+        final_score: 0,
+        band: "low_noise",
+      },
+    }
+  }
+
   const idMatch = Boolean(movementEntityId && movementEntityId === event.entity_id)
-  const nameScore = Math.max(
+  const normalizedExactName =
+    normalizeEntityName(movement.counterparty) !== "" &&
+    normalizeEntityName(movement.counterparty) === normalizeEntityName(event.canonical_name)
+  const fuzzyNameScore = Math.max(
     nameSimilarity(movement.counterparty, event.canonical_name),
     nameSimilarity(movement.raw_description, event.canonical_name),
   )
-  const amountScore = amountProximity(movement.available_cash_num, event.outstanding_num)
-  const dtScore = dateProximity(movement.date, event.expected_date)
 
-  const score = (idMatch ? 0.55 : 0) + 0.3 * nameScore + 0.1 * amountScore + 0.05 * dtScore
-  if (idMatch) return { score, tier: "id" }
-  if (nameScore >= 0.67) return { score, tier: "name" }
-  return { score, tier: "amount_date" }
+  // Vector I: Identity
+  let identity = 0
+  if (idMatch) identity = 1
+  else if (normalizedExactName) identity = 0.8
+  else if (fuzzyNameScore >= 0.6) identity = 0.6
+  else if (fuzzyNameScore >= 0.4) identity = 0.4
+
+  // Vector A: Amount
+  const exactAmount = Math.abs(movement.available_cash_num - event.outstanding_num) <= 0.01
+  const processorLikely = isLikelyProcessorMovement(movement)
+  const impliedFee = event.outstanding_num > 0 ? (event.outstanding_num - movement.available_cash_num) / event.outstanding_num : 0
+  let amount = 0
+  if (exactAmount) amount = 1
+  else if (processorLikely && impliedFee >= 0.01 && impliedFee <= 0.05) amount = 0.8
+  else if (event.outstanding_num > 0 && movement.available_cash_num / event.outstanding_num >= 0.2 && movement.available_cash_num <= event.outstanding_num) amount = 0.5
+  else if (event.outstanding_num > 0 && movement.available_cash_num / event.outstanding_num >= 1.2) amount = 0.2
+  else amount = amountProximity(movement.available_cash_num, event.outstanding_num) * 0.5
+
+  // Vector T: Temporal
+  const dayGap = Math.abs(daysBetween(movement.date.slice(0, 10), event.expected_date.slice(0, 10)))
+  let temporal = 0
+  if (dayGap === 0) temporal = 1
+  else if (dayGap <= 3) temporal = 0.8
+  else if (dayGap <= 10) temporal = 0.5
+  else {
+    const decay = Math.exp(-(dayGap - 14) / 7)
+    temporal = Math.max(0, Math.min(0.5, 0.5 * decay))
+  }
+
+  // Vector B: Behavioral (deterministic proxy)
+  let behavioral = 0
+  if (idMatch || normalizedExactName) behavioral = 0.5
+  if (processorLikely && impliedFee >= 0.01 && impliedFee <= 0.05) behavioral = Math.max(behavioral, 0.5)
+
+  // Penalties
+  let penalties = 0
+  if (movementEntityId && movementEntityId !== event.entity_id) penalties += 0.5
+
+  const raw =
+    SCORE_WEIGHTS.identity * identity +
+    SCORE_WEIGHTS.amount * amount +
+    SCORE_WEIGHTS.temporal * temporal +
+    SCORE_WEIGHTS.behavioral * behavioral -
+    penalties
+  const score = Math.max(0, Math.min(1, raw))
+
+  let band: DecisionBand = "low_noise"
+  if (score >= 0.95) band = "certified"
+  else if (score >= 0.8) band = "high_confidence"
+  else if (score >= 0.6) band = "suggested"
+
+  const tier: CandidateTier = idMatch ? "id" : identity >= 0.6 ? "name" : "amount_date"
+  return {
+    score,
+    tier,
+    breakdown: { identity, amount, temporal, behavioral, penalties, final_score: score, band },
+  }
 }
 
 function statusFromOutstanding(outstanding: number, amount: number): "open" | "partially_paid" | "paid" {
@@ -242,14 +333,19 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
     const scoredCandidates: ScoredCandidate[] = openEvents
       .filter((e) => e.event_type === targetType && e.outstanding_num > 0.01)
       .map((e) => {
-        const { score, tier } = scoreCandidate(movement, e, movementEntityId)
-        return { event: e, score, tier }
+        const { score, tier, breakdown } = scoreCandidate(movement, e, movementEntityId)
+        return { event: e, score, tier, breakdown }
       })
-      .filter((c) => {
-        if (c.tier === "amount_date") return c.score >= 0.82
-        return c.score >= 0.75
-      })
+      .filter((c) => c.score >= AUTO_RECONCILE_MIN)
       .sort((a, b) => b.score - a.score || a.event.expected_date.localeCompare(b.event.expected_date))
+
+    const topTwoMargin = scoredCandidates.length >= 2 ? scoredCandidates[0].score - scoredCandidates[1].score : 1
+    if (topTwoMargin < 0.08) {
+      candidateNoneCount++
+      unresolvedCount++
+      unresolvedAmount += remainingCash
+      continue
+    }
 
     if (scoredCandidates.length === 0) {
       candidateNoneCount++
@@ -275,7 +371,14 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
         entity_id: exact.entity_id,
         gross_amount: r2(remainingCash),
         net_amount: r2(remainingCash),
-        metadata: { fee_amount: 0, match_method: "waterfall_exact", stage: 1, reconcile_at: new Date().toISOString() },
+        metadata: {
+          fee_amount: 0,
+          match_method: "waterfall_exact",
+          stage: 1,
+          reconcile_at: new Date().toISOString(),
+          confidence: exactCandidate?.breakdown ?? null,
+          confidence_score: exactCandidate?.score ?? null,
+        },
       })
       exact.outstanding_num = 0
       touchedEventIds.add(exact.id)
@@ -305,7 +408,14 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
           entity_id: feeMatch.entity_id,
           gross_amount: r2(feeMatch.outstanding_num),
           net_amount: r2(remainingCash),
-          metadata: { fee_amount: fee, match_method: "waterfall_fee_aware", stage: 2, reconcile_at: new Date().toISOString() },
+          metadata: {
+            fee_amount: fee,
+            match_method: "waterfall_fee_aware",
+            stage: 2,
+            reconcile_at: new Date().toISOString(),
+            confidence: feeCandidate?.breakdown ?? null,
+            confidence_score: feeCandidate?.score ?? null,
+          },
         })
         if (fee > 0.01) {
           attributions.push({
@@ -344,7 +454,14 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
             entity_id: ev.entity_id,
             gross_amount: r2(grossApplied),
             net_amount: r2(netApplied),
-            metadata: { fee_amount: r2(fee), match_method: "waterfall_fifo_full", stage: 3, reconcile_at: new Date().toISOString() },
+            metadata: {
+              fee_amount: r2(fee),
+              match_method: "waterfall_fifo_full",
+              stage: 3,
+              reconcile_at: new Date().toISOString(),
+              confidence: fifoCandidate?.breakdown ?? null,
+              confidence_score: fifoCandidate?.score ?? null,
+            },
           })
           if (fee > 0.01) {
             attributions.push({
@@ -374,7 +491,14 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
             entity_id: ev.entity_id,
             gross_amount: r2(grossApplied),
             net_amount: r2(netApplied),
-            metadata: { fee_amount: r2(fee), match_method: "waterfall_fifo_partial", stage: 3, reconcile_at: new Date().toISOString() },
+            metadata: {
+              fee_amount: r2(fee),
+              match_method: "waterfall_fifo_partial",
+              stage: 3,
+              reconcile_at: new Date().toISOString(),
+              confidence: fifoCandidate?.breakdown ?? null,
+              confidence_score: fifoCandidate?.score ?? null,
+            },
           })
           if (fee > 0.01) {
             attributions.push({
