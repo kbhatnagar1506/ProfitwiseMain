@@ -331,44 +331,45 @@ function buildInvoiceForecasts(
     if (archetype === "clockwork") {
       const expectedDelay = dso > 0 ? dso : 5
       if (daysOverdue > 0) {
-        p7 = Math.min(0.95, 0.6 + daysOverdue * 0.05)
-        p14 = Math.min(0.98, p7 + 0.15)
-        p30 = Math.min(0.99, p14 + 0.05)
-        expectedDate = addDays(now, Math.max(1, Math.round(expectedDelay - daysOverdue)))
-        reasoning = `Clockwork payer, ${daysOverdue}d overdue — expect imminent payment (DSO ${r2(dso)}d)`
+        // Overdue clockwork: high probability of payment in window, but not near-certain
+        p7 = Math.min(0.75, 0.4 + daysOverdue * 0.04)
+        p14 = Math.min(0.85, p7 + 0.12)
+        p30 = Math.min(0.90, p14 + 0.08)
+        expectedDate = addDays(now, Math.max(2, Math.round(expectedDelay - daysOverdue)))
+        reasoning = `Clockwork payer, ${daysOverdue}d overdue — expect payment soon (DSO ${r2(dso)}d)`
       } else {
         const daysToExpected = daysUntilDue + expectedDelay
-        p7 = daysToExpected <= 7 ? 0.85 : daysToExpected <= 10 ? 0.5 : 0.1
-        p14 = daysToExpected <= 14 ? 0.9 : daysToExpected <= 20 ? 0.6 : 0.2
-        p30 = daysToExpected <= 30 ? 0.95 : 0.5
+        p7 = daysToExpected <= 7 ? 0.65 : daysToExpected <= 10 ? 0.35 : 0.08
+        p14 = daysToExpected <= 14 ? 0.75 : daysToExpected <= 20 ? 0.45 : 0.15
+        p30 = daysToExpected <= 30 ? 0.82 : 0.35
         expectedDate = inv.due_date ? addDays(inv.due_date, Math.round(expectedDelay)) : addDays(now, daysToExpected)
         reasoning = `Clockwork payer, due in ${daysUntilDue}d — expected ${Math.round(expectedDelay)}d after due (DSO ${r2(dso)}d)`
       }
     } else if (archetype === "slow_reliable") {
       const expectedDelay = Math.max(dso, 15)
       if (daysOverdue > 0) {
-        p7 = 0.3 + Math.min(0.4, daysOverdue * 0.03)
-        p14 = Math.min(0.85, p7 + 0.25)
-        p30 = Math.min(0.95, p14 + 0.15)
+        p7 = 0.2 + Math.min(0.3, daysOverdue * 0.02)
+        p14 = Math.min(0.65, p7 + 0.2)
+        p30 = Math.min(0.78, p14 + 0.15)
         expectedDate = addDays(now, Math.max(3, Math.round(expectedDelay - daysOverdue)))
         reasoning = `Slow but reliable payer, ${daysOverdue}d overdue — historical DSO ${r2(dso)}d`
       } else {
-        p7 = 0.05
-        p14 = daysUntilDue <= 5 ? 0.25 : 0.1
-        p30 = daysUntilDue <= 15 ? 0.55 : 0.3
+        p7 = 0.04
+        p14 = daysUntilDue <= 5 ? 0.18 : 0.08
+        p30 = daysUntilDue <= 15 ? 0.4 : 0.22
         expectedDate = inv.due_date ? addDays(inv.due_date, Math.round(expectedDelay)) : addDays(now, 30)
         reasoning = `Slow but reliable — typically pays ${Math.round(expectedDelay)}d after due`
       }
     } else if (archetype === "bursty" || archetype === "volatile") {
       const spread = archetype === "volatile" ? 0.7 : 0.5
       if (daysOverdue > 0) {
-        p7 = 0.3
-        p14 = 0.5
-        p30 = 0.7
+        p7 = 0.22
+        p14 = 0.38
+        p30 = 0.55
       } else {
-        p7 = daysUntilDue <= 3 ? 0.25 : 0.1
-        p14 = daysUntilDue <= 10 ? 0.35 : 0.15
-        p30 = 0.5
+        p7 = daysUntilDue <= 3 ? 0.18 : 0.07
+        p14 = daysUntilDue <= 10 ? 0.28 : 0.12
+        p30 = 0.4
       }
       p7 *= (1 - spread * 0.3)
       p14 *= (1 - spread * 0.2)
@@ -376,24 +377,24 @@ function buildInvoiceForecasts(
       reasoning = `${archetype} payer — wide timing variance (CV ${r2(features.interval_cv)}), probability spread across horizon`
     } else if (archetype === "low_data") {
       if (daysOverdue > 0) {
-        p7 = 0.18; p14 = 0.3; p30 = 0.4
+        p7 = 0.12; p14 = 0.22; p30 = 0.32
         expectedDate = addDays(now, 7)
         reasoning = `Low-data customer, ${daysOverdue}d overdue — sparse history penalty applied`
       } else {
-        p7 = daysUntilDue <= 5 ? 0.15 : 0.05
-        p14 = daysUntilDue <= 10 ? 0.22 : 0.1
-        p30 = 0.3
+        p7 = daysUntilDue <= 5 ? 0.1 : 0.04
+        p14 = daysUntilDue <= 10 ? 0.18 : 0.08
+        p30 = 0.25
         expectedDate = inv.due_date ?? addDays(now, 14)
         reasoning = `Low-data customer (<3 payments) — anchored to invoice due date with confidence haircut`
       }
     } else {
       if (daysOverdue > 0) {
-        p7 = 0.35; p14 = 0.55; p30 = 0.75
+        p7 = 0.25; p14 = 0.4; p30 = 0.6
         expectedDate = addDays(now, 5)
       } else {
-        p7 = daysUntilDue <= 5 ? 0.4 : 0.15
-        p14 = daysUntilDue <= 10 ? 0.55 : 0.3
-        p30 = 0.7
+        p7 = daysUntilDue <= 5 ? 0.3 : 0.1
+        p14 = daysUntilDue <= 10 ? 0.42 : 0.22
+        p30 = 0.55
         expectedDate = inv.due_date ?? addDays(now, 14)
       }
       reasoning = `Episodic payer — opportunity-weighted, not cadence-driven`
@@ -505,17 +506,17 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     let probability: number
     if (archetype === "clockwork") {
       const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : 0
-      probability = sigmoidDecay(overdueRatio) * (0.7 + 0.3 * Math.min(1, payments.length / 6))
+      probability = sigmoidDecay(overdueRatio) * (0.55 + 0.25 * Math.min(1, payments.length / 6))
     } else if (archetype === "bursty") {
       const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : 0
-      probability = sigmoidDecay(overdueRatio) * 0.75
+      probability = sigmoidDecay(overdueRatio) * 0.6
     } else if (archetype === "episodic") {
-      probability = daysSinceLast < 45 ? 0.35 : daysSinceLast < 90 ? 0.2 : 0.08
+      probability = daysSinceLast < 45 ? 0.25 : daysSinceLast < 90 ? 0.15 : 0.06
     } else if (archetype === "slow_reliable") {
       const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : 0
-      probability = sigmoidDecay(overdueRatio * 0.7) * 0.8
+      probability = sigmoidDecay(overdueRatio * 0.7) * 0.65
     } else if (archetype === "volatile") {
-      probability = daysSinceLast < 30 ? 0.3 : daysSinceLast < 60 ? 0.2 : 0.1
+      probability = daysSinceLast < 30 ? 0.22 : daysSinceLast < 60 ? 0.12 : 0.06
     } else {
       // low_data: anchor to invoices with heavy discount
       if (customerInvoices.length > 0) {
@@ -535,7 +536,12 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     if (archetype === "clockwork" || archetype === "slow_reliable" || archetype === "bursty") {
       if (avgInterval > 0 && probability > 0.1) {
         nextDate = addDays(lastDate, avgInterval)
-        if (nextDate < now) nextDate = addDays(now, Math.max(1, avgInterval * 0.3))
+        // Advance by full intervals until we're in the future, not a fractional snap
+        while (nextDate < now && avgInterval > 0) {
+          nextDate = addDays(nextDate, avgInterval)
+        }
+        // Ensure we don't cluster on D+1
+        if (daysBetween(now, nextDate) < 2) nextDate = addDays(now, Math.max(2, Math.round(avgInterval * 0.5)))
       }
     } else if (archetype === "low_data" && customerInvoices.length > 0) {
       const earliest = customerInvoices.filter((i) => i.due_date).sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
@@ -1270,11 +1276,11 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
         events.push({
           date: adjustedDate, day_offset: adjustedOffset, type: "vendor_payment",
           entity: v.name, amount: r2(bill.amount_due),
-          direction: "out", probability: bill.status === "overdue" ? 0.92 : 0.85,
+          direction: "out", probability: bill.status === "overdue" ? 0.8 : 0.7,
           confidence: "high", source_model: "vendor",
           reasoning: {
             ...vendReasoning,
-            invoice_info: `AP bill due ${bill.due_date} · Bill $${bill.amount_due.toLocaleString()}, ${bill.status}${bill.days_overdue ? ` (${bill.days_overdue}d overdue)` : ""}`,
+            invoice_info: `Bill $${bill.amount_due.toLocaleString()}, ${bill.status}${bill.days_overdue ? ` (${bill.days_overdue}d overdue)` : ""}`,
             basis: `AP bill due ${bill.due_date}`,
           },
         })
@@ -1312,7 +1318,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
       events.push({
         date, day_offset: offset, type: "recurring_expense",
         entity: rf.label, amount: r2(rf.monthly_amount),
-        direction: "out", probability: 0.95,
+        direction: "out", probability: 0.8,
         confidence: "high", source_model: "recurring",
         reasoning: {
           basis: `Fixed recurring obligation, $${rf.monthly_amount.toLocaleString()}/mo`,
@@ -1421,7 +1427,24 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
     }
   }
 
-  return events.sort((a, b) => a.day_offset - b.day_offset || b.amount - a.amount)
+  // Deduplicate events: merge events with same entity, day, direction, and source model
+  const deduped: ForecastEvent[] = []
+  const seen = new Map<string, number>()
+  for (const e of events) {
+    const key = `${e.entity}|${e.day_offset}|${e.direction}|${e.source_model}|${r2(e.amount)}`
+    const existing = seen.get(key)
+    if (existing != null) {
+      // Keep the one with higher probability
+      if (e.probability > deduped[existing].probability) {
+        deduped[existing] = e
+      }
+      continue
+    }
+    seen.set(key, deduped.length)
+    deduped.push(e)
+  }
+
+  return deduped.sort((a, b) => a.day_offset - b.day_offset || b.amount - a.amount)
 }
 
 // ─── Step 4: Aggregate component models (for scenario simulation) ───
@@ -1565,8 +1588,8 @@ function simulateMonthFromModels(
   let outflows = 0
   const componentAmounts: { component_id: string; amount: number }[] = []
 
-  // Time decay: further-out months are less certain
-  const monthDecay = 1 / (1 + monthIndex * 0.12)
+  // Time decay: further-out months are less certain, but not dramatically
+  const monthDecay = 1 / (1 + monthIndex * 0.08)
 
   // Customer receipts: simulate from entity models, weighted by probability and archetype
   let customerTotal = 0
@@ -1583,8 +1606,15 @@ function simulateMonthFromModels(
     } else if (c.payment_interval_days > 0 && c.payment_interval_days <= 60) {
       const paymentsInMonth = Math.min(4, 30 / c.payment_interval_days)
       customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth * archDecay * monthDecay
-    } else if (c.archetype === "low_data" && c.outstanding_invoices.length > 0 && monthIndex === 0) {
-      customerTotal += c.avg_amount * c.probability_of_next * 0.5
+    } else if (c.archetype === "low_data" && c.outstanding_invoices.length > 0) {
+      // Low-data invoice customers: contribute a discounted amount in near-term months
+      // Decay sharply after month 1 since we have no repeat evidence
+      const lowDataDecay = monthIndex === 0 ? 0.5 : monthIndex <= 2 ? 0.2 : 0.08
+      customerTotal += c.avg_amount * c.probability_of_next * lowDataDecay
+    } else if (c.payment_count >= 2 && c.avg_amount > 0) {
+      // Customers with history but no interval (e.g. 2 payments far apart): 
+      // contribute a small recurring baseline
+      customerTotal += c.avg_amount * c.probability_of_next * archDecay * monthDecay * 0.3
     }
   }
   if (customerTotal > 0) {
