@@ -48,6 +48,11 @@ export type WaterfallResult = {
   unresolved_count: number
   unresolved_amount: number
   updated_events: number
+  matched_by_id: number
+  matched_by_name: number
+  matched_by_amount_date: number
+  fee_inferred_count: number
+  candidate_none_count: number
   dry_run: boolean
 }
 
@@ -58,6 +63,80 @@ function r2(n: number): number {
 function normalizeEntityName(name: string | null | undefined): string {
   if (!name) return ""
   return name.toLowerCase().replace(/[^a-z0-9]/g, "").trim()
+}
+
+function normalizeEntityText(name: string | null | undefined): string {
+  if (!name) return ""
+  return name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()
+}
+
+function tokenizeMeaningful(name: string | null | undefined): string[] {
+  if (!name) return []
+  const stopWords = new Set(["llc", "inc", "co", "corp", "ltd", "the", "and"])
+  return normalizeEntityText(name)
+    .split(" ")
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && !stopWords.has(t))
+}
+
+function daysBetween(a: string, b: string): number {
+  const da = new Date(`${a}T00:00:00Z`)
+  const db = new Date(`${b}T00:00:00Z`)
+  return Math.round((db.getTime() - da.getTime()) / 86400000)
+}
+
+function nameSimilarity(a: string | null | undefined, b: string | null | undefined): number {
+  const na = normalizeEntityText(a)
+  const nb = normalizeEntityText(b)
+  if (!na || !nb) return 0
+  if (na === nb) return 1
+  const compactA = normalizeEntityName(a)
+  const compactB = normalizeEntityName(b)
+  if (compactA && compactB && (compactA.includes(compactB) || compactB.includes(compactA))) return 0.85
+
+  const ta = tokenizeMeaningful(a)
+  const tb = tokenizeMeaningful(b)
+  if (ta.length === 0 || tb.length === 0) return 0
+  const setB = new Set(tb)
+  const overlap = ta.filter((t) => setB.has(t)).length
+  return overlap / Math.max(ta.length, tb.length)
+}
+
+function amountProximity(availableCash: number, outstanding: number): number {
+  if (outstanding <= 0) return 0
+  const relDiff = Math.abs(availableCash - outstanding) / outstanding
+  return Math.max(0, 1 - Math.min(1, relDiff))
+}
+
+function dateProximity(movementDate: string, expectedDate: string): number {
+  const delta = Math.abs(daysBetween(movementDate.slice(0, 10), expectedDate.slice(0, 10)))
+  return Math.max(0, 1 - Math.min(1, delta / 30))
+}
+
+type CandidateTier = "id" | "name" | "amount_date"
+type ScoredCandidate = {
+  event: OpenCashEventRow & { amount_num: number; outstanding_num: number; canonical_name: string }
+  score: number
+  tier: CandidateTier
+}
+
+function scoreCandidate(
+  movement: MovementResidualRow & { available_cash_num: number },
+  event: OpenCashEventRow & { outstanding_num: number; canonical_name: string },
+  movementEntityId: string | null,
+): { score: number; tier: CandidateTier } {
+  const idMatch = Boolean(movementEntityId && movementEntityId === event.entity_id)
+  const nameScore = Math.max(
+    nameSimilarity(movement.counterparty, event.canonical_name),
+    nameSimilarity(movement.raw_description, event.canonical_name),
+  )
+  const amountScore = amountProximity(movement.available_cash_num, event.outstanding_num)
+  const dtScore = dateProximity(movement.date, event.expected_date)
+
+  const score = (idMatch ? 0.55 : 0) + 0.3 * nameScore + 0.1 * amountScore + 0.05 * dtScore
+  if (idMatch) return { score, tier: "id" }
+  if (nameScore >= 0.67) return { score, tier: "name" }
+  return { score, tier: "amount_date" }
 }
 
 function statusFromOutstanding(outstanding: number, amount: number): "open" | "partially_paid" | "paid" {
@@ -145,6 +224,11 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
   let feeMatches = 0
   let fifoFull = 0
   let fifoPartial = 0
+  let matchedById = 0
+  let matchedByName = 0
+  let matchedByAmountDate = 0
+  let feeInferredCount = 0
+  let candidateNoneCount = 0
   let unresolvedAmount = 0
   let unresolvedCount = 0
 
@@ -153,21 +237,38 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
     if (remainingCash <= 0.01) continue
     const isInflow = movement.direction === "inflow"
     const targetType: "ar" | "ap" = isInflow ? "ar" : "ap"
-    const movementNameNorm = normalizeEntityName(movement.counterparty)
     const movementEntityId = movement.counterparty_entity_id
 
-    const entityEvents = openEvents
+    const scoredCandidates: ScoredCandidate[] = openEvents
       .filter((e) => e.event_type === targetType && e.outstanding_num > 0.01)
-      .filter((e) => {
-        const idMatch = Boolean(movementEntityId && movementEntityId === e.entity_id)
-        const nameMatch = movementNameNorm.length > 0 && movementNameNorm === normalizeEntityName(e.canonical_name)
-        return idMatch || nameMatch
+      .map((e) => {
+        const { score, tier } = scoreCandidate(movement, e, movementEntityId)
+        return { event: e, score, tier }
       })
+      .filter((c) => {
+        if (c.tier === "amount_date") return c.score >= 0.82
+        return c.score >= 0.75
+      })
+      .sort((a, b) => b.score - a.score || a.event.expected_date.localeCompare(b.event.expected_date))
+
+    if (scoredCandidates.length === 0) {
+      candidateNoneCount++
+      unresolvedCount++
+      unresolvedAmount += remainingCash
+      continue
+    }
+
+    const entityEvents = scoredCandidates
+      .map((c) => c.event)
       .sort((a, b) => a.expected_date.localeCompare(b.expected_date))
 
     // Stage 1: exact 1:1
     const exact = entityEvents.find((e) => Math.abs(e.outstanding_num - remainingCash) <= 0.01)
     if (exact) {
+      const exactCandidate = scoredCandidates.find((c) => c.event.id === exact.id)
+      if (exactCandidate?.tier === "id") matchedById++
+      else if (exactCandidate?.tier === "name") matchedByName++
+      else matchedByAmountDate++
       attributions.push({
         movement_id: movement.id,
         component_type: targetType,
@@ -184,13 +285,20 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
 
     // Stage 2: fee-aware AR
     if (isInflow) {
+      const processorLikely = isLikelyProcessorMovement(movement)
       const feeMatch = entityEvents.find((e) => {
+        if (!processorLikely) return false
         if (e.outstanding_num <= remainingCash) return false
         const impliedFee = (e.outstanding_num - remainingCash) / e.outstanding_num
         return impliedFee >= 0.01 && impliedFee <= 0.05
       })
       if (feeMatch) {
+        const feeCandidate = scoredCandidates.find((c) => c.event.id === feeMatch.id)
+        if (feeCandidate?.tier === "id") matchedById++
+        else if (feeCandidate?.tier === "name") matchedByName++
+        else matchedByAmountDate++
         const fee = r2(feeMatch.outstanding_num - remainingCash)
+        feeInferredCount++
         attributions.push({
           movement_id: movement.id,
           component_type: "ar",
@@ -251,6 +359,10 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
           remainingCash = Math.max(0, remainingCash - netApplied)
           ev.outstanding_num = 0
           touchedEventIds.add(ev.id)
+          const fifoCandidate = scoredCandidates.find((c) => c.event.id === ev.id)
+          if (fifoCandidate?.tier === "id") matchedById++
+          else if (fifoCandidate?.tier === "name") matchedByName++
+          else matchedByAmountDate++
           fifoFull++
         } else {
           const grossApplied = grossPurchasingPower
@@ -276,6 +388,10 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
           }
           ev.outstanding_num = Math.max(0, ev.outstanding_num - grossApplied)
           touchedEventIds.add(ev.id)
+          const fifoCandidate = scoredCandidates.find((c) => c.event.id === ev.id)
+          if (fifoCandidate?.tier === "id") matchedById++
+          else if (fifoCandidate?.tier === "name") matchedByName++
+          else matchedByAmountDate++
           remainingCash = 0
           fifoPartial++
         }
@@ -311,11 +427,20 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
   if (!dryRun) {
     await runInTransaction(async (client) => {
       for (const a of attributions) {
+        const idempotencyKey = `${a.movement_id}|${a.entity_id}|${a.component_type}|${String(a.metadata.stage ?? "0")}|${r2(a.gross_amount).toFixed(2)}|${r2(a.net_amount).toFixed(2)}`
+        const metadataWithKey = { ...a.metadata, idempotency_key: idempotencyKey }
         await client.query(
           `INSERT INTO movement_attributions (
              user_id, movement_id, component_type, entity_id, reference_id,
              gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12)`,
+           )
+           SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12
+           WHERE NOT EXISTS (
+             SELECT 1 FROM movement_attributions x
+             WHERE x.user_id = $1
+               AND x.movement_id = $2
+               AND COALESCE(x.metadata->>'idempotency_key', '') = $13
+           )`,
           [
             userId,
             a.movement_id,
@@ -326,9 +451,10 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
             a.net_amount,
             0.92,
             "model",
-            JSON.stringify(a.metadata),
+            JSON.stringify(metadataWithKey),
             null,
             null,
+            idempotencyKey,
           ],
         )
       }
@@ -376,6 +502,11 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
     unresolved_count: unresolvedCount,
     unresolved_amount: r2(unresolvedAmount),
     updated_events: touchedEventIds.size,
+    matched_by_id: matchedById,
+    matched_by_name: matchedByName,
+    matched_by_amount_date: matchedByAmountDate,
+    fee_inferred_count: feeInferredCount,
+    candidate_none_count: candidateNoneCount,
     dry_run: dryRun,
   }
 }
