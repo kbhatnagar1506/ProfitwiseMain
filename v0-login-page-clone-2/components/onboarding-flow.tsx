@@ -4126,8 +4126,8 @@ export function OnboardingFlow({
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Backtest & Calibration</h3>
-                      <span className={`text-lg font-mono font-bold ${forecastData.backtest.accuracy_score >= 0.75 ? "text-emerald-400" : forecastData.backtest.accuracy_score >= 0.5 ? "text-amber-400" : "text-red-400"}`}>
-                        {(forecastData.backtest.accuracy_score * 100).toFixed(0)}%
+                      <span className={`text-lg font-mono font-bold ${forecastData.backtest.accuracy_score >= 75 ? "text-emerald-400" : forecastData.backtest.accuracy_score >= 50 ? "text-amber-400" : "text-red-400"}`}>
+                        {forecastData.backtest.accuracy_score}%
                       </span>
                     </div>
                     <div className="flex gap-4 text-[11px] text-gray-400 mb-2">
@@ -4137,8 +4137,8 @@ export function OnboardingFlow({
                     </div>
                     <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full ${forecastData.backtest.accuracy_score >= 0.75 ? "bg-emerald-500" : forecastData.backtest.accuracy_score >= 0.5 ? "bg-amber-500" : "bg-red-500"}`}
-                        style={{ width: `${Math.max(0, Math.min(100, forecastData.backtest.accuracy_score * 100))}%` }}
+                        className={`h-full rounded-full ${forecastData.backtest.accuracy_score >= 75 ? "bg-emerald-500" : forecastData.backtest.accuracy_score >= 50 ? "bg-amber-500" : "bg-red-500"}`}
+                        style={{ width: `${forecastData.backtest.accuracy_score}%` }}
                       />
                     </div>
                     <p className="text-[10px] text-gray-500 mt-2">{forecastData.backtest.details}</p>
