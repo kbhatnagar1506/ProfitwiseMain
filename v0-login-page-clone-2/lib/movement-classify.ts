@@ -365,15 +365,23 @@ const WIRE_INFLOW_PATTERNS = [
 ]
 
 function isWeakRevenueEvidence(m: CanonicalMovement, identity: MovementIdentityEntry | null): boolean {
-  const hasEntityMatch = identity?.role === "customer" && (identity?.confidence ?? 0) >= 0.6
-  if (hasEntityMatch) return false
+  const entityConf = identity?.role === "customer" ? (identity?.confidence ?? 0) : 0
+  const hasStrongEntityMatch = entityConf >= 0.6
+  if (hasStrongEntityMatch) return false
+  const hasStrongEvidence = m.evidence.some((e) => {
+    const md = e.metadata ?? {}
+    return !!(md.order_id ?? md.invoice_id ?? md.payment_intent_id as string)
+  })
+  if (hasStrongEvidence) return false
   const primaryObs = m.evidence[0]
   const fromPlaid = primaryObs?.source === "plaid"
   const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
   const isPlaidIncome = fromPlaid && pfcPrimary === "INCOME"
   const isWireLike = WIRE_INFLOW_PATTERNS.some((p) => p.test(m.raw_description ?? "")) ||
     /orig\s*:\s*\w+/i.test(m.raw_description ?? "")
-  return (isPlaidIncome || (fromPlaid && !primaryObs?.source_type)) && isWireLike
+  if ((isPlaidIncome || (fromPlaid && !primaryObs?.source_type)) && isWireLike) return true
+  // Phase 19: weak entity + mostly narrative evidence → stay in review
+  return entityConf < 0.6 && !hasStrongEvidence
 }
 
 function normKey(s: string): string {
@@ -696,6 +704,7 @@ function dateDistance(a: string, b: string): number {
 }
 
 function coalesceObservations(observations: SourceObservation[]): CanonicalMovement[] {
+  // Only prevent duplicate ingestion of same underlying tx; do not merge repeated counterparties.
   // Deduplicate by (source, source_id) — same bank tx cannot appear twice
   const seen = new Set<string>()
   const deduped = observations.filter((o) => {
@@ -838,6 +847,13 @@ function obsToCanonical(evidence: SourceObservation[]): CanonicalMovement {
   if (evidence.length > 1) {
     mergedMeta.coalesced_sources = evidence.map((e) => `${e.source}:${e.source_id}`)
   }
+  // Phase 9: transaction_stable_key for audit/debug — only dedupe same tx, not repeated counterparties
+  const stableParts = [primary.source_id, primary.date, Math.abs(primary.amount).toFixed(2), primary.account_id ?? "", primary.raw_description ?? ""]
+  let h = 0
+  for (const p of stableParts) {
+    for (let i = 0; i < p.length; i++) h = ((h << 5) - h + p.charCodeAt(i)) | 0
+  }
+  mergedMeta.transaction_stable_key = `tx_${Math.abs(h).toString(36)}`
 
   return {
     direction,
@@ -1805,14 +1821,19 @@ export async function classifyMovements(userId: string): Promise<{
     const nonPnl = classifyNonPnl(m, identity, selfCtx)
     if (nonPnl) {
       const conf = computeConfidence({ ...nonPnl.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
-      const reasons: string[] = []
-      if (conf.score < 0.55) reasons.push("low_classification_confidence")
+      let reasons: string[] = []
+      if (conf.score < 0.55) reasons.push("weak_classification")
       if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
+      // Cross-account paired Plaid transfer: deterministic, no review
+      const isCrossAccountTransfer = nonPnl.type === "internal_transfer" && m.metadata?.transfer_type === "cross_account"
+      if (isCrossAccountTransfer) {
+        reasons = []
+      }
       classified.push({
         ...m,
         movement_type: nonPnl.type,
         pnl_eligible: false,
-        confidence: conf,
+        confidence: isCrossAccountTransfer ? { ...conf, score: Math.max(conf.score, 0.95), evidence_strength: Math.max(conf.evidence_strength ?? 0, 0.95) } : conf,
         review_needed: reasons.length > 0,
         review_reasons: reasons,
         currency: "USD",
@@ -1827,7 +1848,7 @@ export async function classifyMovements(userId: string): Promise<{
     if (operating) {
       const conf = computeConfidence({ ...operating.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
       const reasons: string[] = []
-      if (conf.score < 0.55) reasons.push("low_classification_confidence")
+      if (conf.score < 0.55) reasons.push("weak_classification")
       if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
       classified.push({
         ...m,
@@ -1848,7 +1869,7 @@ export async function classifyMovements(userId: string): Promise<{
     if (provisional) {
       const conf = computeConfidence({ ...provisional.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
       const reasons: string[] = ["provisional_classification"]
-      if (conf.score < 0.55) reasons.push("low_classification_confidence")
+      if (conf.score < 0.55) reasons.push("weak_classification")
       if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
       classified.push({
         ...m,
@@ -1867,7 +1888,7 @@ export async function classifyMovements(userId: string): Promise<{
     // Step 7: Fallback (but also queue for LLM if we have API key)
     const fallback = classifyFallback(m)
     const conf = computeConfidence({ ...fallback.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
-    const reasons: string[] = ["low_classification_confidence"]
+    const reasons: string[] = ["weak_classification"]
     if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
     needsLlm.push({ idx: classified.length, movement: m, identity })
     classified.push({
@@ -1899,7 +1920,7 @@ export async function classifyMovements(userId: string): Promise<{
           pattern_strength: llmResult.confidence,
         })
         const newReasons: string[] = ["llm_fallback"]
-        if (classified[target.idx].confidence.score < 0.55) newReasons.push("low_classification_confidence")
+        if (classified[target.idx].confidence.score < 0.55) newReasons.push("weak_classification")
         if (classified[target.idx].confidence.evidence_strength < 0.20) newReasons.push("low_evidence")
         classified[target.idx].review_reasons = newReasons
         classified[target.idx].review_needed = classified[target.idx].confidence.score < 0.55
@@ -1958,6 +1979,7 @@ export async function classifyMovements(userId: string): Promise<{
   await persistFamilies(userId, families)
 
   // Step 9b: Cross-bucket duplicate detection (plan #8) — same event, different interpretation
+  // Persist duplicates with duplicate_of set to canonical; keep canonical.
   const CROSS_BUCKET_PAIRS: [string, string][] = [
     ["cash_out_vendor", "credit_card_payment"],
     ["cash_out_operating_expense", "credit_card_payment"],
@@ -1970,6 +1992,7 @@ export async function classifyMovements(userId: string): Promise<{
     pairSet.add(`${b}:${a}`)
   }
   const duplicateIndices = new Set<number>()
+  const duplicateToCanonical = new Map<number, number>()
   for (let i = 0; i < classified.length; i++) {
     if (duplicateIndices.has(i)) continue
     const a = classified[i]
@@ -1986,27 +2009,43 @@ export async function classifyMovements(userId: string): Promise<{
       const confA = a.confidence?.score ?? 0
       const confB = b.confidence?.score ?? 0
       const toRemove = confA >= confB ? j : i
+      const toKeep = toRemove === i ? j : i
       duplicateIndices.add(toRemove)
+      duplicateToCanonical.set(toRemove, toKeep)
+      // Owner vs settlement conflict: require manual resolution, do not guess
+      const isOwnerVsSettlement =
+        (a.movement_type === "owner_contribution" && (b.movement_type === "merchant_deposit_resolved" || b.movement_type === "merchant_deposit_unresolved")) ||
+        (b.movement_type === "owner_contribution" && (a.movement_type === "merchant_deposit_resolved" || a.movement_type === "merchant_deposit_unresolved"))
+      if (isOwnerVsSettlement) {
+        const canonical = classified[toKeep]
+        canonical.review_needed = true
+        if (!canonical.review_reasons.includes("owner_vs_processor_conflict")) {
+          canonical.review_reasons = [...canonical.review_reasons, "owner_vs_processor_conflict"]
+        }
+      }
       if (toRemove === i) break
     }
   }
-  const toPersist = classified.filter((_, i) => !duplicateIndices.has(i))
+  const toPersistWithIdx = classified
+    .map((m, i) => ({ m, idx: i }))
+    .filter(({ idx }) => !duplicateIndices.has(idx))
+  const canonicalIdxToInsertedId = new Map<number, string>()
 
   // Step 10: Batch persist — two tables: movements + movement_observations
   // First delete old data for this user
   await query("DELETE FROM movements WHERE user_id = $1", [userId])
 
   const BATCH_SIZE = 50
-  for (let i = 0; i < toPersist.length; i += BATCH_SIZE) {
-    const batch = toPersist.slice(i, i + BATCH_SIZE)
+  for (let i = 0; i < toPersistWithIdx.length; i += BATCH_SIZE) {
+    const batch = toPersistWithIdx.slice(i, i + BATCH_SIZE)
 
     // Insert movements
     const mvtValues: string[] = []
     const mvtParams: unknown[] = []
     let mvtIdx = 0
 
-    for (const m of batch) {
-      const meta = { ...m.metadata, review_reasons: m.review_reasons }
+    for (const { m, idx } of batch) {
+      const meta = { ...m.metadata, review_reasons: m.review_reasons, classification_rule_version: "v2" }
       const offsets = Array.from({ length: 18 }, (_, k) => `$${mvtIdx + k + 1}`)
       mvtValues.push(`(${offsets.join(", ")})`)
       mvtParams.push(
@@ -2034,13 +2073,19 @@ export async function classifyMovements(userId: string): Promise<{
       mvtParams,
     )
 
+    for (let b = 0; b < batch.length; b++) {
+      const { idx } = batch[b]
+      const id = insertedMovements[b]?.id
+      if (id) canonicalIdxToInsertedId.set(idx, id)
+    }
+
     // Insert observations for each movement
     const obsValues: string[] = []
     const obsParams: unknown[] = []
     let obsIdx = 0
 
     for (let b = 0; b < batch.length; b++) {
-      const m = batch[b]
+      const m = batch[b].m
       const movementId = insertedMovements[b]?.id
       if (!movementId) continue
 
@@ -2071,6 +2116,37 @@ export async function classifyMovements(userId: string): Promise<{
         obsParams,
       )
     }
+  }
+
+  // Persist duplicates with duplicate_of set to canonical movement id
+  const duplicateIndicesArr = Array.from(duplicateIndices)
+  for (const d of duplicateIndicesArr) {
+    const canonicalIdx = duplicateToCanonical.get(d)
+    const canonicalId = canonicalIdx != null ? canonicalIdxToInsertedId.get(canonicalIdx) : null
+    if (!canonicalId) continue
+    const m = classified[d]
+    const meta = { ...m.metadata, review_reasons: m.review_reasons, classification_rule_version: "v2" }
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO movements (
+        user_id, direction, amount, date, movement_type, pnl_eligible,
+        provenance, cash_account_id, counterparty,
+        counterparty_entity_id, counterparty_entity_type,
+        linked_internal_account_id, confidence,
+        review_needed, raw_description, metadata,
+        currency, coalesced_group_id, duplicate_of
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+      RETURNING id`,
+      [
+        userId, m.direction, m.amount, m.date, m.movement_type, m.pnl_eligible,
+        m.provenance, m.cash_account_name, m.counterparty,
+        m.counterparty_entity_id, m.counterparty_entity_type,
+        m.linked_internal_account_id, JSON.stringify(m.confidence),
+        m.review_needed, m.raw_description, JSON.stringify(meta),
+        m.currency ?? "USD", m.coalesced_group_id, canonicalId,
+      ],
+    )
+    // Duplicate shares same underlying tx; observations stay linked to canonical
   }
 
   log("movements.classify.done", { userId, ...stats }, "movements")
