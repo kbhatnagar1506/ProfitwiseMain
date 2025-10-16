@@ -333,6 +333,42 @@ export function OnboardingFlow({
   }
   const [brainRunResult, setBrainRunResult] = useState<BrainRunResult | null>(null)
 
+  const runStep11Reconciliation = useCallback(async (cancelledRef?: () => boolean) => {
+    setArApLoading(true)
+    setArApError(null)
+    setArApData(null)
+    setMappingLoading(true)
+    setMappingError(null)
+    setMappingArAp(null)
+    setMappingRecon(null)
+    setBrainRunResult(null)
+
+    const brainRes = await fetch("/api/brain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        syncCashEvents: true,
+        runWaterfall: true,
+        waterfallDryRun: false,
+        waterfallMinAiReviewAmount: 1000,
+      }),
+    })
+    if (!brainRes.ok) throw new Error("Brain run failed")
+    const brainData = (await brainRes.json()) as BrainRunResult
+    if (cancelledRef?.()) throw new Error("Cancelled")
+    setBrainRunResult(brainData)
+
+    const arApRes = await fetch("/api/ar-ap-step")
+    if (!arApRes.ok) throw new Error("AR/AP step failed")
+    const data = (await arApRes.json()) as { ar: ARState; ap: APState; recon?: MappingReconData }
+    if (cancelledRef?.()) throw new Error("Cancelled")
+    setArApData({ ar: data.ar, ap: data.ap })
+    setMappingArAp({ ar: data.ar, ap: data.ap })
+    setMappingRecon(data.recon ?? null)
+    setArApLoading(false)
+    setMappingLoading(false)
+  }, [])
+
   const openMovementDetail = useCallback(async (movementId: string) => {
     setMovementDetail({ movementId, loading: true, error: null, detail: null })
     setMovementDetailRecatIntent("")
@@ -848,39 +884,7 @@ export function OnboardingFlow({
     if (currentStep !== 11) return
     let cancelled = false
 
-    setArApLoading(true)
-    setArApError(null)
-    setArApData(null)
-    setMappingLoading(true)
-    setMappingError(null)
-    setMappingArAp(null)
-    setMappingRecon(null)
-    setBrainRunResult(null)
-
-    fetch("/api/brain", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        syncCashEvents: true,
-        runWaterfall: true,
-        waterfallDryRun: false,
-        waterfallMinAiReviewAmount: 1000,
-      }),
-    })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Brain run failed"))))
-      .then((brainData: BrainRunResult) => {
-        if (cancelled) return Promise.reject(new Error("Cancelled"))
-        setBrainRunResult(brainData)
-        return fetch("/api/ar-ap-step").then((res) => (res.ok ? res.json() : Promise.reject(new Error("AR/AP step failed"))))
-      })
-      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
-        if (cancelled) return
-        setArApData({ ar: data.ar, ap: data.ap })
-        setMappingArAp({ ar: data.ar, ap: data.ap })
-        setMappingRecon(data.recon ?? null)
-        setArApLoading(false)
-        setMappingLoading(false)
-      })
+    runStep11Reconciliation(() => cancelled)
       .catch((e) => {
         if (cancelled || (e instanceof Error && e.message === "Cancelled")) return
         const msg = e instanceof Error ? e.message : "Failed to load"
@@ -891,7 +895,7 @@ export function OnboardingFlow({
       })
 
     return () => { cancelled = true }
-  }, [currentStep])
+  }, [currentStep, runStep11Reconciliation])
 
   // Step 12: State objects (computed from frozen tags)
   useEffect(() => {
@@ -3174,6 +3178,25 @@ export function OnboardingFlow({
               <h2 className="text-2xl font-semibold text-white mb-1">{steps[10].title}</h2>
               <p className="text-gray-400 text-lg mb-1">{steps[10].description}</p>
               <p className="text-[11px] text-gray-500 mb-5">Bank payments matched to invoices and obligations. Gross − Fee = Net.</p>
+              <div className="mb-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (arApLoading || mappingLoading) return
+                    runStep11Reconciliation().catch((e) => {
+                      const msg = e instanceof Error ? e.message : "Failed to reconcile"
+                      setMappingError(msg)
+                      setArApError(msg)
+                      setArApLoading(false)
+                      setMappingLoading(false)
+                    })
+                  }}
+                  disabled={arApLoading || mappingLoading}
+                  className="inline-flex items-center justify-center rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {arApLoading || mappingLoading ? "Reconciling..." : "Reconcile now"}
+                </button>
+              </div>
 
               {(arApLoading || mappingLoading) && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
