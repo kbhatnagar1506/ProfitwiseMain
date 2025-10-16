@@ -315,11 +315,6 @@ export function OnboardingFlow({
     unresolved_count: number
     unresolved_amount: number
     updated_events: number
-    matched_by_id?: number
-    matched_by_name?: number
-    matched_by_amount_date?: number
-    fee_inferred_count?: number
-    candidate_none_count?: number
     dry_run: boolean
   }
   type BrainRunResult = {
@@ -332,42 +327,6 @@ export function OnboardingFlow({
     waterfall?: BrainRunWaterfall | null
   }
   const [brainRunResult, setBrainRunResult] = useState<BrainRunResult | null>(null)
-
-  const runStep11Reconciliation = useCallback(async (cancelledRef?: () => boolean) => {
-    setArApLoading(true)
-    setArApError(null)
-    setArApData(null)
-    setMappingLoading(true)
-    setMappingError(null)
-    setMappingArAp(null)
-    setMappingRecon(null)
-    setBrainRunResult(null)
-
-    const brainRes = await fetch("/api/brain", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        syncCashEvents: true,
-        runWaterfall: true,
-        waterfallDryRun: false,
-        waterfallMinAiReviewAmount: 1000,
-      }),
-    })
-    if (!brainRes.ok) throw new Error("Brain run failed")
-    const brainData = (await brainRes.json()) as BrainRunResult
-    if (cancelledRef?.()) throw new Error("Cancelled")
-    setBrainRunResult(brainData)
-
-    const arApRes = await fetch("/api/ar-ap-step")
-    if (!arApRes.ok) throw new Error("AR/AP step failed")
-    const data = (await arApRes.json()) as { ar: ARState; ap: APState; recon?: MappingReconData }
-    if (cancelledRef?.()) throw new Error("Cancelled")
-    setArApData({ ar: data.ar, ap: data.ap })
-    setMappingArAp({ ar: data.ar, ap: data.ap })
-    setMappingRecon(data.recon ?? null)
-    setArApLoading(false)
-    setMappingLoading(false)
-  }, [])
 
   const openMovementDetail = useCallback(async (movementId: string) => {
     setMovementDetail({ movementId, loading: true, error: null, detail: null })
@@ -884,7 +843,39 @@ export function OnboardingFlow({
     if (currentStep !== 11) return
     let cancelled = false
 
-    runStep11Reconciliation(() => cancelled)
+    setArApLoading(true)
+    setArApError(null)
+    setArApData(null)
+    setMappingLoading(true)
+    setMappingError(null)
+    setMappingArAp(null)
+    setMappingRecon(null)
+    setBrainRunResult(null)
+
+    fetch("/api/brain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        syncCashEvents: true,
+        runWaterfall: true,
+        waterfallDryRun: false,
+        waterfallMinAiReviewAmount: 1000,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Brain run failed"))))
+      .then((brainData: BrainRunResult) => {
+        if (cancelled) return Promise.reject(new Error("Cancelled"))
+        setBrainRunResult(brainData)
+        return fetch("/api/ar-ap-step").then((res) => (res.ok ? res.json() : Promise.reject(new Error("AR/AP step failed"))))
+      })
+      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
+        if (cancelled) return
+        setArApData({ ar: data.ar, ap: data.ap })
+        setMappingArAp({ ar: data.ar, ap: data.ap })
+        setMappingRecon(data.recon ?? null)
+        setArApLoading(false)
+        setMappingLoading(false)
+      })
       .catch((e) => {
         if (cancelled || (e instanceof Error && e.message === "Cancelled")) return
         const msg = e instanceof Error ? e.message : "Failed to load"
@@ -895,7 +886,7 @@ export function OnboardingFlow({
       })
 
     return () => { cancelled = true }
-  }, [currentStep, runStep11Reconciliation])
+  }, [currentStep])
 
   // Step 12: State objects (computed from frozen tags)
   useEffect(() => {
@@ -3178,25 +3169,6 @@ export function OnboardingFlow({
               <h2 className="text-2xl font-semibold text-white mb-1">{steps[10].title}</h2>
               <p className="text-gray-400 text-lg mb-1">{steps[10].description}</p>
               <p className="text-[11px] text-gray-500 mb-5">Bank payments matched to invoices and obligations. Gross − Fee = Net.</p>
-              <div className="mb-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (arApLoading || mappingLoading) return
-                    runStep11Reconciliation().catch((e) => {
-                      const msg = e instanceof Error ? e.message : "Failed to reconcile"
-                      setMappingError(msg)
-                      setArApError(msg)
-                      setArApLoading(false)
-                      setMappingLoading(false)
-                    })
-                  }}
-                  disabled={arApLoading || mappingLoading}
-                  className="inline-flex items-center justify-center rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {arApLoading || mappingLoading ? "Reconciling..." : "Reconcile now"}
-                </button>
-              </div>
 
               {(arApLoading || mappingLoading) && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -3213,10 +3185,8 @@ export function OnboardingFlow({
                 <div className="mx-auto mt-3 max-w-3xl rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-left">
                   <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Auto reconciliation saved</div>
                   <div className="mt-1 text-xs text-gray-300">
-                    Matched txns: {((mappingRecon?.matched_inflows?.length ?? 0) + (mappingRecon?.matched_outflows?.length ?? 0))} ·
-                    Inflow matched: {money2(mappingRecon?.total_matched_inflows ?? 0)} ·
-                    Outflow matched: {money2(mappingRecon?.total_matched_outflows ?? 0)} ·
-                    Unresolved: {brainRunResult.waterfall?.unresolved_count ?? 0} ({money2(brainRunResult.waterfall?.unresolved_amount ?? 0)})
+                    Allocations: {brainRunResult.allocation_count} · Cash events synced: {brainRunResult.cash_events_synced ? "yes" : "no"} ·
+                    Waterfall unresolved: {brainRunResult.waterfall?.unresolved_count ?? 0} (${(brainRunResult.waterfall?.unresolved_amount ?? 0).toLocaleString()})
                   </div>
                 </div>
               )}
@@ -3241,55 +3211,6 @@ export function OnboardingFlow({
                     <span className="text-gray-400">Net expected</span>
                   </div>
                 </div>
-
-                {/* ─── Final Reconciliation Summary (all deterministic stages) ─── */}
-                {brainRunResult?.waterfall && (
-                  <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
-                    <div className="text-[11px] font-semibold uppercase tracking-wider text-blue-300 mb-2">Final reconciliation summary (Step 11)</div>
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Stage 1 exact</div>
-                        <div className="font-semibold text-emerald-300">{brainRunResult.waterfall.exact_matches}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Stage 2 fee-aware</div>
-                        <div className="font-semibold text-amber-300">{brainRunResult.waterfall.fee_matches}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Stage 3 fifo full</div>
-                        <div className="font-semibold text-white">{brainRunResult.waterfall.fifo_full_matches}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Stage 3 fifo partial</div>
-                        <div className="font-semibold text-white">{brainRunResult.waterfall.fifo_partial_matches}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Unresolved count</div>
-                        <div className="font-semibold text-red-300">{brainRunResult.waterfall.unresolved_count}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Matched by ID</div>
-                        <div className="font-semibold text-blue-200">{brainRunResult.waterfall.matched_by_id ?? 0}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Matched by name</div>
-                        <div className="font-semibold text-blue-200">{brainRunResult.waterfall.matched_by_name ?? 0}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Matched by amt/date</div>
-                        <div className="font-semibold text-blue-200">{brainRunResult.waterfall.matched_by_amount_date ?? 0}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">Fee inferred</div>
-                        <div className="font-semibold text-amber-300">{brainRunResult.waterfall.fee_inferred_count ?? 0}</div>
-                      </div>
-                      <div className="rounded-lg bg-white/5 px-3 py-2">
-                        <div className="text-[10px] text-gray-500">No-candidate txns</div>
-                        <div className="font-semibold text-red-300">{brainRunResult.waterfall.candidate_none_count ?? 0}</div>
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 {/* ─── Reconciler AR summary ─── */}
                 <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
