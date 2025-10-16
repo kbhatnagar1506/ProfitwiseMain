@@ -222,6 +222,8 @@ function scoreCandidate(
     penalties
   let score = Math.max(0, Math.min(1, raw))
 
+  const tier: CandidateTier = idMatch ? "id" : identity >= 0.6 ? "name" : "amount_date"
+
   // Wide-net deterministic hook:
   // if amount is exact and timing is reasonably close, allow entry as a plausible candidate
   // even when identity signal is weak.
@@ -233,8 +235,6 @@ function scoreCandidate(
   if (score >= 0.95) band = "certified"
   else if (score >= 0.8) band = "high_confidence"
   else if (score >= 0.6) band = "suggested"
-
-  const tier: CandidateTier = idMatch ? "id" : identity >= 0.6 ? "name" : "amount_date"
   return {
     score,
     tier,
