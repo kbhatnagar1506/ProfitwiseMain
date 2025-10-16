@@ -1040,7 +1040,7 @@ export async function buildMovementIdentityContext(userId: string): Promise<Move
     }
   }
 
-  // Owner containment: store owner entries for runtime "JACK RUBENSTEIN" → "Jack" matching
+  // Owner containment: store owner entries for runtime counterparty → owner name matching
   const ownerEntries = entities
     .filter((e) => e.entity_type === "owner")
     .map((e) => ({

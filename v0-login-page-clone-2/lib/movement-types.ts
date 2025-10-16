@@ -82,6 +82,7 @@ const INTERNAL_TO_CLASS: Record<string, MovementClass> = {
   unknown_inflow: "unknown",
   unknown_outflow: "unknown",
   unknown_transfer_candidate: "unknown",
+  review_candidate_revenue: "unknown",
   other_operating: "unknown",
 }
 
@@ -310,4 +311,7 @@ export type MovementTag = {
 
   /** Settlement subtype: shopify_payout | merchant_bank_deposit | processor_payout (default) */
   settlement_subtype?: string | null
+
+  /** Expense subtype: inventory_supplier | saas_software | government_filing | marketplace_misc | admin_professional */
+  expense_subtype?: string | null
 }

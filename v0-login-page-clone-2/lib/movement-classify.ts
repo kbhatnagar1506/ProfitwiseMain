@@ -75,6 +75,7 @@ const FALLBACK_TYPES = [
   "unknown_inflow",
   "unknown_outflow",
   "unknown_transfer_candidate",
+  "review_candidate_revenue",
 ] as const
 
 const ALL_MOVEMENT_TYPES = [...NON_PNL_TYPES, ...PNL_TYPES, ...PROVISIONAL_TYPES, ...FALLBACK_TYPES] as const
@@ -167,7 +168,13 @@ function getSourceAuthority(evidence: SourceObservation[]): number {
   return best
 }
 
-function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBreakdown {
+function deterministicJitter(seed: string, range: number): number {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = ((h << 5) - h + seed.charCodeAt(i)) | 0
+  return ((h % 1000) / 1000) * range * 2 - range
+}
+
+function computeConfidence(signals: Partial<ConfidenceBreakdown>, movementSeed?: string): ConfidenceBreakdown {
   const e = signals.entity_confidence ?? -1
   const a = signals.account_resolution ?? 0
   const p = signals.pattern_strength ?? 0
@@ -189,13 +196,16 @@ function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBre
   if (h >= 0) signalEntries.push({ value: h, weight: 0.05 })  // only if family exists
 
   const totalWeight = signalEntries.reduce((sum, x) => sum + x.weight, 0)
-  const classificationConfidence = totalWeight > 0
+  let classificationConfidence = totalWeight > 0
     ? Math.min(1, Math.max(0, signalEntries.reduce((sum, x) => sum + x.value * (x.weight / totalWeight), 0)))
     : p
 
+  // Add deterministic variance (±4%) to avoid templated scores
+  if (movementSeed) classificationConfidence = Math.min(1, Math.max(0, classificationConfidence + deterministicJitter(movementSeed, 0.04)))
+
   // ── Evidence strength ──
   // Penalizes for missing corroboration
-  const evidenceStrength = Math.min(1, Math.max(0,
+  let evidenceStrength = Math.min(1, Math.max(0,
     (e >= 0 ? e : 0) * 0.20 +
     a * 0.15 +
     (s >= 0 ? s : 0) * 0.30 +
@@ -203,6 +213,7 @@ function computeConfidence(signals: Partial<ConfidenceBreakdown>): ConfidenceBre
     sa * 0.05 +
     d * 0.10
   ))
+  if (movementSeed) evidenceStrength = Math.min(1, Math.max(0, evidenceStrength + deterministicJitter(movementSeed + "ev", 0.05)))
 
   return {
     score: classificationConfidence,
@@ -344,6 +355,26 @@ const OPENING_BALANCE_PATTERNS = [
   /\bopening balance\b/i,
   /\binitial (balance|deposit|funding)\b/i,
 ]
+
+// Wire / bank-code inflows: do not auto-promote to customer revenue without entity match
+const WIRE_INFLOW_PATTERNS = [
+  /\bincoming\s+wire\b/i,
+  /\bwire\s+(transfer|credit)\b/i,
+  /\borig\s*:\s*\w+/i,
+  /\b[A-Z]{6,}\s+(golf|field|inc|llc|corp)/i,
+]
+
+function isWeakRevenueEvidence(m: CanonicalMovement, identity: MovementIdentityEntry | null): boolean {
+  const hasEntityMatch = identity?.role === "customer" && (identity?.confidence ?? 0) >= 0.6
+  if (hasEntityMatch) return false
+  const primaryObs = m.evidence[0]
+  const fromPlaid = primaryObs?.source === "plaid"
+  const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
+  const isPlaidIncome = fromPlaid && pfcPrimary === "INCOME"
+  const isWireLike = WIRE_INFLOW_PATTERNS.some((p) => p.test(m.raw_description ?? "")) ||
+    /orig\s*:\s*\w+/i.test(m.raw_description ?? "")
+  return (isPlaidIncome || (fromPlaid && !primaryObs?.source_type)) && isWireLike
+}
 
 function normKey(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -665,8 +696,17 @@ function dateDistance(a: string, b: string): number {
 }
 
 function coalesceObservations(observations: SourceObservation[]): CanonicalMovement[] {
+  // Deduplicate by (source, source_id) — same bank tx cannot appear twice
+  const seen = new Set<string>()
+  const deduped = observations.filter((o) => {
+    const key = `${o.source}:${o.source_id}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
   // Filter out zero-dollar non-cash notices
-  const nonZero = observations.filter((o) => Math.abs(o.amount) >= 0.01)
+  const nonZero = deduped.filter((o) => Math.abs(o.amount) >= 0.01)
 
   // Group by |amount| rounded to cents — the primary matching dimension
   // Date is checked with a ±1 day window during pairing, not as a key
@@ -1019,7 +1059,7 @@ function resolveCounterpartyIdentity(
       if (directHit) return directHit
     }
 
-    // 4. Owner containment: "JACK RUBENSTEIN" contains "jack" → match owner "Jack"
+    // 4. Owner containment: counterparty contains owner's normalized name → match owner
     const ownerEntries = (ctx as Map<string, unknown> & { _ownerEntries?: MovementIdentityEntry[] })._ownerEntries
     if (ownerEntries && key.length >= 6) {
       for (const entry of ownerEntries) {
@@ -1205,6 +1245,10 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
   // ── Plaid PFC operating signals ──
   if (pfcPrimary === "BANK_FEES") return { type: "cash_out_bank_fee", signals: { pattern_strength: 0.95, source_authority: srcAuth, account_resolution: ar } }
   if (pfcPrimary === "INCOME" && pfcDetailed.includes("INTEREST")) return { type: "cash_in_interest", signals: { pattern_strength: 0.95, source_authority: srcAuth, account_resolution: ar } }
+  // Wire inflows without entity match: do not auto-promote to customer revenue
+  if (m.direction === "inflow" && isWeakRevenueEvidence(m, identity)) {
+    return { type: "review_candidate_revenue", signals: { pattern_strength: 0.35, source_authority: srcAuth, account_resolution: ar } }
+  }
   if (pfcPrimary === "INCOME") return { type: "cash_in_customer", signals: { pattern_strength: 0.80, entity_confidence: eid, source_authority: srcAuth, account_resolution: ar } }
   if (pfcDetailed.includes("TAX") || pfcPrimary === "GOVERNMENT_AND_NON_PROFIT") {
     if (TAX_PATTERNS.some((p) => p.test(desc))) return { type: "cash_out_tax", signals: { pattern_strength: 0.95, source_authority: srcAuth, account_resolution: ar } }
@@ -1301,6 +1345,7 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
       return { type: t, signals: { pattern_strength: 0.70, source_authority: srcAuth, account_resolution: ar } }
     }
     if (primaryObs.source_type === "BankTransaction") {
+      if (m.direction === "inflow" && isWeakRevenueEvidence(m, identity)) return { type: "review_candidate_revenue", signals: { pattern_strength: 0.35, source_authority: srcAuth, account_resolution: ar } }
       const t = m.direction === "inflow" ? "cash_in_customer" as const : "cash_out_operating_expense" as const
       return { type: t, signals: { pattern_strength: 0.60, source_authority: srcAuth, account_resolution: ar } }
     }
@@ -1313,11 +1358,13 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
 
   // ── Plaid category heuristics ──
   if (m.direction === "inflow" && catStr.includes("deposit")) {
+    if (isWeakRevenueEvidence(m, identity)) return { type: "review_candidate_revenue", signals: { pattern_strength: 0.35, source_authority: srcAuth, account_resolution: ar } }
     return { type: "cash_in_customer", signals: { pattern_strength: 0.55, source_authority: srcAuth, account_resolution: ar } }
   }
 
   // ── Plaid payment_channel ──
   if (m.plaid_payment_channel === "in store" || m.plaid_payment_channel === "online") {
+    if (m.direction === "inflow" && isWeakRevenueEvidence(m, identity)) return { type: "review_candidate_revenue", signals: { pattern_strength: 0.35, source_authority: srcAuth, account_resolution: ar } }
     const t = m.direction === "inflow" ? "cash_in_customer" as const : "cash_out_operating_expense" as const
     return { type: t, signals: { pattern_strength: 0.55, source_authority: srcAuth, account_resolution: ar } }
   }
@@ -1327,10 +1374,19 @@ function classifyOperating(m: CanonicalMovement, identity: MovementIdentityEntry
 
 // ─── Step 6b: Provisional classes ───────────────────────────────────
 
-function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEntry | null): ClassifyResult | null {
+function classifyProvisional(m: CanonicalMovement, identity: MovementIdentityEntry | null, selfCtx: SelfContext): ClassifyResult | null {
   const desc = (m.raw_description ?? "").toLowerCase()
   const srcAuth = getSourceAuthority(m.evidence)
   const isMerchantDepositDesc = MERCHANT_DEPOSIT_PATTERNS.some((p) => p.test(desc))
+  const hasStrongProcessorEvidence = PROCESSOR_PAYOUT_DESC_PATTERNS.some((p) => p.test(desc)) ||
+    /\b(shopify|stripe|paypal|square|clover|toast|adyen|worldpay|fiserv|heartland|braintree)\b/i.test(desc)
+  const isOwnerLinked = identity?.role === "owner" || identity?.role === "internal" ||
+    (selfCtx.ownerNames.length > 0 && (m.counterparty ?? "").toLowerCase().split(/\s+/).some((t) => t.length >= 3 && selfCtx.ownerNames.some((on) => normKey(on).includes(normKey(t)) || normKey(t).includes(normKey(on)))))
+
+  // Merchant deposit with owner-linked identity but no strong processor evidence → collision review
+  if (m.direction === "inflow" && isMerchantDepositDesc && isOwnerLinked && !hasStrongProcessorEvidence) {
+    return { type: "owner_contribution_candidate", signals: { pattern_strength: 0.45, source_authority: srcAuth } }
+  }
 
   // Merchant deposit: recurring BANKCD/DEPOSIT patterns — recognized economic class
   if (m.direction === "inflow" && isMerchantDepositDesc) {
@@ -1748,7 +1804,7 @@ export async function classifyMovements(userId: string): Promise<{
     // Step 5: Non-P&L first
     const nonPnl = classifyNonPnl(m, identity, selfCtx)
     if (nonPnl) {
-      const conf = computeConfidence({ ...nonPnl.signals, source_agreement: sa })
+      const conf = computeConfidence({ ...nonPnl.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
       const reasons: string[] = []
       if (conf.score < 0.55) reasons.push("low_classification_confidence")
       if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
@@ -1769,7 +1825,7 @@ export async function classifyMovements(userId: string): Promise<{
     // Step 6: Operating
     const operating = classifyOperating(m, identity)
     if (operating) {
-      const conf = computeConfidence({ ...operating.signals, source_agreement: sa })
+      const conf = computeConfidence({ ...operating.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
       const reasons: string[] = []
       if (conf.score < 0.55) reasons.push("low_classification_confidence")
       if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
@@ -1788,9 +1844,9 @@ export async function classifyMovements(userId: string): Promise<{
     }
 
     // Step 6b: Provisional classes
-    const provisional = classifyProvisional(m, identity)
+    const provisional = classifyProvisional(m, identity, selfCtx)
     if (provisional) {
-      const conf = computeConfidence({ ...provisional.signals, source_agreement: sa })
+      const conf = computeConfidence({ ...provisional.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
       const reasons: string[] = ["provisional_classification"]
       if (conf.score < 0.55) reasons.push("low_classification_confidence")
       if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
@@ -1810,7 +1866,7 @@ export async function classifyMovements(userId: string): Promise<{
 
     // Step 7: Fallback (but also queue for LLM if we have API key)
     const fallback = classifyFallback(m)
-    const conf = computeConfidence({ ...fallback.signals, source_agreement: sa })
+    const conf = computeConfidence({ ...fallback.signals, source_agreement: sa }, `${m.date}:${m.amount}:${m.raw_description ?? ""}`)
     const reasons: string[] = ["low_classification_confidence"]
     if (conf.evidence_strength < 0.20) reasons.push("low_evidence")
     needsLlm.push({ idx: classified.length, movement: m, identity })
@@ -1861,6 +1917,7 @@ export async function classifyMovements(userId: string): Promise<{
     "cash_in_customer", "cash_in_refund", "cash_in_interest", "bank_fee_refund",
     "loan_funding", "owner_contribution", "owner_contribution_candidate",
     "merchant_deposit_unresolved", "merchant_deposit_resolved", "unknown_inflow",
+    "review_candidate_revenue",
   ])
   const OUTFLOW_TYPES = new Set<string>([
     "cash_out_vendor", "cash_out_operating_expense", "cash_out_refund",

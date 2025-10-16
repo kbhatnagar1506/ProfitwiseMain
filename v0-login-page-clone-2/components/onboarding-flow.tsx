@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import Image from "next/image"
+import { displayLabelForCounterparty } from "@/lib/alias-normalize"
 import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
 import { useRouter } from "next/navigation"
 interface Integration {
@@ -2203,6 +2204,7 @@ export function OnboardingFlow({
           owner_contribution_candidate: "Owner Contribution?",
           unknown_inflow: "Unknown Inflow", unknown_outflow: "Unknown Outflow",
           unknown_transfer_candidate: "Unknown Transfer?",
+          review_candidate_revenue: "Revenue? (needs review)",
           loan_funding: "Loan Funding", loan_principal_payment: "Loan Payment",
           other_operating: "Other Operating",
         }
@@ -2322,7 +2324,7 @@ export function OnboardingFlow({
                           <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
                             ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
-                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]">{(m.metadata?.counterparty as string) ?? "\u2014"}</td>
+                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]" title={(m.metadata?.counterparty as string) ?? undefined}>{displayLabelForCounterparty(m.metadata?.counterparty as string)}</td>
                           {classKey === "unknown" && (
                             <td className="px-3 py-1.5 text-xs">
                               <span className="text-[10px] text-gray-500 bg-white/5 rounded px-1.5 py-0.5">{DETAIL_LABELS[m.movement_type_detail] ?? m.movement_type_detail}</span>
