@@ -315,6 +315,11 @@ export function OnboardingFlow({
     unresolved_count: number
     unresolved_amount: number
     updated_events: number
+    matched_by_id?: number
+    matched_by_name?: number
+    matched_by_amount_date?: number
+    fee_inferred_count?: number
+    candidate_none_count?: number
     dry_run: boolean
   }
   type BrainRunResult = {
@@ -3185,8 +3190,10 @@ export function OnboardingFlow({
                 <div className="mx-auto mt-3 max-w-3xl rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-left">
                   <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Auto reconciliation saved</div>
                   <div className="mt-1 text-xs text-gray-300">
-                    Allocations: {brainRunResult.allocation_count} · Cash events synced: {brainRunResult.cash_events_synced ? "yes" : "no"} ·
-                    Waterfall unresolved: {brainRunResult.waterfall?.unresolved_count ?? 0} (${(brainRunResult.waterfall?.unresolved_amount ?? 0).toLocaleString()})
+                    Matched txns: {((mappingRecon?.matched_inflows?.length ?? 0) + (mappingRecon?.matched_outflows?.length ?? 0))} ·
+                    Inflow matched: {money2(mappingRecon?.total_matched_inflows ?? 0)} ·
+                    Outflow matched: {money2(mappingRecon?.total_matched_outflows ?? 0)} ·
+                    Unresolved: {brainRunResult.waterfall?.unresolved_count ?? 0} ({money2(brainRunResult.waterfall?.unresolved_amount ?? 0)})
                   </div>
                 </div>
               )}
@@ -3211,6 +3218,55 @@ export function OnboardingFlow({
                     <span className="text-gray-400">Net expected</span>
                   </div>
                 </div>
+
+                {/* ─── Final Reconciliation Summary (all deterministic stages) ─── */}
+                {brainRunResult?.waterfall && (
+                  <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-blue-300 mb-2">Final reconciliation summary (Step 11)</div>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Stage 1 exact</div>
+                        <div className="font-semibold text-emerald-300">{brainRunResult.waterfall.exact_matches}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Stage 2 fee-aware</div>
+                        <div className="font-semibold text-amber-300">{brainRunResult.waterfall.fee_matches}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Stage 3 fifo full</div>
+                        <div className="font-semibold text-white">{brainRunResult.waterfall.fifo_full_matches}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Stage 3 fifo partial</div>
+                        <div className="font-semibold text-white">{brainRunResult.waterfall.fifo_partial_matches}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Unresolved count</div>
+                        <div className="font-semibold text-red-300">{brainRunResult.waterfall.unresolved_count}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Matched by ID</div>
+                        <div className="font-semibold text-blue-200">{brainRunResult.waterfall.matched_by_id ?? 0}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Matched by name</div>
+                        <div className="font-semibold text-blue-200">{brainRunResult.waterfall.matched_by_name ?? 0}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Matched by amt/date</div>
+                        <div className="font-semibold text-blue-200">{brainRunResult.waterfall.matched_by_amount_date ?? 0}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Fee inferred</div>
+                        <div className="font-semibold text-amber-300">{brainRunResult.waterfall.fee_inferred_count ?? 0}</div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 px-3 py-2">
+                        <div className="text-[10px] text-gray-500">No-candidate txns</div>
+                        <div className="font-semibold text-red-300">{brainRunResult.waterfall.candidate_none_count ?? 0}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* ─── Reconciler AR summary ─── */}
                 <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
