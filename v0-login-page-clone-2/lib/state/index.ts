@@ -4,6 +4,7 @@
 // This is the single entry point for all state computation.
 
 import { query, ensureMovementsSchema } from "@/lib/db"
+import { log } from "@/lib/logger"
 import type { RevenueState, SpendState, LiquidityState } from "./types"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
@@ -211,6 +212,14 @@ export async function computeBusinessState(userId: string): Promise<BusinessStat
   const dates = tagged.map((m) => m.occurred_at).filter(Boolean).sort()
   const periodStart = dates[0] ?? new Date().toISOString()
   const periodEnd = dates[dates.length - 1] ?? new Date().toISOString()
+
+  // 1.1 One final state per transaction: no movement should affect both revenue and spend
+  for (const m of tagged) {
+    const s = m.tag?.state_scope
+    if (s?.affects_revenue && s?.affects_spend) {
+      log("state.validation.conflict", { movement_id: m.id, economic_class: m.tag?.economic_class }, "warn")
+    }
+  }
 
   const revenue = computeRevenueState(tagged, periodStart, periodEnd)
   const spend = computeSpendState(tagged, periodStart, periodEnd)

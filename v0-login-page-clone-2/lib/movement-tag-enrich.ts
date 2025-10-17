@@ -10,7 +10,7 @@
 
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { log } from "@/lib/logger"
-import { normalizeForMatch } from "@/lib/alias-normalize"
+import { normalizeForMatch, isInvoiceSludge } from "@/lib/alias-normalize"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type {
   CanonicalMovement,
@@ -376,8 +376,9 @@ function tagLevel3(
   const is_anomaly = stddev > 0 && m.amount > mean + 2.5 * stddev
 
   const cp = (m.metadata?.counterparty as string) ?? ""
-  const entityIdFromAlias = cp ? ctx.aliasToEntityId.get(normalizeForMatch(cp)) : undefined
-  const entityKey = (m.entity_id ?? entityIdFromAlias ?? cp.toLowerCase()).trim()
+  const entityIdFromAlias = cp && !isInvoiceSludge(cp) ? ctx.aliasToEntityId.get(normalizeForMatch(cp)) : undefined
+  const cpFallback = cp && !isInvoiceSludge(cp) ? cp.toLowerCase() : "unknown"
+  const entityKey = (m.entity_id ?? entityIdFromAlias ?? cpFallback).trim()
   const is_first_seen_counterparty = !!entityKey && firstSeenKeys.has(entityKey)
 
   return { recurrence_family_id, is_recurring, is_anomaly, is_large_outlier, is_first_seen_counterparty }

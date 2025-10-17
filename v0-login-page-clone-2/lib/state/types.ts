@@ -225,6 +225,29 @@ export type CustomerFeatures = {
   last_payment_recency_days: number
   overdue_count: number
   weekday_bias: number | null
+  avg_dso?: number
+  dso_variance?: number
+  pct_overdue_paid?: number
+  amount_elasticity?: number
+  monthly_cadence?: number
+  invoice_size_percentile?: number
+  last_3_intervals?: number[]
+  payer_reliability_cluster?: string
+}
+
+export type VendorFeatures = {
+  due_date_adherence: number
+  payment_batching: number
+  skipped_month_freq: number
+  amount_volatility: number
+  discretionary_flag: boolean
+}
+
+export type CashPostureFeatures = {
+  current_cash: number
+  days_since_transfer: number
+  recent_owner_support: number
+  ap_load: number
 }
 
 export type InvoiceForecast = {
@@ -246,6 +269,7 @@ export type CustomerModel = {
   entity_id: string
   name: string
   archetype: CustomerArchetype
+  inflow_event_class?: InflowEventClass
   features: CustomerFeatures
   avg_amount: number
   payment_interval_days: number
@@ -268,16 +292,32 @@ export type RecurrenceModel = {
   interval_std_days: number | null
   amount_mean: number | null
   amount_std: number | null
+  interval_stability_score?: number
+  amount_stability_score?: number
+  counterparty_consistency?: number
+  due_date_consistency?: number
+  class_consistency?: number
 }
+
+export type VendorArchetype =
+  | "hard_due_date"
+  | "soft_recurring"
+  | "one_off_ap"
+  | "spend_on_demand"
+  | "batch_supplier"
+  | "treasury_linked"
 
 export type VendorModel = {
   entity_id: string
   name: string
+  archetype?: VendorArchetype
+  features?: VendorFeatures
   avg_amount: number
   cadence: "weekly" | "biweekly" | "monthly" | "quarterly" | "irregular"
   cadence_interval_days: number
   is_recurring: boolean
   recurrence: RecurrenceModel
+  outflow_event_class?: OutflowEventClass
   last_payment_date: string
   payment_count: number
   next_expected_date: string | null
@@ -321,6 +361,27 @@ export type BehavioralModels = {
   invoice_signal: InvoiceSignal
 }
 
+export type InflowEventClass =
+  | "clockwork_receivable"
+  | "likely_receivable"
+  | "overdue_receivable"
+  | "sporadic_receivable"
+  | "processor_settlement"
+  | "owner_support"
+  | "treasury_transfer"
+  | "unknown"
+
+export type OutflowEventClass =
+  | "contractual_recurring"
+  | "ap_due_driven"
+  | "payroll_fixed"
+  | "processor_fees"
+  | "bank_fees"
+  | "discretionary_vendor"
+  | "owner_draw"
+  | "treasury_transfer"
+  | "unknown"
+
 export type EventReasoning = {
   basis: string
   payment_history?: string
@@ -329,6 +390,9 @@ export type EventReasoning = {
   recurrence_info?: string
   invoice_info?: string
   risk_factors?: string[]
+  evidence_supports?: string[]
+  could_invalidate?: string[]
+  model_derived_vs_rule?: boolean
 }
 
 export type ForecastEvent = {
@@ -425,6 +489,17 @@ export type ComponentConfidence = {
   reason: string
 }
 
+export type ForecastConfidenceComponents = {
+  transaction_tagging: number
+  entity_resolution: number
+  inflow_model: number
+  outflow_model: number
+  recurrence: number
+  calibration: number
+  horizon_penalty: number
+  unresolved_exposure: number
+}
+
 export type ForecastConfidence = {
   score: number
   label: "high" | "medium" | "low"
@@ -433,6 +508,7 @@ export type ForecastConfidence = {
   variance_penalty: number
   reasons: string[]
   by_component: ComponentConfidence[]
+  components: ForecastConfidenceComponents
   diagnosis: string
 }
 
@@ -443,6 +519,7 @@ export type CalibrationResult = {
   is_overconfident: boolean
   is_underconfident: boolean
   details: string
+  by_segment?: { segment: string; calibration_error: number; count: number }[]
 }
 
 // ─── Cash Runway ─────────────────────────────────────────────────────
@@ -483,6 +560,15 @@ export type Intervention = {
   impact_cash_30d: number
   impact_risk_reduction: number
   description: string
+  vendor_relationship_risk?: number
+  late_fee_probability?: number
+  impact_on_next_month_trough?: number
+  cascade_crunch_probability?: number
+  expected_impact?: number
+  plausible_range_low?: number
+  plausible_range_high?: number
+  confidence_band?: string
+  assumptions?: string[]
 }
 
 // ─── Scenario Drivers ────────────────────────────────────────────────
@@ -536,6 +622,31 @@ export type ForecastContext = {
   account_balances: AccountBalance[]
 }
 
+export type BacktestByHorizon = {
+  horizon_days: number
+  accuracy_score: number
+  days_tested: number
+  mean_absolute_error: number
+  direction_accuracy: number
+  event_occurrence_accuracy: number | null
+  low_point_accuracy: number | null
+}
+
+export type BacktestBySegment = {
+  segment: string
+  entity_count: number
+  direction_accuracy: number
+  mean_absolute_error: number
+}
+
+export type BaselineComparison = {
+  baseline: "naive_carry_forward" | "rolling_average" | "due_date_only" | "last_cycle_repeat"
+  accuracy_score: number
+  mean_absolute_error: number
+  direction_accuracy: number
+  beats_engine: boolean
+}
+
 export type BacktestResult = {
   accuracy_score: number
   days_tested: number
@@ -543,11 +654,50 @@ export type BacktestResult = {
   direction_accuracy: number
   details: string
   calibration: CalibrationResult | null
+  by_horizon?: BacktestByHorizon[]
+  by_segment?: BacktestBySegment[]
+  event_occurrence_accuracy?: number | null
+  low_point_accuracy?: number | null
+  baseline_comparison?: BaselineComparison[]
+}
+
+export type SeparatedForecastDay = {
+  day: number
+  date: string
+  operating_in: number
+  operating_out: number
+  settlement_in: number
+  settlement_out: number
+  treasury_in: number
+  treasury_out: number
+  owner_in: number
+  owner_out: number
+}
+
+export type SeparatedForecast = {
+  days: SeparatedForecastDay[]
+  operating_30d_in: number
+  operating_30d_out: number
+  settlement_30d_in: number
+  settlement_30d_out: number
+  treasury_30d_in: number
+  treasury_30d_out: number
+  owner_30d_in: number
+  owner_30d_out: number
+}
+
+export type ForecastMetadata = {
+  model_version: string
+  feature_version: string
+  calibration_version: string
+  tagging_version: string
+  policy_version: string
 }
 
 export type CashflowForecast = {
   period_start: string
   forecast_horizon_months: number
+  metadata?: ForecastMetadata
   components: CashflowComponent[]
   behavioral_models: BehavioralModels
   events_30d: ForecastEvent[]
@@ -563,6 +713,7 @@ export type CashflowForecast = {
   interventions: Intervention[]
   context: ForecastContext
   backtest: BacktestResult | null
+  separated_forecast: SeparatedForecast
 }
 
 export type BusinessState = {

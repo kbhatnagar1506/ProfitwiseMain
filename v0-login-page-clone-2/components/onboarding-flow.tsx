@@ -287,7 +287,8 @@ export function OnboardingFlow({
   type CalibrationBucket = { range: string; predicted_prob: number; actual_rate: number; count: number }
   type CalibrationResult = { total_events_evaluated: number; buckets: CalibrationBucket[]; calibration_error: number; is_overconfident: boolean; is_underconfident: boolean; details: string }
   type BacktestResult = { accuracy_score: number; days_tested: number; mean_absolute_error: number; direction_accuracy: number; details: string; calibration?: CalibrationResult | null }
-  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[]; context?: ForecastContext; backtest?: BacktestResult | null }
+  type SeparatedForecast = { days: { day: number; date: string; operating_in: number; operating_out: number; settlement_in: number; settlement_out: number; treasury_in: number; treasury_out: number; owner_in: number; owner_out: number }[]; operating_30d_in: number; operating_30d_out: number; settlement_30d_in: number; settlement_30d_out: number; treasury_30d_in: number; treasury_30d_out: number; owner_30d_in: number; owner_30d_out: number }
+  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[]; context?: ForecastContext; backtest?: BacktestResult | null; separated_forecast?: SeparatedForecast }
   const [forecastData, setForecastData] = useState<CashflowForecast | null>(null)
   const [forecastLoading, setForecastLoading] = useState(false)
   const [forecastError, setForecastError] = useState<string | null>(null)
@@ -3605,6 +3606,48 @@ export function OnboardingFlow({
                           <div key={d.day} className="flex-1 text-center">{d.day % 5 === 0 ? d.day : ""}</div>
                         ))}
                       </div>
+
+                      {/* Operating vs Treasury breakdown (optional) */}
+                      {forecastData.separated_forecast && (() => {
+                        const sf = forecastData.separated_forecast
+                        const hasBreakdown = sf.operating_30d_in + sf.operating_30d_out + sf.settlement_30d_in + sf.settlement_30d_out + sf.treasury_30d_in + sf.treasury_30d_out > 0
+                        if (!hasBreakdown) return null
+                        return (
+                          <div className="mt-4 pt-4 border-t border-white/10">
+                            <h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">30-Day Breakdown</h4>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                              {(sf.operating_30d_in > 0 || sf.operating_30d_out > 0) && (
+                                <div className="bg-white/5 rounded-lg p-2">
+                                  <div className="text-gray-500">Operating</div>
+                                  <div className="text-emerald-400">+{money(sf.operating_30d_in)}</div>
+                                  <div className="text-red-400">-{money(sf.operating_30d_out)}</div>
+                                </div>
+                              )}
+                              {(sf.settlement_30d_in > 0 || sf.settlement_30d_out > 0) && (
+                                <div className="bg-white/5 rounded-lg p-2">
+                                  <div className="text-gray-500">Settlement</div>
+                                  <div className="text-emerald-400">+{money(sf.settlement_30d_in)}</div>
+                                  <div className="text-red-400">-{money(sf.settlement_30d_out)}</div>
+                                </div>
+                              )}
+                              {(sf.treasury_30d_in > 0 || sf.treasury_30d_out > 0) && (
+                                <div className="bg-white/5 rounded-lg p-2">
+                                  <div className="text-gray-500">Treasury</div>
+                                  <div className="text-emerald-400">+{money(sf.treasury_30d_in)}</div>
+                                  <div className="text-red-400">-{money(sf.treasury_30d_out)}</div>
+                                </div>
+                              )}
+                              {(sf.owner_30d_in > 0 || sf.owner_30d_out > 0) && (
+                                <div className="bg-white/5 rounded-lg p-2">
+                                  <div className="text-gray-500">Owner</div>
+                                  <div className="text-emerald-400">+{money(sf.owner_30d_in)}</div>
+                                  <div className="text-red-400">-{money(sf.owner_30d_out)}</div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })()}
                     </div>
                   )
                 })()}
