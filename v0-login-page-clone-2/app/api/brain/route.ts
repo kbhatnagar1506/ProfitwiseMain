@@ -27,30 +27,15 @@ export async function POST(req: Request) {
   let arApOnly = true
   let merchantOnly = false
   let syncCashEvents = true
-  let runWaterfall = false
-  let waterfallDryRun = false
-  let waterfallMinAiReviewAmount: number | undefined
   try {
     const body = await req.json().catch(() => ({}))
     if (typeof body.arApOnly === "boolean") arApOnly = body.arApOnly
     if (typeof body.merchantOnly === "boolean") merchantOnly = body.merchantOnly
     if (typeof body.syncCashEvents === "boolean") syncCashEvents = body.syncCashEvents
-    if (typeof body.runWaterfall === "boolean") runWaterfall = body.runWaterfall
-    if (typeof body.waterfallDryRun === "boolean") waterfallDryRun = body.waterfallDryRun
-    if (typeof body.waterfallMinAiReviewAmount === "number" && body.waterfallMinAiReviewAmount >= 0) {
-      waterfallMinAiReviewAmount = body.waterfallMinAiReviewAmount
-    }
   } catch {
     const { searchParams } = new URL(req.url)
     arApOnly = searchParams.get("arApOnly") !== "false"
     merchantOnly = searchParams.get("merchantOnly") === "true"
-    runWaterfall = searchParams.get("runWaterfall") === "true"
-    waterfallDryRun = searchParams.get("waterfallDryRun") === "true"
-    const minAiRaw = searchParams.get("waterfallMinAiReviewAmount")
-    if (minAiRaw != null) {
-      const parsed = parseFloat(minAiRaw)
-      if (!Number.isNaN(parsed) && parsed >= 0) waterfallMinAiReviewAmount = parsed
-    }
   }
 
   try {
@@ -68,9 +53,6 @@ export async function POST(req: Request) {
       ...(syncCashEvents && outstandingInvoices && apObligations
         ? { outstandingInvoices, apObligations }
         : {}),
-      runWaterfall,
-      waterfallDryRun,
-      ...(waterfallMinAiReviewAmount != null ? { waterfallMinAiReviewAmount } : {}),
     })
 
     return NextResponse.json({
@@ -80,7 +62,15 @@ export async function POST(req: Request) {
       allocation_count: result.attribution.allocationsRefreshed.length,
       ar_suggestions: result.attribution.arSuggestions.length,
       ap_suggestions: result.attribution.apSuggestions.length,
-      waterfall: result.waterfall,
+      ...(result.waterfall
+        ? {
+            waterfall: {
+              attributions_created: result.waterfall.attributionsCreated,
+              cash_events_updated: result.waterfall.cashEventsUpdated,
+              stage4_queued: result.waterfall.stage4Queued,
+            },
+          }
+        : {}),
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

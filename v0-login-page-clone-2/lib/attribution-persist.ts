@@ -2,6 +2,7 @@
  * Movement attributions: canonical decomposition of each movement (AR/AP/fee/transfer/settlement/unknown).
  */
 
+import type { PoolClient } from "pg"
 import { query, ensureMovementsSchema } from "./db"
 import type { AllocationTargetType, MatchMethod, MovementAllocation } from "./cash-allocation-types"
 import { confidenceFromScore, serializeConfidenceEnvelope, type ConfidenceEnvelope } from "./confidence"
@@ -124,6 +125,47 @@ export async function createAttribution(opts: CreateAttributionOpts): Promise<Mo
     ],
   )
   const row = rows[0]
+  if (!row) throw new Error("Failed to create attribution")
+  return normalizeAttributionRow(row as MovementAttributionRow)
+}
+
+/** Same as createAttribution but uses an existing transaction client. */
+export async function insertAttributionWithClient(
+  client: PoolClient,
+  opts: CreateAttributionOpts,
+): Promise<MovementAttributionRow> {
+  const metadata = { ...opts.metadata }
+  const confDetail = opts.confidenceEnvelope
+    ? serializeConfidenceEnvelope(opts.confidenceEnvelope)
+    : opts.confidence
+      ? serializeConfidenceEnvelope(confidenceFromScore(opts.confidence))
+      : null
+
+  const result = await client.query<
+    MovementAttributionRow & { gross_amount: string; net_amount: string }
+  >(
+    `INSERT INTO movement_attributions (
+      user_id, movement_id, component_type, entity_id, reference_id,
+      gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12)
+    RETURNING id, user_id, movement_id, component_type, entity_id, reference_id,
+      gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id, created_at`,
+    [
+      opts.userId,
+      opts.movementId,
+      opts.component_type,
+      opts.entity_id,
+      opts.reference_id ?? null,
+      opts.gross_amount,
+      opts.net_amount,
+      opts.confidence,
+      opts.source,
+      JSON.stringify(metadata),
+      confDetail ? JSON.stringify(confDetail) : null,
+      opts.migrated_from_allocation_id ?? null,
+    ],
+  )
+  const row = result.rows[0]
   if (!row) throw new Error("Failed to create attribution")
   return normalizeAttributionRow(row as MovementAttributionRow)
 }

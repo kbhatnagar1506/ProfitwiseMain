@@ -26,15 +26,15 @@ export type CashEventRow = {
   entity_id: string
   event_type: "ar" | "ap" | "settlement"
   amount: number
+  /** Remaining obligation (expectation layer); defaults to amount when unset. */
+  outstanding_amount?: number
+  status?: "open" | "partially_paid" | "paid"
   probability: number
   expected_date: string
   source: "invoice" | "inferred" | "model" | "attribution"
   movement_id: string | null
   attribution_id: string | null
   metadata: Record<string, unknown>
-  outstanding_amount: number
-  status: "open" | "partially_paid" | "paid"
-  last_reconciled_at: string | null
 }
 
 function defaultReasoning(label: string): EventReasoning {
@@ -52,6 +52,11 @@ export function cashEventRowsToForecastEvents(rows: CashEventRow[], today: strin
   const horizon = addDays(today, 30)
   const out: ForecastEvent[] = []
   for (const r of rows) {
+    const outstanding =
+      r.outstanding_amount != null && !Number.isNaN(Number(r.outstanding_amount))
+        ? Number(r.outstanding_amount)
+        : Number(r.amount)
+    if (r.status === "paid" || outstanding <= 0) continue
     if (r.expected_date < today || r.expected_date > horizon) continue
     const offset = daysBetween(today, r.expected_date)
     if (offset < 1) continue
@@ -72,7 +77,7 @@ export function cashEventRowsToForecastEvents(rows: CashEventRow[], today: strin
         day_offset: offset,
         type: "customer_payment",
         entity: canonicalName,
-        amount: r2(Number(r.amount)),
+        amount: r2(outstanding),
         direction: "in",
         probability: r2(Math.min(1, Math.max(0, r.probability))),
         confidence: r.probability >= 0.75 ? "high" : r.probability >= 0.45 ? "medium" : "low",
@@ -86,7 +91,7 @@ export function cashEventRowsToForecastEvents(rows: CashEventRow[], today: strin
         day_offset: offset,
         type: "vendor_payment",
         entity: canonicalName,
-        amount: r2(Number(r.amount)),
+        amount: r2(outstanding),
         direction: "out",
         probability: r2(Math.min(1, Math.max(0, r.probability))),
         confidence: r.probability >= 0.75 ? "high" : r.probability >= 0.45 ? "medium" : "low",
@@ -116,77 +121,33 @@ export async function fetchCashEventsForUser30d(userId: string): Promise<CashEve
   await ensureMovementsSchema()
   const today = new Date().toISOString().slice(0, 10)
   const end = addDays(today, 30)
-  const { rows } = await query<CashEventRow & { amount: string; probability: string; expected_date: string; outstanding_amount: string; last_reconciled_at: string | null }>(
-    `SELECT id, user_id, entity_id, event_type, amount::float, probability::float, expected_date::text, source, movement_id, attribution_id, metadata,
-            COALESCE(outstanding_amount::float, amount::float) AS outstanding_amount,
-            COALESCE(status, 'open') AS status,
-            last_reconciled_at::text
+  const { rows } = await query<
+    CashEventRow & {
+      amount: string
+      outstanding_amount: string | null
+      probability: string
+      expected_date: string
+    }
+  >(
+    `SELECT id, user_id, entity_id, event_type, amount::float, outstanding_amount::float, status,
+            probability::float, expected_date::text, source, movement_id, attribution_id, metadata
      FROM cash_events
-     WHERE user_id = $1
-       AND expected_date >= $2::date AND expected_date <= $3::date
-       AND COALESCE(outstanding_amount::float, amount::float) > 0.01
-       AND COALESCE(status, 'open') <> 'paid'
+     WHERE user_id = $1 AND expected_date >= $2::date AND expected_date <= $3::date
      ORDER BY expected_date ASC`,
     [userId, today, end],
   )
   return rows.map((r) => ({
     ...r,
     amount: parseFloat(String(r.amount)),
+    outstanding_amount:
+      r.outstanding_amount != null && r.outstanding_amount !== ""
+        ? parseFloat(String(r.outstanding_amount))
+        : undefined,
+    status: (r.status as CashEventRow["status"]) ?? undefined,
     probability: parseFloat(String(r.probability)),
     expected_date: (r.expected_date as string).slice(0, 10),
     metadata: (r.metadata && typeof r.metadata === "object" ? r.metadata : {}) as Record<string, unknown>,
-    outstanding_amount: parseFloat(String(r.outstanding_amount)) || parseFloat(String(r.amount)),
-    status: (r.status ?? "open") as "open" | "partially_paid" | "paid",
-    last_reconciled_at: r.last_reconciled_at,
   }))
-}
-
-type UpsertCashEventInput = {
-  userId: string
-  entityId: string
-  eventType: "ar" | "ap" | "settlement"
-  amount: number
-  probability: number
-  expectedDate: string
-  source: "invoice" | "inferred" | "model" | "attribution"
-  metadata: Record<string, unknown>
-}
-
-async function upsertCashEvent(input: UpsertCashEventInput): Promise<void> {
-  await query(
-    `INSERT INTO cash_events (
-       user_id, entity_id, event_type, amount, probability, expected_date, source, metadata,
-       outstanding_amount, status, updated_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8::jsonb, $4, 'open', NOW())
-     ON CONFLICT (user_id, event_type, entity_id)
-     DO UPDATE SET
-       amount = EXCLUDED.amount,
-       probability = EXCLUDED.probability,
-       expected_date = EXCLUDED.expected_date,
-       source = EXCLUDED.source,
-       metadata = EXCLUDED.metadata,
-       outstanding_amount = GREATEST(
-         0,
-         LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
-       ),
-       status = CASE
-         WHEN GREATEST(0, LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)) <= 0.01 THEN 'paid'
-         WHEN GREATEST(0, LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)) < EXCLUDED.amount THEN 'partially_paid'
-         ELSE 'open'
-       END,
-       updated_at = NOW()`,
-    [
-      input.userId,
-      input.entityId,
-      input.eventType,
-      input.amount,
-      input.probability,
-      input.expectedDate,
-      input.source,
-      JSON.stringify(input.metadata),
-    ],
-  )
 }
 
 function normalizeVendorKey(v: string): string {
@@ -337,7 +298,7 @@ async function fetchApMedianDelayByVendorName(userId: string, windowDays: number
 }
 
 /**
- * Replace cash_events for user with rows derived from open invoices and bill obligations (v1).
+ * Upsert cash_events from open invoices and bill obligations; preserve reconciliation balances on conflict.
  */
 export async function syncCashEventsForUser(
   userId: string,
@@ -350,7 +311,41 @@ export async function syncCashEventsForUser(
   const arExpectedByInvoice = buildArExpectedCollectionMap(invoices, arObservations, today)
   const apMedianDelayByVendorName = await fetchApMedianDelayByVendorName(userId, 120)
 
-  const activeStableKeys = new Set<string>()
+  const stableEntityIds: string[] = []
+
+  const upsertArSql = `INSERT INTO cash_events (
+      user_id, entity_id, event_type, amount, outstanding_amount, status, probability, expected_date, source, metadata
+    ) VALUES ($1, $2, 'ar', $3, $3, $4, $5, $6::date, 'invoice', $7::jsonb)
+    ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
+      amount = EXCLUDED.amount,
+      probability = EXCLUDED.probability,
+      expected_date = EXCLUDED.expected_date,
+      source = EXCLUDED.source,
+      metadata = EXCLUDED.metadata,
+      updated_at = NOW(),
+      outstanding_amount = LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount),
+      status = CASE
+        WHEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount) <= 0 THEN 'paid'
+        WHEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount) < EXCLUDED.amount THEN 'partially_paid'
+        ELSE 'open'
+      END`
+
+  const upsertApSql = `INSERT INTO cash_events (
+      user_id, entity_id, event_type, amount, outstanding_amount, status, probability, expected_date, source, metadata
+    ) VALUES ($1, $2, 'ap', $3, $3, $4, $5, $6::date, 'inferred', $7::jsonb)
+    ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
+      amount = EXCLUDED.amount,
+      probability = EXCLUDED.probability,
+      expected_date = EXCLUDED.expected_date,
+      source = EXCLUDED.source,
+      metadata = EXCLUDED.metadata,
+      updated_at = NOW(),
+      outstanding_amount = LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount),
+      status = CASE
+        WHEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount) <= 0 THEN 'paid'
+        WHEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount) < EXCLUDED.amount THEN 'partially_paid'
+        ELSE 'open'
+      END`
 
   for (const inv of invoices) {
     if (inv.amount_due <= 0) continue
@@ -360,21 +355,21 @@ export async function syncCashEventsForUser(
     const prob =
       inv.status === "overdue" ? 0.85 : inv.status === "partially_paid" ? 0.7 : 0.55
     const entityLabel = inv.entity_uri ?? `${inv.source}:${inv.invoice_id}`
-    activeStableKeys.add(`ar|${entityLabel}`)
-    await upsertCashEvent({
+    stableEntityIds.push(entityLabel)
+    const statusInit: "open" | "partially_paid" | "paid" = "open"
+    await query(upsertArSql, [
       userId,
-      entityId: entityLabel,
-      eventType: "ar",
-      amount: inv.amount_due,
-      probability: prob,
-      expectedDate: expected,
-      source: "invoice",
-      metadata: {
+      entityLabel,
+      inv.amount_due,
+      statusInit,
+      prob,
+      expected,
+      JSON.stringify({
         invoice_id: inv.invoice_id,
         customer_name: inv.customer_name,
         canonical_name: inv.customer_name,
-      },
-    })
+      }),
+    ])
   }
 
   for (const ob of billObligations) {
@@ -387,51 +382,36 @@ export async function syncCashEventsForUser(
     const vendorDelay = apMedianDelayByVendorName.get(normalizeVendorKey(ob.vendor_name))
     const delayedExpected = ob.due_date && vendorDelay != null ? addDays(ob.due_date, vendorDelay) : fallbackExpected
     const expected = delayedExpected < addDays(today, 1) ? addDays(today, 1) : delayedExpected
-    activeStableKeys.add(`ap|${ob.obligation_id}`)
-    await upsertCashEvent({
+    stableEntityIds.push(ob.obligation_id)
+    const statusInit: "open" | "partially_paid" | "paid" = "open"
+    await query(upsertApSql, [
       userId,
-      entityId: ob.obligation_id,
-      eventType: "ap",
-      amount: ob.amount_due,
-      probability: 0.6,
-      expectedDate: expected,
-      source: "inferred",
-      metadata: {
+      ob.obligation_id,
+      ob.amount_due,
+      statusInit,
+      0.6,
+      expected,
+      JSON.stringify({
         bill_id: ob.bill_id,
         vendor_name: ob.vendor_name,
         canonical_name: ob.vendor_name,
         vendor_delay_days: vendorDelay ?? null,
-      },
-    })
+      }),
+    ])
   }
 
-  const activeKeyArr = [...activeStableKeys]
-  if (activeKeyArr.length > 0) {
-    await query(
-      `UPDATE cash_events
-       SET outstanding_amount = 0,
-           status = 'paid',
-           last_reconciled_at = NOW(),
-           updated_at = NOW()
-       WHERE user_id = $1
-         AND event_type IN ('ar', 'ap')
-         AND (event_type || '|' || entity_id) <> ALL($2::text[])
-         AND COALESCE(status, 'open') <> 'paid'`,
-      [userId, activeKeyArr],
-    )
-  } else {
-    await query(
-      `UPDATE cash_events
-       SET outstanding_amount = 0,
-           status = 'paid',
-           last_reconciled_at = NOW(),
-           updated_at = NOW()
-       WHERE user_id = $1
-         AND event_type IN ('ar', 'ap')
-         AND COALESCE(status, 'open') <> 'paid'`,
-      [userId],
-    )
-  }
+  await query(
+    `UPDATE cash_events
+     SET status = 'paid',
+         outstanding_amount = 0,
+         metadata = COALESCE(metadata, '{}'::jsonb) || '{"stale_reason":"removed_from_source"}'::jsonb,
+         updated_at = NOW()
+     WHERE user_id = $1
+       AND source IN ('invoice', 'inferred')
+       AND event_type IN ('ar', 'ap')
+       AND NOT (entity_id = ANY($2::text[]))`,
+    [userId, stableEntityIds],
+  )
 }
 
 /** Aggregate inflow/outflow by counterparty entity from attributions + movements. */

@@ -305,28 +305,8 @@ export function OnboardingFlow({
   const [mappingRecon, setMappingRecon] = useState<MappingReconData | null>(null)
   const [mappingLoading, setMappingLoading] = useState(false)
   const [mappingError, setMappingError] = useState<string | null>(null)
-  type BrainRunWaterfall = {
-    scanned_movements: number
-    attributed_rows: number
-    exact_matches: number
-    fee_matches: number
-    fifo_full_matches: number
-    fifo_partial_matches: number
-    unresolved_count: number
-    unresolved_amount: number
-    updated_events: number
-    dry_run: boolean
-  }
-  type BrainRunResult = {
-    ok: boolean
-    cash_events_synced: boolean
-    entity_profiles_refreshed: boolean
-    allocation_count: number
-    ar_suggestions: number
-    ap_suggestions: number
-    waterfall?: BrainRunWaterfall | null
-  }
-  const [brainRunResult, setBrainRunResult] = useState<BrainRunResult | null>(null)
+  /** Step 11 bank tx table: show all, reconciled (AR/AP linked), or not reconciled */
+  const [reconTxFilter, setReconTxFilter] = useState<"all" | "reconciled" | "unreconciled">("all")
 
   const openMovementDetail = useCallback(async (movementId: string) => {
     setMovementDetail({ movementId, loading: true, error: null, detail: null })
@@ -850,24 +830,9 @@ export function OnboardingFlow({
     setMappingError(null)
     setMappingArAp(null)
     setMappingRecon(null)
-    setBrainRunResult(null)
 
-    fetch("/api/brain", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        syncCashEvents: true,
-        runWaterfall: true,
-        waterfallDryRun: false,
-        waterfallMinAiReviewAmount: 1000,
-      }),
-    })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Brain run failed"))))
-      .then((brainData: BrainRunResult) => {
-        if (cancelled) return Promise.reject(new Error("Cancelled"))
-        setBrainRunResult(brainData)
-        return fetch("/api/ar-ap-step").then((res) => (res.ok ? res.json() : Promise.reject(new Error("AR/AP step failed"))))
-      })
+    fetch("/api/ar-ap-step")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP step failed"))))
       .then((data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
         if (cancelled) return
         setArApData({ ar: data.ar, ap: data.ap })
@@ -1103,14 +1068,6 @@ export function OnboardingFlow({
                 AR/AP reconciliation + state objects + cashflow forecast are temporarily disabled in onboarding.
                 You’ll see this placeholder until the new step implementation is wired in.
               </p>
-              {currentStep === 12 && brainRunResult && (
-                <div className="mt-4 border-t border-white/10 pt-4 text-left">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Latest Step 11 run</div>
-                  <div className="mt-1 text-xs text-gray-300">
-                    Saved to Postgres. Allocations: {brainRunResult.allocation_count}. Waterfall updated events: {brainRunResult.waterfall?.updated_events ?? 0}.
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -3140,14 +3097,39 @@ export function OnboardingFlow({
         const arInvoices = arApData?.ar.invoices ?? []
         const arOverdueFirst = [...arInvoices].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0))
         const apObligations = arApData?.ap.obligations ?? []
-        const allReconRows = mappingRecon
+        const allReconRowsRaw = mappingRecon
           ? [
-              ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "inflow" as const })),
-              ...(mappingRecon.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "outflow" as const })),
-              ...(mappingRecon.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow" as const, allocations: [] })),
-              ...(mappingRecon.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow" as const, allocations: [] })),
+              ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({
+                ...m,
+                direction: "inflow" as const,
+                reconciled: true as const,
+              })),
+              ...(mappingRecon.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({
+                ...m,
+                direction: "outflow" as const,
+                reconciled: true as const,
+              })),
+              ...(mappingRecon.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({
+                ...m,
+                direction: "inflow" as const,
+                reconciled: false as const,
+                allocations: m.allocations ?? [],
+              })),
+              ...(mappingRecon.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({
+                ...m,
+                direction: "outflow" as const,
+                reconciled: false as const,
+                allocations: m.allocations ?? [],
+              })),
             ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
           : []
+        const reconReconciledCount = allReconRowsRaw.filter((r) => r.reconciled).length
+        const reconUnreconciledCount = allReconRowsRaw.length - reconReconciledCount
+        const allReconRows = allReconRowsRaw.filter((r) => {
+          if (reconTxFilter === "all") return true
+          if (reconTxFilter === "reconciled") return r.reconciled
+          return !r.reconciled
+        })
 
         return (
           <div className="space-y-6">
@@ -3159,22 +3141,12 @@ export function OnboardingFlow({
               {(arApLoading || mappingLoading) && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Reconciling + saving to ledger…
+                  Loading AR/AP & reconciliation…
                 </div>
               )}
 
               {(arApError || mappingError) && !arApLoading && !mappingLoading && (
                 <p className="text-red-300 text-sm mb-4">Failed: {arApError || mappingError}</p>
-              )}
-
-              {brainRunResult && !arApLoading && !mappingLoading && (
-                <div className="mx-auto mt-3 max-w-3xl rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-left">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Auto reconciliation saved</div>
-                  <div className="mt-1 text-xs text-gray-300">
-                    Allocations: {brainRunResult.allocation_count} · Cash events synced: {brainRunResult.cash_events_synced ? "yes" : "no"} ·
-                    Waterfall unresolved: {brainRunResult.waterfall?.unresolved_count ?? 0} (${(brainRunResult.waterfall?.unresolved_amount ?? 0).toLocaleString()})
-                  </div>
-                </div>
               )}
             </div>
 
@@ -3231,8 +3203,6 @@ export function OnboardingFlow({
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-16">Source</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24">Due date</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Status</TableHead>
-                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Collected</TableHead>
-                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Remaining</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Amount due</TableHead>
                           </TableRow>
                         </TableHeader>
@@ -3259,12 +3229,6 @@ export function OnboardingFlow({
                                     )}
                                   </TableCell>
                                   <TableCell className="py-2.5">{statusBadge(inv.status, inv.days_overdue ?? null)}</TableCell>
-                                  <TableCell className="text-right font-mono py-2.5 text-emerald-300">
-                                    {moneySmall(amountCollected)}
-                                  </TableCell>
-                                  <TableCell className="text-right font-mono py-2.5 text-gray-300">
-                                    {moneySmall(amountRemaining)}
-                                  </TableCell>
                                   <TableCell className={`text-right font-mono font-semibold py-2.5 ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>
                                     {moneySmall(inv.amount_due)}
                                     {allocs.length > 0 && <span className="block text-[10px] text-gray-500">collected {moneySmall(amountCollected)}</span>}
@@ -3272,7 +3236,7 @@ export function OnboardingFlow({
                                 </TableRow>
                                 {isExpanded && allocs.length > 0 && (
                                   <TableRow className="border-emerald-500/5 bg-emerald-500/5">
-                                    <TableCell colSpan={7} className="py-3 pl-8">
+                                    <TableCell colSpan={5} className="py-3 pl-8">
                                       <div className="space-y-2 text-xs">
                                         <div className="flex gap-4">
                                           <span>Gross: {moneySmall(inv.amount_due)}</span>
@@ -3423,14 +3387,49 @@ export function OnboardingFlow({
                 </>
                 )}
 
-                {/* ─── Tagged bank transactions (reconciliation) ─── */}
-                {mappingRecon && allReconRows.length > 0 && (
+                {/* ─── Bank transactions: reconciled vs not reconciled (AR/AP) ─── */}
+                {mappingRecon && allReconRowsRaw.length > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
-                    <h3 className="text-base font-semibold text-white px-4 py-3 border-b border-white/10">Tagged bank transactions</h3>
+                    <div className="px-4 py-3 border-b border-white/10 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between gap-y-2">
+                      <div>
+                        <h3 className="text-base font-semibold text-white">Bank transaction reconciliation</h3>
+                        <p className="text-[11px] text-gray-500 mt-0.5">
+                          Reconciled = linked to an AR (deposit) or AP (payment) line. Not reconciled = still needs an invoice/bill match.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] text-gray-500 mr-1">Show:</span>
+                        {(["all", "reconciled", "unreconciled"] as const).map((f) => (
+                          <button
+                            key={f}
+                            type="button"
+                            onClick={() => setReconTxFilter(f)}
+                            className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
+                              reconTxFilter === f
+                                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-200"
+                                : "bg-white/5 border-white/10 text-gray-400 hover:border-white/20"
+                            }`}
+                          >
+                            {f === "all" ? "All" : f === "reconciled" ? "Reconciled" : "Not reconciled"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="px-4 py-2 flex flex-wrap gap-4 text-[11px] border-b border-white/5 bg-white/[0.02]">
+                      <span>
+                        <span className="text-emerald-400 font-semibold">{reconReconciledCount}</span>
+                        <span className="text-gray-500"> reconciled</span>
+                      </span>
+                      <span>
+                        <span className="text-amber-400 font-semibold">{reconUnreconciledCount}</span>
+                        <span className="text-gray-500"> not reconciled</span>
+                      </span>
+                    </div>
                     <div className="max-h-[min(70vh,900px)] overflow-y-auto">
                       <Table>
                         <TableHeader>
                           <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
+                            <TableHead className="text-[10px] uppercase text-gray-500 w-28">Status</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500">Payment</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 w-24">Gross</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 w-20">Fee</TableHead>
@@ -3439,33 +3438,64 @@ export function OnboardingFlow({
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {allReconRows.map((r) => {
-                            const totalFee = (r.allocations ?? []).reduce((s: number, a: { fee: number }) => s + a.fee, 0)
-                            const totalGross = (r.allocations ?? []).reduce((s: number, a: { gross: number }) => s + a.gross, 0)
-                            const totalNet = (r.allocations ?? []).reduce((s: number, a: { net: number }) => s + a.net, 0)
-                            const linked = (r.allocations ?? []).length > 0
-                              ? (r.allocations ?? []).map((a: { entity_type: string; entity_id: string }) => `${a.entity_type.toUpperCase()}: ${a.entity_id.slice(0, 12)}...`).join(", ")
-                              : "—"
-                            return (
-                              <TableRow key={r.movement_id} className={`border-white/5 ${(r.allocations ?? []).length === 0 ? "bg-amber-500/5" : ""}`}>
-                                <TableCell className="py-2">
-                                  <span className={r.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
-                                    {r.direction === "inflow" ? "+" : "-"}{money2(r.amount)}
-                                  </span>
-                                  <span className="text-gray-500 text-xs block">{(r as { date?: string }).date} · {(r as { display_name?: string | null }).display_name ?? r.counterparty ?? "—"}</span>
-                                </TableCell>
-                                <TableCell className="py-2 font-mono text-sm">{totalGross > 0 ? money2(totalGross) : money2(r.amount)}</TableCell>
-                                <TableCell className="py-2 font-mono text-amber-400 text-sm">{totalFee > 0 ? money2(totalFee) : "—"}</TableCell>
-                                <TableCell className="py-2 font-mono text-sm">{totalNet > 0 ? money2(totalNet) : money2(r.amount)}</TableCell>
-                                <TableCell className="py-2 text-xs text-gray-400 truncate max-w-[160px]">{linked}</TableCell>
-                              </TableRow>
-                            )
-                          })}
+                          {allReconRows.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={6} className="py-8 text-center text-sm text-gray-500">
+                                No transactions match this filter.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            allReconRows.map((r) => {
+                              const totalFee = (r.allocations ?? []).reduce((s: number, a: { fee: number }) => s + a.fee, 0)
+                              const totalGross = (r.allocations ?? []).reduce((s: number, a: { gross: number }) => s + a.gross, 0)
+                              const totalNet = (r.allocations ?? []).reduce((s: number, a: { net: number }) => s + a.net, 0)
+                              const linked = (r.allocations ?? []).length > 0
+                                ? (r.allocations ?? [])
+                                    .map((a: { entity_type?: string; entity_id?: string }) => {
+                                      const t = (a.entity_type ?? "?").toUpperCase()
+                                      const id = (a.entity_id ?? "").slice(0, 14)
+                                      return id ? `${t}: ${id}${(a.entity_id ?? "").length > 14 ? "…" : ""}` : t
+                                    })
+                                    .join(", ")
+                                : "—"
+                              const isReconciled = (r as { reconciled?: boolean }).reconciled === true
+                              return (
+                                <TableRow
+                                  key={r.movement_id}
+                                  className={`border-white/5 ${!isReconciled ? "bg-amber-500/5" : ""}`}
+                                >
+                                  <TableCell className="py-2">
+                                    {isReconciled ? (
+                                      <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 whitespace-nowrap">
+                                        Reconciled
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 whitespace-nowrap">
+                                        Not reconciled
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="py-2">
+                                    <span className={r.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
+                                      {r.direction === "inflow" ? "+" : "-"}{money2(r.amount)}
+                                    </span>
+                                    <span className="text-gray-500 text-xs block">{(r as { date?: string }).date} · {(r as { display_name?: string | null }).display_name ?? r.counterparty ?? "—"}</span>
+                                  </TableCell>
+                                  <TableCell className="py-2 font-mono text-sm">{totalGross > 0 ? money2(totalGross) : money2(r.amount)}</TableCell>
+                                  <TableCell className="py-2 font-mono text-amber-400 text-sm">{totalFee > 0 ? money2(totalFee) : "—"}</TableCell>
+                                  <TableCell className="py-2 font-mono text-sm">{totalNet > 0 ? money2(totalNet) : money2(r.amount)}</TableCell>
+                                  <TableCell className="py-2 text-xs text-gray-400 truncate max-w-[200px]" title={linked}>
+                                    {linked}
+                                  </TableCell>
+                                </TableRow>
+                              )
+                            })
+                          )}
                         </TableBody>
                       </Table>
                     </div>
                     <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500 text-center">
-                      {allReconRows.length} bank transaction{allReconRows.length !== 1 ? "s" : ""}
+                      Showing {allReconRows.length} of {allReconRowsRaw.length} bank transaction{allReconRowsRaw.length !== 1 ? "s" : ""}
                     </div>
                   </div>
                 )}
