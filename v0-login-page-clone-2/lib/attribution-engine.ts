@@ -13,6 +13,7 @@ import { computeAPStateFromBills } from "@/lib/state/ar-ap"
 import { filterMerchantDeposits, runMerchantDepositPipeline } from "@/lib/merchant-deposit-pipeline"
 import { toEntityUriAr } from "@/lib/entity-uri"
 import { computeEntityPaymentProfiles } from "@/lib/entity-payment-profiles"
+import { resolveDisplayNames } from "@/lib/display-name-resolve"
 
 export type AttributionEngineOptions = {
   arApOnly?: boolean
@@ -30,6 +31,14 @@ type MovementRow = {
   counterparty: string | null
   counterparty_entity_id: string | null
   raw_description: string | null
+  metadata: Record<string, unknown> | null
+}
+
+function counterpartyForResolution(m: MovementRow): string | null {
+  const meta = m.metadata && typeof m.metadata === "object" && !Array.isArray(m.metadata) ? m.metadata : {}
+  const fromMeta = typeof meta.counterparty === "string" ? meta.counterparty.trim() : ""
+  if (fromMeta) return fromMeta
+  return m.counterparty?.trim() || null
 }
 
 function isTestEntityName(name: string): boolean {
@@ -83,7 +92,7 @@ export async function runAttributionEngine(
   const allocatedMovementIds = new Set(allocations.map((a) => a.movement_id))
 
   const { rows: movementRows } = await query<MovementRow>(
-    `SELECT id, direction, amount::float, date, counterparty, counterparty_entity_id, raw_description FROM movements
+    `SELECT id, direction, amount::float, date, counterparty, counterparty_entity_id, raw_description, metadata FROM movements
      WHERE user_id = $1 AND duplicate_of IS NULL ORDER BY date DESC`,
     [userId],
   )
@@ -109,6 +118,26 @@ export async function runAttributionEngine(
   const arSuggestions: AttributionARSuggestion[] = []
   const apSuggestions: AttributionAPSuggestion[] = []
 
+  const displayInputs = [
+    ...unmatchedInflowRows.map((m) => ({
+      movement_id: m.id,
+      user_id: userId,
+      counterparty: counterpartyForResolution(m),
+      counterparty_entity_id: m.counterparty_entity_id,
+    })),
+    ...unmatchedOutflowRows.map((m) => ({
+      movement_id: m.id,
+      user_id: userId,
+      counterparty: counterpartyForResolution(m),
+      counterparty_entity_id: m.counterparty_entity_id,
+    })),
+  ]
+  const displayMap = await resolveDisplayNames(displayInputs)
+
+  function resolvedCounterpartyLabel(m: MovementRow): string | null {
+    return displayMap.get(m.id)?.display_name ?? counterpartyForResolution(m)
+  }
+
   if (!merchantOnly) {
     // Pass 1: AR attribution (inflows)
     for (const m of unmatchedInflowRows) {
@@ -119,7 +148,7 @@ export async function runAttributionEngine(
         date: m.date,
         entity_id: m.counterparty_entity_id,
         raw_description: m.raw_description,
-        counterparty_name: m.counterparty ?? undefined,
+        counterparty_name: resolvedCounterpartyLabel(m) ?? undefined,
       }
       const match = matchARPayment(payment, invoices, entityProfiles)
       if (match && match.confidence >= AUTO_ALLOCATE_CONFIDENCE) {
@@ -183,7 +212,7 @@ export async function runAttributionEngine(
           date: m.date,
           raw_description: m.raw_description,
           entity_id: m.counterparty_entity_id,
-          counterparty_name: m.counterparty ?? undefined,
+          counterparty_name: resolvedCounterpartyLabel(m) ?? undefined,
         }
         const match = matchAPPayment(payment, obligations)
         if (match && match.confidence >= AUTO_ALLOCATE_CONFIDENCE) {
@@ -230,7 +259,7 @@ export async function runAttributionEngine(
         movement_id: m.id,
         amount: parseFloat(String(m.amount)),
         date: m.date,
-        counterparty: m.counterparty,
+        counterparty: resolvedCounterpartyLabel(m) ?? m.counterparty,
       })),
       economicClassByMovement,
     )

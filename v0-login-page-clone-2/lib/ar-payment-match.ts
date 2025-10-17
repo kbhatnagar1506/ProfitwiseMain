@@ -18,6 +18,7 @@ export type InflowPayment = {
   date: string
   entity_id: string | null
   raw_description: string | null
+  /** Prefer `resolveDisplayNames` output (entity > merchant tag > counterparty) for name fallback when entity IDs disagree. */
   counterparty_name?: string | null
 }
 
