@@ -305,6 +305,8 @@ export function OnboardingFlow({
   const [mappingRecon, setMappingRecon] = useState<MappingReconData | null>(null)
   const [mappingLoading, setMappingLoading] = useState(false)
   const [mappingError, setMappingError] = useState<string | null>(null)
+  /** Step 11: manual re-run of /api/ar-ap-step (financial brain + recon) */
+  const [reconRefreshLoading, setReconRefreshLoading] = useState(false)
   /** Step 11 bank tx table: show all, reconciled (AR/AP linked), or not reconciled */
   const [reconTxFilter, setReconTxFilter] = useState<"all" | "reconciled" | "unreconciled">("all")
 
@@ -852,6 +854,38 @@ export function OnboardingFlow({
 
     return () => { cancelled = true }
   }, [currentStep])
+
+  const runArApReconciliation = useCallback(async () => {
+    setReconRefreshLoading(true)
+    setMappingError(null)
+    setArApError(null)
+    try {
+      const r = await fetch("/api/ar-ap-step")
+      const data = (await r.json()) as {
+        ar?: ARState
+        ap?: APState
+        recon?: MappingReconData
+        error?: string
+        detail?: string
+      }
+      if (!r.ok) {
+        const msg =
+          typeof data.detail === "string" ? data.detail : data.error ?? "Reconciliation failed"
+        throw new Error(msg)
+      }
+      if (data.ar && data.ap) {
+        setArApData({ ar: data.ar, ap: data.ap })
+        setMappingArAp({ ar: data.ar, ap: data.ap })
+      }
+      setMappingRecon(data.recon ?? null)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to reconcile"
+      setMappingError(msg)
+      setArApError(msg)
+    } finally {
+      setReconRefreshLoading(false)
+    }
+  }, [])
 
   // Step 12: State objects (computed from frozen tags)
   useEffect(() => {
@@ -3136,7 +3170,20 @@ export function OnboardingFlow({
             <div className="text-center mb-2">
               <h2 className="text-2xl font-semibold text-white mb-1">{steps[10].title}</h2>
               <p className="text-gray-400 text-lg mb-1">{steps[10].description}</p>
-              <p className="text-[11px] text-gray-500 mb-5">Bank payments matched to invoices and obligations. Gross − Fee = Net.</p>
+              <p className="text-[11px] text-gray-500 mb-3">Bank payments matched to invoices and obligations. Gross − Fee = Net.</p>
+
+              {!arApLoading && !mappingLoading && (
+                <div className="flex justify-center mb-5">
+                  <button
+                    type="button"
+                    onClick={() => void runArApReconciliation()}
+                    disabled={reconRefreshLoading}
+                    className="text-sm font-medium px-4 py-2 rounded-lg border border-cyan-500/45 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {reconRefreshLoading ? "Reconciling…" : "Run reconciliation"}
+                  </button>
+                </div>
+              )}
 
               {(arApLoading || mappingLoading) && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -3388,7 +3435,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Bank transactions: reconciled vs not reconciled (AR/AP) ─── */}
-                {mappingRecon && allReconRowsRaw.length > 0 && (
+                {mappingRecon && (
                   <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
                     <div className="px-4 py-3 border-b border-white/10 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between gap-y-2">
                       <div>
@@ -3398,6 +3445,14 @@ export function OnboardingFlow({
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void runArApReconciliation()}
+                          disabled={reconRefreshLoading}
+                          className="text-[11px] font-medium px-3 py-1.5 rounded-md border border-cyan-500/45 bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {reconRefreshLoading ? "…" : "Reconcile"}
+                        </button>
                         <span className="text-[10px] text-gray-500 mr-1">Show:</span>
                         {(["all", "reconciled", "unreconciled"] as const).map((f) => (
                           <button
@@ -3441,7 +3496,9 @@ export function OnboardingFlow({
                           {allReconRows.length === 0 ? (
                             <TableRow>
                               <TableCell colSpan={6} className="py-8 text-center text-sm text-gray-500">
-                                No transactions match this filter.
+                                {allReconRowsRaw.length === 0
+                                  ? "No bank movements yet. Sync your bank, then run reconciliation."
+                                  : "No transactions match this filter."}
                               </TableCell>
                             </TableRow>
                           ) : (
