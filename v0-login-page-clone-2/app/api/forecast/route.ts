@@ -8,7 +8,7 @@ import type { OutstandingInvoice, OutstandingBill, AccountBalance, ForecastConte
 import { computeCashflowForecast } from "@/lib/state/forecast-engine"
 import type { IdentityContext } from "@/lib/state/forecast-engine"
 import { computeBusinessState } from "@/lib/state"
-import { generateNarrativeWithLLM, canonicalizeEntitiesBatch } from "@/lib/forecast-llm"
+import { generateNarrativeWithLLM, canonicalizeEntitiesBatch, generateExecutionSuggestions } from "@/lib/forecast-llm"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -645,6 +645,13 @@ export async function GET() {
               return canonical ? { ...e, entity: canonical } : e
             }),
           }
+        }
+
+        const execSuggestions = await generateExecutionSuggestions(
+          forecast.interventions.slice(0, 4).map((i) => ({ id: i.id, label: i.label, type: i.type, entity: i.entity })),
+        )
+        if (execSuggestions.length > 0) {
+          forecast = { ...forecast, execution_suggestions: execSuggestions }
         }
       } catch (err) {
         console.warn("[Forecast] LLM enrichment failed:", err instanceof Error ? err.message : err)
