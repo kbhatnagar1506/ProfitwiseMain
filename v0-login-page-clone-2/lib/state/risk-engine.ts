@@ -7,6 +7,7 @@ import type {
   RiskDimension,
   RiskState,
 } from "./types"
+import { CONCENTRATION } from "./constants"
 
 function level(score: number): RiskLevel {
   if (score >= 70) return "high"
@@ -14,6 +15,7 @@ function level(score: number): RiskLevel {
   return "low"
 }
 
+// Buffer days = period_net_cash_flow / avg_daily_outflow. Excludes transfers and owner inflows from burn.
 function computeLiquidityRisk(liquidity: LiquidityState): RiskDimension {
   const avgDailyOutflow = liquidity.total_outflows > 0
     ? liquidity.total_outflows / Math.max(1, daySpan(liquidity.period_start, liquidity.period_end))
@@ -46,27 +48,27 @@ function computeLiquidityRisk(liquidity: LiquidityState): RiskDimension {
 }
 
 function computeConcentrationRisk(revenue: RevenueState, spend: SpendState): RiskDimension {
-  const custConc = revenue.top_customer_pct / 100
-  const vendConc = spend.top_vendor_pct / 100
-  const worst = Math.max(custConc, vendConc)
+  const custPct = revenue.top_customer_pct
+  const vendPct = spend.top_vendor_pct
+  const worst = Math.max(custPct, vendPct)
 
   let score = 0
   const parts: string[] = []
 
-  if (custConc > 0.3) {
+  if (custPct > CONCENTRATION.HIGH_MAX) {
     score = Math.max(score, 80)
-    parts.push(`top customer ${Math.round(custConc * 100)}%`)
-  } else if (custConc > 0.15) {
+    parts.push(`top customer ${Math.round(custPct)}%`)
+  } else if (custPct > CONCENTRATION.LOW_MAX) {
     score = Math.max(score, 50)
-    parts.push(`top customer ${Math.round(custConc * 100)}%`)
+    parts.push(`top customer ${Math.round(custPct)}%`)
   }
 
-  if (vendConc > 0.3) {
+  if (vendPct > CONCENTRATION.HIGH_MAX) {
     score = Math.max(score, 75)
-    parts.push(`top vendor ${Math.round(vendConc * 100)}%`)
-  } else if (vendConc > 0.15) {
+    parts.push(`top vendor ${Math.round(vendPct)}%`)
+  } else if (vendPct > CONCENTRATION.LOW_MAX) {
     score = Math.max(score, 45)
-    parts.push(`top vendor ${Math.round(vendConc * 100)}%`)
+    parts.push(`top vendor ${Math.round(vendPct)}%`)
   }
 
   if (parts.length === 0) {
@@ -74,9 +76,9 @@ function computeConcentrationRisk(revenue: RevenueState, spend: SpendState): Ris
     parts.push("well diversified")
   }
 
-  const reason = worst > 0.3
+  const reason = worst > CONCENTRATION.HIGH_MAX
     ? `High concentration: ${parts.join(", ")}`
-    : worst > 0.15
+    : worst > CONCENTRATION.LOW_MAX
       ? `Moderate concentration: ${parts.join(", ")}`
       : `Low concentration: ${parts.join(", ")}`
 
@@ -115,7 +117,9 @@ function computeDependencyRisk(liquidity: LiquidityState): RiskDimension {
     ? `High dependency on non-operating sources: ${parts.join(", ")}`
     : score >= 40
       ? `Moderate non-operating reliance: ${parts.join(", ")}`
-      : `Self-sustaining: ${parts.join(", ")}`
+      : transferRatio > 0.3
+        ? `Primarily operating-driven, but treasury transfers still materially affect liquidity (${Math.round(transferRatio * 100)}%).`
+        : `Self-sustaining: ${parts.join(", ")}`
 
   return { level: level(score), score, reason }
 }

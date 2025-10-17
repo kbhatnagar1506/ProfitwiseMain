@@ -12,6 +12,8 @@
 
 import type { MovementTag, CanonicalMovement } from "@/lib/movement-types"
 import type { RevenueState, SpendState, LiquidityState, TransitionSignal, SeverityBand, AccountCash, SpendBreakdownEntry, LiquidityRegime, SettlementLagSignal } from "./types"
+import { CONCENTRATION, concentrationLabelFromPct, concentrationAdverb } from "./constants"
+import { normalizeAccountDisplayName } from "@/lib/alias-normalize"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
 
@@ -34,6 +36,8 @@ const SUPPLIER_PATTERNS = [
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 const pct1 = (n: number, d: number) => d > 0 ? Math.round((n / d) * 1000) / 10 : 0
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // ─── Revenue State ──────────────────────────────────────────────────
 
@@ -87,13 +91,13 @@ export function computeRevenueState(
 
   const netRevenue = grossRevenue - contraRevenue
   const repeatRevenueRatio = grossRevenue > 0 ? recurringRevenue / grossRevenue : 0
-  const customers = [...customerTotals.values()].sort((a, b) => b.total - a.total)
-  const customerCount = customers.length
-  const avgReceipt = customerCount > 0 ? grossRevenue / customers.reduce((s, c) => s + c.count, 0) : 0
-  const topCustomerPct = customerCount > 0 && grossRevenue > 0 ? customers[0].total / grossRevenue : 0
+  const customerEntries = [...customerTotals.entries()].sort((a, b) => b[1].total - a[1].total)
+  const customerCount = customerEntries.length
+  const avgReceipt = customerCount > 0 ? grossRevenue / customerEntries.reduce((s, [, c]) => s + c.count, 0) : 0
+  const topCustomerPct = customerCount > 0 && grossRevenue > 0 ? customerEntries[0][1].total / grossRevenue : 0
 
   let hhi = 0
-  for (const c of customers) {
+  for (const [, c] of customerEntries) {
     const share = grossRevenue > 0 ? c.total / grossRevenue : 0
     hhi += share * share
   }
@@ -109,8 +113,8 @@ export function computeRevenueState(
     top_customer_pct: pct1(topCustomerPct, 1),
     concentration_index: Math.round(hhi * 1000) / 1000,
     repeat_revenue_ratio: Math.round(repeatRevenueRatio * 1000) / 1000,
-    revenue_by_customer: customers.slice(0, 10).map((c) => ({
-      entity_id: null,
+    revenue_by_customer: customerEntries.slice(0, 10).map(([key, c]) => ({
+      entity_id: UUID_RE.test(key) ? key : null,
       name: c.name,
       total: r2(c.total),
       count: c.count,
@@ -197,19 +201,19 @@ export function computeSpendState(
   }
 
   const totalSpend = totalOpex + totalCogs
-  const vendors = [...vendorTotals.values()].sort((a, b) => b.total - a.total)
-  const vendorCount = vendors.length
-  const avgPayment = vendorCount > 0 ? totalSpend / vendors.reduce((s, v) => s + v.count, 0) : 0
-  const topVendorPct = vendorCount > 0 && totalSpend > 0 ? vendors[0].total / totalSpend : 0
+  const vendorEntries = [...vendorTotals.entries()].sort((a, b) => b[1].total - a[1].total)
+  const vendorCount = vendorEntries.length
+  const avgPayment = vendorCount > 0 ? totalSpend / vendorEntries.reduce((s, [, v]) => s + v.count, 0) : 0
+  const topVendorPct = vendorCount > 0 && totalSpend > 0 ? vendorEntries[0][1].total / totalSpend : 0
 
   let supplierHHI = 0
-  for (const v of vendors) {
+  for (const [, v] of vendorEntries) {
     const share = totalSpend > 0 ? v.total / totalSpend : 0
     supplierHHI += share * share
   }
 
-  const spendByVendor: SpendBreakdownEntry[] = vendors.slice(0, 10).map((v) => ({
-    entity_id: null,
+  const spendByVendor: SpendBreakdownEntry[] = vendorEntries.slice(0, 10).map(([key, v]) => ({
+    entity_id: UUID_RE.test(key) ? key : null,
     name: v.name,
     total: r2(v.total),
     count: v.count,
@@ -340,7 +344,8 @@ export function computeLiquidityState(
     const acctName = (m.account_id && String(m.account_id).trim()) || null
     const acctKey = acctName ?? "__external_unknown__"
     const acctType = (m.metadata?.account_type as string) ?? ""
-    const displayName = acctName ?? "External / unknown account"
+    const acctSubtype = (m.metadata?.account_subtype as string) ?? null
+    const displayName = normalizeAccountDisplayName(acctName, acctType, acctSubtype)
     let acctEntry = accountFlows.get(acctKey)
     if (!acctEntry) {
       acctEntry = {
@@ -398,45 +403,76 @@ export function computeLiquidityState(
 }
 
 // ─── State Confidence ───────────────────────────────────────────────
+//
+// Confidence must reflect excluded, unresolved, provisional, and low-confidence exposure.
+// Never return 100% when excluded or unresolved exists.
+
+function computeAreaConfidence(
+  total: number,
+  excluded: number,
+  unresolved: number,
+  provisional: number,
+  lowConfAmount: number,
+): number {
+  if (total <= 0) return 100
+  const exclShare = excluded / total
+  const unrevShare = unresolved / total
+  const provShare = provisional / total
+  const lowShare = lowConfAmount / total
+  const penalty = Math.min(1, exclShare * 0.5 + unrevShare * 0.4 + provShare * 0.15 + lowShare * 0.25)
+  let conf = 1 - penalty
+  if ((excluded > 0 || unresolved > 0) && conf >= 0.99) conf = 0.99
+  return Math.round(conf * 1000) / 10
+}
 
 export function computeStateConfidence(
   movements: TaggedMovement[],
 ): { revenue_confidence: number; spend_confidence: number; liquidity_confidence: number } {
-  let revTotal = 0, revUnresolved = 0
-  let spendTotal = 0, spendUnresolved = 0
-  let liqTotal = 0, liqUnresolved = 0
+  let revTotal = 0, revExcluded = 0, revUnresolved = 0, revProvisional = 0, revLowConf = 0
+  let spendTotal = 0, spendExcluded = 0, spendUnresolved = 0, spendProvisional = 0, spendLowConf = 0
+  let liqTotal = 0, liqExcluded = 0, liqUnresolved = 0, liqProvisional = 0, liqLowConf = 0
 
   for (const m of movements) {
     const t = m.tag
+    const conf = (t.classification_confidence ?? m.confidence ?? 0)
+    const isLowConf = conf < 0.7
+    const amt = m.amount
+
     if (t.state_scope.affects_revenue) {
-      revTotal += m.amount
-      if (t.economic_class === "unknown") revUnresolved += m.amount
+      revTotal += amt
+      if (t.state_inclusion_policy === "exclude_and_review") revExcluded += amt
+      if (t.economic_class === "unknown") revUnresolved += amt
+      if (t.state_inclusion_policy === "include_provisional") revProvisional += amt
+      if (isLowConf) revLowConf += amt
     }
     if (t.state_scope.affects_spend) {
-      spendTotal += m.amount
-      if (t.economic_class === "unknown") spendUnresolved += m.amount
+      spendTotal += amt
+      if (t.state_inclusion_policy === "exclude_and_review") spendExcluded += amt
+      if (t.economic_class === "unknown") spendUnresolved += amt
+      if (t.state_inclusion_policy === "include_provisional") spendProvisional += amt
+      if (isLowConf) spendLowConf += amt
     }
     if (t.state_scope.affects_liquidity) {
-      liqTotal += m.amount
-      if (t.economic_class === "unknown" || t.state_inclusion_policy === "exclude_and_review") liqUnresolved += m.amount
+      liqTotal += amt
+      if (t.state_inclusion_policy === "exclude_and_review") { liqExcluded += amt; liqUnresolved += amt }
+      else if (t.economic_class === "unknown") liqUnresolved += amt
+      if (t.state_inclusion_policy === "include_provisional") liqProvisional += amt
+      if (isLowConf) liqLowConf += amt
     }
   }
 
   return {
-    revenue_confidence: revTotal > 0 ? Math.round((1 - revUnresolved / revTotal) * 1000) / 10 : 100,
-    spend_confidence: spendTotal > 0 ? Math.round((1 - spendUnresolved / spendTotal) * 1000) / 10 : 100,
-    liquidity_confidence: liqTotal > 0 ? Math.round((1 - liqUnresolved / liqTotal) * 1000) / 10 : 100,
+    revenue_confidence: computeAreaConfidence(revTotal, revExcluded, revUnresolved, revProvisional, revLowConf),
+    spend_confidence: computeAreaConfidence(spendTotal, spendExcluded, spendUnresolved, spendProvisional, spendLowConf),
+    liquidity_confidence: computeAreaConfidence(liqTotal, liqExcluded, liqUnresolved, liqProvisional, liqLowConf),
   }
 }
 
 // ─── Severity Bands ─────────────────────────────────────────────────
 
 function concentrationBand(topPct: number): SeverityBand {
-  if (topPct > 70) return "critical"
-  if (topPct > 50) return "high"
-  if (topPct > 35) return "elevated"
-  if (topPct > 20) return "moderate"
-  return "low"
+  const band = concentrationLabelFromPct(topPct)
+  return band === "critical" ? "critical" : band === "high" ? "high" : band === "moderate" ? "moderate" : "low"
 }
 
 function ownerBand(ownerPct: number): SeverityBand {
@@ -523,7 +559,7 @@ export function detectTransitions(
   const concDir = bandDirection(concCurrent, concPrev)
   signals.push({
     signal: "revenue_concentration",
-    severity: concCurrent === "critical" || concCurrent === "high" ? "critical" : concCurrent === "elevated" ? "warning" : "info",
+    severity: concCurrent === "critical" || concCurrent === "high" ? "critical" : concCurrent === "moderate" ? "warning" : "info",
     description: concTransitioned && concPrev
       ? `Concentration ${concDir}: ${concPrev} → ${concCurrent} (top customer ${revenue.top_customer_pct}%)`
       : `Concentration is ${concCurrent} (top customer ${revenue.top_customer_pct}%)`,
@@ -700,7 +736,8 @@ export function computeInsightBlock(
 ): string {
   const parts: string[] = []
 
-  const concLabel = revenue.top_customer_pct > 50 ? "highly" : revenue.top_customer_pct > 35 ? "moderately" : "lightly"
+  const concBand = concentrationLabelFromPct(revenue.top_customer_pct)
+  const concLabel = concentrationAdverb(concBand)
   const top2 = revenue.revenue_by_customer.slice(0, 2).reduce((s, c) => s + c.total, 0)
   const top2Pct = revenue.gross_revenue > 0 ? Math.round((top2 / revenue.gross_revenue) * 100) : 0
   parts.push(`Revenue is ${concLabel} concentrated, with top ${revenue.revenue_by_customer.length >= 2 ? "2" : "1"} customer${revenue.revenue_by_customer.length >= 2 ? "s" : ""} contributing ~${top2Pct}%.`)
@@ -715,10 +752,11 @@ export function computeInsightBlock(
     parts.push(`Cash flow is ${100 - opPct}% supported by non-operating flows.`)
   }
   if (transferPct > 15) {
-    parts.push(`Internal transfers support ~${transferPct}% of liquidity.`)
+    parts.push(`Liquidity movement included significant treasury reshuffling (~${transferPct}% internal transfers).`)
   }
 
-  const vendorConc = spend.top_vendor_pct > 30 ? "highly" : spend.top_vendor_pct > 20 ? "moderately" : "lightly"
+  const vendorBand = concentrationLabelFromPct(spend.top_vendor_pct)
+  const vendorConc = concentrationAdverb(vendorBand)
   parts.push(`Vendor spend is ${vendorConc} concentrated, with the top supplier accounting for ${Math.round(spend.top_vendor_pct)}% of costs.`)
 
   if (revenue.repeat_revenue_ratio >= 0.5) {
