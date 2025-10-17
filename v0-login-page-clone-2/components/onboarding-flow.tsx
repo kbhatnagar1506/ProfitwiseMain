@@ -115,6 +115,11 @@ const steps = [
     title: "Cashflow forecast",
     description: "Simulate future cash based on behavioral component models, not simple time-series prediction.",
   },
+  {
+    id: 14,
+    title: "Decisions & actions",
+    description: "Top actions ranked by impact, combined strategies, and execution steps.",
+  },
 ]
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
@@ -798,9 +803,9 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 13: Cashflow forecast
+  // Step 13 & 14: Cashflow forecast + Decisions (share forecast data)
   useEffect(() => {
-    if (currentStep !== 13) return
+    if (currentStep !== 13 && currentStep !== 14) return
     let cancelled = false
 
     setForecastLoading(true)
@@ -4551,6 +4556,157 @@ export function OnboardingFlow({
         )
       }
 
+      case 14: {
+        const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
+              {forecastLoading && (
+                <div className="flex justify-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Loading forecast…
+                </div>
+              )}
+            </div>
+
+            {!forecastLoading && forecastData && (
+              <div className="space-y-6">
+                {/* ─── Decision Layer: Top Actions ─── */}
+                {forecastData.interventions && forecastData.interventions.length > 0 ? (
+                  <div className="bg-white/5 border border-cyan-500/20 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wider mb-1">Top Actions (by risk reduction)</h3>
+                    <p className="text-xs text-gray-500 mb-4">If I do X, what happens to my cash distribution?</p>
+                    <div className="space-y-2">
+                      {forecastData.interventions.slice(0, 6).map((iv) => {
+                        const hasRange = iv.plausible_range_low != null && iv.plausible_range_high != null
+                        const rangeStr = hasRange ? `${money(iv.plausible_range_low!)} – ${money(iv.plausible_range_high!)}` : money(iv.impact_cash_14d)
+                        const confLabel = iv.confidence_band ? ` (${iv.confidence_band} confidence)` : ""
+                        const sim = iv.simulation_impact
+                        return (
+                          <div key={iv.id} className="bg-white/5 rounded-lg px-4 py-3">
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-2">
+                                {iv.rank != null && <span className="text-[10px] text-cyan-400 font-bold">#{iv.rank}</span>}
+                                <div className="text-sm text-white font-medium">{iv.label}</div>
+                              </div>
+                              <div className="text-emerald-400 font-mono font-bold text-sm">
+                                +{hasRange ? rangeStr : money(iv.impact_cash_14d)}
+                                <span className="text-[10px] text-gray-500 font-normal ml-1">@14d{confLabel}</span>
+                              </div>
+                            </div>
+                            {sim && (
+                              <div className="flex flex-wrap gap-3 text-[10px] text-gray-400 mb-2">
+                                <span>Low point: ${Math.round(sim.low_point_before).toLocaleString()} → <span className="text-emerald-400">${Math.round(sim.low_point_after).toLocaleString()}</span></span>
+                                <span>Stress prob: {(sim.stress_prob_before * 100).toFixed(0)}% → <span className="text-emerald-400">{(sim.stress_prob_after * 100).toFixed(0)}%</span></span>
+                                {sim.runway_months_change != null && sim.runway_months_change > 0 && (
+                                  <span>Runway: <span className="text-emerald-400">+{sim.runway_months_change.toFixed(1)} mo</span></span>
+                                )}
+                              </div>
+                            )}
+                            <div className="text-xs text-gray-400 mb-2">{iv.description}</div>
+                            {iv.assumptions && iv.assumptions.length > 0 && (
+                              <div className="text-[10px] text-amber-600/80 mb-2 italic">Assumes: {iv.assumptions.slice(0, 2).join("; ")}</div>
+                            )}
+                            {iv.second_order_risks && (iv.second_order_risks.late_fee || iv.second_order_risks.relationship || iv.second_order_risks.next_period) && (
+                              <div className="mb-2 p-2 bg-amber-500/5 rounded border border-amber-500/20">
+                                <div className="text-[10px] text-amber-400/90 font-semibold mb-1">Second-order effects</div>
+                                <ul className="space-y-0.5 text-[10px] text-gray-400">
+                                  {iv.second_order_risks.late_fee && <li>• {iv.second_order_risks.late_fee}</li>}
+                                  {iv.second_order_risks.relationship && <li>• {iv.second_order_risks.relationship}</li>}
+                                  {iv.second_order_risks.next_period && <li>• {iv.second_order_risks.next_period}</li>}
+                                </ul>
+                              </div>
+                            )}
+                            <div className="flex items-center gap-4 text-[10px] text-gray-500">
+                              <span>30d impact: <span className="text-emerald-400 font-mono">+{money(iv.impact_cash_30d)}</span></span>
+                              {iv.impact_risk_reduction > 0 && (
+                                <span>↓ downside risk: <span className="text-cyan-400 font-mono">~{iv.impact_risk_reduction.toFixed(0)}%</span></span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {forecastData.combined_strategies && forecastData.combined_strategies.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-white/10">
+                        <h4 className="text-xs font-semibold text-cyan-400/90 uppercase mb-2">Best 2-action strategy</h4>
+                        <div className="space-y-2">
+                          {forecastData.combined_strategies.map((s) => (
+                            <div key={s.id} className="bg-cyan-500/10 rounded-lg px-3 py-2 border border-cyan-500/20">
+                              <div className="text-xs text-white font-medium mb-1">{s.summary}</div>
+                              <div className="flex gap-2 text-[10px]">
+                                <span className={`${s.risk_level === "low" ? "text-emerald-400" : s.risk_level === "medium" ? "text-amber-400" : "text-red-400"}`}>
+                                  Risk: {s.risk_level.toUpperCase()}
+                                </span>
+                                <span className="text-gray-500">Low point: ${Math.round(s.low_point).toLocaleString()}</span>
+                                <span className="text-gray-500">Stress prob: {(s.stress_prob * 100).toFixed(0)}%</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-6 text-center">
+                    <p className="text-gray-400 text-sm">No actions available. Complete step 13 (Cashflow forecast) first to see recommended actions.</p>
+                  </div>
+                )}
+
+                {/* ─── Control Layer: Execution ─── */}
+                {forecastData.execution_suggestions && forecastData.execution_suggestions.length > 0 && (
+                  <div className="bg-white/5 border border-violet-500/20 rounded-xl p-5">
+                    <h3 className="text-sm font-semibold text-violet-400 uppercase tracking-wider mb-1">Execution</h3>
+                    <p className="text-xs text-gray-500 mb-4">Turn advice into doing: reminders, drafts, triggers</p>
+                    <div className="space-y-3">
+                      {forecastData.execution_suggestions.map((es, i) => (
+                        <div key={i} className="bg-white/5 rounded-lg px-4 py-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-violet-300">{es.label}</span>
+                            <span className="text-[10px] text-gray-500 uppercase">{es.type}</span>
+                          </div>
+                          <div className="text-[10px] text-gray-500 mb-1">For: {es.action_label}</div>
+                          {es.content && (
+                            <div className="text-xs text-gray-300 mt-2 p-2 bg-white/5 rounded border border-white/10 font-mono">
+                              {es.content}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={forecastLoading}
+                    onClick={() => {
+                      setForecastLoading(true)
+                      setForecastError(null)
+                      fetch("/api/forecast")
+                        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+                        .then((data: CashflowForecast) => { setForecastData(data); setForecastLoading(false) })
+                        .catch((err) => { setForecastError(err instanceof Error ? err.message : "Failed"); setForecastLoading(false) })
+                    }}
+                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50"
+                  >
+                    <div className="text-sm font-medium text-white">Refresh forecast</div>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!forecastLoading && !forecastData && forecastError && (
+              <p className="text-red-300 text-sm text-center">Failed to load forecast: {forecastError}</p>
+            )}
+          </div>
+        )
+      }
+
       default:
         return (
           <div className="text-center py-12">
@@ -4567,7 +4723,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14
   return (
     <div
       className={
