@@ -47,8 +47,49 @@ const TEST_WORD_PATTERN = /\btest\b/i
 // Invoice sludge: raw invoice strings, payment-for-invoice — exclude from primary display
 export const INVOICE_SLUDGE = /^(INV-\d+|Payment\s+for\s+invoice|Invoice\s+#?\d*)$/i
 
+// Raw descriptor patterns: TEAM1234/Payment 30280, /Payment 30280 PERFORMAN, etc.
+const PAYMENT_INVOICE_PATTERN = /\/?\s*Payment\s+(\d+)\s*(.*)$/i
+const TEAM_ID_PATTERN = /^(.+?)\s*TEAM\s*\d+/i
+const INV_NUM_PATTERN = /(?:INV|Invoice)\s*#?\s*(\d+)/i
+
 export function isInvoiceSludge(s: string | null | undefined): boolean {
   return !!(s && typeof s === "string" && INVOICE_SLUDGE.test(s.trim()))
+}
+
+/**
+ * Extract human-readable entity from raw bank/processor descriptors.
+ * "MARLINS TEAM5618/Payment 30280 PERFORMAN" → "Marlins Team (Invoice 30280)"
+ * "Payment 30280 PERFORMAN" → "Invoice 30280"
+ */
+export function extractEntityFromRawDescriptor(raw: string | null | undefined): string | null {
+  if (!raw || typeof raw !== "string") return null
+  const s = raw.trim()
+  if (s.length < 2) return null
+  if (isInvoiceSludge(s)) return null
+
+  // Match "X TEAM1234/Payment 30280 Y" or "X/Payment 30280 Y"
+  const payMatch = s.match(PAYMENT_INVOICE_PATTERN)
+  const invNum = payMatch ? payMatch[1] : s.match(INV_NUM_PATTERN)?.[1]
+
+  let entityPart = s
+  if (payMatch) {
+    entityPart = s.slice(0, payMatch.index).trim()
+  }
+
+  // Strip TEAM1234 suffix: "MARLINS TEAM5618" → "Marlins"
+  const teamMatch = entityPart.match(TEAM_ID_PATTERN)
+  if (teamMatch) {
+    entityPart = teamMatch[1].trim()
+  }
+
+  // Title-case if all caps
+  if (entityPart === entityPart.toUpperCase() && entityPart.length > 2) {
+    entityPart = entityPart.split(/[\s/]+/).map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" ")
+  }
+
+  if (!entityPart) entityPart = "Customer"
+  const invSuffix = invNum ? ` (Invoice ${invNum})` : ""
+  return entityPart.length >= 2 ? `${entityPart}${invSuffix}` : null
 }
 
 // Email: avoid unless no other option

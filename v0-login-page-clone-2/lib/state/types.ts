@@ -47,6 +47,12 @@ export type SpendState = {
 
   recurring_obligations: number
   recurring_obligation_count: number
+  /** Fixed contractual: payroll, taxes, bank fees, processor fees — mandatory obligations */
+  recurring_fixed_contractual?: number
+  /** Soft recurring: vendor payments with recurring pattern — negotiable/delayable */
+  recurring_soft?: number
+  /** Discretionary recurring: subscriptions, software, etc. — can be cut */
+  recurring_discretionary?: number
   non_recurring_spend: number
 
   vendor_count: number
@@ -406,6 +412,8 @@ export type ForecastEvent = {
   confidence: "high" | "medium" | "low"
   source_model: "customer" | "vendor" | "recurring" | "settlement" | "transfer" | "aggregate"
   reasoning: EventReasoning
+  invoice_id?: string
+  bill_id?: string
 }
 
 export type ForecastMonth = {
@@ -500,6 +508,12 @@ export type ForecastConfidenceComponents = {
   unresolved_exposure: number
 }
 
+export type IdentityBreakdown = {
+  high_confidence_canonical_pct: number
+  weak_inferred_pct: number
+  unresolved_pct: number
+}
+
 export type ForecastConfidence = {
   score: number
   label: "high" | "medium" | "low"
@@ -509,6 +523,7 @@ export type ForecastConfidence = {
   reasons: string[]
   by_component: ComponentConfidence[]
   components: ForecastConfidenceComponents
+  identity_breakdown?: IdentityBreakdown
   diagnosis: string
 }
 
@@ -605,9 +620,18 @@ export type AccountBalance = {
   balance: number
 }
 
+export type RiskDecomposition = {
+  liquidity: number
+  concentration: number
+  dependency: number
+  anomaly: number
+  uncertainty: number
+}
+
 export type ForecastContext = {
   risk_score: number
   risk_level: "low" | "medium" | "high"
+  risk_decomposition?: RiskDecomposition
   concentration_risk_score: number
   dependency_risk_score: number
   liquidity_risk_score: number
