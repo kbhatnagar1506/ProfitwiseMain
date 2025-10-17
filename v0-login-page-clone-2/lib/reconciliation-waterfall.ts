@@ -5,6 +5,7 @@
 
 import type { PoolClient } from "pg"
 import { ensureMovementsSchema, query, withTransaction } from "./db"
+import { resolveDisplayNames } from "./display-name-resolve"
 import { insertAttributionWithClient, type CreateAttributionOpts } from "./attribution-persist"
 import type { CashEventRow } from "./cash-events-build"
 
@@ -89,8 +90,13 @@ function matchesEntity(
   event: MutableCashEvent,
   movement: MovementWithAvailableCash,
   entityNormByUuid: Map<string, string>,
+  resolvedBankDisplayName: string | null,
 ): boolean {
   const md = (event.metadata && typeof event.metadata === "object" ? event.metadata : {}) as Record<string, unknown>
+  const graphEntityId = typeof md.graph_entity_id === "string" ? md.graph_entity_id : null
+  if (graphEntityId && movement.counterparty_entity_id && graphEntityId === movement.counterparty_entity_id) {
+    return true
+  }
   const canonical =
     typeof md.canonical_name === "string"
       ? md.canonical_name
@@ -100,11 +106,16 @@ function matchesEntity(
           ? md.vendor_name
           : null
   const cn = normalizeEntityName(canonical)
-  const cp = normalizeEntityName(movement.counterparty)
+  const bankLabel = resolvedBankDisplayName ?? movement.counterparty
+  const cp = normalizeEntityName(bankLabel)
   if (cn && cp && cn === cp) return true
   if (movement.counterparty_entity_id) {
     const entNorm = entityNormByUuid.get(movement.counterparty_entity_id)
     if (entNorm && cn && entNorm === cn) return true
+  }
+  if (graphEntityId) {
+    const eventEntNorm = entityNormByUuid.get(graphEntityId)
+    if (eventEntNorm && cp && eventEntNorm === cp) return true
   }
   return false
 }
@@ -177,6 +188,16 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   }
   const movements = await fetchMovementsWithAvailableCash(userId)
 
+  const displayNameByMovement = await resolveDisplayNames(
+    movements.map((m) => ({
+      movement_id: m.id,
+      user_id: userId,
+      counterparty:
+        (typeof m.metadata?.counterparty === "string" ? m.metadata.counterparty : null) ?? m.counterparty,
+      counterparty_entity_id: m.counterparty_entity_id,
+    })),
+  )
+
   const pendingAttributions: CreateAttributionOpts[] = []
   const touchedEventIds = new Set<string>()
   const stage4Reviews: { movementId: string; remainingCash: number }[] = []
@@ -184,11 +205,12 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
 
   const filterForMovement = (m: MovementWithAvailableCash): MutableCashEvent[] => {
     const target: "ar" | "ap" = m.direction === "inflow" ? "ar" : "ap"
+    const resolvedBank = displayNameByMovement.get(m.id)?.display_name ?? null
     return [...eventById.values()].filter(
       (e) =>
         e.event_type === target &&
         e.outstanding_amount > EPS &&
-        matchesEntity(e, m, entityNormByUuid),
+        matchesEntity(e, m, entityNormByUuid, resolvedBank),
     )
   }
 

@@ -368,6 +368,7 @@ export async function syncCashEventsForUser(
         invoice_id: inv.invoice_id,
         customer_name: inv.customer_name,
         canonical_name: inv.customer_name,
+        ...(inv.entity_id ? { graph_entity_id: inv.entity_id } : {}),
       }),
     ])
   }
@@ -396,6 +397,7 @@ export async function syncCashEventsForUser(
         vendor_name: ob.vendor_name,
         canonical_name: ob.vendor_name,
         vendor_delay_days: vendorDelay ?? null,
+        ...(ob.entity_id ? { graph_entity_id: ob.entity_id } : {}),
       }),
     ])
   }

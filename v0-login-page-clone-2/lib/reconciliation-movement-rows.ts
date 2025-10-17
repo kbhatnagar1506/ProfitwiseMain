@@ -3,6 +3,7 @@
  */
 
 import { query } from "./db"
+import { resolveDisplayNames } from "./display-name-resolve"
 
 export type ReconAllocationRow = {
   gross: number
@@ -27,6 +28,8 @@ type FlatRow = {
   amount: string
   date: string
   counterparty: string | null
+  counterparty_entity_id: string | null
+  movement_metadata: unknown
   component_type: string | null
   entity_id: string | null
   gross_amount: string | null
@@ -38,6 +41,8 @@ type Grouped = {
   direction: string
   base: Omit<ReconMovementRow, "allocations">
   attrs: ReconAllocationRow[]
+  counterparty_entity_id: string | null
+  movement_metadata: Record<string, unknown>
 }
 
 function feeFromMeta(md: unknown): number {
@@ -59,6 +64,7 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
 }> {
   const { rows } = await query<FlatRow>(
     `SELECT m.id AS movement_id, m.direction, m.amount::text AS amount, m.date::text AS date, m.counterparty,
+            m.counterparty_entity_id::text AS counterparty_entity_id, m.metadata AS movement_metadata,
             a.component_type, a.entity_id, a.gross_amount::text, a.net_amount::text, a.metadata
      FROM movements m
      LEFT JOIN movement_attributions a ON a.movement_id = m.id AND a.user_id = m.user_id
@@ -73,6 +79,10 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
     const id = r.movement_id
     let g = byMovement.get(id)
     if (!g) {
+      const md =
+        r.movement_metadata && typeof r.movement_metadata === "object"
+          ? (r.movement_metadata as Record<string, unknown>)
+          : {}
       g = {
         direction: r.direction,
         base: {
@@ -83,6 +93,8 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
           display_name: r.counterparty,
         },
         attrs: [],
+        counterparty_entity_id: r.counterparty_entity_id,
+        movement_metadata: md,
       }
       byMovement.set(id, g)
     }
@@ -100,13 +112,30 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
     }
   }
 
+  const groupedList = [...byMovement.values()]
+  const displayMap = await resolveDisplayNames(
+    groupedList.map((g) => ({
+      movement_id: g.base.movement_id,
+      user_id: userId,
+      counterparty:
+        (typeof g.movement_metadata.counterparty === "string" ? g.movement_metadata.counterparty : null) ??
+        g.base.counterparty,
+      counterparty_entity_id: g.counterparty_entity_id,
+    })),
+  )
+
   const matched_inflows: ReconMovementRow[] = []
   const matched_outflows: ReconMovementRow[] = []
   const unmatched_inflows: ReconMovementRow[] = []
   const unmatched_outflows: ReconMovementRow[] = []
 
-  for (const { direction, base, attrs } of byMovement.values()) {
-    const row: ReconMovementRow = { ...base, allocations: attrs }
+  for (const { direction, base, attrs } of groupedList) {
+    const resolved = displayMap.get(base.movement_id)?.display_name ?? null
+    const row: ReconMovementRow = {
+      ...base,
+      display_name: resolved ?? base.display_name ?? base.counterparty,
+      allocations: attrs,
+    }
     const hasAr = attrs.some((a) => a.entity_type === "ar")
     const hasAp = attrs.some((a) => a.entity_type === "ap")
     if (direction === "inflow") {
