@@ -203,6 +203,27 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   const stage4Reviews: { movementId: string; remainingCash: number }[] = []
   let stage4Queued = 0
 
+  // #region agent log
+  const debugWf = {
+    openEvents: eventById.size,
+    movementsIn: movements.length,
+    hitS1: 0,
+    hitS2: 0,
+    hitS3: 0,
+    zeroCandidates: 0,
+    stage4NoCand: 0,
+    stage4HadCand: 0,
+    samples: [] as Array<{
+      m: string
+      dir: string
+      rem: number
+      nCand: number
+      s1MinGap: number | null
+      outcome: string
+    }>,
+  }
+  // #endregion
+
   const filterForMovement = (m: MovementWithAvailableCash): MutableCashEvent[] => {
     const target: "ar" | "ap" = m.direction === "inflow" ? "ar" : "ap"
     const resolvedBank = displayNameByMovement.get(m.id)?.display_name ?? null
@@ -224,6 +245,20 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       (a, b) => a.expected_date.localeCompare(b.expected_date),
     )
 
+    // #region agent log
+    const nCand = entityEvents.length
+    let s1MinGap: number | null = null
+    if (nCand > 0) {
+      for (const ev of entityEvents) {
+        const g = Math.abs(ev.outstanding_amount - remainingCash)
+        if (s1MinGap === null || g < s1MinGap) s1MinGap = g
+      }
+    } else {
+      debugWf.zeroCandidates++
+    }
+    let wfOutcome = "none"
+    // #endregion
+
     const pushAttr = (opts: CreateAttributionOpts) => {
       pendingAttributions.push(opts)
     }
@@ -231,6 +266,10 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     // --- Stage 1: exact match ---
     const exactMatch = entityEvents.find((e) => Math.abs(e.outstanding_amount - remainingCash) < EPS)
     if (exactMatch) {
+      // #region agent log
+      debugWf.hitS1++
+      wfOutcome = "s1"
+      // #endregion
       pushAttr({
         userId,
         movementId: movement.id,
@@ -264,6 +303,10 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         return impliedFee > 0.01 && impliedFee <= 0.05
       })
       if (feeMatch) {
+        // #region agent log
+        debugWf.hitS2++
+        wfOutcome = "s2"
+        // #endregion
         const gross = feeMatch.outstanding_amount
         const net = remainingCash
         const feeAmt = Math.max(0, gross - net)
@@ -313,6 +356,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     const feeAssumed =
       isInflow && isProcessorLikeMovement(movement) && targetType === "ar" ? 0.03 : 0
     entityEvents = entityEvents.filter((e) => e.outstanding_amount > EPS)
+    let fifoTouched = false
     for (const event of entityEvents) {
       if (remainingCash <= EPS) break
 
@@ -364,6 +408,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         event.outstanding_amount = 0
         event.status = "paid"
         touchedEventIds.add(event.id)
+        fifoTouched = true
       } else {
         const grossApplied = feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash
         const feeAmt = Math.max(0, grossApplied - remainingCash)
@@ -409,16 +454,52 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         event.status = statusFromOutstanding(event.outstanding_amount, event.amount)
         touchedEventIds.add(event.id)
         remainingCash = 0
+        fifoTouched = true
         break
       }
     }
+    // #region agent log
+    if (fifoTouched) {
+      debugWf.hitS3++
+      wfOutcome = wfOutcome === "none" ? "s3" : wfOutcome
+    }
+    // #endregion
 
     // --- Stage 4: large leftover (metadata written in same transaction as attributions) ---
     if (remainingCash > STAGE4_REVIEW_THRESHOLD) {
       stage4Queued += 1
       stage4Reviews.push({ movementId: movement.id, remainingCash })
+      // #region agent log
+      if (nCand === 0) debugWf.stage4NoCand++
+      else debugWf.stage4HadCand++
+      if (debugWf.samples.length < 18) {
+        debugWf.samples.push({
+          m: movement.id.slice(0, 8),
+          dir: movement.direction,
+          rem: Math.round(remainingCash * 100) / 100,
+          nCand,
+          s1MinGap: s1MinGap == null ? null : Math.round(s1MinGap * 100) / 100,
+          outcome: wfOutcome,
+        })
+      }
+      // #endregion
     }
   }
+
+  // #region agent log
+  // Heroku (and other hosts): localhost ingest is unavailable — emit one grep-friendly JSON line for `heroku logs`.
+  console.log(
+    "[reconciliation-waterfall:debug]",
+    JSON.stringify({
+      sessionId: "fee5c4",
+      hypothesisId: "WF_SUMMARY",
+      location: "reconciliation-waterfall.ts:runReconciliationWaterfall",
+      message: "waterfall_stage_counts",
+      data: debugWf,
+      timestamp: Date.now(),
+    }),
+  )
+  // #endregion
 
   if (pendingAttributions.length === 0 && touchedEventIds.size === 0 && stage4Reviews.length === 0) {
     return {
