@@ -301,8 +301,22 @@ export function OnboardingFlow({
     unmatched_inflows?: MappingReconRow[]
     unmatched_outflows?: MappingReconRow[]
   }
+  type WaterfallReviewPreviewRow = {
+    movement_id: string
+    amount: number
+    date: string
+    counterparty: string | null
+    raw_description: string | null
+    direction: "inflow" | "outflow"
+    remaining_cash: number
+  }
+  type WaterfallReviewData = {
+    count: number
+    movements: WaterfallReviewPreviewRow[]
+  }
   const [mappingArAp, setMappingArAp] = useState<{ ar: ARState; ap: APState } | null>(null)
   const [mappingRecon, setMappingRecon] = useState<MappingReconData | null>(null)
+  const [waterfallReview, setWaterfallReview] = useState<WaterfallReviewData | null>(null)
   const [mappingLoading, setMappingLoading] = useState(false)
   const [mappingError, setMappingError] = useState<string | null>(null)
   /** Step 11: manual re-run of /api/ar-ap-step (financial brain + recon) */
@@ -832,14 +846,16 @@ export function OnboardingFlow({
     setMappingError(null)
     setMappingArAp(null)
     setMappingRecon(null)
+    setWaterfallReview(null)
 
     fetch("/api/ar-ap-step")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP step failed"))))
-      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
+      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData; waterfall_review?: WaterfallReviewData }) => {
         if (cancelled) return
         setArApData({ ar: data.ar, ap: data.ap })
         setMappingArAp({ ar: data.ar, ap: data.ap })
         setMappingRecon(data.recon ?? null)
+        setWaterfallReview(data.waterfall_review ?? null)
         setArApLoading(false)
         setMappingLoading(false)
       })
@@ -865,6 +881,7 @@ export function OnboardingFlow({
         ar?: ARState
         ap?: APState
         recon?: MappingReconData
+        waterfall_review?: WaterfallReviewData
         error?: string
         detail?: string
       }
@@ -878,6 +895,7 @@ export function OnboardingFlow({
         setMappingArAp({ ar: data.ar, ap: data.ap })
       }
       setMappingRecon(data.recon ?? null)
+      setWaterfallReview(data.waterfall_review ?? null)
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to reconcile"
       setMappingError(msg)
@@ -3194,6 +3212,34 @@ export function OnboardingFlow({
 
               {(arApError || mappingError) && !arApLoading && !mappingLoading && (
                 <p className="text-red-300 text-sm mb-4">Failed: {arApError || mappingError}</p>
+              )}
+
+              {!arApLoading && !mappingLoading && waterfallReview && waterfallReview.count > 0 && (
+                <div className="max-w-2xl mx-auto rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-left text-sm text-amber-100/95 mb-4">
+                  <p className="font-medium text-amber-200">
+                    {waterfallReview.count} bank transaction{waterfallReview.count !== 1 ? "s" : ""} flagged for review
+                    <span className="font-normal text-amber-100/80"> — large leftover cash after deterministic rules (Stage 4).</span>
+                  </p>
+                  {waterfallReview.movements.length > 0 && (
+                    <ul className="mt-2 space-y-1 text-[11px] text-amber-100/70 font-mono">
+                      {waterfallReview.movements.map((m) => (
+                        <li key={m.movement_id}>
+                          {m.date.slice(0, 10)} · {m.direction === "inflow" ? "+" : "−"}
+                          {m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ·{" "}
+                          {m.counterparty ?? m.raw_description ?? "—"}{" "}
+                          <span className="text-amber-200/80">
+                            (leftover {m.remaining_cash.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {waterfallReview.count > waterfallReview.movements.length && (
+                    <p className="mt-2 text-[11px] text-amber-100/60">
+                      +{waterfallReview.count - waterfallReview.movements.length} more not shown.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
