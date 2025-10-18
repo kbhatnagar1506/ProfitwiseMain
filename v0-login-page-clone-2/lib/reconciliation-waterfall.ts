@@ -8,6 +8,7 @@ import { ensureMovementsSchema, query, withTransaction } from "./db"
 import { resolveDisplayNames } from "./display-name-resolve"
 import { insertAttributionWithClient, type CreateAttributionOpts } from "./attribution-persist"
 import type { CashEventRow } from "./cash-events-build"
+import { namesMatch } from "./ar-payment-match"
 
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
@@ -116,6 +117,11 @@ function matchesEntity(
   if (graphEntityId) {
     const eventEntNorm = entityNormByUuid.get(graphEntityId)
     if (eventEntNorm && cp && eventEntNorm === cp) return true
+  }
+  // Fuzzy: bank/Plaid strings almost never equal invoice vendor/customer strings (runtime WF_SUMMARY showed nCand=0 for all).
+  if (canonical) {
+    if (namesMatch(canonical, bankLabel)) return true
+    if (namesMatch(canonical, movement.raw_description)) return true
   }
   return false
 }

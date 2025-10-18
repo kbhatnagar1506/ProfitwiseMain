@@ -54,7 +54,7 @@ function normalizeName(s: string | null | undefined): string {
 }
 
 /** Check if two names are similar enough (one contains the other, or they share key tokens). */
-function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+export function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   const na = normalizeName(a)
   const nb = normalizeName(b)
   if (!na || !nb) return false
