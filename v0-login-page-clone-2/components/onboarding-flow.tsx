@@ -108,16 +108,21 @@ const steps = [
   },
   {
     id: 12,
+    title: "AR & AP Business State Layer",
+    description: "Expected inflows (AR) from invoices; expected outflows (AP) derived from money movement patterns.",
+  },
+  {
+    id: 13,
     title: "State objects",
     description: "Revenue, Spend, and Liquidity states computed from frozen tags, plus transition detectors.",
   },
   {
-    id: 13,
+    id: 14,
     title: "Cashflow forecast",
     description: "Simulate future cash based on behavioral component models, not simple time-series prediction.",
   },
   {
-    id: 14,
+    id: 15,
     title: "Decisions & actions",
     description: "Top actions ranked by impact, combined strategies, and execution steps.",
   },
@@ -255,6 +260,11 @@ export function OnboardingFlow({
   type RiskState = { liquidity_risk: RiskDimension; concentration_risk: RiskDimension; dependency_risk: RiskDimension; anomaly_risk: RiskDimension; uncertainty_risk: RiskDimension; overall: RiskLevel; overall_score: number }
   type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; risk: RiskState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
+  type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: { invoice_id: string; source: string; customer_name: string; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: string }[]; avg_days_to_due: number | null }
+  type BehavioralAPState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; confidence: string; cadence: string; payment_count: number }[] }
+  const [arApData, setArApData] = useState<{ ar: ARState; behavioral_ap: BehavioralAPState } | null>(null)
+  const [arApLoading, setArApLoading] = useState(false)
+  const [arApError, setArApError] = useState<string | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
 
@@ -782,9 +792,34 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 12: State objects (computed from frozen tags)
+  // Step 12: AR & AP Business State Layer
   useEffect(() => {
     if (currentStep !== 12) return
+    let cancelled = false
+
+    setArApLoading(true)
+    setArApError(null)
+    setArApData(null)
+
+    fetch("/api/ar-ap")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((data: { ar: ARState; behavioral_ap: BehavioralAPState }) => {
+        if (cancelled) return
+        setArApData(data)
+        setArApLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setArApError(err instanceof Error ? err.message : "Failed to load AR/AP")
+        setArApLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [currentStep])
+
+  // Step 13: State objects (computed from frozen tags)
+  useEffect(() => {
+    if (currentStep !== 13) return
     let cancelled = false
 
     setStateLoading(true)
@@ -807,9 +842,9 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 13 & 14: Cashflow forecast + Decisions (share forecast data)
+  // Step 14 & 15: Cashflow forecast + Decisions (share forecast data)
   useEffect(() => {
-    if (currentStep !== 13 && currentStep !== 14) return
+    if (currentStep !== 14 && currentStep !== 15) return
     let cancelled = false
 
     setForecastLoading(true)
@@ -3032,6 +3067,126 @@ export function OnboardingFlow({
 
       case 12: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[11].description}</p>
+
+              {arApLoading && (
+                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Loading AR & AP…
+                </div>
+              )}
+
+              {arApError && !arApLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed: {arApError}</p>
+              )}
+            </div>
+
+            {!arApLoading && arApData && (
+              <div className="space-y-6">
+                {/* AR (Accounts Receivable) — expected inflow */}
+                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-5">
+                  <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-2">
+                    <span className="text-emerald-400">🟢</span> AR (Accounts Receivable)
+                  </h3>
+                  <p className="text-xs text-gray-400 mb-4">Money you are expected to receive, but have not received yet. From invoices (QBO, Xero, Stripe, Gmail).</p>
+                  <div className="grid grid-cols-4 gap-3 mb-4">
+                    <div className="bg-white/5 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold font-mono text-emerald-400">{money(arApData.ar.total_outstanding)}</div>
+                      <div className="text-[10px] text-gray-500">Total outstanding</div>
+                    </div>
+                    <div className="bg-white/5 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold font-mono text-red-400">{money(arApData.ar.total_overdue)}</div>
+                      <div className="text-[10px] text-gray-500">Overdue</div>
+                    </div>
+                    <div className="bg-white/5 rounded-lg px-3 py-2">
+                      <div className="text-sm font-semibold text-white">{arApData.ar.invoice_count}</div>
+                      <div className="text-[10px] text-gray-500">Invoices</div>
+                    </div>
+                    <div className="bg-white/5 rounded-lg px-3 py-2">
+                      <div className="text-sm font-semibold text-white">{arApData.ar.overdue_count}</div>
+                      <div className="text-[10px] text-gray-500">Overdue count</div>
+                    </div>
+                  </div>
+                  {arApData.ar.invoices.length > 0 && (
+                    <div>
+                      <div className="text-[10px] uppercase text-gray-500 mb-2">Outstanding invoices</div>
+                      <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                        {arApData.ar.invoices.slice(0, 15).map((inv, i) => (
+                          <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded bg-white/[0.02]">
+                            <span className="text-gray-300 truncate max-w-[50%]">{inv.customer_name}</span>
+                            <span className="text-[10px] text-gray-500">{inv.source}</span>
+                            <span className={`font-mono ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>{money(inv.amount_due)}</span>
+                            {inv.days_overdue != null && inv.days_overdue > 0 && <span className="text-red-300 text-[10px]">{inv.days_overdue}d overdue</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Behavioral AP (Accounts Payable) — expected outflow from movement patterns */}
+                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-5">
+                  <h3 className="text-sm font-semibold text-red-400 uppercase tracking-wider mb-1 flex items-center gap-2">
+                    <span className="text-red-400">🔴</span> Behavioral AP (Accounts Payable)
+                  </h3>
+                  <p className="text-xs text-gray-400 mb-4">Money you are expected to pay, derived from recurring vendor payment patterns. We do not use QBO bills.</p>
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    <div className="bg-white/5 rounded-lg px-3 py-2">
+                      <div className="text-lg font-bold font-mono text-red-400">{money(arApData.behavioral_ap.total_expected_30d)}</div>
+                      <div className="text-[10px] text-gray-500">Expected next 30d</div>
+                    </div>
+                    <div className="bg-white/5 rounded-lg px-3 py-2">
+                      <div className="text-sm font-semibold text-white">{arApData.behavioral_ap.obligation_count}</div>
+                      <div className="text-[10px] text-gray-500">Obligations</div>
+                    </div>
+                  </div>
+                  {arApData.behavioral_ap.obligations.length > 0 && (
+                    <div>
+                      <div className="text-[10px] uppercase text-gray-500 mb-2">Expected vendor payments (30d)</div>
+                      <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                        {arApData.behavioral_ap.obligations.slice(0, 15).map((ob, i) => (
+                          <div key={i} className="flex items-center justify-between text-xs py-1.5 px-2 rounded bg-white/[0.02]">
+                            <span className="text-gray-300 truncate max-w-[45%]">{ob.vendor_name}</span>
+                            <span className="text-[10px] text-gray-500">{ob.cadence} · {ob.payment_count}x</span>
+                            <span className="text-[10px] text-gray-500">in {ob.days_until_due}d</span>
+                            <span className="font-mono text-red-400">{money(ob.expected_amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={arApLoading}
+                    onClick={() => {
+                      setArApLoading(true)
+                      setArApError(null)
+                      fetch("/api/ar-ap")
+                        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+                        .then((data: { ar: ARState; behavioral_ap: BehavioralAPState }) => { setArApData(data); setArApLoading(false) })
+                        .catch((err) => { setArApError(err instanceof Error ? err.message : "Failed"); setArApLoading(false) })
+                    }}
+                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="text-sm font-medium text-white">{arApLoading ? "Loading…" : "Refresh AR/AP"}</div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
+      case 13: {
+        const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const badge = (severity: "info" | "warning" | "critical") =>
           severity === "critical"
             ? "text-red-300 bg-red-500/10 border-red-500/20"
@@ -3046,8 +3201,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[11].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
 
               {stateLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -3422,7 +3577,7 @@ export function OnboardingFlow({
         )
       }
 
-      case 13: {
+      case 14: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const behaviorLabel = (b: ComponentBehavior) => b === "recurring" ? "Recurring" : b === "episodic" ? "Episodic" : b === "seasonal" ? "Seasonal" : "One-time"
@@ -3434,8 +3589,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
 
               {forecastLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -4626,13 +4781,13 @@ export function OnboardingFlow({
         )
       }
 
-      case 14: {
+      case 15: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[14].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[14].description}</p>
               {forecastLoading && (
                 <div className="flex justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -4793,7 +4948,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14 || currentStep === 15
   return (
     <div
       className={
