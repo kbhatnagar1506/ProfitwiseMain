@@ -19,7 +19,8 @@ import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movemen
 import type { OutstandingInvoice } from "@/lib/state/types"
 import { buildBehavioralModels, setIdentityContext } from "@/lib/state/forecast-engine"
 import type { IdentityContext } from "@/lib/state/forecast-engine"
-import { computeARState, computeAPState } from "@/lib/state/ar-ap"
+import { computeARState, computeAPState, computeAPStateFromBills, mergeAPObligations } from "@/lib/state/ar-ap"
+import { fetchOutstandingBills } from "@/lib/bills-fetch"
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -360,11 +361,24 @@ export async function GET() {
     const { setIdentityContext } = await import("@/lib/state/forecast-engine")
     setIdentityContext(identityCtx)
 
-    // Behavioral models with empty bills — we derive AP from payment patterns only
-    const models = buildBehavioralModels(tagged, outstandingInvoices, [])
+    // ── Outstanding AP Bills (QBO, Xero, Gmail) ──
+    const outstandingBills = await fetchOutstandingBills(user.id)
+
+    // Behavioral models with bills for richer vendor context
+    const models = buildBehavioralModels(tagged, outstandingInvoices, outstandingBills)
 
     const ar = computeARState(outstandingInvoices)
-    const ap = computeAPState(models.vendors, 30)
+
+    // Bill-based + inferred AP, merged with deduplication
+    const billObligations = computeAPStateFromBills(outstandingBills)
+    const patternObligations = computeAPState(models.vendors, 30).obligations
+    const mergedObligations = mergeAPObligations(billObligations, patternObligations)
+    const total_expected_30d = mergedObligations.reduce((s, o) => s + o.expected_amount, 0)
+    const ap = {
+      total_expected_30d: Math.round(total_expected_30d * 100) / 100,
+      obligation_count: mergedObligations.length,
+      obligations: mergedObligations,
+    }
 
     return NextResponse.json({ ar, ap })
   } catch (e) {
