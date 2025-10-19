@@ -1,12 +1,14 @@
-// ─── AR/AP Business State Layer ───────────────────────────────────────
+// ─── AR/AP Business State Layer (Step 12 only) ────────────────────────
+//
+// CONSTRAINT: Only touches data from steps 1–11. No state/forecast.
 //
 // AR (Accounts Receivable): Expected inflow, not yet received.
-//   - From invoices (QBO, Xero, Stripe, Gmail inferred)
+//   - From invoices (QBO, Xero, Stripe, Gmail) — step 3, 4
 //   - Exists before payment; decreases when payment happens
 //
-// Behavioral AP (Accounts Payable): Expected outflow, not yet paid.
-//   - Derived from money movement patterns (recurring vendor payments)
-//   - We do NOT use QBO/Xero bills — purely behavioral inference
+// AP (Accounts Payable): Expected outflow, not yet paid.
+//   - Derived from tagged movements (step 10–11) — vendor payment patterns
+//   - We do NOT use QBO/Xero bills — purely pattern-based inference
 
 import type { OutstandingInvoice, VendorModel } from "./types"
 
@@ -19,28 +21,27 @@ export type ARState = {
   avg_days_to_due: number | null
 }
 
-export type BehavioralAPObligation = {
+export type APObligation = {
   obligation_id: string
   vendor_name: string
   entity_id: string | null
   expected_amount: number
   next_expected_date: string
   days_until_due: number
-  source: "behavioral"
   confidence: "high" | "medium" | "low"
   cadence: string
   payment_count: number
 }
 
-export type BehavioralAPState = {
+export type APState = {
   total_expected_30d: number
   obligation_count: number
-  obligations: BehavioralAPObligation[]
+  obligations: APObligation[]
 }
 
 export type ARAPState = {
   ar: ARState
-  behavioral_ap: BehavioralAPState
+  ap: APState
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -72,13 +73,13 @@ export function computeARState(invoices: OutstandingInvoice[]): ARState {
   }
 }
 
-export function computeBehavioralAPState(
+export function computeAPState(
   vendors: VendorModel[],
   horizonDays: number = 30,
-): BehavioralAPState {
+): APState {
   const today = new Date().toISOString().slice(0, 10)
   const horizon = addDays(today, horizonDays)
-  const obligations: BehavioralAPObligation[] = []
+  const obligations: APObligation[] = []
 
   for (const v of vendors) {
     // Skip vendors without recurrence signal
@@ -99,13 +100,12 @@ export function computeBehavioralAPState(
     if (daysUntilDue < 1) continue
 
     obligations.push({
-      obligation_id: `behavioral_${v.entity_id}_${nextDate}`,
+      obligation_id: `ap_${v.entity_id}_${nextDate}`,
       vendor_name: v.name,
       entity_id: v.entity_id,
       expected_amount: r2(v.avg_amount),
       next_expected_date: nextDate,
       days_until_due: daysUntilDue,
-      source: "behavioral",
       confidence: v.confidence,
       cadence: v.cadence,
       payment_count: v.payment_count,
