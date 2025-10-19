@@ -1,0 +1,143 @@
+/**
+ * AR (invoice) to Payment matching.
+ * Tolerance-based: entity + time ±14d + amount ±5% (covers 3% fee + variance).
+ * Payment amount = net (what hit bank); invoice amount_due = gross.
+ */
+
+import type { OutstandingInvoice } from "./state/types"
+
+const AMOUNT_TOLERANCE_PCT = 0.05
+const AR_DATE_TOLERANCE_DAYS = 14
+
+export type InflowPayment = {
+  movement_id: string
+  amount: number
+  date: string
+  entity_id: string | null
+  raw_description: string | null
+  counterparty_name?: string | null
+}
+
+export type ARMatchSuggestion = {
+  invoice_id: string
+  customer_name: string
+  amount_due: number
+  confidence: "high" | "medium" | "low"
+  reasoning: string
+  gross_applied: number
+  fee_amount: number
+  net_applied: number
+}
+
+export type AllocationCandidate = {
+  movement_id: string
+  invoice_id: string
+  gross_applied: number
+  fee_amount: number
+  net_applied: number
+  confidence: number
+  match_method: "exact" | "tolerance"
+}
+
+function daysBetween(a: string, b: string): number {
+  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000)
+}
+
+/** Deterministic AR match: entity + time ±14d + amount ±5%. */
+function deterministicARMatch(
+  payment: InflowPayment,
+  invoice: OutstandingInvoice,
+): { confidence: number; gross: number; fee: number; net: number; method: "exact" | "tolerance" } | null {
+  if (payment.amount <= 0 || invoice.amount_due <= 0) return null
+
+  // Entity match: movement entity_id matches invoice entity_id
+  const entityMatch = payment.entity_id && invoice.entity_id
+    ? payment.entity_id === invoice.entity_id
+    : false
+  if (!entityMatch && (payment.entity_id || invoice.entity_id)) return null
+  // If both lack entity_id, allow match by amount+date (weaker)
+
+  // Time window: payment date within ±14 days of due date
+  const dueDate = invoice.due_date ?? payment.date
+  const diffDays = Math.abs(daysBetween(payment.date, dueDate))
+  if (diffDays > AR_DATE_TOLERANCE_DAYS) return null
+
+  // Amount: payment (net) within ±5% of invoice (gross). Fee inferred: gross - net.
+  // So net can be 95%-100% of gross (or up to 105% if overpayment)
+  const ratio = payment.amount / invoice.amount_due
+  if (ratio < 1 - AMOUNT_TOLERANCE_PCT || ratio > 1 + AMOUNT_TOLERANCE_PCT) return null
+
+  const gross = invoice.amount_due
+  const net = payment.amount
+  const fee = Math.max(0, gross - net)
+  const amountMatch = 1 - Math.abs(ratio - 1)
+  const dateMatch = 1 - diffDays / AR_DATE_TOLERANCE_DAYS
+  const entityScore = entityMatch ? 1 : 0.5
+  const confidence = (amountMatch + dateMatch + entityScore) / 3
+  const method = ratio >= 0.99 && ratio <= 1.01 && diffDays <= 3 ? "exact" : "tolerance"
+
+  return { confidence, gross, fee, net, method }
+}
+
+const DETERMINISTIC_THRESHOLD = 0.7
+
+/**
+ * Find best AR match for an inflow payment.
+ * Returns allocation candidate or null.
+ */
+export function matchARPayment(
+  payment: InflowPayment,
+  invoices: OutstandingInvoice[],
+): AllocationCandidate | null {
+  let best: { cand: AllocationCandidate; conf: number } | null = null
+  for (const inv of invoices) {
+    const m = deterministicARMatch(payment, inv)
+    if (m && m.confidence >= DETERMINISTIC_THRESHOLD) {
+      if (!best || m.confidence > best.conf) {
+        best = {
+          conf: m.confidence,
+          cand: {
+            movement_id: payment.movement_id,
+            invoice_id: inv.invoice_id,
+            gross_applied: m.gross,
+            fee_amount: m.fee,
+            net_applied: m.net,
+            confidence: m.confidence,
+            match_method: m.method,
+          },
+        }
+      }
+    }
+  }
+  return best?.cand ?? null
+}
+
+/**
+ * Suggest AR matches for an inflow (when deterministic confidence < threshold).
+ * Returns suggestions for LLM or manual confirmation.
+ */
+export function suggestARMatches(
+  payment: InflowPayment,
+  invoices: OutstandingInvoice[],
+): ARMatchSuggestion[] {
+  const withConf: { s: ARMatchSuggestion; c: number }[] = []
+  for (const inv of invoices) {
+    const m = deterministicARMatch(payment, inv)
+    if (m && m.confidence >= 0.3) {
+      withConf.push({
+        c: m.confidence,
+        s: {
+          invoice_id: inv.invoice_id,
+          customer_name: inv.customer_name,
+          amount_due: inv.amount_due,
+          confidence: m.confidence >= 0.8 ? "high" : m.confidence >= 0.5 ? "medium" : "low",
+          reasoning: `Amount within ±${AMOUNT_TOLERANCE_PCT * 100}%, date within ±${AR_DATE_TOLERANCE_DAYS} days`,
+          gross_applied: m.gross,
+          fee_amount: m.fee,
+          net_applied: m.net,
+        },
+      })
+    }
+  }
+  return withConf.sort((a, b) => b.c - a.c).slice(0, 5).map((x) => x.s)
+}

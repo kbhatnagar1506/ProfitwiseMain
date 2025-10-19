@@ -741,6 +741,25 @@ export async function ensureMovementsSchema(): Promise<void> {
     )
   `)
   await p.query("CREATE INDEX IF NOT EXISTS idx_state_snapshots_user ON state_snapshots (user_id, snapshot_at DESC)")
+  // AR/AP to Payments mapping: allocation records
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS movement_allocations (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      movement_id       UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
+      entity_type       TEXT NOT NULL CHECK (entity_type IN ('ar', 'ap')),
+      entity_id         TEXT NOT NULL,
+      gross_applied     NUMERIC NOT NULL,
+      fee_amount        NUMERIC NOT NULL DEFAULT 0,
+      net_applied       NUMERIC NOT NULL,
+      confidence        REAL NOT NULL DEFAULT 0.5,
+      match_method      TEXT NOT NULL DEFAULT 'tolerance' CHECK (match_method IN ('exact', 'tolerance', 'llm_suggested', 'manual')),
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_movement ON movement_allocations (movement_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_entity ON movement_allocations (entity_type, entity_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_user ON movement_allocations (user_id)")
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }
