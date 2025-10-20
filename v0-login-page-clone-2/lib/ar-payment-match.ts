@@ -50,12 +50,12 @@ function deterministicARMatch(
 ): { confidence: number; gross: number; fee: number; net: number; method: "exact" | "tolerance" } | null {
   if (payment.amount <= 0 || invoice.amount_due <= 0) return null
 
-  // Entity match: movement entity_id matches invoice entity_id
+  // Entity match: when both have entity_id, they must match. When payment lacks entity_id, allow match by amount+date (weaker).
   const entityMatch = payment.entity_id && invoice.entity_id
     ? payment.entity_id === invoice.entity_id
     : false
-  if (!entityMatch && (payment.entity_id || invoice.entity_id)) return null
-  // If both lack entity_id, allow match by amount+date (weaker)
+  if (payment.entity_id && invoice.entity_id && !entityMatch) return null
+  // If payment has entity_id but invoice doesn't (or vice versa), allow match by amount+date
 
   // Time window: payment date within ±14 days of due date
   const dueDate = invoice.due_date ?? payment.date

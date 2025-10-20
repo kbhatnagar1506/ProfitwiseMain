@@ -11,7 +11,7 @@ const API_KEY = process.env.FORECAST_LLM_API_KEY ?? process.env.OPENAI_API_KEY
 const MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
 const AMOUNT_TOLERANCE_PCT = 0.05
-const DATE_TOLERANCE_DAYS = 3
+const DATE_TOLERANCE_DAYS = 7
 
 export type PaymentInput = {
   movement_id: string
@@ -53,6 +53,51 @@ function deterministicMatch(
 }
 
 const DETERMINISTIC_THRESHOLD = 0.8
+
+export type APAllocationCandidate = {
+  movement_id: string
+  obligation_id: string
+  gross_applied: number
+  fee_amount: number
+  net_applied: number
+  confidence: number
+  match_method: "exact" | "tolerance"
+}
+
+/**
+ * Find best AP match for an outflow payment. Returns allocation candidate or null.
+ * Used for auto-matching in reconciliation.
+ */
+export function matchAPPayment(
+  payment: PaymentInput,
+  obligations: APObligation[],
+): APAllocationCandidate | null {
+  let best: { cand: APAllocationCandidate; conf: number } | null = null
+  for (const ob of obligations) {
+    const m = deterministicMatch(payment, ob)
+    if (!m || m.confidence < DETERMINISTIC_THRESHOLD) continue
+    if (payment.entity_id && ob.entity_id && payment.entity_id !== ob.entity_id) continue
+    if (!best || m.confidence > best.conf) {
+      const gross = ob.amount_due
+      const net = payment.amount
+      const fee = Math.max(0, gross - net)
+      const method = Math.abs(payment.amount / ob.amount_due - 1) < 0.01 ? "exact" : "tolerance"
+      best = {
+        conf: m.confidence,
+        cand: {
+          movement_id: payment.movement_id,
+          obligation_id: ob.obligation_id,
+          gross_applied: gross,
+          fee_amount: fee,
+          net_applied: net,
+          confidence: m.confidence,
+          match_method: method,
+        },
+      }
+    }
+  }
+  return best?.cand ?? null
+}
 
 async function callLLM(messages: { role: string; content: string }[], maxTokens = 600): Promise<string | null> {
   if (!API_KEY) return null
