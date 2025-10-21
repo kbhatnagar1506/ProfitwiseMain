@@ -1,13 +1,13 @@
 /**
  * AR (invoice) to Payment matching.
- * Tolerance-based: entity + time ±14d + amount ±5% (covers 3% fee + variance).
+ * Tolerance-based: entity + time ±45d + amount ±5% (covers 3% fee + variance).
  * Payment amount = net (what hit bank); invoice amount_due = gross.
  */
 
 import type { OutstandingInvoice } from "./state/types"
 
 const AMOUNT_TOLERANCE_PCT = 0.05
-const AR_DATE_TOLERANCE_DAYS = 14
+const AR_DATE_TOLERANCE_DAYS = 45
 
 export type InflowPayment = {
   movement_id: string
@@ -62,7 +62,7 @@ function namesMatch(a: string | null | undefined, b: string | null | undefined):
   return overlap >= Math.min(tokensA.size, tokensB.size, 2)
 }
 
-/** Deterministic AR match: entity + time ±14d + amount ±5%. When entity_id is missing on one side, use counterparty name. */
+/** Deterministic AR match: entity + time ±45d + amount ±5%. When entity_id is missing on one side, use counterparty name. */
 function deterministicARMatch(
   payment: InflowPayment,
   invoice: OutstandingInvoice,
@@ -82,7 +82,7 @@ function deterministicARMatch(
     invoice.customer_name,
   )
 
-  // Time window: payment date within ±14 days of due date
+  // Time window: payment date within ±45 days of due date
   const dueDate = invoice.due_date ?? payment.date
   const diffDays = Math.abs(daysBetween(payment.date, dueDate))
   if (diffDays > AR_DATE_TOLERANCE_DAYS) return null
