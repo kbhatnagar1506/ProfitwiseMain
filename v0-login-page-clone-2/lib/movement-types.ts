@@ -331,4 +331,7 @@ export type MovementTag = {
 
   /** Expense subtype: inventory_supplier | saas_software | government_filing | marketplace_misc | admin_professional */
   expense_subtype?: string | null
+
+  /** Resolved display name: entity canonical > merchant_tags normalized > counterparty */
+  display_name?: string | null
 }

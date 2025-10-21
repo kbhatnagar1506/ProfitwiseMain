@@ -10,6 +10,7 @@
 
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { log } from "@/lib/logger"
+import { resolveDisplayNames } from "@/lib/display-name-resolve"
 import { normalizeForMatch, isInvoiceSludge } from "@/lib/alias-normalize"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type {
@@ -443,6 +444,15 @@ export async function tagMovements(userId: string): Promise<{
 
   const ctx = await loadTagContext(userId, movements)
 
+  // Resolve display names: entity > merchant_tags > counterparty (for AI context + display)
+  const displayInputs = movements.map((m) => ({
+    movement_id: m.id,
+    user_id: userId,
+    counterparty: (m.metadata?.counterparty as string) ?? null,
+    counterparty_entity_id: m.entity_id,
+  }))
+  const displayNames = await resolveDisplayNames(displayInputs)
+
   // Phase 3.1 + Phase 8: First-seen on canonical entity ID (avoid overcount: Jack/JACK/jack test -> one first-seen)
   const byDateAsc = [...movements].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime())
   const earliestDate = byDateAsc.length > 0 ? byDateAsc[0].occurred_at : ""
@@ -567,6 +577,8 @@ export async function tagMovements(userId: string): Promise<{
 
       settlement_subtype,
       expense_subtype,
+
+      display_name: displayNames.get(m.id)?.display_name ?? null,
     })
 
     if (policy === "include") stats.policy_include++
@@ -637,6 +649,7 @@ async function persistTags(userId: string, tags: MovementTag[]): Promise<void> {
           is_first_seen_counterparty: t.is_first_seen_counterparty,
           settlement_subtype: t.settlement_subtype ?? null,
           expense_subtype: t.expense_subtype ?? null,
+          display_name: t.display_name ?? null,
         }),
       )
       idx += 5

@@ -184,6 +184,79 @@ export async function addFinalContextToSupermemory(content: string, customId: st
   log("supermemory.final_context.added", { customId: id }, "supermemory")
 }
 
+/** Entity hint for Supermemory: canonical name + aliases. */
+export type EntityHintForSupermemory = { canonical_name: string; aliases: string[] }
+
+/** Store all entities in Supermemory for semantic search. Unlimited context — LLM retrieves relevant entities per batch. */
+export async function addEntitiesToSupermemory(
+  userId: string,
+  entityHints: EntityHintForSupermemory[]
+): Promise<void> {
+  if (entityHints.length === 0) return
+  if (!process.env.SUPERMEMORY_API_KEY) return
+  try {
+    const client = getClient()
+    const containerTag = getUserFinanceTag(userId)
+    const content = entityHints
+      .map(
+        (e) =>
+          `Entity: "${e.canonical_name}". Aliases: ${e.aliases.slice(0, 20).join(", ") || "—"}. Use this canonical name when normalizing.`
+      )
+      .join("\n\n")
+    await client.add({
+      content,
+      containerTag,
+      customId: `entities_${userId}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+      metadata: { source: "profitwise_entities" },
+    })
+    log("supermemory.entities.added", { userId, count: entityHints.length }, "supermemory")
+  } catch (err) {
+    log("supermemory.entities.failed", { userId, error: err instanceof Error ? err.message : String(err) }, "supermemory")
+  }
+}
+
+/** Search Supermemory for entity context relevant to merchant strings. Returns relevant snippets for LLM. */
+export async function searchEntityContextFromSupermemory(
+  userId: string,
+  merchantStrings: string
+): Promise<string> {
+  if (!process.env.SUPERMEMORY_API_KEY || !merchantStrings.trim()) return ""
+  try {
+    const client = getClient()
+    const containerTag = getUserFinanceTag(userId)
+    const searchRes = await client.search.execute({
+      q: merchantStrings.slice(0, 500),
+      containerTags: [containerTag],
+      limit: 25,
+      includeSummary: true,
+      chunkThreshold: 0.3,
+    })
+    const results = (searchRes as { results?: Array<{ chunks?: Array<{ content?: string }>; summary?: string | null; content?: string | null }> })?.results ?? []
+    const snippets: string[] = []
+    const seen = new Set<string>()
+    for (const r of results) {
+      if (r.summary && !seen.has(r.summary)) {
+        seen.add(r.summary)
+        snippets.push(r.summary)
+      }
+      if (r.content && !seen.has(r.content)) {
+        seen.add(r.content)
+        snippets.push(r.content)
+      }
+      for (const ch of r.chunks ?? []) {
+        if (ch.content && !seen.has(ch.content)) {
+          seen.add(ch.content)
+          snippets.push(ch.content)
+        }
+      }
+    }
+    if (snippets.length === 0) return ""
+    return `Existing entities (use as hints — prefer these canonical names when a raw description matches):\n${snippets.join("\n\n")}\n\nWhen a raw description clearly refers to an existing entity, set normalized to that entity's canonical name.`
+  } catch {
+    return ""
+  }
+}
+
 /** Save a merchant override to Supermemory so future normalizations use it. One document per merchant (customId = merchant_${userId}_${accountId}_${rawName}). */
 export async function addMerchantOverrideToSupermemory(
   userId: string,

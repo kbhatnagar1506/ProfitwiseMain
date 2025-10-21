@@ -12,6 +12,7 @@
 import { query, ensureIdentitySchema } from "./db"
 import { log } from "./logger"
 import { normalizeForMatch } from "./alias-normalize"
+import { addEntitiesToSupermemory, searchEntityContextFromSupermemory } from "./supermemory"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
@@ -468,19 +469,56 @@ async function extractGmailSignalGroups(userId: string): Promise<SignalGroup[]> 
 
 // ─── LLM normalization for Plaid merchant strings ──────────────────
 
-async function llmNormalizeMerchants(merchants: string[], ctx: SelfContext): Promise<LlmNormResult[]> {
+/** Existing entity as hint: canonical name + known aliases (merchant strings, names, etc.) */
+type EntityHint = { canonical_name: string; aliases: string[] }
+
+async function llmNormalizeMerchants(
+  merchants: string[],
+  ctx: SelfContext,
+  entityHints: EntityHint[] = [],
+  userId?: string
+): Promise<LlmNormResult[]> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey || merchants.length === 0) return []
 
   const results: LlmNormResult[] = []
   const batchSize = 50
+  const HINTS_PER_BATCH = 150
   const selfNamesStr = ctx.selfNames.length > 0 ? ctx.selfNames.join(", ") : "(not provided)"
 
   for (let i = 0; i < merchants.length; i += batchSize) {
     const batch = merchants.slice(i, i + batchSize)
     const numbered = batch.map((m, idx) => `${idx + 1}. ${m}`).join("\n")
 
-    const systemPrompt = `You are a financial identity normalization engine for a business called "${selfNamesStr}".
+    // Supermemory: unlimited context — search retrieves relevant entities for this batch
+    let entityContext = ""
+    if (userId) {
+      const supermemoryContext = await searchEntityContextFromSupermemory(userId, batch.join(" "))
+      if (supermemoryContext) entityContext = `\n\n${supermemoryContext}`
+    }
+
+    // Fallback: DB entity hints (batch + rotate) when Supermemory empty or unavailable
+    if (!entityContext && entityHints.length > 0) {
+      const batchLower = batch.map((m) => m.toLowerCase())
+      const relevant = entityHints.filter((e) =>
+        e.aliases.some((a) => {
+          const al = a.trim().toLowerCase()
+          if (al.length < 3) return false
+          return batchLower.some((m) => m.includes(al) || al.includes(m))
+        })
+      )
+      const hintBatchIndex = Math.floor(i / batchSize) % Math.max(1, Math.ceil(entityHints.length / HINTS_PER_BATCH))
+      const hintStart = hintBatchIndex * HINTS_PER_BATCH
+      const rotating = entityHints.slice(hintStart, hintStart + HINTS_PER_BATCH)
+      const seen = new Set(relevant.map((e) => e.canonical_name))
+      const extra = rotating.filter((e) => !seen.has(e.canonical_name))
+      const hintsToUse = [...relevant, ...extra].slice(0, HINTS_PER_BATCH)
+      entityContext = `\n\nExisting entities (use as hints — prefer these canonical names when a raw description matches):\n${hintsToUse
+        .map((e) => `- "${e.canonical_name}" (aliases: ${e.aliases.slice(0, 8).join(", ") || "—"})`)
+        .join("\n")}\n\nWhen a raw description clearly refers to an existing entity, set normalized to that entity's canonical name.`
+    }
+
+    const systemPrompt = `You are a financial identity normalization engine for a business called "${selfNamesStr}".${entityContext}
 
 Given raw bank transaction descriptions, return a JSON array. Each element:
 - "raw": the original string (exactly as given)
@@ -507,6 +545,7 @@ Normalization rules:
 - For Zelle transfers like "ZELLE MICHELLE SCHOR", extract just the person name: "Michelle Schor"
 - Merge variations of the same entity that appear with different descriptions into a single canonical name
 - If the same real entity appears with different descriptions, normalize to the same canonical name
+- When existing entities are provided above, prefer their canonical name when the raw string clearly refers to that entity (e.g. alias match, partial match)
 - Names with parenthetical context like "Brenna Sleggs (Pittsburgh Penguins)" should normalize to "Brenna Sleggs" with the context preserved in domain_guess or dropped
 - Test/sample entries like "test", "Sample Customer", "Test Company", "Demo Vendor" should have skip=true
 
@@ -725,9 +764,38 @@ export async function seedIdentityGraph(userId: string): Promise<{
     extractGmailSignalGroups(userId),
   ])
 
-  // Phase 2: LLM-normalize Plaid merchant strings
+  // Load existing entities + aliases as hints for LLM (already normalized — helps consistency)
+  const existingEntities = (
+    await query<{ id: string; canonical_name: string; entity_type: string }>(
+      "SELECT id, canonical_name, entity_type FROM entities WHERE user_id = $1",
+      [userId]
+    )
+  ).rows
+  const entityHints: EntityHint[] = []
+  if (existingEntities.length > 0) {
+    const ids = existingEntities.map((e) => e.id)
+    const { rows: aliasRows } = await query<{ entity_id: string; alias: string }>(
+      "SELECT entity_id, alias FROM entity_aliases WHERE entity_id = ANY($1)",
+      [ids]
+    )
+    const aliasesByEntity = new Map<string, string[]>()
+    for (const r of aliasRows) {
+      const list = aliasesByEntity.get(r.entity_id) ?? []
+      list.push(r.alias)
+      aliasesByEntity.set(r.entity_id, list)
+    }
+    for (const e of existingEntities) {
+      const aliases = aliasesByEntity.get(e.id) ?? []
+      entityHints.push({ canonical_name: e.canonical_name, aliases: [e.canonical_name, ...aliases] })
+    }
+  }
+
+  // Sync entities to Supermemory for unlimited context (Supermemory + LLM)
+  await addEntitiesToSupermemory(userId, entityHints)
+
+  // Phase 2: LLM-normalize Plaid merchant strings (Supermemory + entity hints for consistency)
   const plaidMerchants = await extractPlaidMerchantStrings(userId)
-  const normalized = await llmNormalizeMerchants(plaidMerchants, ctx)
+  const normalized = await llmNormalizeMerchants(plaidMerchants, ctx, entityHints, userId)
 
   const plaidGroups: SignalGroup[] = []
   for (const n of normalized) {

@@ -2455,7 +2455,7 @@ export function OnboardingFlow({
                           <td className={`px-3 py-1.5 text-xs text-right font-mono whitespace-nowrap ${m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
                             ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
-                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]" title={(m.metadata?.counterparty as string) ?? undefined}>{displayLabelForCounterparty(m.metadata?.counterparty as string, (m as { tag?: { entity_canonical_name?: string } }).tag?.entity_canonical_name)}</td>
+                          <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]" title={(m.metadata?.counterparty as string) ?? undefined}>{displayLabelForCounterparty(m.metadata?.counterparty as string, (m as { tag?: { display_name?: string; entity_canonical_name?: string } }).tag?.display_name ?? (m as { tag?: { entity_canonical_name?: string } }).tag?.entity_canonical_name)}</td>
                           {(classKey === "unknown" || classKey === "merchant_deposit" || classKey === "settlement_in" || classKey === "settlement_adjustment") && (
                             <td className="px-3 py-1.5 text-xs">
                               <span className="text-[10px] text-gray-500 bg-white/5 rounded px-1.5 py-0.5">

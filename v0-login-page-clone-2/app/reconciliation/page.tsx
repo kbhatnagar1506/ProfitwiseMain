@@ -13,6 +13,7 @@ type PaymentRow = {
   amount: number
   date: string
   counterparty: string | null
+  display_name?: string | null
   allocations: Allocation[]
   confidence?: number
 }
@@ -63,25 +64,25 @@ export default function ReconciliationPage() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Failed"))))
       .then((data) => {
         const matched: PaymentRow[] = [
-          ...(data.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; allocations: Allocation[] }) => ({
+          ...(data.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({
             ...m,
             direction: "inflow",
             confidence: 0.9,
           })),
-          ...(data.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; allocations: Allocation[] }) => ({
+          ...(data.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({
             ...m,
             direction: "outflow",
             confidence: 0.9,
           })),
         ]
         const unmatched: PaymentRow[] = [
-          ...(data.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null }) => ({
+          ...(data.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({
             ...m,
             direction: "inflow",
             allocations: [],
             confidence: 0,
           })),
-          ...(data.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null }) => ({
+          ...(data.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({
             ...m,
             direction: "outflow",
             allocations: [],
@@ -167,7 +168,7 @@ export default function ReconciliationPage() {
                       <span className={r.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
                         {r.direction === "inflow" ? "+" : "-"}{money(r.amount)}
                       </span>
-                      <span className="text-gray-500 text-xs block">{r.date} · {r.counterparty ?? "—"}</span>
+                      <span className="text-gray-500 text-xs block">{r.date} · {r.display_name ?? r.counterparty ?? "—"}</span>
                     </TableCell>
                     <TableCell className="py-2.5 font-mono text-sm">{totalGross > 0 ? money(totalGross) : money(r.amount)}</TableCell>
                     <TableCell className="py-2.5 font-mono text-amber-400 text-sm">
