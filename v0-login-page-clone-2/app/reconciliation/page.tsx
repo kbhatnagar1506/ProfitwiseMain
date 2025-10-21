@@ -108,7 +108,10 @@ export default function ReconciliationPage() {
     <div className="min-h-screen bg-black font-sans text-white p-6">
       <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-semibold">Reconciliation</h1>
+          <div>
+            <h1 className="text-2xl font-semibold">Payment → Invoice Reconciliation</h1>
+            <p className="text-sm text-gray-500 mt-0.5">All time · Bank payments matched to AR/AP</p>
+          </div>
           <Link href="/dashboard" className="text-sm text-gray-400 hover:text-white">Dashboard</Link>
         </div>
 
@@ -134,9 +137,10 @@ export default function ReconciliationPage() {
         </div>
 
         <div className="border border-white/10 rounded-xl overflow-hidden">
+          <div className="max-h-[70vh] overflow-y-auto">
           <Table>
             <TableHeader>
-              <TableRow className="border-white/10 hover:bg-transparent bg-white/5">
+              <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
                 <TableHead className="text-[10px] uppercase text-gray-500">Payment</TableHead>
                 <TableHead className="text-[10px] uppercase text-gray-500 w-24">Gross</TableHead>
                 <TableHead className="text-[10px] uppercase text-gray-500 w-20">Fee</TableHead>
@@ -194,6 +198,10 @@ export default function ReconciliationPage() {
               })}
             </TableBody>
           </Table>
+          </div>
+          <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500">
+            {filtered.length} payment{filtered.length !== 1 ? "s" : ""} shown
+          </div>
         </div>
 
         {explainText && (

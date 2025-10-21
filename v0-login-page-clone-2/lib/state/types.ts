@@ -197,7 +197,7 @@ export type OutstandingInvoice = {
   due_date: string | null
   days_until_due: number | null
   days_overdue: number | null
-  status: "open" | "overdue" | "partially_paid"
+  status: "open" | "overdue" | "partially_paid" | "paid"
 }
 
 export type InvoiceSignal = {

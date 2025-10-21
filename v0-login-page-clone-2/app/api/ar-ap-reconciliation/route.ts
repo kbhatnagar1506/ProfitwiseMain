@@ -11,7 +11,7 @@ import { getAllocationsForUser, createAllocation } from "@/lib/allocation-persis
 import { isFeeAnomaly } from "@/lib/fee-anomaly"
 import { matchARPayment, type InflowPayment } from "@/lib/ar-payment-match"
 import { matchAPPayment, type PaymentInput } from "@/lib/ap-llm-match"
-import { fetchOutstandingInvoices } from "@/lib/invoices-fetch"
+import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
 import { computeAPStateFromBills } from "@/lib/state/ar-ap"
 
@@ -46,7 +46,7 @@ export async function GET() {
     const unmatchedOutflowRows = movementRows.filter((m) => m.direction === "outflow" && !allocatedMovementIds.has(m.id))
 
     if (unmatchedInflowRows.length > 0) {
-      const invoices = await fetchOutstandingInvoices(user.id)
+      const invoices = await fetchInvoicesForReconciliation(user.id)
       for (const m of unmatchedInflowRows) {
         const amount = parseFloat(String(m.amount))
         const payment: InflowPayment = {
@@ -152,10 +152,10 @@ export async function GET() {
     const totalUnmatchedOutflows = unmatchedOutflows.reduce((s, m) => s + m.amount, 0)
 
     return NextResponse.json({
-      matched_inflows: matchedInflows.slice(0, 50),
-      matched_outflows: matchedOutflows.slice(0, 50),
-      unmatched_inflows: unmatchedInflows.slice(0, 50),
-      unmatched_outflows: unmatchedOutflows.slice(0, 50),
+      matched_inflows: matchedInflows,
+      matched_outflows: matchedOutflows,
+      unmatched_inflows: unmatchedInflows,
+      unmatched_outflows: unmatchedOutflows,
       total_matched_inflows: Math.round(totalMatchedInflows * 100) / 100,
       total_matched_outflows: Math.round(totalMatchedOutflows * 100) / 100,
       total_unmatched_inflows: Math.round(totalUnmatchedInflows * 100) / 100,
