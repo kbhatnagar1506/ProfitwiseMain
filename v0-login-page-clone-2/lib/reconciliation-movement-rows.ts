@@ -3,7 +3,7 @@
  */
 
 import { query } from "./db"
-import { resolveDisplayNames } from "./display-name-resolve"
+import { resolveReconciliationBankLabelsForMatch } from "./display-name-resolve"
 
 export type ReconAllocationRow = {
   gross: number
@@ -113,7 +113,7 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
   }
 
   const groupedList = [...byMovement.values()]
-  const displayMap = await resolveDisplayNames(
+  const displayMap = await resolveReconciliationBankLabelsForMatch(
     groupedList.map((g) => ({
       movement_id: g.base.movement_id,
       user_id: userId,
