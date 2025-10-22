@@ -346,6 +346,7 @@ const GMAIL_SYNCED_MESSAGES_SQL = `
 let xeroSchemaEnsured = false
 let qboSchemaEnsured = false
 let stripeSchemaEnsured = false
+let shopifySchemaEnsured = false
 
 export async function ensureXeroSchema(): Promise<void> {
   if (xeroSchemaEnsured) return
@@ -396,6 +397,219 @@ export async function ensureStripeSchema(): Promise<void> {
   )
   stripeSchemaEnsured = true
   log("stripe.schema.ensured", undefined, "stripe")
+}
+
+const SHOPIFY_CONNECTIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_connections (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    client_id                   TEXT NOT NULL,
+    temp_client_secret_encrypted TEXT,
+    access_token_encrypted      TEXT,
+    granted_scopes              TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    missing_scopes              TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    status                      TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'connected', 'scope_missing', 'reauth_required', 'uninstalled', 'error', 'disconnected')),
+    retention_mode              TEXT NOT NULL DEFAULT 'default'
+      CHECK (retention_mode IN ('default', '12m', '24m', 'indefinite')),
+    installed_at                TIMESTAMPTZ,
+    disconnected_at             TIMESTAMPTZ,
+    last_error                  TEXT,
+    created_at                  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at                  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop_domain)
+  )
+`
+
+const SHOPIFY_OAUTH_STATES_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_oauth_states (
+    state                       TEXT PRIMARY KEY,
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    client_id                   TEXT NOT NULL,
+    client_secret_encrypted     TEXT NOT NULL,
+    redirect_uri                TEXT NOT NULL,
+    expires_at                  TIMESTAMPTZ NOT NULL,
+    used_at                     TIMESTAMPTZ,
+    created_at                  TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
+const SHOPIFY_DATA_CONSENTS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_data_consents (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    consent_type                TEXT NOT NULL,
+    policy_version              TEXT NOT NULL,
+    retention_mode              TEXT NOT NULL DEFAULT 'default'
+      CHECK (retention_mode IN ('default', '12m', '24m', 'indefinite')),
+    accepted_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at                  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop_domain, consent_type, policy_version)
+  )
+`
+
+const SHOPIFY_WEBHOOK_EVENTS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_webhook_events (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    topic                       TEXT NOT NULL,
+    event_id                    TEXT NOT NULL,
+    payload                     JSONB NOT NULL,
+    headers                     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status                      TEXT NOT NULL DEFAULT 'received'
+      CHECK (status IN ('received', 'processing', 'processed', 'failed')),
+    error_message               TEXT,
+    received_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at                TIMESTAMPTZ,
+    UNIQUE(shop_domain, topic, event_id)
+  )
+`
+
+const SHOPIFY_WEBHOOK_SUBSCRIPTIONS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_webhook_subscriptions (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    topic                       TEXT NOT NULL,
+    endpoint                    TEXT NOT NULL,
+    active                      BOOLEAN NOT NULL DEFAULT true,
+    created_at                  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at                  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop_domain, topic, endpoint)
+  )
+`
+
+const SHOPIFY_SYNC_CURSORS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_sync_cursors (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    resource                    TEXT NOT NULL,
+    cursor                      TEXT,
+    updated_at                  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop_domain, resource)
+  )
+`
+
+const SHOPIFY_SYNC_JOBS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_sync_jobs (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    job_type                    TEXT NOT NULL CHECK (job_type IN ('webhook', 'backfill')),
+    payload                     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status                      TEXT NOT NULL DEFAULT 'queued'
+      CHECK (status IN ('queued', 'processing', 'done', 'failed', 'dead_letter')),
+    attempts                    INT NOT NULL DEFAULT 0,
+    max_attempts                INT NOT NULL DEFAULT 5,
+    next_run_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_error                  TEXT,
+    created_at                  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at                  TIMESTAMPTZ DEFAULT NOW()
+  )
+`
+
+const SHOPIFY_ORDERS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_orders (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    order_id                    TEXT NOT NULL,
+    order_name                  TEXT,
+    currency                    TEXT,
+    financial_status            TEXT,
+    fulfillment_status          TEXT,
+    total_price                 NUMERIC,
+    subtotal_price              NUMERIC,
+    total_tax                   NUMERIC,
+    total_discounts             NUMERIC,
+    total_refunds               NUMERIC,
+    processed_at                TIMESTAMPTZ,
+    raw                         JSONB NOT NULL,
+    updated_at                  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop_domain, order_id)
+  )
+`
+
+const SHOPIFY_REFUNDS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_refunds (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    refund_id                   TEXT NOT NULL,
+    order_id                    TEXT,
+    amount                      NUMERIC,
+    currency                    TEXT,
+    processed_at                TIMESTAMPTZ,
+    raw                         JSONB NOT NULL,
+    updated_at                  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop_domain, refund_id)
+  )
+`
+
+const SHOPIFY_PAYOUTS_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_payouts (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    payout_id                   TEXT NOT NULL,
+    status                      TEXT,
+    amount                      NUMERIC,
+    currency                    TEXT,
+    issued_at                   TIMESTAMPTZ,
+    raw                         JSONB NOT NULL,
+    updated_at                  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop_domain, payout_id)
+  )
+`
+
+const SHOPIFY_BALANCE_TX_SQL = `
+  CREATE TABLE IF NOT EXISTS shopify_balance_transactions (
+    id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shop_domain                 TEXT NOT NULL,
+    transaction_id              TEXT NOT NULL,
+    payout_id                   TEXT,
+    order_id                    TEXT,
+    type                        TEXT,
+    amount                      NUMERIC,
+    fee                         NUMERIC,
+    net                         NUMERIC,
+    currency                    TEXT,
+    occurred_at                 TIMESTAMPTZ,
+    raw                         JSONB NOT NULL,
+    updated_at                  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, shop_domain, transaction_id)
+  )
+`
+
+export async function ensureShopifySchema(): Promise<void> {
+  if (shopifySchemaEnsured) return
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(SHOPIFY_CONNECTIONS_SQL)
+  await p.query(SHOPIFY_OAUTH_STATES_SQL)
+  await p.query(SHOPIFY_DATA_CONSENTS_SQL)
+  await p.query(SHOPIFY_WEBHOOK_EVENTS_SQL)
+  await p.query(SHOPIFY_WEBHOOK_SUBSCRIPTIONS_SQL)
+  await p.query(SHOPIFY_SYNC_CURSORS_SQL)
+  await p.query(SHOPIFY_SYNC_JOBS_SQL)
+  await p.query(SHOPIFY_ORDERS_SQL)
+  await p.query(SHOPIFY_REFUNDS_SQL)
+  await p.query(SHOPIFY_PAYOUTS_SQL)
+  await p.query(SHOPIFY_BALANCE_TX_SQL)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_connections_user_status ON shopify_connections (user_id, status, updated_at DESC)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_webhook_events_status ON shopify_webhook_events (status, received_at DESC)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_jobs_status_run ON shopify_sync_jobs (status, next_run_at ASC)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_orders_processed ON shopify_orders (user_id, shop_domain, processed_at DESC)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_balance_tx_payout ON shopify_balance_transactions (user_id, shop_domain, payout_id)")
+  shopifySchemaEnsured = true
+  log("shopify.schema.ensured", undefined, "db")
 }
 
 let gmailSchemaEnsured = false

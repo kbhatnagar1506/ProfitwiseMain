@@ -73,6 +73,21 @@ export default function OAuthConnectorPage() {
   const [gmailConnected, setGmailConnected] = useState<boolean | null>(null)
   const [gmailConnectedEmail, setGmailConnectedEmail] = useState<string | null>(null)
   const [gmailCanConnect, setGmailCanConnect] = useState(false)
+  const [shopDomain, setShopDomain] = useState("")
+  const [shopClientId, setShopClientId] = useState("")
+  const [shopClientSecret, setShopClientSecret] = useState("")
+  const [shopRetentionMode, setShopRetentionMode] = useState<"default" | "12m" | "24m" | "indefinite">("default")
+  const [shopConsent, setShopConsent] = useState(false)
+  const [shopConnectLoading, setShopConnectLoading] = useState(false)
+  const [shopConnectError, setShopConnectError] = useState<string | null>(null)
+  const [shopConnections, setShopConnections] = useState<Array<{
+    shop_domain: string
+    status: string
+    missing_scopes: string[]
+    granted_scopes: string[]
+    retention_mode: string
+    updated_at: string
+  }>>([])
 
   // Format integration name for display
   const integrationName = integration?.replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
@@ -138,7 +153,171 @@ export default function OAuthConnectorPage() {
         .catch(() => setGmailConnected(false))
       return
     }
+    if (integration === "shopify") {
+      fetch("/api/shopify/status")
+        .then((res) => (res.ok ? res.json() : { connections: [] }))
+        .then((data: { connections?: Array<{
+          shop_domain: string
+          status: string
+          missing_scopes: string[]
+          granted_scopes: string[]
+          retention_mode: string
+          updated_at: string
+        }> }) => setShopConnections(data.connections ?? []))
+        .catch(() => setShopConnections([]))
+      return
+    }
   }, [integration, integrationName])
+
+  if (integration === "shopify") {
+    const normalizedShop = shopDomain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")
+    const hasShop = normalizedShop.endsWith(".myshopify.com")
+    const adminBase = hasShop ? `https://${normalizedShop}/admin` : "https://admin.shopify.com"
+    const appSetupLink = hasShop ? `${adminBase}/apps` : "https://help.shopify.com/en/manual/apps/app-types/custom-apps"
+    const appConfigLink = hasShop ? `${adminBase}/settings/apps/development` : "https://help.shopify.com/en/manual/apps/app-types/custom-apps"
+    const scopesGuideLink = "https://shopify.dev/docs/api/usage/access-scopes"
+    const webhookGuideLink = "https://shopify.dev/docs/apps/build/webhooks/subscribe/https"
+
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center px-6 py-10">
+        <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+          <h1 className="text-2xl font-semibold text-white mb-2">Connect Shopify (BYO App)</h1>
+          <p className="text-sm text-gray-400 mb-6">
+            Enter your Shopify app credentials. We use OAuth, enforce required scopes, and securely store only the access token after connection.
+          </p>
+          <div className="mb-6 rounded-lg border border-white/10 bg-white/[0.02] p-4">
+            <p className="text-sm text-white font-medium mb-2">Procedure to connect</p>
+            <ol className="list-decimal ml-5 space-y-1 text-sm text-gray-300">
+              <li>Create or open your custom Shopify app in your store admin.</li>
+              <li>Set app URL/callback URL to this portal callback: <span className="font-mono text-xs text-emerald-300">{`${typeof window !== "undefined" ? window.location.origin : ""}/api/shopify/oauth/callback`}</span></li>
+              <li>Enable required read scopes for orders, customers, payouts, disputes, and all-orders history.</li>
+              <li>Copy the app Client ID and Client Secret into the form below.</li>
+              <li>Click <span className="text-white">Connect Shopify</span> and approve OAuth on Shopify.</li>
+            </ol>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <a href={appSetupLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
+                Open Shopify Apps
+              </a>
+              <a href={appConfigLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
+                Open App Config
+              </a>
+              <a href={scopesGuideLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
+                Scope Docs
+              </a>
+              <a href={webhookGuideLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
+                Webhook Docs
+              </a>
+            </div>
+          </div>
+          <div className="space-y-4">
+            <Input
+              placeholder="your-store.myshopify.com"
+              value={shopDomain}
+              onChange={(e) => setShopDomain(e.target.value)}
+              className="bg-white/5 border-white/20 text-white"
+            />
+            <Input
+              placeholder="Client ID"
+              value={shopClientId}
+              onChange={(e) => setShopClientId(e.target.value)}
+              className="bg-white/5 border-white/20 text-white"
+            />
+            <Input
+              type="password"
+              placeholder="Client Secret"
+              value={shopClientSecret}
+              onChange={(e) => setShopClientSecret(e.target.value)}
+              className="bg-white/5 border-white/20 text-white"
+            />
+            <select
+              value={shopRetentionMode}
+              onChange={(e) => setShopRetentionMode(e.target.value as "default" | "12m" | "24m" | "indefinite")}
+              className="w-full rounded-md bg-white/5 border border-white/20 text-white h-10 px-3"
+            >
+              <option value="default">Retention: default</option>
+              <option value="12m">Retention: 12 months</option>
+              <option value="24m">Retention: 24 months</option>
+              <option value="indefinite">Retention: indefinite</option>
+            </select>
+            <label className="flex items-start gap-2 text-sm text-gray-300">
+              <input type="checkbox" checked={shopConsent} onChange={(e) => setShopConsent(e.target.checked)} className="mt-1" />
+              <span>I consent to storing Shopify data per selected retention mode.</span>
+            </label>
+            {shopConnectError && <p className="text-sm text-red-400">{shopConnectError}</p>}
+            <Button
+              disabled={shopConnectLoading}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white"
+              onClick={async () => {
+                setShopConnectError(null)
+                setShopConnectLoading(true)
+                try {
+                  const res = await fetch("/api/shopify/oauth/authorize", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      shop_domain: shopDomain,
+                      client_id: shopClientId,
+                      client_secret: shopClientSecret,
+                      retention_mode: shopRetentionMode,
+                      accept_storage_consent: shopConsent,
+                    }),
+                  })
+                  const data = await res.json().catch(() => ({}))
+                  if (!res.ok) {
+                    setShopConnectError(data.error || "Failed to start Shopify OAuth")
+                    return
+                  }
+                  if (!data.authorize_url) {
+                    setShopConnectError("Missing authorize URL")
+                    return
+                  }
+                  window.location.href = data.authorize_url
+                } catch {
+                  setShopConnectError("Failed to start Shopify OAuth")
+                } finally {
+                  setShopConnectLoading(false)
+                }
+              }}
+            >
+              {shopConnectLoading ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Redirecting...
+                </span>
+              ) : (
+                "Connect Shopify"
+              )}
+            </Button>
+            {shopConnections.length > 0 && (
+              <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-sm">
+                <p className="text-gray-300 mb-2">Connected stores</p>
+                <div className="space-y-2">
+                  {shopConnections.map((conn) => (
+                    <div key={conn.shop_domain} className="rounded-md border border-white/10 p-2">
+                      <p className="text-white font-medium">{conn.shop_domain}</p>
+                      <p className="text-xs text-gray-400">Status: {conn.status} | Retention: {conn.retention_mode}</p>
+                      {conn.missing_scopes?.length ? (
+                        <p className="text-xs text-amber-400">Missing scopes: {conn.missing_scopes.join(", ")}</p>
+                      ) : (
+                        <p className="text-xs text-emerald-400">All required scopes granted</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => router.back()}
+              className="w-full text-sm text-gray-500 hover:text-white hover:underline"
+            >
+              Back to onboarding
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (integration === "gmail") {
     const GMAIL_FILTERS_URL = "https://mail.google.com/mail/u/0/#settings/filters"
