@@ -635,6 +635,9 @@ export async function ensureShopifySchema(): Promise<void> {
   await p.query("UPDATE shopify_sync_jobs SET status = 'queued' WHERE status IS NULL")
 
   await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_connections_user_status ON shopify_connections (user_id, status, updated_at DESC)")
+  await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_shopify_connections_user_shop_unique ON shopify_connections (user_id, shop_domain)")
+  await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_shopify_consents_unique ON shopify_data_consents (user_id, shop_domain, consent_type, policy_version)")
+  await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_shopify_subscriptions_unique ON shopify_webhook_subscriptions (user_id, shop_domain, topic, endpoint)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_webhook_events_status ON shopify_webhook_events (status, received_at DESC)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_jobs_status_run ON shopify_sync_jobs (status, next_run_at ASC)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_shopify_orders_processed ON shopify_orders (user_id, shop_domain, processed_at DESC)")
