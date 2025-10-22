@@ -605,6 +605,12 @@ export async function ensureShopifySchema(): Promise<void> {
   await p.query(SHOPIFY_BALANCE_TX_SQL)
   // Backward-compatible column adds in case earlier deploy created partial tables.
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS status TEXT")
+  await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE")
+  await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS shop_domain TEXT")
+  await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS client_id TEXT")
+  await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS temp_client_secret_encrypted TEXT")
+  await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS access_token_encrypted TEXT")
+  await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()")
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()")
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS granted_scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]")
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS missing_scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]")
