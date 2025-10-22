@@ -18,12 +18,14 @@ import { Sparkles, Loader2 } from "lucide-react"
 import { displayLabelForCounterparty } from "@/lib/alias-normalize"
 import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
+import shopifyLogo from "../Screenshot 2026-03-24 at 09.43.29.png"
 import { useRouter } from "next/navigation"
+import type { StaticImageData } from "next/image"
 interface Integration {
   name: string
   description: string
   category: string
-  logo: string
+  logo: string | StaticImageData
 }
 
 const integrations: Integration[] = [
@@ -49,7 +51,7 @@ const integrations: Integration[] = [
     name: "Shopify",
     description: "Orders, payouts, and reconciliation data",
     category: "Commerce",
-    logo: "/placeholder.svg",
+    logo: shopifyLogo,
   },
   {
     name: "FreshBooks",
