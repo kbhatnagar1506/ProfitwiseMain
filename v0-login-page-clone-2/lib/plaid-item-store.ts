@@ -90,6 +90,20 @@ export async function updatePlaidItemCursor(itemId: string, cursor: string): Pro
   }
 }
 
+/** Owner user id for a Plaid item (e.g. classify after sync). */
+export async function getPlaidItemUserId(itemId: string): Promise<string | null> {
+  try {
+    await ensurePlaidSchema()
+    const { rows } = await query<{ user_id: string }>(
+      `SELECT user_id::text AS user_id FROM plaid_items WHERE item_id = $1`,
+      [itemId],
+    )
+    return rows[0]?.user_id ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function listPlaidItemIds(userId?: string): Promise<string[]> {
   if (isProduction() && userId) {
     try {
