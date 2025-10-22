@@ -606,6 +606,7 @@ export async function ensureShopifySchema(): Promise<void> {
   // Backward-compatible column adds in case earlier deploy created partial tables.
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS status TEXT")
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE")
+  await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS shop TEXT")
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS shop_domain TEXT")
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS client_id TEXT")
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS temp_client_secret_encrypted TEXT")
@@ -620,6 +621,8 @@ export async function ensureShopifySchema(): Promise<void> {
   await p.query("ALTER TABLE shopify_connections ADD COLUMN IF NOT EXISTS last_error TEXT")
   await p.query("UPDATE shopify_connections SET status = 'pending' WHERE status IS NULL")
   await p.query("UPDATE shopify_connections SET retention_mode = 'default' WHERE retention_mode IS NULL OR retention_mode = ''")
+  await p.query("UPDATE shopify_connections SET shop = shop_domain WHERE (shop IS NULL OR shop = '') AND shop_domain IS NOT NULL")
+  await p.query("UPDATE shopify_connections SET shop_domain = shop WHERE (shop_domain IS NULL OR shop_domain = '') AND shop IS NOT NULL")
 
   await p.query("ALTER TABLE shopify_webhook_events ADD COLUMN IF NOT EXISTS status TEXT")
   await p.query("ALTER TABLE shopify_webhook_events ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ DEFAULT NOW()")

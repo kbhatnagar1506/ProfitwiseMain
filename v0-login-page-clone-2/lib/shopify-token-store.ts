@@ -139,10 +139,11 @@ export async function upsertConnectionFromOAuth(input: {
   await ensureShopifySchema()
   await query(
     `INSERT INTO shopify_connections (
-       user_id, shop_domain, client_id, access_token_encrypted,
+       user_id, shop, shop_domain, client_id, access_token_encrypted,
        granted_scopes, missing_scopes, status, retention_mode, installed_at, updated_at, temp_client_secret_encrypted, disconnected_at, last_error
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), NULL, NULL, NULL)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), NULL, NULL, NULL)
      ON CONFLICT (user_id, shop_domain) DO UPDATE SET
+       shop = EXCLUDED.shop,
        client_id = EXCLUDED.client_id,
        access_token_encrypted = EXCLUDED.access_token_encrypted,
        granted_scopes = EXCLUDED.granted_scopes,
@@ -156,6 +157,7 @@ export async function upsertConnectionFromOAuth(input: {
        last_error = NULL`,
     [
       input.userId,
+      input.shopDomain,
       input.shopDomain,
       input.clientId,
       encryptSecret(input.accessToken),
