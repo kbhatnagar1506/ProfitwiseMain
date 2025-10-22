@@ -214,10 +214,20 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   const debugWf = {
     openEvents: eventById.size,
     movementsIn: movements.length,
+    evAr: 0,
+    evAp: 0,
+    mInflow: 0,
+    mOutflow: 0,
     hitS1: 0,
     hitS2: 0,
     hitS3: 0,
     zeroCandidates: 0,
+    /** H-A: no cash_event of target type (ar/ap) with outstanding — direction pool empty */
+    zeroByNoType: 0,
+    /** H-B: events of that type exist but matchesEntity filtered all */
+    zeroByEntityOnly: 0,
+    /** H-D: among zeroByEntityOnly, bank label used for match was empty */
+    zeroCandNullBankLabel: 0,
     stage4NoCand: 0,
     stage4HadCand: 0,
     samples: [] as Array<{
@@ -228,6 +238,14 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       s1MinGap: number | null
       outcome: string
     }>,
+  }
+  for (const e of eventById.values()) {
+    if (e.event_type === "ar") debugWf.evAr++
+    else if (e.event_type === "ap") debugWf.evAp++
+  }
+  for (const m of movements) {
+    if (m.direction === "inflow") debugWf.mInflow++
+    else debugWf.mOutflow++
   }
   // #endregion
 
@@ -246,6 +264,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     let remainingCash = movement.available_cash
     if (remainingCash <= EPS) continue
 
+    const resolvedBankForMove =
+      displayNameByMovement.get(movement.id)?.display_name ?? null
     const isInflow = movement.direction === "inflow"
     const targetType = isInflow ? "ar" : "ap"
     let entityEvents = filterForMovement(movement).sort(
@@ -262,6 +282,17 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       }
     } else {
       debugWf.zeroCandidates++
+      const byTypeOnly = [...eventById.values()].filter(
+        (e) => e.event_type === targetType && e.outstanding_amount > EPS,
+      )
+      if (byTypeOnly.length === 0) {
+        debugWf.zeroByNoType++
+      } else {
+        debugWf.zeroByEntityOnly++
+        if (!resolvedBankForMove || String(resolvedBankForMove).trim() === "") {
+          debugWf.zeroCandNullBankLabel++
+        }
+      }
     }
     let wfOutcome = "none"
     // #endregion
@@ -495,17 +526,36 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
 
   // #region agent log
   // Heroku (and other hosts): localhost ingest is unavailable — emit one grep-friendly JSON line for `heroku logs`.
-  console.log(
-    "[reconciliation-waterfall:debug]",
-    JSON.stringify({
+  const wfPayload = {
+    sessionId: "fee5c4",
+    hypothesisId: "WF_SUMMARY",
+    location: "reconciliation-waterfall.ts:runReconciliationWaterfall",
+    message: "waterfall_stage_counts",
+    data: debugWf,
+    timestamp: Date.now(),
+  }
+  console.log("[reconciliation-waterfall:debug]", JSON.stringify(wfPayload))
+  fetch("http://127.0.0.1:7242/ingest/b0bb6c9e-7e1d-4674-9db3-ac21c3d4fa72", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "fee5c4" },
+    body: JSON.stringify({
       sessionId: "fee5c4",
-      hypothesisId: "WF_SUMMARY",
+      hypothesisId: "WF_BREAKDOWN",
       location: "reconciliation-waterfall.ts:runReconciliationWaterfall",
-      message: "waterfall_stage_counts",
-      data: debugWf,
+      message: "zeroCand_split",
+      data: {
+        evAr: debugWf.evAr,
+        evAp: debugWf.evAp,
+        mInflow: debugWf.mInflow,
+        mOutflow: debugWf.mOutflow,
+        zeroByNoType: debugWf.zeroByNoType,
+        zeroByEntityOnly: debugWf.zeroByEntityOnly,
+        zeroCandNullBankLabel: debugWf.zeroCandNullBankLabel,
+        openEvents: debugWf.openEvents,
+      },
       timestamp: Date.now(),
     }),
-  )
+  }).catch(() => {})
   // #endregion
 
   if (pendingAttributions.length === 0 && touchedEventIds.size === 0 && stage4Reviews.length === 0) {
