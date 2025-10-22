@@ -3426,12 +3426,14 @@ export function OnboardingFlow({
 
       case 13: {
         const money2 = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        const allRows = [
-          ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "inflow" as const })),
-          ...(mappingRecon.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "outflow" as const })),
-          ...(mappingRecon.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow" as const, allocations: [] })),
-          ...(mappingRecon.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow" as const, allocations: [] })),
-        ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        const allRows = mappingRecon
+          ? [
+              ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "inflow" as const })),
+              ...(mappingRecon.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "outflow" as const })),
+              ...(mappingRecon.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow" as const, allocations: [] })),
+              ...(mappingRecon.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow" as const, allocations: [] })),
+            ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+          : []
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
@@ -3444,9 +3446,11 @@ export function OnboardingFlow({
                   Loading tagged transactions…
                 </div>
               )}
-
+              {mappingError && !mappingLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed: {mappingError}</p>
+              )}
             </div>
-            {!mappingLoading && (
+            {!mappingLoading && mappingRecon && (
               <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
                 <h3 className="text-base font-semibold text-white px-4 py-3 border-b border-white/10">All tagged bank transactions</h3>
                 <div className="max-h-[420px] overflow-y-auto">
