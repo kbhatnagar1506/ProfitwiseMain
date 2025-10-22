@@ -222,6 +222,7 @@ export function OnboardingFlow({
   const [identitySeeding, setIdentitySeeding] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityExpandedEntity, setIdentityExpandedEntity] = useState<string | null>(null)
+  const [afterIdentityLoading, setAfterIdentityLoading] = useState(false)
   type MovementRow = {
     id: string; user_id: string; occurred_at: string; direction: string; amount: number;
     currency: string; raw_description: string | null; source_record_ids: string[];
@@ -992,6 +993,14 @@ export function OnboardingFlow({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ form: companyForm }),
       }).finally(() => handleNext())
+    } else if (currentStep === 9) {
+      setAfterIdentityLoading(true)
+      setIdentityError(null)
+      fetch("/api/onboarding/after-identity", { method: "POST" })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+        .then(() => handleNext())
+        .catch(() => setIdentityError("Failed to sync and tag. Please try again."))
+        .finally(() => setAfterIdentityLoading(false))
     } else if (currentStep >= steps.length) {
       router.push("/dashboard")
     } else {
@@ -2048,22 +2057,26 @@ export function OnboardingFlow({
             <h2 className="text-3xl font-bold tracking-tight text-white mb-2">{steps[8].title}</h2>
             <p className="text-gray-400 text-lg mb-5">{steps[8].description}</p>
 
-            {(identitySeeding || identityLoading) && (
+            {(identitySeeding || identityLoading || afterIdentityLoading) && (
               <div className="flex items-center gap-2 py-6 text-gray-400">
                 <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                {identitySeeding ? "Resolving identities across all sources (this may take a moment)\u2026" : "Loading identity graph\u2026"}
+                {afterIdentityLoading
+                  ? "Syncing to Supermemory & tagging merchants\u2026"
+                  : identitySeeding
+                    ? "Resolving identities across all sources (this may take a moment)\u2026"
+                    : "Loading identity graph\u2026"}
               </div>
             )}
 
-            {identityError && !identityLoading && !identitySeeding && (
+            {identityError && !identityLoading && !identitySeeding && !afterIdentityLoading && (
               <p className="text-red-300 text-sm mb-4">Failed to load identity graph: {identityError}</p>
             )}
 
-            {!identityLoading && !identitySeeding && identityData && idEntities.length === 0 && (
+            {!identityLoading && !identitySeeding && !afterIdentityLoading && identityData && idEntities.length === 0 && (
               <p className="text-gray-400 text-sm mb-4">No entities resolved yet. Connect integrations and sync data first.</p>
             )}
 
-            {!identityLoading && !identitySeeding && idEntities.length > 0 && (
+            {!identityLoading && !identitySeeding && !afterIdentityLoading && idEntities.length > 0 && (
               <div className="space-y-6">
                 {/* Summary stats */}
                 <div className="flex flex-wrap gap-3 items-end">
@@ -5341,9 +5354,10 @@ export function OnboardingFlow({
         <Button
           type="button"
           onClick={handleNextOrFinish}
-          className="w-32 h-11 bg-white hover:bg-white/90 text-black font-medium"
+          disabled={afterIdentityLoading}
+          className="w-32 h-11 bg-white hover:bg-white/90 text-black font-medium disabled:opacity-70 disabled:cursor-not-allowed"
         >
-          {currentStep === 6 || currentStep === 7 || currentStep === steps.length ? "Finish" : "Next"}
+          {afterIdentityLoading ? "Loading…" : currentStep === 6 || currentStep === 7 || currentStep === steps.length ? "Finish" : "Next"}
         </Button>
       </div>
     </div>
