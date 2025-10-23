@@ -290,7 +290,7 @@ export function OnboardingFlow({
   type RiskState = { liquidity_risk: RiskDimension; concentration_risk: RiskDimension; dependency_risk: RiskDimension; anomaly_risk: RiskDimension; uncertainty_risk: RiskDimension; overall: RiskLevel; overall_score: number }
   type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; risk: RiskState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
-  type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: { invoice_id: string; source: string; customer_name: string; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: string }[]; avg_days_to_due: number | null }
+  type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: OutstandingInvoice[]; paid_invoices?: OutstandingInvoice[]; avg_days_to_due: number | null; reconciliation_summary?: { total_invoices: number; matched_count: number; partial_count: number; unmatched_count: number; matched_amount: number; partial_matched_amount: number; unmatched_amount: number; match_rate: number } }
   type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; source: "bill" | "inferred"; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; days_overdue: number | null; confidence: string; cadence: string; payment_count: number; priority: "high" | "medium" | "low"; risk_flag: string | null }[] }
   const [arApData, setArApData] = useState<{ ar: ARState; ap: APState } | null>(null)
   const [arApLoading, setArApLoading] = useState(false)
@@ -362,7 +362,7 @@ export function OnboardingFlow({
 
   type ComponentBehavior = "recurring" | "episodic" | "seasonal" | "one_time"
   type CashflowComponent = { id: string; label: string; direction: "in" | "out"; category: string; behavior: ComponentBehavior; monthly_avg: number; monthly_count: number; trend: number; volatility: number; confidence: "high" | "medium" | "low"; seasonal_index: Record<number, number> | null }
-  type OutstandingInvoice = { invoice_id: string; source: string; customer_name: string; customer_source_id: string | null; entity_id: string | null; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: "open" | "overdue" | "partially_paid" }
+  type OutstandingInvoice = { invoice_id: string; source: string; customer_name: string; customer_source_id: string | null; entity_id: string | null; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: "open" | "overdue" | "partially_paid" | "paid"; reconciliation_status?: "matched" | "unmatched" | "partial"; matched_movement_ids?: string[]; matched_amount?: number; payment_date?: string | null }
   type InvoiceSignal = { invoices: OutstandingInvoice[]; total_outstanding: number; total_overdue: number; overdue_count: number; avg_days_to_due: number | null }
   type CustomerArchetype = "clockwork" | "bursty" | "episodic" | "slow_reliable" | "volatile" | "low_data"
   type CustomerFeatures = { payment_count: number; invoice_count: number; paid_vs_unpaid_ratio: number; avg_days_to_pay: number; std_days_to_pay: number; amount_mean: number; amount_std: number; interval_cv: number; recent_trend: string; last_payment_recency_days: number; overdue_count: number; weekday_bias: number | null }
@@ -3174,10 +3174,11 @@ export function OnboardingFlow({
           return <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded uppercase ${c}`}>{s}</span>
         }
         const statusBadge = (status: string, daysOverdue: number | null) => {
+          if (status === "paid") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Paid</span>
           if (status === "overdue" || (daysOverdue != null && daysOverdue > 0))
             return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">Overdue</span>
           if (status === "partially_paid") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Partial</span>
-          return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Open</span>
+          return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">Open</span>
         }
         const arInvoices = arApData?.ar.invoices ?? []
         const arOverdueFirst = [...arInvoices].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0))
@@ -3281,7 +3282,7 @@ export function OnboardingFlow({
                 {arApData && (
                 <>
                 {/* ─── Summary bar ─── */}
-                <div className="flex flex-wrap gap-4 justify-center text-sm">
+                <div className="flex flex-wrap gap-4 justify-center text-sm mb-4">
                   <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                     <span className="text-emerald-400 font-bold">{money(arApData.ar.total_outstanding)}</span>
                     <span className="text-gray-400">AR outstanding</span>
@@ -3295,6 +3296,32 @@ export function OnboardingFlow({
                     <span className="text-gray-400">Net expected</span>
                   </div>
                 </div>
+
+                {/* ─── Reconciliation Summary Cards ─── */}
+                {arApData.ar.reconciliation_summary && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-blue-400">{arApData.ar.reconciliation_summary.total_invoices - arApData.ar.reconciliation_summary.matched_count - arApData.ar.reconciliation_summary.partial_count}</div>
+                      <div className="text-xs text-gray-400 mt-1">Open</div>
+                      <div className="text-[10px] text-gray-500">{money(arApData.ar.total_outstanding)}</div>
+                    </div>
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-red-400">{arApData.ar.overdue_count}</div>
+                      <div className="text-xs text-gray-400 mt-1">Overdue</div>
+                      <div className="text-[10px] text-gray-500">{money(arApData.ar.total_overdue)}</div>
+                    </div>
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-emerald-400">{(arApData.ar.paid_invoices ?? []).length}</div>
+                      <div className="text-xs text-gray-400 mt-1">Paid (180d)</div>
+                      <div className="text-[10px] text-gray-500">{money((arApData.ar.paid_invoices ?? []).reduce((s, i) => s + i.amount, 0))}</div>
+                    </div>
+                    <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-cyan-400">{arApData.ar.reconciliation_summary.matched_count}</div>
+                      <div className="text-xs text-gray-400 mt-1">Reconciled</div>
+                      <div className="text-[10px] text-gray-500">{arApData.ar.reconciliation_summary.match_rate.toFixed(0)}% match rate</div>
+                    </div>
+                  </div>
+                )}
 
                 {/* ─── AR (Accounts Receivable) ─── */}
                 <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl overflow-hidden">
@@ -3329,17 +3356,22 @@ export function OnboardingFlow({
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-16">Source</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24">Due date</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Status</TableHead>
-                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Amount due</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Bank Match</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Amount</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {arOverdueFirst.map((inv, i) => {
-                            const invExt = inv as { allocations?: { movement_id: string; gross: number; fee: number; net: number }[]; amount_collected?: number; amount_remaining?: number }
+                            const invExt = inv as OutstandingInvoice & { allocations?: { movement_id: string; gross: number; fee: number; net: number }[]; amount_collected?: number; amount_remaining?: number }
                             const allocs = invExt.allocations ?? []
-                            const amountCollected = invExt.amount_collected ?? allocs.reduce((s: number, c: { gross: number }) => s + c.gross, 0)
-                            const amountRemaining = invExt.amount_remaining ?? Math.max(0, inv.amount_due - amountCollected)
-                            const pct = inv.amount_due > 0 ? Math.round((amountCollected / inv.amount_due) * 100) : 0
+                            const amountCollected = invExt.matched_amount ?? invExt.amount_collected ?? allocs.reduce((s: number, c: { gross: number }) => s + c.gross, 0)
+                            const pct = inv.amount > 0 ? Math.round((amountCollected / inv.amount) * 100) : 0
                             const isExpanded = expandedInvoiceId === inv.invoice_id
+                            const reconBadge = () => {
+                              if (inv.reconciliation_status === "matched") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />Matched</span>
+                              if (inv.reconciliation_status === "partial") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Partial</span>
+                              return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">Unmatched</span>
+                            }
                             return (
                               <Fragment key={`${inv.invoice_id}-${i}`}>
                                 <TableRow
@@ -3355,24 +3387,35 @@ export function OnboardingFlow({
                                     )}
                                   </TableCell>
                                   <TableCell className="py-2.5">{statusBadge(inv.status, inv.days_overdue ?? null)}</TableCell>
+                                  <TableCell className="py-2.5">{reconBadge()}</TableCell>
                                   <TableCell className={`text-right font-mono font-semibold py-2.5 ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>
-                                    {moneySmall(inv.amount_due)}
-                                    {allocs.length > 0 && <span className="block text-[10px] text-gray-500">collected {moneySmall(amountCollected)}</span>}
+                                    {moneySmall(inv.amount)}
+                                    {inv.amount_due > 0 && inv.amount_due < inv.amount && <span className="block text-[10px] text-gray-500">due: {moneySmall(inv.amount_due)}</span>}
+                                    {amountCollected > 0 && <span className="block text-[10px] text-cyan-400">matched: {moneySmall(amountCollected)}</span>}
                                   </TableCell>
                                 </TableRow>
-                                {isExpanded && allocs.length > 0 && (
+                                {isExpanded && (
                                   <TableRow className="border-emerald-500/5 bg-emerald-500/5">
-                                    <TableCell colSpan={5} className="py-3 pl-8">
+                                    <TableCell colSpan={6} className="py-3 pl-8">
                                       <div className="space-y-2 text-xs">
                                         <div className="flex gap-4">
-                                          <span>Gross: {moneySmall(inv.amount_due)}</span>
-                                          <span className="text-amber-400">Fee: {moneySmall(allocs.reduce((s, c) => s + c.fee, 0))}</span>
-                                          <span className="text-emerald-400">Net: {moneySmall(allocs.reduce((s, c) => s + c.net, 0))}</span>
+                                          <span>Invoice Total: {moneySmall(inv.amount)}</span>
+                                          {inv.amount_due > 0 && <span className="text-amber-400">Outstanding: {moneySmall(inv.amount_due)}</span>}
+                                          {amountCollected > 0 && <span className="text-cyan-400">Bank Matched: {moneySmall(amountCollected)}</span>}
                                         </div>
-                                        <div className="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                                          <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.min(100, pct)}%` }} />
-                                        </div>
-                                        <div className="text-gray-500">{pct}% collected</div>
+                                        {amountCollected > 0 && (
+                                          <>
+                                            <div className="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                                              <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${Math.min(100, pct)}%` }} />
+                                            </div>
+                                            <div className="text-gray-500">{pct}% reconciled to bank</div>
+                                          </>
+                                        )}
+                                        {inv.matched_movement_ids && inv.matched_movement_ids.length > 0 && (
+                                          <div className="text-gray-500">
+                                            Linked to {inv.matched_movement_ids.length} bank transaction{inv.matched_movement_ids.length !== 1 ? "s" : ""}
+                                          </div>
+                                        )}
                                       </div>
                                     </TableCell>
                                   </TableRow>
@@ -3511,6 +3554,50 @@ export function OnboardingFlow({
                   )}
                 </div>
                 </>
+                )}
+
+                {/* ─── Reconciliation Summary Dashboard ─── */}
+                {arApData?.ar.reconciliation_summary && mappingRecon && (
+                  <div className="bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-xl p-5">
+                    <h3 className="text-base font-semibold text-cyan-400 mb-4 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                      Reconciliation Overview
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                      <div className="text-center">
+                        <div className="text-3xl font-bold text-cyan-400">{arApData.ar.reconciliation_summary.match_rate.toFixed(0)}%</div>
+                        <div className="text-xs text-gray-400 mt-1">Invoice Match Rate</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-3xl font-bold text-emerald-400">{money(arApData.ar.reconciliation_summary.matched_amount)}</div>
+                        <div className="text-xs text-gray-400 mt-1">AR Matched</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-3xl font-bold text-amber-400">{money(arApData.ar.reconciliation_summary.unmatched_amount)}</div>
+                        <div className="text-xs text-gray-400 mt-1">AR Unmatched</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-3xl font-bold text-purple-400">{money(mappingRecon.total_fees_paid)}</div>
+                        <div className="text-xs text-gray-400 mt-1">Fees Identified</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-white/5 rounded-lg p-3">
+                        <div className="text-xs text-gray-400 mb-2">Bank Inflows</div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-cyan-300">Matched: {money(mappingRecon.total_matched_inflows)}</span>
+                          <span className="text-gray-400">Unmatched: {mappingRecon.total_unmatched_inflows} txns</span>
+                        </div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-3">
+                        <div className="text-xs text-gray-400 mb-2">Bank Outflows</div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-cyan-300">Matched: {money(mappingRecon.total_matched_outflows)}</span>
+                          <span className="text-gray-400">Unmatched: {mappingRecon.total_unmatched_outflows} txns</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {/* ─── Bank transactions: reconciled vs not reconciled (AR/AP) ─── */}

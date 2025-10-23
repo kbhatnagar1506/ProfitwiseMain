@@ -199,6 +199,10 @@ export type OutstandingInvoice = {
   days_until_due: number | null
   days_overdue: number | null
   status: "open" | "overdue" | "partially_paid" | "paid"
+  reconciliation_status?: "matched" | "unmatched" | "partial"
+  matched_movement_ids?: string[]
+  matched_amount?: number
+  payment_date?: string | null
 }
 
 export type InvoiceSignal = {

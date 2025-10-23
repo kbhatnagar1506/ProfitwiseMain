@@ -178,10 +178,8 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
      FROM cash_events
      WHERE user_id = $1::uuid
        AND event_type IN ('ar', 'ap')
-       AND COALESCE(status, 'open') != 'paid'
-       AND COALESCE(outstanding_amount, amount) > $2
      ORDER BY expected_date ASC`,
-    [userId, EPS],
+    [userId],
   )
   return rows.map((r) => {
     const gross = parseFloat(String(r.amount))
@@ -286,7 +284,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     return [...eventById.values()].filter(
       (e) =>
         e.event_type === target &&
-        e.outstanding_amount > EPS &&
+        (e.outstanding_amount > EPS || e.status === "paid") &&
         matchesEntity(e, m, entityNormByUuid, resolvedBank, movementEntityCanonicalRaw),
     )
   }
@@ -333,19 +331,28 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     }
 
     // --- Stage 1: exact match (including processor fee-aware match for inflows) ---
-    let exactMatch = entityEvents.find((e) => Math.abs(e.outstanding_amount - remainingCash) < EPS)
+    // For paid events, we match by gross amount (historical reconciliation)
+    let exactMatch = entityEvents.find((e) => {
+      const matchAmount = e.status === "paid" ? e.amount : e.outstanding_amount
+      return Math.abs(matchAmount - remainingCash) < EPS
+    })
     let s1FeeAmount = 0
+    let isHistoricalMatch = false
     if (!exactMatch && isInflow && isProcessorLikeMovement(movement) && targetType === "ar") {
       exactMatch = entityEvents.find((e) => {
-        if (e.outstanding_amount <= EPS) return false
-        const impliedFee = (e.outstanding_amount - remainingCash) / e.outstanding_amount
+        const matchAmount = e.status === "paid" ? e.amount : e.outstanding_amount
+        if (matchAmount <= EPS) return false
+        const impliedFee = (matchAmount - remainingCash) / matchAmount
         return impliedFee >= 0 && impliedFee <= 0.08
       })
       if (exactMatch) {
-        s1FeeAmount = Math.max(0, exactMatch.outstanding_amount - remainingCash)
+        const matchAmount = exactMatch.status === "paid" ? exactMatch.amount : exactMatch.outstanding_amount
+        s1FeeAmount = Math.max(0, matchAmount - remainingCash)
       }
     }
     if (exactMatch) {
+      isHistoricalMatch = exactMatch.status === "paid"
+      const matchAmount = isHistoricalMatch ? exactMatch.amount : exactMatch.outstanding_amount
       // #region agent log
       debugWf.hitS1++
       wfOutcome = "s1"
@@ -359,14 +366,15 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           targetType === "ar"
             ? (exactMatch.metadata?.invoice_id as string) ?? null
             : (exactMatch.metadata?.bill_id as string) ?? null,
-        gross_amount: exactMatch.outstanding_amount,
+        gross_amount: matchAmount,
         net_amount: remainingCash,
         confidence: s1FeeAmount > EPS ? 0.90 : 0.92,
         source: "rule",
         metadata: {
           fee_amount: s1FeeAmount,
           match_method: s1FeeAmount > EPS ? "exact_with_fee" : "exact",
-          waterfall_stage: "sniper",
+          waterfall_stage: isHistoricalMatch ? "sniper_historical" : "sniper",
+          is_historical_reconciliation: isHistoricalMatch,
         },
       })
       if (s1FeeAmount > EPS && targetType === "ar") {
@@ -384,12 +392,15 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           metadata: {
             fee_amount: s1FeeAmount,
             match_method: "exact_with_fee",
-            waterfall_stage: "sniper_fee",
+            waterfall_stage: isHistoricalMatch ? "sniper_fee_historical" : "sniper_fee",
+            is_historical_reconciliation: isHistoricalMatch,
           },
         })
       }
-      exactMatch.outstanding_amount = 0
-      exactMatch.status = "paid"
+      if (!isHistoricalMatch) {
+        exactMatch.outstanding_amount = 0
+        exactMatch.status = "paid"
+      }
       touchedEventIds.add(exactMatch.id)
       continue
     }
@@ -397,16 +408,18 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     // --- Stage 2: processor fee band (AR inflow only) ---
     if (isInflow) {
       const feeMatch = entityEvents.find((e) => {
-        if (e.outstanding_amount <= EPS) return false
-        const impliedFee = (e.outstanding_amount - remainingCash) / e.outstanding_amount
+        const matchAmount = e.status === "paid" ? e.amount : e.outstanding_amount
+        if (matchAmount <= EPS) return false
+        const impliedFee = (matchAmount - remainingCash) / matchAmount
         return impliedFee > 0.01 && impliedFee <= 0.05
       })
       if (feeMatch) {
+        const isHistoricalFeeMatch = feeMatch.status === "paid"
         // #region agent log
         debugWf.hitS2++
         wfOutcome = "s2"
         // #endregion
-        const gross = feeMatch.outstanding_amount
+        const gross = isHistoricalFeeMatch ? feeMatch.amount : feeMatch.outstanding_amount
         const net = remainingCash
         const feeAmt = Math.max(0, gross - net)
         pushAttr({
@@ -422,7 +435,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           metadata: {
             fee_amount: feeAmt,
             match_method: "tolerance",
-            waterfall_stage: "processor",
+            waterfall_stage: isHistoricalFeeMatch ? "processor_historical" : "processor",
+            is_historical_reconciliation: isHistoricalFeeMatch,
           },
         })
         if (feeAmt > EPS) {
@@ -440,29 +454,39 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             metadata: {
               fee_amount: feeAmt,
               match_method: "tolerance",
-              waterfall_stage: "processor_fee",
+              waterfall_stage: isHistoricalFeeMatch ? "processor_fee_historical" : "processor_fee",
+              is_historical_reconciliation: isHistoricalFeeMatch,
             },
           })
         }
-        feeMatch.outstanding_amount = 0
-        feeMatch.status = "paid"
+        if (!isHistoricalFeeMatch) {
+          feeMatch.outstanding_amount = 0
+          feeMatch.status = "paid"
+        }
         touchedEventIds.add(feeMatch.id)
         continue
       }
     }
 
     // --- Stage 3: FIFO ---
+    // Prioritize open events first, then paid events for historical matching
     const feeAssumed =
       isInflow && isProcessorLikeMovement(movement) && targetType === "ar" ? 0.03 : 0
-    entityEvents = entityEvents.filter((e) => e.outstanding_amount > EPS)
+    const openEvents = entityEvents.filter((e) => e.status !== "paid" && e.outstanding_amount > EPS)
+    const paidEvents = entityEvents.filter((e) => e.status === "paid")
+    const sortedEvents = [...openEvents, ...paidEvents]
     let fifoTouched = false
-    for (const event of entityEvents) {
+    for (const event of sortedEvents) {
       if (remainingCash <= EPS) break
+
+      const isHistoricalFifo = event.status === "paid"
+      const eventAmount = isHistoricalFifo ? event.amount : event.outstanding_amount
+      if (eventAmount <= EPS) continue
 
       const purchasingPower = feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash
 
-      if (purchasingPower + EPS >= event.outstanding_amount) {
-        const gross = event.outstanding_amount
+      if (purchasingPower + EPS >= eventAmount) {
+        const gross = eventAmount
         const netApplied = feeAssumed > 0 ? gross * (1 - feeAssumed) : gross
         const feeAmt = Math.max(0, gross - netApplied)
         pushAttr({
@@ -481,7 +505,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           metadata: {
             fee_amount: feeAmt,
             match_method: "tolerance",
-            waterfall_stage: "fifo",
+            waterfall_stage: isHistoricalFifo ? "fifo_historical" : "fifo",
+            is_historical_reconciliation: isHistoricalFifo,
           },
         })
         if (feeAmt > EPS && targetType === "ar") {
@@ -499,18 +524,21 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             metadata: {
               fee_amount: feeAmt,
               match_method: "tolerance",
-              waterfall_stage: "fifo_fee",
+              waterfall_stage: isHistoricalFifo ? "fifo_fee_historical" : "fifo_fee",
+              is_historical_reconciliation: isHistoricalFifo,
             },
           })
         }
         remainingCash -= netApplied
-        event.outstanding_amount = 0
-        event.status = "paid"
+        if (!isHistoricalFifo) {
+          event.outstanding_amount = 0
+          event.status = "paid"
+        }
         touchedEventIds.add(event.id)
         fifoTouched = true
       } else {
         const rawGross = feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash
-        const grossApplied = Math.min(rawGross, event.outstanding_amount)
+        const grossApplied = Math.min(rawGross, eventAmount)
         const netApplied = feeAssumed > 0 ? grossApplied * (1 - feeAssumed) : grossApplied
         const feeAmt = Math.max(0, grossApplied - netApplied)
         pushAttr({
@@ -529,7 +557,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           metadata: {
             fee_amount: feeAmt,
             match_method: "tolerance",
-            waterfall_stage: "fifo_partial",
+            waterfall_stage: isHistoricalFifo ? "fifo_partial_historical" : "fifo_partial",
+            is_historical_reconciliation: isHistoricalFifo,
           },
         })
         if (feeAmt > EPS && targetType === "ar") {
@@ -547,13 +576,16 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             metadata: {
               fee_amount: feeAmt,
               match_method: "tolerance",
-              waterfall_stage: "fifo_partial_fee",
+              waterfall_stage: isHistoricalFifo ? "fifo_partial_fee_historical" : "fifo_partial_fee",
+              is_historical_reconciliation: isHistoricalFifo,
             },
           })
         }
         remainingCash -= netApplied
-        event.outstanding_amount -= grossApplied
-        event.status = statusFromOutstanding(event.outstanding_amount, event.amount)
+        if (!isHistoricalFifo) {
+          event.outstanding_amount -= grossApplied
+          event.status = statusFromOutstanding(event.outstanding_amount, event.amount)
+        }
         touchedEventIds.add(event.id)
         remainingCash = 0
         fifoTouched = true
