@@ -13,14 +13,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import Image from "next/image"
+import Image, { type StaticImageData } from "next/image"
 import { Sparkles, Loader2 } from "lucide-react"
 import { displayLabelForCounterparty } from "@/lib/alias-normalize"
 import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 import whatsappQr from "../Screenshot 2026-03-08 at 03.57.15.png"
 import shopifyLogo from "../Screenshot 2026-03-24 at 09.43.29.png"
 import { useRouter } from "next/navigation"
-import type { StaticImageData } from "next/image"
 interface Integration {
   name: string
   description: string
@@ -49,8 +48,8 @@ const integrations: Integration[] = [
   },
   {
     name: "Shopify",
-    description: "Orders, payouts, and reconciliation data",
-    category: "Commerce",
+    description: "Orders, customers, products, and payouts",
+    category: "Revenue",
     logo: shopifyLogo,
   },
   {
@@ -153,6 +152,15 @@ const QBO_ERROR_MESSAGES: Record<string, string> = {
   state_mismatch: "QuickBooks security check failed. Please try again.",
   config: "QuickBooks isn't configured yet. Please try again later.",
   token_exchange: "QuickBooks connection failed. Please try again.",
+  shopify_invalid_shop: "Please enter a valid Shopify domain like your-store.myshopify.com.",
+  shopify_config: "Shopify OAuth is not configured yet. Please try again later.",
+  shopify_missing_params: "Shopify connection did not complete. Please try again.",
+  shopify_invalid_hmac: "Shopify callback security check failed. Please reconnect.",
+  shopify_state_missing: "Your Shopify session expired. Please reconnect.",
+  shopify_state_invalid: "Shopify state validation failed. Please reconnect.",
+  shopify_state_mismatch: "Shopify state mismatch detected. Please reconnect.",
+  shopify_state_shop_mismatch: "Shop domain changed during OAuth. Please reconnect.",
+  shopify_token_exchange: "Shopify token exchange failed. Please try again.",
 }
 
 export function OnboardingFlow({
@@ -179,6 +187,7 @@ export function OnboardingFlow({
   const [accountingStepLinkToken, setAccountingStepLinkToken] = useState<string | null>(null)
   const [accountingStepLinkLoading, setAccountingStepLinkLoading] = useState(false)
   const [connectedIntegrations, setConnectedIntegrations] = useState<string[]>([])
+  const [shopifyScopeWarning, setShopifyScopeWarning] = useState<string | null>(null)
   const [accountingSyncLoading, setAccountingSyncLoading] = useState(false)
   const [disconnectAccountingLoading, setDisconnectAccountingLoading] = useState(false)
   const [connectedContextIntegrations, setConnectedContextIntegrations] = useState<string[]>([])
@@ -545,6 +554,19 @@ export function OnboardingFlow({
         setConnectedIntegrations(data.connected ?? [])
       })
       .catch(() => setConnectedIntegrations([]))
+    fetch("/api/shopify/status")
+      .then((res) => (res.ok ? res.json() : { connections: [] }))
+      .then((data: { connections?: { shopDomain?: string; missingScopes?: string[] }[] }) => {
+        const problematic = (data.connections ?? []).find((c) => (c.missingScopes ?? []).length > 0)
+        if (problematic) {
+          setShopifyScopeWarning(
+            `Shopify connection for ${problematic.shopDomain ?? "your store"} is missing scopes: ${(problematic.missingScopes ?? []).join(", ")}`
+          )
+        } else {
+          setShopifyScopeWarning(null)
+        }
+      })
+      .catch(() => setShopifyScopeWarning(null))
   }, [currentStep])
 
   useEffect(() => {
@@ -1418,11 +1440,13 @@ export function OnboardingFlow({
             {plaidLinkError && (
               <p className="text-sm text-red-400 text-center mb-4">{plaidLinkError}</p>
             )}
+            {shopifyScopeWarning && (
+              <p className="text-sm text-amber-300 text-center mb-4">{shopifyScopeWarning}</p>
+            )}
             <div className="grid grid-cols-2 md:grid-cols-3 gap-8 max-w-2xl mx-auto">
               {integrations.map((integration) => {
                 const usePlaid = PLAID_INTEGRATIONS.includes(integration.name)
                 const isStripe = integration.name === "Stripe"
-                const isShopify = integration.name === "Shopify"
                 const plaidDisabled = usePlaid && (accountingStepLinkLoading || !plaidReady)
                 const isConnected = connectedIntegrations.includes(integration.name)
                 return (
@@ -1434,8 +1458,6 @@ export function OnboardingFlow({
                         openPlaidLink()
                       } else if (isStripe) {
                         window.location.href = "/oauth/stripe"
-                      } else if (isShopify) {
-                        window.location.href = "/oauth/shopify"
                       } else {
                         toggleIntegration(integration.name)
                       }

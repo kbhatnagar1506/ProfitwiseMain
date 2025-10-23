@@ -50,9 +50,7 @@ export async function POST(req: Request) {
     const result = await runFinancialBrain(user.id, {
       arApOnly,
       merchantOnly,
-      ...(syncCashEvents && outstandingInvoices && apObligations
-        ? { outstandingInvoices, apObligations }
-        : {}),
+      ...(syncCashEvents ? { outstandingInvoices, apObligations } : {}),
     })
 
     return NextResponse.json({

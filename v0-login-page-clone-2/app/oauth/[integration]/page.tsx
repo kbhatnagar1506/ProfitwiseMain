@@ -7,6 +7,15 @@ import { Loader2, Copy, Check, Plus, Trash2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import whatsappQr from "../../../Screenshot 2026-03-08 at 03.57.15.png"
+import shopifyLogo from "../../../Screenshot 2026-03-24 at 09.43.29.png"
+
+type ShopifyConnectionRow = {
+  shopDomain: string
+  status: string
+  grantedScopes: string[]
+  missingScopes: string[]
+  updatedAt: string | null
+}
 
 function CopyableRow({
   label,
@@ -73,27 +82,32 @@ export default function OAuthConnectorPage() {
   const [gmailConnected, setGmailConnected] = useState<boolean | null>(null)
   const [gmailConnectedEmail, setGmailConnectedEmail] = useState<string | null>(null)
   const [gmailCanConnect, setGmailCanConnect] = useState(false)
-  const [shopDomain, setShopDomain] = useState("")
-  const [shopClientId, setShopClientId] = useState("")
-  const [shopClientSecret, setShopClientSecret] = useState("")
-  const [shopRetentionMode, setShopRetentionMode] = useState<"default" | "12m" | "24m" | "indefinite">("default")
-  const [shopConsent, setShopConsent] = useState(false)
-  const [shopConnectLoading, setShopConnectLoading] = useState(false)
-  const [shopConnectError, setShopConnectError] = useState<string | null>(null)
-  const [shopScopesCopied, setShopScopesCopied] = useState(false)
-  const [shopConnections, setShopConnections] = useState<Array<{
-    shop_domain: string
-    status: string
-    missing_scopes: string[]
-    granted_scopes: string[]
-    retention_mode: string
-    updated_at: string
-  }>>([])
+  const [shopifyShopInput, setShopifyShopInput] = useState("")
+  const [shopifyConnections, setShopifyConnections] = useState<ShopifyConnectionRow[] | null>(null)
+  const [shopifyStatusLoading, setShopifyStatusLoading] = useState(false)
+  const [shopifySyncShop, setShopifySyncShop] = useState<string | null>(null)
+  const [shopifySyncMessage, setShopifySyncMessage] = useState<string | null>(null)
 
   // Format integration name for display
   const integrationName = integration?.replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
 
   useEffect(() => {
+    if (integration === "shopify") {
+      const pref = (searchParams.get("shop") ?? "").trim()
+      if (pref) setShopifyShopInput(pref)
+      setShopifyStatusLoading(true)
+      fetch("/api/shopify/status")
+        .then((res) => (res.ok ? res.json() : null))
+        .then(
+          (data: { connections?: ShopifyConnectionRow[] } | null) => {
+            setShopifyConnections(data?.connections ?? [])
+          }
+        )
+        .catch(() => setShopifyConnections([]))
+        .finally(() => setShopifyStatusLoading(false))
+      return
+    }
+
     if (integration === "whatsapp") {
       // WhatsApp uses in-app setup instead of external OAuth redirect
       setWhatsappStatus(null)
@@ -154,188 +168,199 @@ export default function OAuthConnectorPage() {
         .catch(() => setGmailConnected(false))
       return
     }
-    if (integration === "shopify") {
-      fetch("/api/shopify/status")
-        .then((res) => (res.ok ? res.json() : { connections: [] }))
-        .then((data: { connections?: Array<{
-          shop_domain: string
-          status: string
-          missing_scopes: string[]
-          granted_scopes: string[]
-          retention_mode: string
-          updated_at: string
-        }> }) => setShopConnections(data.connections ?? []))
-        .catch(() => setShopConnections([]))
-      return
-    }
-  }, [integration, integrationName])
+  }, [integration, integrationName, searchParams])
 
   if (integration === "shopify") {
-    const normalizedShop = shopDomain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")
-    const hasShop = normalizedShop.endsWith(".myshopify.com")
-    const adminBase = hasShop ? `https://${normalizedShop}/admin` : "https://admin.shopify.com"
-    const appSetupLink = hasShop ? `${adminBase}/apps` : "https://help.shopify.com/en/manual/apps/app-types/custom-apps"
-    const appConfigLink = hasShop ? `${adminBase}/settings/apps/development` : "https://help.shopify.com/en/manual/apps/app-types/custom-apps"
-    const scopesGuideLink = "https://shopify.dev/docs/api/usage/access-scopes"
-    const webhookGuideLink = "https://shopify.dev/docs/apps/build/webhooks/subscribe/https"
-    const shopifyDashboardLink = "https://dev.shopify.com/dashboard"
-    const scopeCsv = "read_orders,read_customers,read_discounts,read_shopify_payments_payouts"
+    const oauthError = searchParams.get("error")
+    const connected = searchParams.get("connected") === "shopify"
+    const status = searchParams.get("status")
+    const connectedShop = searchParams.get("shop")
+
+    const runShopifySync = async (shop?: string) => {
+      setShopifySyncMessage(null)
+      setShopifySyncShop(shop ?? "all")
+      try {
+        const res = await fetch("/api/shopify/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(shop ? { shop } : {}),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setShopifySyncMessage("Sync completed.")
+          setTimeout(() => setShopifySyncMessage(null), 5000)
+        } else {
+          setShopifySyncMessage((data as { error?: string }).error ?? "Sync failed.")
+        }
+      } catch {
+        setShopifySyncMessage("Sync failed.")
+      } finally {
+        setShopifySyncShop(null)
+      }
+    }
 
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center px-6 py-10">
-        <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-white/[0.03] p-6">
-          <h1 className="text-2xl font-semibold text-white mb-2">Connect Shopify (BYO App)</h1>
-          <p className="text-sm text-gray-400 mb-6">
-            Enter your Shopify app credentials. We use OAuth, enforce required scopes, and securely store only the access token after connection.
-          </p>
-          <div className="mb-6 rounded-lg border border-white/10 bg-white/[0.02] p-4">
-            <p className="text-sm text-white font-medium mb-2">Procedure to connect</p>
-            <ol className="list-decimal ml-5 space-y-1 text-sm text-gray-300">
-              <li>Create or open your custom Shopify app in your store admin.</li>
-              <li>Set app URL/callback URL to this portal callback: <span className="font-mono text-xs text-emerald-300">{`${typeof window !== "undefined" ? window.location.origin : ""}/api/shopify/oauth/callback`}</span></li>
-              <li>Enable required read scopes for orders, customers, payouts, disputes, and all-orders history.</li>
-              <li>Copy the app Client ID and Client Secret into the form below.</li>
-              <li>Click <span className="text-white">Connect Shopify</span> and approve OAuth on Shopify.</li>
-            </ol>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <a href={shopifyDashboardLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
-                Open Shopify Dashboard
-              </a>
-              <a href={appSetupLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
-                Open Shopify Apps
-              </a>
-              <a href={appConfigLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
-                Open App Config
-              </a>
-              <a href={scopesGuideLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
-                Scope Docs
-              </a>
-              <a href={webhookGuideLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
-                Webhook Docs
-              </a>
-            </div>
-            <div className="mt-3 rounded-md border border-white/10 bg-black/20 p-3">
-              <p className="text-xs text-gray-300 mb-2">Scopes CSV (copy and paste in Shopify app scopes)</p>
-              <div className="flex items-center gap-2">
-                <code className="text-[11px] text-emerald-300 break-all">{scopeCsv}</code>
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(scopeCsv).then(() => {
-                      setShopScopesCopied(true)
-                      setTimeout(() => setShopScopesCopied(false), 2000)
-                    })
-                  }}
-                  className="shrink-0 rounded-md border border-white/20 px-2 py-1 text-xs text-white hover:bg-white/10"
-                >
-                  {shopScopesCopied ? "Copied" : "Copy CSV"}
-                </button>
+      <div className="min-h-screen bg-black flex flex-col items-center px-6 py-10 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(149,191,71,0.12),transparent)]">
+        <div className="w-full max-w-xl">
+          <div className="flex flex-col items-center text-center mb-8">
+            <Image
+              src="/profitwise-logo.png"
+              alt="ProfitWise"
+              width={160}
+              height={44}
+              className="object-contain mb-8 opacity-90"
+            />
+            <div className="relative mb-5">
+              <div className="absolute inset-0 rounded-2xl bg-[#95BF47]/20 blur-xl" aria-hidden />
+              <div className="relative rounded-2xl border border-white/10 bg-white/[0.06] p-4 shadow-lg">
+                <Image
+                  src={shopifyLogo}
+                  alt="Shopify"
+                  width={88}
+                  height={88}
+                  className="object-contain"
+                  priority
+                />
               </div>
             </div>
+            <h1 className="text-2xl font-semibold text-white mb-2">Shopify</h1>
+            <p className="text-sm text-gray-400 max-w-md">
+              Connect your store to sync orders and refunds for reconciliation—no webhooks required for basic pull sync.
+            </p>
           </div>
-          <div className="space-y-4">
-            <Input
-              placeholder="your-store.myshopify.com"
-              value={shopDomain}
-              onChange={(e) => setShopDomain(e.target.value)}
-              className="bg-white/5 border-white/20 text-white"
-            />
-            <Input
-              placeholder="Client ID"
-              value={shopClientId}
-              onChange={(e) => setShopClientId(e.target.value)}
-              className="bg-white/5 border-white/20 text-white"
-            />
-            <Input
-              type="password"
-              placeholder="Client Secret"
-              value={shopClientSecret}
-              onChange={(e) => setShopClientSecret(e.target.value)}
-              className="bg-white/5 border-white/20 text-white"
-            />
-            <select
-              value={shopRetentionMode}
-              onChange={(e) => setShopRetentionMode(e.target.value as "default" | "12m" | "24m" | "indefinite")}
-              className="w-full rounded-md bg-white/5 border border-white/20 text-white h-10 px-3"
-            >
-              <option value="default">Retention: default</option>
-              <option value="12m">Retention: 12 months</option>
-              <option value="24m">Retention: 24 months</option>
-              <option value="indefinite">Retention: indefinite</option>
-            </select>
-            <label className="flex items-start gap-2 text-sm text-gray-300">
-              <input type="checkbox" checked={shopConsent} onChange={(e) => setShopConsent(e.target.checked)} className="mt-1" />
-              <span>I consent to storing Shopify data per selected retention mode.</span>
-            </label>
-            {shopConnectError && <p className="text-sm text-red-400">{shopConnectError}</p>}
-            <Button
-              disabled={shopConnectLoading}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white"
-              onClick={async () => {
-                setShopConnectError(null)
-                setShopConnectLoading(true)
-                try {
-                  const res = await fetch("/api/shopify/oauth/authorize", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      shop_domain: shopDomain,
-                      client_id: shopClientId,
-                      client_secret: shopClientSecret,
-                      retention_mode: shopRetentionMode,
-                      accept_storage_consent: shopConsent,
-                    }),
-                  })
-                  const data = await res.json().catch(() => ({}))
-                  if (!res.ok) {
-                    setShopConnectError(data.error || "Failed to start Shopify OAuth")
-                    return
-                  }
-                  if (!data.authorize_url) {
-                    setShopConnectError("Missing authorize URL")
-                    return
-                  }
-                  window.location.href = data.authorize_url
-                } catch {
-                  setShopConnectError("Failed to start Shopify OAuth")
-                } finally {
-                  setShopConnectLoading(false)
-                }
-              }}
-            >
-              {shopConnectLoading ? (
-                <span className="inline-flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Redirecting...
-                </span>
-              ) : (
-                "Connect Shopify"
-              )}
-            </Button>
-            {shopConnections.length > 0 && (
-              <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-sm">
-                <p className="text-gray-300 mb-2">Connected stores</p>
-                <div className="space-y-2">
-                  {shopConnections.map((conn) => (
-                    <div key={conn.shop_domain} className="rounded-md border border-white/10 p-2">
-                      <p className="text-white font-medium">{conn.shop_domain}</p>
-                      <p className="text-xs text-gray-400">Status: {conn.status} | Retention: {conn.retention_mode}</p>
-                      {conn.missing_scopes?.length ? (
-                        <p className="text-xs text-amber-400">Missing scopes: {conn.missing_scopes.join(", ")}</p>
-                      ) : (
-                        <p className="text-xs text-emerald-400">All required scopes granted</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-6 space-y-6">
+            {connected && connectedShop && (
+              <div
+                className={`rounded-xl border px-4 py-3 text-sm ${
+                  status === "scope_missing"
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                }`}
+              >
+                {status === "scope_missing"
+                  ? `Connected ${connectedShop}, but some required API scopes are missing. Update the app in Shopify and reconnect.`
+                  : `Successfully connected: ${connectedShop}`}
               </div>
             )}
+            {oauthError && (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                Connection issue: {oauthError}
+              </div>
+            )}
+            {shopifySyncMessage && (
+              <p className="text-sm text-emerald-400/90">{shopifySyncMessage}</p>
+            )}
+
+            <div>
+              <h2 className="text-sm font-medium text-white/90 mb-3">Connected stores</h2>
+              {shopifyStatusLoading ? (
+                <div className="flex items-center justify-center gap-2 py-8 text-gray-500">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <span className="text-sm">Loading…</span>
+                </div>
+              ) : !shopifyConnections || shopifyConnections.length === 0 ? (
+                <p className="text-sm text-gray-500 py-4 text-center rounded-xl border border-dashed border-white/15">
+                  No store connected yet. Add your shop domain below.
+                </p>
+              ) : (
+                <ul className="space-y-3">
+                  {shopifyConnections.map((c) => (
+                    <li
+                      key={c.shopDomain}
+                      className="rounded-xl border border-white/10 bg-black/30 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                    >
+                      <div className="min-w-0 text-left">
+                        <p className="text-white font-mono text-sm truncate">{c.shopDomain}</p>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <span
+                            className={`text-[11px] uppercase tracking-wide px-2 py-0.5 rounded ${
+                              c.status === "connected"
+                                ? "bg-emerald-500/20 text-emerald-300"
+                                : "bg-amber-500/20 text-amber-200"
+                            }`}
+                          >
+                            {c.status === "connected" ? "Scopes OK" : "Scopes incomplete"}
+                          </span>
+                          {c.missingScopes?.length > 0 && (
+                            <span className="text-[11px] text-gray-500 truncate max-w-full">
+                              Missing: {c.missingScopes.join(", ")}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={shopifySyncShop !== null || c.missingScopes?.length > 0}
+                        onClick={() => runShopifySync(c.shopDomain)}
+                        className="shrink-0 bg-[#95BF47]/90 text-black hover:bg-[#95BF47] border-0"
+                      >
+                        {shopifySyncShop === c.shopDomain ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin inline" />
+                            Syncing…
+                          </>
+                        ) : (
+                          "Sync now"
+                        )}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {shopifyConnections && shopifyConnections.length > 0 && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-full mt-3 bg-white/5 text-gray-300 hover:bg-white/10 border border-white/15"
+                  disabled={shopifySyncShop !== null}
+                  onClick={() => runShopifySync()}
+                >
+                  {shopifySyncShop === "all" ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin inline" />
+                      Syncing all…
+                    </>
+                  ) : (
+                    "Sync all stores"
+                  )}
+                </Button>
+              )}
+            </div>
+
+            <div className="border-t border-white/10 pt-6">
+              <h2 className="text-sm font-medium text-white/90 mb-2">Connect a store</h2>
+              <p className="text-xs text-gray-500 mb-3">
+                Use your admin domain (e.g. <span className="font-mono text-gray-400">store.myshopify.com</span>).
+              </p>
+              <div className="space-y-3">
+                <Input
+                  value={shopifyShopInput}
+                  onChange={(e) => setShopifyShopInput(e.target.value)}
+                  placeholder="your-store.myshopify.com"
+                  className="bg-white/5 border-white/20 text-white placeholder:text-gray-500"
+                />
+                <Button
+                  type="button"
+                  className="w-full bg-white/10 text-white hover:bg-white/20 border border-white/20"
+                  onClick={() => {
+                    const shop = shopifyShopInput.trim()
+                    if (!shop) return
+                    window.location.href = `/api/shopify/oauth/authorize?shop=${encodeURIComponent(shop)}`
+                  }}
+                >
+                  Continue to Shopify
+                </Button>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={() => router.back()}
-              className="w-full text-sm text-gray-500 hover:text-white hover:underline"
+              className="w-full text-sm text-gray-500 hover:text-white hover:underline pt-2"
             >
-              Back to onboarding
+              ← Back to onboarding
             </button>
           </div>
         </div>

@@ -1,76 +1,55 @@
 import { NextRequest, NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import {
-  buildShopifyAuthorizeUrl,
-  generateOAuthState,
-  getShopifyCallbackUrl,
-  isValidShopDomain,
-  normalizeShopDomain,
-  type ShopifyRetentionMode,
-} from "@/lib/shopify"
-import { getLatestConsent, recordConsent, saveOAuthState } from "@/lib/shopify-token-store"
-import { log } from "@/lib/logger"
-import { isShopifyOAuthEnabled } from "@/lib/shopify-flags"
+import { getShopifyAuthorizeUrl, normalizeShopDomain } from "@/lib/shopify"
+import { log, error as logError } from "@/lib/logger"
 
-type Body = {
-  shop_domain?: string
-  client_id?: string
-  client_secret?: string
-  retention_mode?: ShopifyRetentionMode
-  accept_storage_consent?: boolean
-}
+const STATE_COOKIE = "shopify_oauth_state"
 
-export async function POST(request: NextRequest) {
-  if (!isShopifyOAuthEnabled()) {
-    return NextResponse.json({ error: "Shopify OAuth disabled" }, { status: 503 })
+export async function GET(request: NextRequest) {
+  const token = request.cookies.get(getSessionCookieName())?.value
+  const user = await getUserBySessionToken(token ?? "")
+  const base = (process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? request.nextUrl.origin).replace(/\/$/, "")
+  if (!user) {
+    return NextResponse.redirect(new URL("/", base), 302)
   }
+
+  const rawShop = request.nextUrl.searchParams.get("shop") ?? ""
+  let shopDomain = ""
+  try {
+    shopDomain = normalizeShopDomain(rawShop)
+  } catch {
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_invalid_shop", base), 302)
+  }
+
+  const state = crypto.randomUUID()
   const cookieStore = await cookies()
-  const sessionToken = cookieStore.get(getSessionCookieName())?.value
-  const user = await getUserBySessionToken(sessionToken ?? "")
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  cookieStore.set(
+    STATE_COOKIE,
+    JSON.stringify({
+      state,
+      userId: user.id,
+      shopDomain,
+    }),
+    {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 10,
+      path: "/",
+    }
+  )
 
-  const body = (await request.json().catch(() => ({}))) as Body
-  const shopDomain = normalizeShopDomain(body.shop_domain ?? "")
-  const clientId = (body.client_id ?? "").trim()
-  const clientSecret = (body.client_secret ?? "").trim()
-  const retentionMode = body.retention_mode ?? "default"
-  const accepted = body.accept_storage_consent === true
-
-  if (!isValidShopDomain(shopDomain)) {
-    return NextResponse.json({ error: "Invalid shop_domain", code: "invalid_shop_domain" }, { status: 400 })
+  try {
+    const authUrl = getShopifyAuthorizeUrl({
+      shopDomain,
+      state,
+      origin: request.nextUrl.origin,
+    })
+    log("shopify.oauth.authorize.redirecting", { userId: user.id, shopDomain }, "shopify")
+    return NextResponse.redirect(authUrl, 302)
+  } catch (err) {
+    logError("shopify.oauth.authorize.failed", err, "shopify")
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_config", base), 302)
   }
-  if (!clientId || !clientSecret) {
-    return NextResponse.json({ error: "Missing client_id or client_secret", code: "missing_credentials" }, { status: 400 })
-  }
-
-  const existingConsent = await getLatestConsent(user.id, shopDomain)
-  if (!existingConsent && !accepted) {
-    return NextResponse.json({ error: "Storage consent required", code: "consent_required" }, { status: 400 })
-  }
-  if (accepted) {
-    await recordConsent({ userId: user.id, shopDomain, retentionMode })
-  }
-
-  const state = generateOAuthState()
-  const callbackUrl = getShopifyCallbackUrl(request.nextUrl.origin)
-  await saveOAuthState({
-    state,
-    userId: user.id,
-    shopDomain,
-    clientId,
-    clientSecret,
-    redirectUri: callbackUrl,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-  })
-
-  const authorizeUrl = buildShopifyAuthorizeUrl({
-    shopDomain,
-    clientId,
-    redirectUri: callbackUrl,
-    state,
-  })
-
-  log("shopify.oauth.authorize.created", { shopDomain }, "shopify")
-  return NextResponse.json({ authorize_url: authorizeUrl })
 }

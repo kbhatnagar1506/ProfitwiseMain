@@ -92,17 +92,19 @@ function matchesEntity(
   movement: MovementWithAvailableCash,
   entityNormByUuid: Map<string, string>,
   resolvedBankDisplayName: string | null,
+  movementEntityCanonicalRaw: Map<string, string>,
 ): boolean {
   const md = (event.metadata && typeof event.metadata === "object" ? event.metadata : {}) as Record<string, unknown>
   const graphEntityId = typeof md.graph_entity_id === "string" ? md.graph_entity_id : null
   if (graphEntityId && movement.counterparty_entity_id && graphEntityId === movement.counterparty_entity_id) {
     return true
   }
+  const customerName = typeof md.customer_name === "string" ? md.customer_name : null
   const canonical =
     typeof md.canonical_name === "string"
       ? md.canonical_name
-      : typeof md.customer_name === "string"
-        ? md.customer_name
+      : customerName
+        ? customerName
         : typeof md.vendor_name === "string"
           ? md.vendor_name
           : null
@@ -110,15 +112,25 @@ function matchesEntity(
   const bankLabel = resolvedBankDisplayName ?? movement.counterparty
   const cp = normalizeEntityName(bankLabel)
   if (cn && cp && cn === cp) return true
+  if (cn.length >= 4 && cp.length >= 4 && (cn.includes(cp) || cp.includes(cn))) return true
   if (movement.counterparty_entity_id) {
     const entNorm = entityNormByUuid.get(movement.counterparty_entity_id)
     if (entNorm && cn && entNorm === cn) return true
+    const rawEnt = movementEntityCanonicalRaw.get(movement.counterparty_entity_id)
+    if (rawEnt) {
+      if (canonical && namesMatch(rawEnt, canonical)) return true
+      if (customerName && namesMatch(rawEnt, customerName)) return true
+      if (namesMatch(rawEnt, bankLabel)) return true
+    }
   }
   if (graphEntityId) {
     const eventEntNorm = entityNormByUuid.get(graphEntityId)
     if (eventEntNorm && cp && eventEntNorm === cp) return true
   }
-  // Fuzzy: bank/Plaid strings almost never equal invoice vendor/customer strings (runtime WF_SUMMARY showed nCand=0 for all).
+  if (customerName) {
+    if (namesMatch(customerName, bankLabel)) return true
+    if (namesMatch(customerName, movement.raw_description)) return true
+  }
   if (canonical) {
     if (namesMatch(canonical, bankLabel)) return true
     if (namesMatch(canonical, movement.raw_description)) return true
@@ -134,6 +146,20 @@ async function loadEntityNormByUuid(userId: string): Promise<Map<string, string>
   const m = new Map<string, string>()
   for (const r of rows) {
     m.set(r.id, normalizeEntityName(r.canonical_name))
+  }
+  return m
+}
+
+/** Raw `entities.canonical_name` for movement counterparty IDs — used with `namesMatch` when compact norm differs. */
+async function loadEntityCanonicalRawForIds(userId: string, entityIds: string[]): Promise<Map<string, string>> {
+  const m = new Map<string, string>()
+  if (entityIds.length === 0) return m
+  const { rows } = await query<{ id: string; canonical_name: string }>(
+    `SELECT id::text, canonical_name FROM entities WHERE user_id = $1::uuid AND id = ANY($2::uuid[])`,
+    [userId, entityIds],
+  )
+  for (const r of rows) {
+    if (r.canonical_name?.trim()) m.set(r.id, r.canonical_name.trim())
   }
   return m
 }
@@ -193,6 +219,10 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     eventById.set(e.id, e)
   }
   const movements = await fetchMovementsWithAvailableCash(userId)
+  const distinctCounterpartyEntityIds = [
+    ...new Set(movements.map((m) => m.counterparty_entity_id).filter((id): id is string => Boolean(id))),
+  ]
+  const movementEntityCanonicalRaw = await loadEntityCanonicalRawForIds(userId, distinctCounterpartyEntityIds)
 
   /** Bank-first labels (Plaid merchant_tags) for matching to invoices/bills — not entity-first display names. */
   const displayNameByMovement = await resolveReconciliationBankLabelsForMatch(
@@ -256,7 +286,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       (e) =>
         e.event_type === target &&
         e.outstanding_amount > EPS &&
-        matchesEntity(e, m, entityNormByUuid, resolvedBank),
+        matchesEntity(e, m, entityNormByUuid, resolvedBank, movementEntityCanonicalRaw),
     )
   }
 
