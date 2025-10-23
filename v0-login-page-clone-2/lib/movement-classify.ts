@@ -426,7 +426,7 @@ function isWeakRevenueEvidence(m: CanonicalMovement, identity: MovementIdentityE
 }
 
 function normKey(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, "")
+  return normalizeForMatch(s)
 }
 
 // ─── Step 1: Extract source observations ────────────────────────────
@@ -2118,6 +2118,8 @@ export async function classifyMovements(userId: string): Promise<{
   await ensureMovementsSchema()
   await ensurePlaidSchema()
 
+  await query("SELECT pg_advisory_lock(hashtext('movements:' || $1))", [userId])
+
   const stats = {
     total_observations: 0, zero_dollar_skipped: 0,
     canonical_movements: 0, coalesced_count: 0,
@@ -2497,6 +2499,76 @@ export async function classifyMovements(userId: string): Promise<{
   const canonicalIdxToInsertedId = new Map<number, string>()
 
   // Step 10: Batch persist — two tables: movements + movement_observations
+  // G3: Preserve attributions before DELETE by saving them keyed by observation source:source_id
+  type SavedAttribution = {
+    component_type: string
+    entity_id: string
+    reference_id: string | null
+    gross_amount: number
+    net_amount: number
+    confidence: number
+    source: string
+    metadata: Record<string, unknown>
+    confidence_detail: Record<string, unknown> | null
+  }
+  const savedAttributions = new Map<string, SavedAttribution[]>()
+  try {
+    const { rows: attrRows } = await query<{
+      movement_id: string
+      component_type: string
+      entity_id: string
+      reference_id: string | null
+      gross_amount: string
+      net_amount: string
+      confidence: number
+      source: string
+      metadata: Record<string, unknown>
+      confidence_detail: Record<string, unknown> | null
+    }>(
+      `SELECT ma.movement_id, ma.component_type, ma.entity_id, ma.reference_id,
+              ma.gross_amount::text, ma.net_amount::text, ma.confidence, ma.source,
+              ma.metadata, ma.confidence_detail
+       FROM movement_attributions ma
+       WHERE ma.user_id = $1`,
+      [userId]
+    )
+    if (attrRows.length > 0) {
+      const { rows: obsRows } = await query<{ movement_id: string; source: string; source_id: string }>(
+        `SELECT mo.movement_id, mo.source, mo.source_id
+         FROM movement_observations mo
+         JOIN movements m ON m.id = mo.movement_id
+         WHERE m.user_id = $1`,
+        [userId]
+      )
+      const movementToObsKey = new Map<string, string>()
+      for (const obs of obsRows) {
+        const key = `${obs.source}:${obs.source_id}`
+        movementToObsKey.set(obs.movement_id, key)
+      }
+      for (const attr of attrRows) {
+        const obsKey = movementToObsKey.get(attr.movement_id)
+        if (obsKey) {
+          const existing = savedAttributions.get(obsKey) ?? []
+          existing.push({
+            component_type: attr.component_type,
+            entity_id: attr.entity_id,
+            reference_id: attr.reference_id,
+            gross_amount: parseFloat(attr.gross_amount),
+            net_amount: parseFloat(attr.net_amount),
+            confidence: attr.confidence,
+            source: attr.source,
+            metadata: attr.metadata,
+            confidence_detail: attr.confidence_detail,
+          })
+          savedAttributions.set(obsKey, existing)
+        }
+      }
+      log("movements.classify.attributions_saved", { userId, count: attrRows.length, uniqueKeys: savedAttributions.size }, "movements")
+    }
+  } catch (err) {
+    log("movements.classify.attributions_save_failed", { userId, error: String(err) }, "movements")
+  }
+
   // First delete old data for this user
   await query("DELETE FROM movements WHERE user_id = $1", [userId])
 
@@ -2614,7 +2686,52 @@ export async function classifyMovements(userId: string): Promise<{
     // Duplicate shares same underlying tx; observations stay linked to canonical
   }
 
+  // G3: Re-link saved attributions to new movement IDs
+  if (savedAttributions.size > 0) {
+    try {
+      const { rows: newObsRows } = await query<{ movement_id: string; source: string; source_id: string }>(
+        `SELECT mo.movement_id, mo.source, mo.source_id
+         FROM movement_observations mo
+         JOIN movements m ON m.id = mo.movement_id
+         WHERE m.user_id = $1`,
+        [userId]
+      )
+      const obsKeyToNewMovementId = new Map<string, string>()
+      for (const obs of newObsRows) {
+        const key = `${obs.source}:${obs.source_id}`
+        obsKeyToNewMovementId.set(key, obs.movement_id)
+      }
+
+      let restoredCount = 0
+      for (const [obsKey, attrs] of savedAttributions) {
+        const newMovementId = obsKeyToNewMovementId.get(obsKey)
+        if (!newMovementId) continue
+
+        for (const attr of attrs) {
+          await query(
+            `INSERT INTO movement_attributions (
+              user_id, movement_id, component_type, entity_id, reference_id,
+              gross_amount, net_amount, confidence, source, metadata, confidence_detail
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb)
+            ON CONFLICT DO NOTHING`,
+            [
+              userId, newMovementId, attr.component_type, attr.entity_id, attr.reference_id,
+              attr.gross_amount, attr.net_amount, attr.confidence, attr.source,
+              JSON.stringify(attr.metadata), attr.confidence_detail ? JSON.stringify(attr.confidence_detail) : null,
+            ]
+          )
+          restoredCount++
+        }
+      }
+      log("movements.classify.attributions_restored", { userId, restoredCount }, "movements")
+    } catch (err) {
+      log("movements.classify.attributions_restore_failed", { userId, error: String(err) }, "movements")
+    }
+  }
+
   log("movements.classify.done", { userId, ...stats }, "movements")
+  await query("SELECT pg_advisory_unlock(hashtext('movements:' || $1))", [userId])
   return stats
 }
 
@@ -2624,8 +2741,13 @@ export async function classifyMovements(userId: string): Promise<{
  * preserving `movement_attributions` foreign keys.
  */
 export async function refreshMovementEntityIds(userId: string): Promise<number> {
+  await query("SELECT pg_advisory_lock(hashtext('movements:' || $1))", [userId])
+
   const identityCtx = await buildMovementIdentityContext(userId)
-  if (identityCtx.size === 0) return 0
+  if (identityCtx.size === 0) {
+    await query("SELECT pg_advisory_unlock(hashtext('movements:' || $1))", [userId])
+    return 0
+  }
   const prefixIdx = buildPrefixIndex(identityCtx)
 
   const { rows } = await query<{
@@ -2659,5 +2781,6 @@ export async function refreshMovementEntityIds(userId: string): Promise<number> 
   }
 
   log("movements.refresh_entity_ids.done", { userId, updated, total: rows.length }, "movements")
+  await query("SELECT pg_advisory_unlock(hashtext('movements:' || $1))", [userId])
   return updated
 }

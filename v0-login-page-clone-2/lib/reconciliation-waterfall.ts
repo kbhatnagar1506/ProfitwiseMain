@@ -84,7 +84,7 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
 function isProcessorLikeMovement(m: MovementWithAvailableCash): boolean {
   if (m.movement_type === "processor_payout") return true
   const raw = (m.raw_description ?? "").toLowerCase()
-  return raw.includes("stripe") || raw.includes("shopify") || raw.includes("square")
+  return /\bstripe\b/i.test(raw) || /\bshopify\b/i.test(raw) || /\bsquare\b/i.test(raw)
 }
 
 function matchesEntity(
@@ -178,6 +178,7 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
      FROM cash_events
      WHERE user_id = $1::uuid
        AND event_type IN ('ar', 'ap')
+       AND COALESCE(status, 'open') != 'paid'
        AND COALESCE(outstanding_amount, amount) > $2
      ORDER BY expected_date ASC`,
     [userId, EPS],
@@ -331,8 +332,19 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       pendingAttributions.push(opts)
     }
 
-    // --- Stage 1: exact match ---
-    const exactMatch = entityEvents.find((e) => Math.abs(e.outstanding_amount - remainingCash) < EPS)
+    // --- Stage 1: exact match (including processor fee-aware match for inflows) ---
+    let exactMatch = entityEvents.find((e) => Math.abs(e.outstanding_amount - remainingCash) < EPS)
+    let s1FeeAmount = 0
+    if (!exactMatch && isInflow && isProcessorLikeMovement(movement) && targetType === "ar") {
+      exactMatch = entityEvents.find((e) => {
+        if (e.outstanding_amount <= EPS) return false
+        const impliedFee = (e.outstanding_amount - remainingCash) / e.outstanding_amount
+        return impliedFee >= 0 && impliedFee <= 0.08
+      })
+      if (exactMatch) {
+        s1FeeAmount = Math.max(0, exactMatch.outstanding_amount - remainingCash)
+      }
+    }
     if (exactMatch) {
       // #region agent log
       debugWf.hitS1++
@@ -349,14 +361,33 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             : (exactMatch.metadata?.bill_id as string) ?? null,
         gross_amount: exactMatch.outstanding_amount,
         net_amount: remainingCash,
-        confidence: 0.92,
+        confidence: s1FeeAmount > EPS ? 0.90 : 0.92,
         source: "rule",
         metadata: {
-          fee_amount: 0,
-          match_method: "exact",
+          fee_amount: s1FeeAmount,
+          match_method: s1FeeAmount > EPS ? "exact_with_fee" : "exact",
           waterfall_stage: "sniper",
         },
       })
+      if (s1FeeAmount > EPS && targetType === "ar") {
+        const processor = isProcessorLikeMovement(movement) ? "stripe" : "processor"
+        pushAttr({
+          userId,
+          movementId: movement.id,
+          component_type: "fee",
+          entity_id: `fee://${processor}`,
+          reference_id: null,
+          gross_amount: 0,
+          net_amount: -s1FeeAmount,
+          confidence: 0.90,
+          source: "rule",
+          metadata: {
+            fee_amount: s1FeeAmount,
+            match_method: "exact_with_fee",
+            waterfall_stage: "sniper_fee",
+          },
+        })
+      }
       exactMatch.outstanding_amount = 0
       exactMatch.status = "paid"
       touchedEventIds.add(exactMatch.id)
@@ -478,8 +509,10 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         touchedEventIds.add(event.id)
         fifoTouched = true
       } else {
-        const grossApplied = feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash
-        const feeAmt = Math.max(0, grossApplied - remainingCash)
+        const rawGross = feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash
+        const grossApplied = Math.min(rawGross, event.outstanding_amount)
+        const netApplied = feeAssumed > 0 ? grossApplied * (1 - feeAssumed) : grossApplied
+        const feeAmt = Math.max(0, grossApplied - netApplied)
         pushAttr({
           userId,
           movementId: movement.id,
@@ -490,7 +523,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
               ? (event.metadata?.invoice_id as string) ?? null
               : (event.metadata?.bill_id as string) ?? null,
           gross_amount: grossApplied,
-          net_amount: remainingCash,
+          net_amount: netApplied,
           confidence: 0.8,
           source: "rule",
           metadata: {
@@ -518,6 +551,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             },
           })
         }
+        remainingCash -= netApplied
         event.outstanding_amount -= grossApplied
         event.status = statusFromOutstanding(event.outstanding_amount, event.amount)
         touchedEventIds.add(event.id)
@@ -598,6 +632,29 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   }
 
   return withTransaction(async (client: PoolClient) => {
+    // D4: Clear stale Stage 4 review metadata from previous runs
+    await client.query(
+      `UPDATE movements SET metadata = metadata - 'reconciliation_waterfall_review'
+       WHERE user_id = $1::uuid AND metadata ? 'reconciliation_waterfall_review'`,
+      [userId],
+    )
+
+    // D5: Delete previous waterfall attributions to ensure idempotency on re-run
+    await client.query(
+      `DELETE FROM movement_attributions
+       WHERE user_id = $1 AND source = 'rule'
+         AND metadata->>'waterfall_stage' IS NOT NULL`,
+      [userId],
+    )
+
+    // D6: Re-load cash events inside transaction to avoid TOCTOU race.
+    // Outstanding amounts may have changed since the initial load if a concurrent
+    // waterfall was committed. Rebuild eventById from fresh data inside the txn.
+    eventById.clear()
+    for (const e of await loadOpenCashEvents(userId)) {
+      eventById.set(e.id, e)
+    }
+
     for (const opts of pendingAttributions) {
       await insertAttributionWithClient(client, opts)
     }

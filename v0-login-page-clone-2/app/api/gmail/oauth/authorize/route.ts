@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
   const redirectUri = `${base}/api/gmail/oauth/callback`
   const state = crypto.randomUUID()
   const cookieStore = await cookies()
-  cookieStore.set(STATE_COOKIE, JSON.stringify({ state }), {
+  cookieStore.set(STATE_COOKIE, JSON.stringify({ state, userId: user.id }), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

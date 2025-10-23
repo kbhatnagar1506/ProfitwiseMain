@@ -18,7 +18,7 @@ type PlaidWebhookPayload = {
 const keyCache = new Map<string, jose.JWK>()
 
 async function verifyPlaidWebhook(body: string, verificationHeader: string | null): Promise<boolean> {
-  if (!verificationHeader) return true
+  if (!verificationHeader) return false
   const client = getPlaidClient()
   let decoded: { header: { alg?: string; kid?: string }; payload?: { request_body_sha256?: string; iat?: number } }
   try {
@@ -122,6 +122,10 @@ export async function POST(request: NextRequest) {
 
   const verificationHeader =
     request.headers.get("plaid-verification") ?? request.headers.get("Plaid-Verification")
+  if (!verificationHeader && process.env.NODE_ENV === "production") {
+    log("webhook.verify.failed", { reason: "missing_verification_header" }, "plaid")
+    return NextResponse.json({ error: "Missing verification header" }, { status: 401 })
+  }
   if (verificationHeader) {
     try {
       if (!(await verifyPlaidWebhook(body, verificationHeader))) {

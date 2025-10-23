@@ -32,7 +32,7 @@ function isProduction(): boolean {
   return process.env.NODE_ENV === "production"
 }
 
-async function getUserIdByStripeAccountId(stripeAccountId: string): Promise<string | undefined> {
+export async function getUserIdByStripeAccountId(stripeAccountId: string): Promise<string | undefined> {
   try {
     await ensureStripeSchema()
     const { rows } = await query<{ user_id: string }>(

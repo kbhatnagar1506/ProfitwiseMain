@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createHmac, timingSafeEqual } from "crypto"
 import { log, warn, error } from "@/lib/logger"
-import { upsertStripeEntities, deleteStripeEntity } from "@/lib/stripe-entity-store"
+import { upsertStripeEntities, deleteStripeEntity, getUserIdByStripeAccountId } from "@/lib/stripe-entity-store"
+import { refreshMovementEntityIds } from "@/lib/movement-classify"
+import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 
 const STRIPE_ENTITY_TYPES = new Set([
   "customer",
@@ -123,6 +125,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         } else {
           const count = await upsertStripeEntities(accountId, parsed.entityType, [obj])
           log("stripe.webhook.entity.upserted", { accountId, entityType: parsed.entityType, entityId, count }, "stripe")
+
+          // G2: Refresh entity aliases and movement entity IDs for this user
+          const userId = await getUserIdByStripeAccountId(accountId)
+          if (userId) {
+            try {
+              await refreshEntityAliasesFromAccounting(userId)
+              const updated = await refreshMovementEntityIds(userId)
+              log("stripe.webhook.refresh.succeeded", { accountId, userId, movementsUpdated: updated }, "stripe")
+            } catch (refreshErr) {
+              error("stripe.webhook.refresh.failed", { accountId, userId, error: refreshErr }, "stripe")
+            }
+          }
         }
       } catch (err) {
         error("stripe.webhook.persist.failed", { eventType: event.type, accountId, error: err }, "stripe")

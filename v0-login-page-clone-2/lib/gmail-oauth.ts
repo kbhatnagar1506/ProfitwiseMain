@@ -76,22 +76,24 @@ export async function saveGmailConnection(
   refreshToken: string,
   accessToken: string,
   expiresIn: number | undefined,
-  email: string | null
+  email: string | null,
+  userId?: string | null
 ): Promise<void> {
   await ensureGmailSchema()
   const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null
   await query(
-    `INSERT INTO gmail_connections (id, email, refresh_token, access_token, expires_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())
+    `INSERT INTO gmail_connections (id, user_id, email, refresh_token, access_token, expires_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
      ON CONFLICT (id) DO UPDATE SET
+       user_id = COALESCE(EXCLUDED.user_id, gmail_connections.user_id),
        email = EXCLUDED.email,
        refresh_token = EXCLUDED.refresh_token,
        access_token = EXCLUDED.access_token,
        expires_at = EXCLUDED.expires_at,
        updated_at = NOW()`,
-    [connectionId, email, refreshToken, accessToken, expiresAt]
+    [connectionId, userId ?? null, email, refreshToken, accessToken, expiresAt]
   )
-  log("gmail.oauth.connection_saved", { connectionId, email }, "gmail")
+  log("gmail.oauth.connection_saved", { connectionId, email, userId }, "gmail")
 }
 
 export async function getGmailConnection(connectionId: string): Promise<{

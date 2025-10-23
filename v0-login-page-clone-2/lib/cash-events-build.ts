@@ -355,7 +355,7 @@ export async function syncCashEventsForUser(
     const fallbackExpected = inv.due_date && inv.due_date >= today ? inv.due_date : addDays(today, Math.min(14, inv.days_until_due ?? 7))
     const expected = expectedFromArLayer2 ?? fallbackExpected
     const prob =
-      inv.status === "overdue" ? 0.85 : inv.status === "partially_paid" ? 0.7 : 0.55
+      inv.status === "overdue" ? 0.55 : inv.status === "partially_paid" ? 0.75 : 0.85
     const entityLabel = inv.entity_uri ?? `${inv.source}:${inv.invoice_id}`
     arStableIds.push(entityLabel)
     const statusInit: "open" | "partially_paid" | "paid" = "open"
@@ -408,24 +408,28 @@ export async function syncCashEventsForUser(
          outstanding_amount = 0,
          metadata = COALESCE(metadata, '{}'::jsonb) || '{"stale_reason":"removed_from_source"}'::jsonb,
          updated_at = NOW()`
-  await query(
-    `UPDATE cash_events
-     ${staleSet}
-     WHERE user_id = $1::uuid
-       AND source = 'invoice'
-       AND event_type = 'ar'
-       AND NOT (entity_id = ANY($2::text[]))`,
-    [userId, arStableIds],
-  )
-  await query(
-    `UPDATE cash_events
-     ${staleSet}
-     WHERE user_id = $1::uuid
-       AND source = 'inferred'
-       AND event_type = 'ap'
-       AND NOT (entity_id = ANY($2::text[]))`,
-    [userId, apStableIds],
-  )
+  if (arStableIds.length > 0) {
+    await query(
+      `UPDATE cash_events
+       ${staleSet}
+       WHERE user_id = $1::uuid
+         AND source = 'invoice'
+         AND event_type = 'ar'
+         AND NOT (entity_id = ANY($2::text[]))`,
+      [userId, arStableIds],
+    )
+  }
+  if (apStableIds.length > 0) {
+    await query(
+      `UPDATE cash_events
+       ${staleSet}
+       WHERE user_id = $1::uuid
+         AND source = 'inferred'
+         AND event_type = 'ap'
+         AND NOT (entity_id = ANY($2::text[]))`,
+      [userId, apStableIds],
+    )
+  }
 }
 
 /** Aggregate inflow/outflow by counterparty entity from attributions + movements. */

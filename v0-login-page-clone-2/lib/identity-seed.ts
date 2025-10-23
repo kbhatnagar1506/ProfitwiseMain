@@ -452,8 +452,10 @@ async function extractGmailSignalGroups(userId: string): Promise<SignalGroup[]> 
   }>(
     `SELECT message_id, from_email, extracted_invoice
      FROM gmail_synced_messages
-     WHERE extracted_invoice IS NOT NULL
-     LIMIT 1000`
+     WHERE (user_id = $1 OR user_id IS NULL)
+     AND extracted_invoice IS NOT NULL
+     LIMIT 1000`,
+    [userId]
   )
 
   for (const row of rows) {
@@ -947,7 +949,8 @@ export async function seedIdentityGraph(userId: string): Promise<{
         `INSERT INTO entity_aliases (entity_id, alias, alias_type, source, source_id, confidence)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (entity_id, alias, alias_type, source) DO UPDATE SET
-           confidence = GREATEST(entity_aliases.confidence, EXCLUDED.confidence)`,
+           confidence = GREATEST(entity_aliases.confidence, EXCLUDED.confidence),
+           source_id = COALESCE(EXCLUDED.source_id, entity_aliases.source_id)`,
         [entityId, signal.alias, signal.alias_type, signal.source, signal.source_id, signal.confidence]
       )
       stats.aliasesCreated++

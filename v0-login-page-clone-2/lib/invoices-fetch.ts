@@ -80,7 +80,7 @@ export async function fetchOutstandingInvoices(
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (balance < totalAmt && balance > 0) status = "partially_paid"
+      if (balance < totalAmt && balance > 0 && status !== "overdue") status = "partially_paid"
       const entityId = custSourceId ? (sourceIdToEntity.get(custSourceId) ?? null) : null
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "qbo",
@@ -118,7 +118,7 @@ export async function fetchOutstandingInvoices(
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (amountDue < total && amountDue > 0) status = "partially_paid"
+      if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "xero",
         customer_name: custName, customer_source_id: contactId,
@@ -133,10 +133,11 @@ export async function fetchOutstandingInvoices(
   try {
     const gmailRows = await query<{ message_id: string; extracted_invoice: Record<string, unknown> }>(
       `SELECT message_id, extracted_invoice FROM gmail_synced_messages
-       WHERE extracted_invoice IS NOT NULL
+       WHERE (user_id = $1 OR user_id IS NULL)
+       AND extracted_invoice IS NOT NULL
        AND extracted_invoice->>'side' = 'AR'
        AND extracted_invoice->>'status' IN ('open', 'partially_paid')`,
-      []
+      [userId]
     ).then((r) => r.rows)
     for (const row of gmailRows) {
       const d = row.extracted_invoice
@@ -185,7 +186,7 @@ export async function fetchOutstandingInvoices(
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (amountDue < total && amountDue > 0) status = "partially_paid"
+      if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "stripe",
         customer_name: custName, customer_source_id: String(d.customer ?? ""),
@@ -254,7 +255,7 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         entity_id: entityId,
         entity_uri: toEntityUriAr("qbo", row.entity_id),
         amount: totalAmt,
-        amount_due: totalAmt,
+        amount_due: 0,
         due_date: dueDate,
         days_until_due: null,
         days_overdue: null,
@@ -293,7 +294,7 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         entity_id: entityId,
         entity_uri: toEntityUriAr("xero", row.entity_id),
         amount: total,
-        amount_due: total,
+        amount_due: 0,
         due_date: dueDate?.slice(0, 10) ?? null,
         days_until_due: null,
         days_overdue: null,
@@ -327,7 +328,7 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         entity_id: null,
         entity_uri: toEntityUriAr("stripe", row.entity_id),
         amount: total,
-        amount_due: total,
+        amount_due: 0,
         due_date: dueDate,
         days_until_due: null,
         days_overdue: null,
