@@ -75,7 +75,7 @@ export async function suggestARMatchesLLM(
   payment: InflowPayment,
   invoices: OutstandingInvoice[],
 ): Promise<ARMatchSuggestion[]> {
-  if (!process.env.AR_LLM_ENABLED || !API_KEY || invoices.length === 0) return []
+  if (!API_KEY || invoices.length === 0) return []
 
   const invSummary = invoices.slice(0, 15).map((i) =>
     `- ${i.invoice_id}: ${i.customer_name}, $${i.amount_due.toFixed(2)} due ${i.due_date ?? "unknown"}`

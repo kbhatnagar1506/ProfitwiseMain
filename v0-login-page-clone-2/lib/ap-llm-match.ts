@@ -200,8 +200,8 @@ export async function suggestAPMatches(
     }]
   }
 
-  // LLM fallback when AP_LLM_ENABLED
-  if (!process.env.AP_LLM_ENABLED || !API_KEY || obligations.length === 0) return []
+  // LLM fallback for unmatched
+  if (!API_KEY || obligations.length === 0) return []
 
   const obSummary = obligations.slice(0, 15).map((o) =>
     `- ${o.obligation_id}: ${o.vendor_name}, $${o.amount_due.toFixed(2)} due ${o.due_date ?? "unknown"}`

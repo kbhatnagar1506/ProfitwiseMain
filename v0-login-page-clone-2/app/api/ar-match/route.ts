@@ -101,7 +101,7 @@ export async function POST(req: Request) {
       })
     }
     const suggestions = suggestARMatches(payment, outstandingInvoices)
-    if (suggestions.length === 0 && process.env.AR_LLM_ENABLED) {
+    if (suggestions.length === 0) {
       const llmSuggestions = await suggestARMatchesLLM(payment, outstandingInvoices)
       if (llmSuggestions.length > 0) {
         return NextResponse.json({
