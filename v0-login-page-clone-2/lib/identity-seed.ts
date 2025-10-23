@@ -9,7 +9,7 @@
  * - Canonical entity is the resolved node; aliases + assertions are evidence
  */
 
-import { query, ensureIdentitySchema } from "./db"
+import { query, ensureIdentitySchema, ensureGmailSchema } from "./db"
 import { log } from "./logger"
 import { normalizeForMatch } from "./alias-normalize"
 import { addEntitiesToSupermemory, searchEntityContextFromSupermemory } from "./supermemory"
@@ -445,6 +445,7 @@ async function extractPlaidMerchantStrings(userId: string): Promise<string[]> {
 async function extractGmailSignalGroups(userId: string): Promise<SignalGroup[]> {
   const groups: SignalGroup[] = []
 
+  await ensureGmailSchema()
   const { rows } = await query<{
     message_id: string
     from_email: string | null

@@ -2,7 +2,7 @@
  * Shared invoice fetch for AR. QBO, Xero, Gmail, Stripe.
  */
 
-import { query, ensureQBOSchema } from "@/lib/db"
+import { query, ensureQBOSchema, ensureGmailSchema } from "@/lib/db"
 import { toEntityUriAr } from "@/lib/entity-uri"
 import type { OutstandingInvoice } from "./state/types"
 
@@ -131,6 +131,7 @@ export async function fetchOutstandingInvoices(
   } catch { /* Xero invoices may not be available */ }
 
   try {
+    await ensureGmailSchema()
     const gmailRows = await query<{ message_id: string; extracted_invoice: Record<string, unknown> }>(
       `SELECT message_id, extracted_invoice FROM gmail_synced_messages
        WHERE (user_id = $1 OR user_id IS NULL)
