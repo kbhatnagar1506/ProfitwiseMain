@@ -12,6 +12,8 @@ import {
   type ReconMovementRow,
 } from "@/lib/reconciliation-movement-rows"
 import { getMovementsPendingWaterfallReview } from "@/lib/reconciliation-waterfall"
+import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
+import { refreshMovementEntityIds } from "@/lib/movement-classify"
 
 const WATERFALL_REVIEW_PREVIEW = 15
 
@@ -42,6 +44,9 @@ export async function GET() {
   const obligations = computeAPStateFromBills(bills)
 
   try {
+    await refreshEntityAliasesFromAccounting(user.id)
+    await refreshMovementEntityIds(user.id)
+
     await runFinancialBrain(user.id, {
       outstandingInvoices: invoices,
       apObligations: obligations,

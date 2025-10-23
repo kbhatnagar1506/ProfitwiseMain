@@ -11,6 +11,8 @@ import { runFinancialBrain } from "@/lib/financial-brain"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
 import { computeAPStateFromBills } from "@/lib/state/ar-ap"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
+import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
+import { refreshMovementEntityIds } from "@/lib/movement-classify"
 
 export async function POST(req: Request) {
   const cookieStore = await cookies()
@@ -42,6 +44,9 @@ export async function POST(req: Request) {
     let outstandingInvoices: import("@/lib/state/types").OutstandingInvoice[] | undefined
     let apObligations: import("@/lib/state/ar-ap").APObligation[] | undefined
     if (syncCashEvents) {
+      await refreshEntityAliasesFromAccounting(user.id)
+      await refreshMovementEntityIds(user.id)
+
       outstandingInvoices = await fetchInvoicesForReconciliation(user.id)
       const bills = await fetchOutstandingBills(user.id)
       apObligations = computeAPStateFromBills(bills)

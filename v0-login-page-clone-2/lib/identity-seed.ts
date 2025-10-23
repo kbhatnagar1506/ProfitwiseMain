@@ -1032,6 +1032,125 @@ export type MovementIdentityEntry = {
 export type MovementIdentityContext = Map<string, MovementIdentityEntry>
 
 /**
+ * Lightweight alias refresh: re-processes QBO Customers/Vendors and Xero
+ * Contacts to ensure `entity_aliases` has current source_id mappings
+ * (needed for invoice `entity_id` resolution). Skips LLM normalization,
+ * Plaid merchant processing, and Supermemory sync.
+ */
+export async function refreshEntityAliasesFromAccounting(userId: string): Promise<{
+  aliasesRefreshed: number
+  entitiesCreated: number
+}> {
+  await ensureIdentitySchema()
+
+  const stats = { aliasesRefreshed: 0, entitiesCreated: 0 }
+
+  const ctx = await getSelfContext(userId)
+
+  const [qboGroups, xeroGroups] = await Promise.all([
+    extractQboSignalGroups(userId, ctx),
+    extractXeroSignalGroups(userId, ctx),
+  ])
+
+  const allGroups = [...qboGroups, ...xeroGroups]
+  if (allGroups.length === 0) return stats
+
+  let entities = (await query<EntityRow>(
+    "SELECT id, canonical_name, entity_type, confidence FROM entities WHERE user_id = $1",
+    [userId]
+  )).rows
+
+  const loadAliasMap = async (): Promise<Map<string, AliasRow[]>> => {
+    if (entities.length === 0) return new Map()
+    const ids = entities.map((e) => e.id)
+    const { rows } = await query<{ entity_id: string; alias: string; alias_type: string; source: string }>(
+      `SELECT entity_id, alias, alias_type, source FROM entity_aliases WHERE entity_id = ANY($1)`,
+      [ids]
+    )
+    const map = new Map<string, AliasRow[]>()
+    for (const r of rows) {
+      const list = map.get(r.entity_id) ?? []
+      list.push({ alias: r.alias, alias_type: r.alias_type, source: r.source })
+      map.set(r.entity_id, list)
+    }
+    return map
+  }
+
+  const aliasMap = await loadAliasMap()
+
+  allGroups.sort((a, b) => b.anchor.confidence - a.anchor.confidence)
+
+  for (const group of allGroups) {
+    const { anchor, satellites } = group
+    if (!anchor.alias || anchor.alias.trim().length === 0) continue
+
+    const candidate = findCandidateEntity(anchor, entities, aliasMap)
+
+    let entityId: string
+
+    if (candidate && candidate.matchScore >= 0.6) {
+      entityId = candidate.entityId
+    } else {
+      const canonicalName = anchor.alias_type === "email"
+        ? anchor.alias.split("@")[0] ?? anchor.alias
+        : anchor.alias_type === "domain"
+          ? anchor.alias
+          : normalizeProcessorName(stripParenthetical(anchor.alias))
+
+      if (isTestOrNoiseEntity(anchor.alias, anchor.alias_type, canonicalName)) continue
+
+      const { rows: inserted } = await query<{ id: string }>(
+        `INSERT INTO entities (user_id, entity_type, canonical_name, display_name, confidence)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, canonical_name, entity_type) DO UPDATE SET
+           confidence = GREATEST(entities.confidence, EXCLUDED.confidence),
+           updated_at = NOW()
+         RETURNING id`,
+        [userId, anchor.entity_type, canonicalName, anchor.alias, anchor.confidence]
+      )
+      entityId = inserted[0]?.id
+      if (!entityId) continue
+      stats.entitiesCreated++
+      entities.push({ id: entityId, canonical_name: canonicalName, entity_type: anchor.entity_type, confidence: anchor.confidence })
+    }
+
+    const allSignals = [anchor, ...satellites]
+    for (const signal of allSignals) {
+      if (!signal.alias || signal.alias.trim().length === 0) continue
+
+      await query(
+        `INSERT INTO entity_aliases (entity_id, alias, alias_type, source, source_id, confidence)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (entity_id, alias, alias_type, source) DO UPDATE SET
+           confidence = GREATEST(entity_aliases.confidence, EXCLUDED.confidence),
+           source_id = COALESCE(EXCLUDED.source_id, entity_aliases.source_id)`,
+        [entityId, signal.alias, signal.alias_type, signal.source, signal.source_id, signal.confidence]
+      )
+      stats.aliasesRefreshed++
+
+      if (signal.alias_type === "email") {
+        const domain = extractDomain(signal.alias)
+        if (domain) {
+          await query(
+            `INSERT INTO entity_aliases (entity_id, alias, alias_type, source, source_id, confidence)
+             VALUES ($1, $2, 'domain', $3, $4, $5)
+             ON CONFLICT (entity_id, alias, alias_type, source) DO NOTHING`,
+            [entityId, domain, signal.source, signal.source_id, signal.confidence * 0.8]
+          )
+        }
+      }
+
+      const existing = aliasMap.get(entityId) ?? []
+      existing.push({ alias: signal.alias, alias_type: signal.alias_type, source: signal.source })
+      aliasMap.set(entityId, existing)
+    }
+  }
+
+  log("identity.refresh_aliases.done", { userId, ...stats }, "identity")
+  return stats
+}
+
+/**
  * Builds a pre-computed lookup from every known counterparty string to the
  * identity entry the movement engine needs. The movement engine never touches
  * entity_aliases directly — this function does all the resolution work.
