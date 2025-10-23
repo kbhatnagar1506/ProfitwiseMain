@@ -18,6 +18,9 @@ import { resolveDisplayNames } from "@/lib/display-name-resolve"
 
 const AUTO_MATCH_CONFIDENCE = 0.8
 
+export type InvoiceRow = { invoice_id: string; type: "ar"; display_name: string; amount: number; amount_due: number; due_date: string | null; status: string }
+export type BillRow = { bill_id: string; type: "ap"; display_name: string; amount: number; amount_due: number; due_date: string | null; status: string }
+
 export async function GET() {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
@@ -164,7 +167,43 @@ export async function GET() {
     const totalUnmatchedInflows = unmatchedInflows.reduce((s, m) => s + m.amount, 0)
     const totalUnmatchedOutflows = unmatchedOutflows.reduce((s, m) => s + m.amount, 0)
 
+    // Invoices (AR) + Bills (AP) with entity display names for left column
+    const invoices = await fetchInvoicesForReconciliation(user.id)
+    const bills = await fetchOutstandingBills(user.id)
+    const entityIds = [...new Set([
+      ...invoices.map((i) => i.entity_id).filter(Boolean),
+      ...bills.map((b) => b.entity_id).filter(Boolean),
+    ])] as string[]
+    const entityNames = new Map<string, string>()
+    if (entityIds.length > 0) {
+      const { rows: entityRows } = await query<{ id: string; canonical_name: string }>(
+        `SELECT id::text, canonical_name FROM entities WHERE id::text = ANY($1)`,
+        [entityIds]
+      )
+      for (const r of entityRows) entityNames.set(r.id, r.canonical_name)
+    }
+    const invoices_rows: InvoiceRow[] = invoices.map((i) => ({
+      invoice_id: i.invoice_id,
+      type: "ar",
+      display_name: (i.entity_id && entityNames.get(i.entity_id)) || i.customer_name || "Unknown",
+      amount: i.amount,
+      amount_due: i.amount_due,
+      due_date: i.due_date,
+      status: i.status,
+    }))
+    const bills_rows: BillRow[] = bills.map((b) => ({
+      bill_id: b.bill_id,
+      type: "ap",
+      display_name: (b.entity_id && entityNames.get(b.entity_id)) || b.vendor_name || "Unknown",
+      amount: b.amount,
+      amount_due: b.amount_due,
+      due_date: b.due_date,
+      status: b.status,
+    }))
+
     return NextResponse.json({
+      invoices: invoices_rows,
+      bills: bills_rows,
       matched_inflows: matchedInflows,
       matched_outflows: matchedOutflows,
       unmatched_inflows: unmatchedInflows,
