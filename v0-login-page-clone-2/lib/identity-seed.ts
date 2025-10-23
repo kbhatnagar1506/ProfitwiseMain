@@ -70,6 +70,15 @@ function isKnownProcessor(name: string): boolean {
   return false
 }
 
+/** Skip creating entities for test data, emails, malformed names. */
+function isTestOrNoiseEntity(alias: string, aliasType: string, canonicalName: string): boolean {
+  if (aliasType === "email" || /^[^\s]+@[^\s]+\.[^\s]+$/.test(alias)) return true
+  const cn = canonicalName.trim().toLowerCase()
+  if (/\b(test|jruby|jack\s*test)\b/.test(cn)) return true
+  if (cn.length <= 2) return true
+  return false
+}
+
 function normalizeProcessorName(name: string): string {
   return name
     .replace(/\s*-\s*USD$/i, "")
@@ -901,6 +910,11 @@ export async function seedIdentityGraph(userId: string): Promise<{
         : anchor.alias_type === "domain"
           ? anchor.alias
           : normalizeProcessorName(stripParenthetical(anchor.alias))
+
+      if (isTestOrNoiseEntity(anchor.alias, anchor.alias_type, canonicalName)) {
+        stats.testSkipped = (stats.testSkipped ?? 0) + 1
+        continue
+      }
 
       const { rows: inserted } = await query<{ id: string }>(
         `INSERT INTO entities (user_id, entity_type, canonical_name, display_name, confidence)

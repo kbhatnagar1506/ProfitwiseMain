@@ -102,9 +102,9 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
 
   // Gmail AP bills (gmail_synced_messages may not have user_id; query all if so)
   try {
-    type GmailApRow = { extracted_invoice: Record<string, unknown> }
+    type GmailApRow = { message_id: string; extracted_invoice: Record<string, unknown> }
     const gmailApRows = await query<GmailApRow>(
-      `SELECT extracted_invoice FROM gmail_synced_messages
+      `SELECT message_id, extracted_invoice FROM gmail_synced_messages
        WHERE extracted_invoice IS NOT NULL
        AND extracted_invoice->>'side' = 'AP'
        AND extracted_invoice->>'status' IN ('open', 'partially_paid')`,
@@ -125,8 +125,9 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
+      const billId = `gmail_ap_${row.message_id ?? d.invoice_number ?? crypto.randomUUID()}`
       outstandingBills.push({
-        bill_id: `gmail_ap_${d.invoice_number ?? Date.now()}`, source: "gmail",
+        bill_id: billId, source: "gmail",
         vendor_name: vendName, vendor_source_id: null,
         entity_id: null, amount: total, amount_due: amountDue,
         due_date: dueDate, days_until_due: daysToDue,
@@ -135,5 +136,11 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
     }
   } catch { /* Gmail AP may not be available */ }
 
-  return outstandingBills
+  // Dedupe by (entity_id ?? vendor_name, amount_due, due_date) — keep first occurrence
+  const seen = new Map<string, OutstandingBill>()
+  for (const b of outstandingBills) {
+    const key = `${b.entity_id ?? b.vendor_name}|${b.amount_due}|${b.due_date ?? ""}`
+    if (!seen.has(key)) seen.set(key, b)
+  }
+  return [...seen.values()]
 }

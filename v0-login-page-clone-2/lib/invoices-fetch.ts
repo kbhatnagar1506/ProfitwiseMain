@@ -94,8 +94,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
   } catch { /* Xero invoices may not be available */ }
 
   try {
-    const gmailRows = await query<{ extracted_invoice: Record<string, unknown> }>(
-      `SELECT extracted_invoice FROM gmail_synced_messages
+    const gmailRows = await query<{ message_id: string; extracted_invoice: Record<string, unknown> }>(
+      `SELECT message_id, extracted_invoice FROM gmail_synced_messages
        WHERE extracted_invoice IS NOT NULL
        AND extracted_invoice->>'side' = 'AR'
        AND extracted_invoice->>'status' IN ('open', 'partially_paid')`,
@@ -116,8 +116,9 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
+      const invoiceId = `gmail_${row.message_id ?? d.invoice_number ?? crypto.randomUUID()}`
       outstandingInvoices.push({
-        invoice_id: `gmail_${d.invoice_number ?? Date.now()}`, source: "gmail",
+        invoice_id: invoiceId, source: "gmail",
         customer_name: custName, customer_source_id: null,
         entity_id: null, amount: total, amount_due: amountDue,
         due_date: dueDate, days_until_due: daysToDue, days_overdue: daysOverdue, status,
@@ -290,5 +291,11 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
     }
   } catch { /* */ }
 
-  return outstanding
+  // Dedupe by (entity_id ?? customer_name, amount_due, due_date) — keep first occurrence
+  const seen = new Map<string, OutstandingInvoice>()
+  for (const i of outstanding) {
+    const key = `${i.entity_id ?? i.customer_name}|${i.amount_due}|${i.due_date ?? ""}`
+    if (!seen.has(key)) seen.set(key, i)
+  }
+  return [...seen.values()]
 }

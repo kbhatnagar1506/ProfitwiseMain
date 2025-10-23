@@ -67,10 +67,11 @@ function deterministicMatch(
   const entityMatch = payment.entity_id && obligation.entity_id
     ? payment.entity_id === obligation.entity_id
     : false
-  const nameMatch = !entityMatch && namesMatch(
+  const nameMatch = namesMatch(
     payment.counterparty_name ?? payment.raw_description,
     obligation.vendor_name,
   )
+  if (payment.entity_id && obligation.entity_id && !entityMatch && !nameMatch) return null
   const entityScore = entityMatch ? 1 : nameMatch ? 0.85 : 0.5
   const confidence = (amountMatch + dateMatch + entityScore) / 3
   return {
@@ -103,7 +104,7 @@ export function matchAPPayment(
   for (const ob of obligations) {
     const m = deterministicMatch(payment, ob)
     if (!m || m.confidence < DETERMINISTIC_THRESHOLD) continue
-    if (payment.entity_id && ob.entity_id && payment.entity_id !== ob.entity_id) continue
+    // When entity IDs differ, deterministicMatch uses name fallback; allow match if confidence passes.
     if (!best || m.confidence > best.conf) {
       const gross = ob.amount_due
       const net = payment.amount

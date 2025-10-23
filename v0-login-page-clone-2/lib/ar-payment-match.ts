@@ -69,18 +69,16 @@ function deterministicARMatch(
 ): { confidence: number; gross: number; fee: number; net: number; method: "exact" | "tolerance" } | null {
   if (payment.amount <= 0 || invoice.amount_due <= 0) return null
 
-  // Entity match: when both have entity_id, they must match.
+  // Entity match: when both have entity_id, they must match for full confidence.
   const entityMatch = payment.entity_id && invoice.entity_id
     ? payment.entity_id === invoice.entity_id
     : false
-  if (payment.entity_id && invoice.entity_id && !entityMatch) return null
-
-  // When entity_id is missing on one side (e.g. invoice has it, transaction doesn't), use counterparty name.
-  // Transaction has counterparty/raw_description; invoice has customer_name.
-  const nameMatch = !entityMatch && namesMatch(
+  // When entity IDs differ, allow name match as fallback (same person resolved to different entities).
+  const nameMatch = namesMatch(
     payment.counterparty_name ?? payment.raw_description,
     invoice.customer_name,
   )
+  if (payment.entity_id && invoice.entity_id && !entityMatch && !nameMatch) return null
 
   // Time window: payment date within ±45 days of due date
   const dueDate = invoice.due_date ?? payment.date
