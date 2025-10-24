@@ -290,9 +290,30 @@ export function OnboardingFlow({
   type RiskState = { liquidity_risk: RiskDimension; concentration_risk: RiskDimension; dependency_risk: RiskDimension; anomaly_risk: RiskDimension; uncertainty_risk: RiskDimension; overall: RiskLevel; overall_score: number }
   type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; risk: RiskState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
-  type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: OutstandingInvoice[]; paid_invoices?: OutstandingInvoice[]; avg_days_to_due: number | null; reconciliation_summary?: { total_invoices: number; matched_count: number; partial_count: number; unmatched_count: number; matched_amount: number; partial_matched_amount: number; unmatched_amount: number; match_rate: number } }
-  type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; source: "bill" | "inferred"; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; days_overdue: number | null; confidence: string; cadence: string; payment_count: number; priority: "high" | "medium" | "low"; risk_flag: string | null }[]; bills?: OutstandingBill[]; paid_bills?: OutstandingBill[]; reconciliation_summary?: { total_bills: number; matched_count: number; partial_count: number; unmatched_count: number; matched_amount: number; partial_matched_amount: number; unmatched_amount: number; match_rate: number } }
+  type ARReconciliationSummary = { 
+    total_invoices: number; matched_count: number; partial_count: number; unmatched_count: number; 
+    matched_amount: number; partial_matched_amount: number; unmatched_amount: number; match_rate: number;
+    accounting_outstanding?: number; bank_verified_outstanding?: number; bank_verified_matched?: number;
+    discrepancy?: number; suspicious_count?: number; suspicious_amount?: number;
+  }
+  type APReconciliationSummary = { 
+    total_bills: number; matched_count: number; partial_count: number; unmatched_count: number; 
+    matched_amount: number; partial_matched_amount: number; unmatched_amount: number; match_rate: number;
+    accounting_outstanding?: number; bank_verified_outstanding?: number; bank_verified_matched?: number;
+    discrepancy?: number; suspicious_count?: number; suspicious_amount?: number;
+  }
+  type ExcludedMovement = { id: string; amount: number; date: string; counterparty: string | null; direction: "inflow" | "outflow"; economic_class: string; cashflow_bucket: string | null }
+  type ExcludedCategories = {
+    transfers: ExcludedMovement[]; owner_activity: ExcludedMovement[]; fees_and_interest: ExcludedMovement[]; processor_settlements: ExcludedMovement[];
+    totals: { transfers_count: number; transfers_amount: number; owner_activity_count: number; owner_activity_amount: number; fees_and_interest_count: number; fees_and_interest_amount: number; processor_settlements_count: number; processor_settlements_amount: number }
+  }
+  type TransferPair = { outflow_id: string; inflow_id: string; amount: number; date: string; counterparty: string | null; days_apart: number }
+  type TransferPairsResult = { pairs: TransferPair[]; unpaired_transfers: ExcludedMovement[]; total_paired_amount: number; total_unpaired_amount: number }
+  type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: OutstandingInvoice[]; paid_invoices?: OutstandingInvoice[]; avg_days_to_due: number | null; reconciliation_summary?: ARReconciliationSummary }
+  type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; source: "bill" | "inferred"; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; days_overdue: number | null; confidence: string; cadence: string; payment_count: number; priority: "high" | "medium" | "low"; risk_flag: string | null }[]; bills?: OutstandingBill[]; paid_bills?: OutstandingBill[]; reconciliation_summary?: APReconciliationSummary }
   const [arApData, setArApData] = useState<{ ar: ARState; ap: APState } | null>(null)
+  const [excludedCategories, setExcludedCategories] = useState<ExcludedCategories | null>(null)
+  const [transferPairs, setTransferPairs] = useState<TransferPairsResult | null>(null)
   const [arApLoading, setArApLoading] = useState(false)
   const [arApError, setArApError] = useState<string | null>(null)
   const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null)
@@ -880,12 +901,14 @@ export function OnboardingFlow({
 
     fetch("/api/ar-ap-step")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP step failed"))))
-      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData; waterfall_review?: WaterfallReviewData }) => {
+      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData; waterfall_review?: WaterfallReviewData; excluded_categories?: ExcludedCategories; transfer_pairs?: TransferPairsResult }) => {
         if (cancelled) return
         setArApData({ ar: data.ar, ap: data.ap })
         setMappingArAp({ ar: data.ar, ap: data.ap })
         setMappingRecon(data.recon ?? null)
         setWaterfallReview(data.waterfall_review ?? null)
+        setExcludedCategories(data.excluded_categories ?? null)
+        setTransferPairs(data.transfer_pairs ?? null)
         setArApLoading(false)
         setMappingLoading(false)
       })
@@ -912,6 +935,8 @@ export function OnboardingFlow({
         ap?: APState
         recon?: MappingReconData
         waterfall_review?: WaterfallReviewData
+        excluded_categories?: ExcludedCategories
+        transfer_pairs?: TransferPairsResult
         is_reconciling?: boolean
         error?: string
         detail?: string
@@ -927,6 +952,8 @@ export function OnboardingFlow({
       }
       setMappingRecon(data.recon ?? null)
       setWaterfallReview(data.waterfall_review ?? null)
+      setExcludedCategories(data.excluded_categories ?? null)
+      setTransferPairs(data.transfer_pairs ?? null)
       
       if (data.is_reconciling) {
         setTimeout(() => {
@@ -950,6 +977,8 @@ export function OnboardingFlow({
         ap?: APState
         recon?: MappingReconData
         waterfall_review?: WaterfallReviewData
+        excluded_categories?: ExcludedCategories
+        transfer_pairs?: TransferPairsResult
         is_reconciling?: boolean
       }
       if (r.ok) {
@@ -959,7 +988,9 @@ export function OnboardingFlow({
         }
         setMappingRecon(data.recon ?? null)
         setWaterfallReview(data.waterfall_review ?? null)
-        
+        setExcludedCategories(data.excluded_categories ?? null)
+        setTransferPairs(data.transfer_pairs ?? null)
+
         if (data.is_reconciling) {
           setTimeout(() => {
             void pollReconciliationStatus()
@@ -3640,6 +3671,47 @@ export function OnboardingFlow({
                         <div className="text-xs text-gray-400 mt-1">AP Matched</div>
                       </div>
                     </div>
+
+                    {/* Bank-Verified Outstanding */}
+                    {(arApData.ar.reconciliation_summary?.accounting_outstanding !== undefined || arApData.ap.reconciliation_summary?.accounting_outstanding !== undefined) && (
+                      <div className="grid grid-cols-2 gap-4 mb-4 pt-4 border-t border-white/10">
+                        <div className="bg-white/5 rounded-lg p-3">
+                          <div className="text-xs text-gray-400 mb-2">AR Outstanding</div>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-gray-400">Accounting:</span>
+                            <span className="text-white">{money(arApData.ar.reconciliation_summary?.accounting_outstanding ?? 0)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-gray-400">Bank-Verified:</span>
+                            <span className="text-emerald-400">{money(arApData.ar.reconciliation_summary?.bank_verified_outstanding ?? 0)}</span>
+                          </div>
+                          {(arApData.ar.reconciliation_summary?.suspicious_count ?? 0) > 0 && (
+                            <div className="flex justify-between text-sm mt-2 pt-2 border-t border-white/10">
+                              <span className="text-amber-400">Suspicious:</span>
+                              <span className="text-amber-400">{arApData.ar.reconciliation_summary?.suspicious_count} ({money(arApData.ar.reconciliation_summary?.suspicious_amount ?? 0)})</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3">
+                          <div className="text-xs text-gray-400 mb-2">AP Outstanding</div>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-gray-400">Accounting:</span>
+                            <span className="text-white">{money(arApData.ap.reconciliation_summary?.accounting_outstanding ?? 0)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-gray-400">Bank-Verified:</span>
+                            <span className="text-emerald-400">{money(arApData.ap.reconciliation_summary?.bank_verified_outstanding ?? 0)}</span>
+                          </div>
+                          {(arApData.ap.reconciliation_summary?.suspicious_count ?? 0) > 0 && (
+                            <div className="flex justify-between text-sm mt-2 pt-2 border-t border-white/10">
+                              <span className="text-amber-400">Suspicious:</span>
+                              <span className="text-amber-400">{arApData.ap.reconciliation_summary?.suspicious_count} ({money(arApData.ap.reconciliation_summary?.suspicious_amount ?? 0)})</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-4">
                       <div className="bg-white/5 rounded-lg p-3">
                         <div className="text-xs text-gray-400 mb-2">Bank Inflows (AR)</div>
@@ -3660,6 +3732,85 @@ export function OnboardingFlow({
                       <span className="text-purple-400 font-semibold">{money(mappingRecon.total_fees_paid)}</span>
                       <span className="text-xs text-gray-400 ml-2">Total Fees Identified</span>
                     </div>
+                  </div>
+                )}
+
+                {/* ─── Excluded Categories (Non-AR/AP Movements) ─── */}
+                {excludedCategories && excludedCategories.totals && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-white/10">
+                      <h3 className="text-base font-semibold text-white">Excluded from AR/AP Reconciliation</h3>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        These movements are classified as non-AR/AP and excluded from invoice/bill matching.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4">
+                      <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-purple-400">{excludedCategories.totals.transfers_count}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Transfers</div>
+                        <div className="text-[9px] text-gray-500">{money(excludedCategories.totals.transfers_amount)}</div>
+                      </div>
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-amber-400">{excludedCategories.totals.owner_activity_count}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Owner Activity</div>
+                        <div className="text-[9px] text-gray-500">{money(excludedCategories.totals.owner_activity_amount)}</div>
+                      </div>
+                      <div className="bg-gray-500/10 border border-gray-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-gray-400">{excludedCategories.totals.fees_and_interest_count}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Fees & Interest</div>
+                        <div className="text-[9px] text-gray-500">{money(excludedCategories.totals.fees_and_interest_amount)}</div>
+                      </div>
+                      <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-blue-400">{excludedCategories.totals.processor_settlements_count}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Processor Settlements</div>
+                        <div className="text-[9px] text-gray-500">{money(excludedCategories.totals.processor_settlements_amount)}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Transfer Pairs (Netted Internal Transfers) ─── */}
+                {transferPairs && (transferPairs.pairs.length > 0 || transferPairs.unpaired_transfers.length > 0) && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-white/10">
+                      <h3 className="text-base font-semibold text-white">Internal Transfers</h3>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        Matched transfer pairs (outflow + inflow within 3 days, same amount) net to zero.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4">
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-emerald-400">{transferPairs.pairs.length}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Matched Pairs</div>
+                        <div className="text-[9px] text-gray-500">{money(transferPairs.total_paired_amount)} (nets to $0)</div>
+                      </div>
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-amber-400">{transferPairs.unpaired_transfers.length}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Unpaired Transfers</div>
+                        <div className="text-[9px] text-gray-500">{money(transferPairs.total_unpaired_amount)}</div>
+                      </div>
+                    </div>
+                    {transferPairs.pairs.length > 0 && (
+                      <div className="px-4 pb-4">
+                        <div className="text-[10px] text-gray-400 mb-2">Recent Matched Pairs</div>
+                        <div className="space-y-2 max-h-40 overflow-y-auto">
+                          {transferPairs.pairs.slice(0, 5).map((pair, idx) => (
+                            <div key={idx} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2 text-[11px]">
+                              <div className="flex items-center gap-2">
+                                <span className="text-red-400">OUT</span>
+                                <span className="text-gray-400">→</span>
+                                <span className="text-emerald-400">IN</span>
+                                <span className="text-gray-500">({pair.days_apart}d apart)</span>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-gray-400">{pair.counterparty ?? "Internal"}</span>
+                                <span className="text-white font-medium">{money(pair.amount)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
