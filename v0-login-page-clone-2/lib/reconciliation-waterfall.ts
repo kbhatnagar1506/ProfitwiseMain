@@ -155,6 +155,24 @@ function matchesEntity(
   const cp = normalizeEntityName(bankLabel)
   if (cn && cp && cn === cp) return true
   if (cn.length >= 4 && cp.length >= 4 && (cn.includes(cp) || cp.includes(cn))) return true
+  
+  // Extract organization name from parentheses in customer name (e.g., "Rosalyn Huckaby (Pivot)" -> "Pivot")
+  // This handles cases where bank shows org name but invoice is under contact name
+  if (customerName) {
+    const orgMatch = customerName.match(/\(([^)]+)\)/)
+    if (orgMatch) {
+      const orgName = normalizeEntityName(orgMatch[1])
+      if (orgName && cp && orgName.length >= 3 && (orgName.includes(cp) || cp.includes(orgName))) {
+        return true
+      }
+      // Also check against raw description for org name
+      const rawDesc = normalizeEntityName(movement.raw_description)
+      if (orgName && rawDesc && orgName.length >= 3 && (rawDesc.includes(orgName) || orgName.includes(rawDesc.slice(0, 20)))) {
+        return true
+      }
+    }
+  }
+  
   if (movement.counterparty_entity_id) {
     const entNorm = entityNormByUuid.get(movement.counterparty_entity_id)
     if (entNorm && cn && entNorm === cn) return true
