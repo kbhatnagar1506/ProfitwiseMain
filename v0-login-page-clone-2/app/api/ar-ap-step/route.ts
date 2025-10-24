@@ -3,7 +3,7 @@ import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema } from "@/lib/db"
 import { fetchInvoicesForReconciliation, enrichInvoicesWithReconciliationStatus } from "@/lib/invoices-fetch"
-import { fetchOutstandingBills } from "@/lib/bills-fetch"
+import { fetchBillsForReconciliation, enrichBillsWithReconciliationStatus } from "@/lib/bills-fetch"
 import { computeARState, computeAPStateFromBills } from "@/lib/state/ar-ap"
 import { query } from "@/lib/db"
 import { runFinancialBrain } from "@/lib/financial-brain"
@@ -14,7 +14,7 @@ import {
 import { getMovementsPendingWaterfallReview } from "@/lib/reconciliation-waterfall"
 import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
-import type { OutstandingInvoice } from "@/lib/state/types"
+import type { OutstandingInvoice, OutstandingBill } from "@/lib/state/types"
 
 const WATERFALL_REVIEW_PREVIEW = 15
 
@@ -45,8 +45,8 @@ async function runReconciliationInBackground(userId: string) {
   
   try {
     const invoices = await fetchInvoicesForReconciliation(userId)
-    const bills = await fetchOutstandingBills(userId)
-    const obligations = computeAPStateFromBills(bills)
+    const bills = await fetchBillsForReconciliation(userId)
+    const obligations = computeAPStateFromBills(bills.filter(b => b.status !== "paid"))
     
     await refreshEntityAliasesFromAccounting(userId)
     await refreshMovementEntityIds(userId)
@@ -83,22 +83,30 @@ export async function GET(request: Request) {
   }
 
   const invoices = await fetchInvoicesForReconciliation(user.id)
-  const bills = await fetchOutstandingBills(user.id)
-  const obligations = computeAPStateFromBills(bills)
+  const bills = await fetchBillsForReconciliation(user.id)
+  const obligations = computeAPStateFromBills(bills.filter(b => b.status !== "paid"))
 
   const enrichedInvoices = await enrichInvoicesWithReconciliationStatus(user.id, invoices)
+  const enrichedBills = await enrichBillsWithReconciliationStatus(user.id, bills)
 
   const openInvoices = enrichedInvoices.filter((i) => i.status !== "paid")
   const paidInvoices = enrichedInvoices.filter((i) => i.status === "paid")
 
+  const openBills = enrichedBills.filter((b) => b.status !== "paid")
+  const paidBills = enrichedBills.filter((b) => b.status === "paid")
+
   const ar = computeARState(openInvoices)
 
-  const reconciliationSummary = computeReconciliationSummary(enrichedInvoices)
+  const arReconciliationSummary = computeReconciliationSummary(enrichedInvoices)
+  const apReconciliationSummary = computeApReconciliationSummary(enrichedBills)
 
   const ap = {
     total_expected_30d: r2(obligations.reduce((s, o) => s + o.expected_amount, 0)),
     obligation_count: obligations.length,
     obligations: obligations.sort((a, b) => a.days_until_due - b.days_until_due),
+    bills: openBills,
+    paid_bills: paidBills,
+    reconciliation_summary: apReconciliationSummary,
   }
 
   const recon = await fetchReconTotals(user.id)
@@ -116,7 +124,7 @@ export async function GET(request: Request) {
       ...ar,
       invoices: openInvoices,
       paid_invoices: paidInvoices,
-      reconciliation_summary: reconciliationSummary,
+      reconciliation_summary: arReconciliationSummary,
     },
     ap,
     recon,
@@ -143,6 +151,34 @@ function computeReconciliationSummary(invoices: OutstandingInvoice[]) {
 
   return {
     total_invoices: total,
+    matched_count: matched,
+    partial_count: partial,
+    unmatched_count: unmatched,
+    matched_amount: r2(matchedAmount),
+    partial_matched_amount: r2(partialAmount),
+    unmatched_amount: r2(unmatchedAmount),
+    match_rate: total > 0 ? r2((matched + partial) / total * 100) : 0,
+  }
+}
+
+function computeApReconciliationSummary(bills: OutstandingBill[]) {
+  const total = bills.length
+  const matched = bills.filter((b) => b.reconciliation_status === "matched").length
+  const partial = bills.filter((b) => b.reconciliation_status === "partial").length
+  const unmatched = bills.filter((b) => b.reconciliation_status === "unmatched" || !b.reconciliation_status).length
+
+  const matchedAmount = bills
+    .filter((b) => b.reconciliation_status === "matched")
+    .reduce((sum, b) => sum + b.amount, 0)
+  const unmatchedAmount = bills
+    .filter((b) => b.reconciliation_status === "unmatched" || !b.reconciliation_status)
+    .reduce((sum, b) => sum + b.amount, 0)
+  const partialAmount = bills
+    .filter((b) => b.reconciliation_status === "partial")
+    .reduce((sum, b) => sum + (b.matched_amount ?? 0), 0)
+
+  return {
+    total_bills: total,
     matched_count: matched,
     partial_count: partial,
     unmatched_count: unmatched,

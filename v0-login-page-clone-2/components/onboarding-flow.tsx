@@ -291,7 +291,7 @@ export function OnboardingFlow({
   type BusinessState = { revenue: RevenueState; spend: SpendState; liquidity: LiquidityState; risk: RiskState; transitions: TransitionSignal[]; insights: Insight[]; state_confidence: StateConfidence; insight_block: string; computed_at: string }
   const [stateData, setStateData] = useState<BusinessState | null>(null)
   type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: OutstandingInvoice[]; paid_invoices?: OutstandingInvoice[]; avg_days_to_due: number | null; reconciliation_summary?: { total_invoices: number; matched_count: number; partial_count: number; unmatched_count: number; matched_amount: number; partial_matched_amount: number; unmatched_amount: number; match_rate: number } }
-  type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; source: "bill" | "inferred"; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; days_overdue: number | null; confidence: string; cadence: string; payment_count: number; priority: "high" | "medium" | "low"; risk_flag: string | null }[] }
+  type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; source: "bill" | "inferred"; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; days_overdue: number | null; confidence: string; cadence: string; payment_count: number; priority: "high" | "medium" | "low"; risk_flag: string | null }[]; bills?: OutstandingBill[]; paid_bills?: OutstandingBill[]; reconciliation_summary?: { total_bills: number; matched_count: number; partial_count: number; unmatched_count: number; matched_amount: number; partial_matched_amount: number; unmatched_amount: number; match_rate: number } }
   const [arApData, setArApData] = useState<{ ar: ARState; ap: APState } | null>(null)
   const [arApLoading, setArApLoading] = useState(false)
   const [arApError, setArApError] = useState<string | null>(null)
@@ -368,7 +368,7 @@ export function OnboardingFlow({
   type CustomerFeatures = { payment_count: number; invoice_count: number; paid_vs_unpaid_ratio: number; avg_days_to_pay: number; std_days_to_pay: number; amount_mean: number; amount_std: number; interval_cv: number; recent_trend: string; last_payment_recency_days: number; overdue_count: number; weekday_bias: number | null }
   type InvoiceForecast = { invoice_id: string; customer_name: string; amount_due: number; due_date: string | null; days_overdue: number | null; customer_dso: number; probability_7d: number; probability_14d: number; probability_30d: number; expected_collection_date: string; expected_amount: number; reasoning: string }
   type CustomerModel = { entity_id: string; name: string; archetype: CustomerArchetype; features: CustomerFeatures; avg_amount: number; payment_interval_days: number; interval_variance: number; last_payment_date: string; payment_count: number; probability_of_next: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_invoices: OutstandingInvoice[]; invoice_forecasts: InvoiceForecast[] }
-  type OutstandingBill = { bill_id: string; source: string; vendor_name: string; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: string }
+  type OutstandingBill = { bill_id: string; source: string; vendor_name: string; vendor_source_id?: string | null; entity_id?: string | null; amount: number; amount_due: number; due_date: string | null; days_until_due: number | null; days_overdue: number | null; status: "open" | "overdue" | "partially_paid" | "paid"; reconciliation_status?: "matched" | "unmatched" | "partial"; matched_movement_ids?: string[]; matched_amount?: number }
   type RecurrenceModel = { recurrence_type: string; recurrence_confidence: number; expected_interval_days: number | null; interval_std_days: number | null; amount_mean: number | null; amount_std: number | null }
   type VendorModel = { entity_id: string; name: string; avg_amount: number; cadence: string; cadence_interval_days: number; is_recurring: boolean; recurrence: RecurrenceModel; last_payment_date: string; payment_count: number; next_expected_date: string | null; confidence: "high" | "medium" | "low"; outstanding_bills?: OutstandingBill[] }
   type ProcessorSettlementProfile = { processor: string; avg_delay_days: number; delay_std: number; sample_count: number; weekday_pattern: Record<number, number> | null; fee_rate: number | null }
@@ -3489,87 +3489,110 @@ export function OnboardingFlow({
                           <div className="text-[10px] text-gray-500">Next 30 days</div>
                         </div>
                         <div className="text-right">
-                          <div className="text-xl font-bold text-white">{arApData.ap.obligation_count}</div>
-                          <div className="text-[10px] text-gray-500">Obligations</div>
+                          <div className="text-xl font-bold text-white">{(arApData.ap.bills ?? []).length + (arApData.ap.paid_bills ?? []).length}</div>
+                          <div className="text-[10px] text-gray-500">Total Bills</div>
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  {apObligations.length > 0 ? (
+                  {/* AP Summary Cards */}
+                  {arApData.ap.reconciliation_summary && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 border-b border-red-500/10">
+                      <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-blue-400">{(arApData.ap.bills ?? []).filter(b => b.status === "open").length}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Open</div>
+                      </div>
+                      <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-red-400">{(arApData.ap.bills ?? []).filter(b => b.status === "overdue").length}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Overdue</div>
+                      </div>
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-emerald-400">{(arApData.ap.paid_bills ?? []).length}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Paid (180d)</div>
+                      </div>
+                      <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-cyan-400">{arApData.ap.reconciliation_summary.matched_count}</div>
+                        <div className="text-[10px] text-gray-400 mt-1">Reconciled</div>
+                        <div className="text-[9px] text-gray-500">{arApData.ap.reconciliation_summary.match_rate.toFixed(0)}% rate</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {(arApData.ap.bills ?? []).length > 0 ? (
                     <div className="overflow-x-auto max-h-[320px] overflow-y-auto">
                       <Table>
                         <TableHeader>
                           <TableRow className="border-red-500/10 hover:bg-transparent sticky top-0 bg-red-500/10 backdrop-blur-sm z-10">
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold">Vendor</TableHead>
-                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Source</TableHead>
-                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-28">Cadence</TableHead>
-                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Due in</TableHead>
-                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Confidence</TableHead>
-                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Expected</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-16">Source</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24">Due date</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Status</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Bank Match</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Amount</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {apObligations.map((ob) => {
-                            const obExt = ob as { allocations?: { movement_id: string; gross: number; fee: number; net: number }[]; amount_paid?: number; amount_remaining?: number }
-                            const allocs = obExt.allocations ?? []
-                            const amountPaid = obExt.amount_paid ?? allocs.reduce((s: number, c: { gross: number }) => s + c.gross, 0)
-                            const pct = ob.expected_amount > 0 ? Math.round((amountPaid / ob.expected_amount) * 100) : 0
-                            const isExpanded = expandedObligationId === ob.obligation_id
+                          {[...(arApData.ap.bills ?? [])].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0)).map((bill, i) => {
+                            const matchedAmount = bill.matched_amount ?? 0
+                            const pct = bill.amount > 0 ? Math.round((matchedAmount / bill.amount) * 100) : 0
+                            const isExpanded = expandedObligationId === bill.bill_id
+                            const apStatusBadge = (status: string, daysOverdue: number | null) => {
+                              if (status === "paid") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Paid</span>
+                              if (status === "overdue" || (daysOverdue != null && daysOverdue > 0))
+                                return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">Overdue</span>
+                              if (status === "partially_paid") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Partial</span>
+                              return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">Open</span>
+                            }
+                            const apReconBadge = () => {
+                              if (bill.reconciliation_status === "matched") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />Matched</span>
+                              if (bill.reconciliation_status === "partial") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Partial</span>
+                              return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">Unmatched</span>
+                            }
                             return (
-                              <Fragment key={ob.obligation_id}>
+                              <Fragment key={`${bill.bill_id}-${i}`}>
                                 <TableRow
                                   className="border-red-500/5 hover:bg-red-500/5 cursor-pointer"
-                                  onClick={() => setExpandedObligationId(isExpanded ? null : ob.obligation_id)}
+                                  onClick={() => setExpandedObligationId(isExpanded ? null : bill.bill_id)}
                                 >
-                                  <TableCell className="text-sm text-white font-medium py-2.5">
-                                    <div className="flex items-center gap-2">
-                                      {ob.vendor_name}
-                                      {ob.risk_flag && (
-                                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">{ob.risk_flag}</span>
-                                      )}
-                                      {ob.priority === "high" && !ob.risk_flag && (
-                                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">high</span>
-                                      )}
-                                    </div>
-                                  </TableCell>
+                                  <TableCell className="text-sm text-white font-medium py-2.5">{bill.vendor_name}</TableCell>
+                                  <TableCell className="py-2.5">{sourceBadge(bill.source)}</TableCell>
                                   <TableCell className="text-xs text-gray-400 py-2.5">
-                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                                      (ob.source ?? "inferred") === "bill" ? "bg-blue-500/20 text-blue-300" : "bg-gray-500/20 text-gray-400"
-                                    }`}>{ob.source ?? "inferred"}</span>
-                                  </TableCell>
-                                  <TableCell className="text-xs text-gray-400 py-2.5">{(ob.cadence ?? "") === "bill" ? "bill" : `${ob.cadence ?? "—"} · ${ob.payment_count ?? 0} payments`}</TableCell>
-                                  <TableCell className="text-xs text-gray-400 py-2.5">
-                                    {ob.days_overdue != null && ob.days_overdue > 0 ? (
-                                      <span className="text-red-400">{ob.days_overdue}d overdue</span>
-                                    ) : (
-                                      `${ob.days_until_due} days`
+                                    {bill.due_date ?? "—"}
+                                    {bill.days_overdue != null && bill.days_overdue > 0 && (
+                                      <span className="block text-red-400 font-medium">{bill.days_overdue}d overdue</span>
                                     )}
                                   </TableCell>
-                                  <TableCell className="py-2.5">
-                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                                      ob.confidence === "high" ? "bg-emerald-500/20 text-emerald-300" :
-                                      ob.confidence === "medium" ? "bg-amber-500/20 text-amber-300" : "bg-gray-500/20 text-gray-400"
-                                    }`}>{ob.confidence}</span>
-                                  </TableCell>
-                                  <TableCell className="text-right font-mono font-semibold text-red-400 py-2.5">
-                                    {moneySmall(ob.expected_amount)}
-                                    {allocs.length > 0 && <span className="block text-[10px] text-gray-500">paid {moneySmall(amountPaid)}</span>}
+                                  <TableCell className="py-2.5">{apStatusBadge(bill.status, bill.days_overdue ?? null)}</TableCell>
+                                  <TableCell className="py-2.5">{apReconBadge()}</TableCell>
+                                  <TableCell className={`text-right font-mono font-semibold py-2.5 ${bill.status === "overdue" ? "text-red-400" : "text-red-400"}`}>
+                                    {moneySmall(bill.amount)}
+                                    {bill.amount_due > 0 && bill.amount_due < bill.amount && <span className="block text-[10px] text-gray-500">due: {moneySmall(bill.amount_due)}</span>}
+                                    {matchedAmount > 0 && <span className="block text-[10px] text-cyan-400">matched: {moneySmall(matchedAmount)}</span>}
                                   </TableCell>
                                 </TableRow>
-                                {isExpanded && allocs.length > 0 && (
+                                {isExpanded && (
                                   <TableRow className="border-red-500/5 bg-red-500/5">
                                     <TableCell colSpan={6} className="py-3 pl-8">
                                       <div className="space-y-2 text-xs">
                                         <div className="flex gap-4">
-                                          <span>Gross: {moneySmall(amountPaid)}</span>
-                                          <span className="text-amber-400">Fee: {moneySmall(allocs.reduce((s, c) => s + c.fee, 0))}</span>
-                                          <span className="text-red-400">Net: {moneySmall(allocs.reduce((s, c) => s + c.net, 0))}</span>
+                                          <span>Bill Total: {moneySmall(bill.amount)}</span>
+                                          {bill.amount_due > 0 && <span className="text-amber-400">Outstanding: {moneySmall(bill.amount_due)}</span>}
+                                          {matchedAmount > 0 && <span className="text-cyan-400">Bank Matched: {moneySmall(matchedAmount)}</span>}
                                         </div>
-                                        <div className="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                                          <div className="h-full bg-red-500 rounded-full" style={{ width: `${Math.min(100, pct)}%` }} />
-                                        </div>
-                                        <div className="text-gray-500">{pct}% paid</div>
+                                        {matchedAmount > 0 && (
+                                          <>
+                                            <div className="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                                              <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${Math.min(100, pct)}%` }} />
+                                            </div>
+                                            <div className="text-gray-500">{pct}% reconciled to bank</div>
+                                          </>
+                                        )}
+                                        {bill.matched_movement_ids && bill.matched_movement_ids.length > 0 && (
+                                          <div className="text-gray-500">
+                                            Linked to {bill.matched_movement_ids.length} bank transaction{bill.matched_movement_ids.length !== 1 ? "s" : ""}
+                                          </div>
+                                        )}
                                       </div>
                                     </TableCell>
                                   </TableRow>
@@ -3579,21 +3602,21 @@ export function OnboardingFlow({
                           })}
                         </TableBody>
                       </Table>
-                      {apObligations.length > 0 && (
+                      {(arApData.ap.bills ?? []).length > 0 && (
                         <div className="p-3 border-t border-red-500/10 text-center">
-                          <span className="text-[11px] text-gray-500">{apObligations.length} obligation{apObligations.length !== 1 ? "s" : ""} in next 30d</span>
+                          <span className="text-[11px] text-gray-500">{(arApData.ap.bills ?? []).length} bill{(arApData.ap.bills ?? []).length !== 1 ? "s" : ""} outstanding</span>
                         </div>
                       )}
                     </div>
                   ) : (
-                    <div className="p-8 text-center text-gray-500 text-sm">No recurring vendor obligations detected in the next 30 days.</div>
+                    <div className="p-8 text-center text-gray-500 text-sm">No outstanding bills.</div>
                   )}
                 </div>
                 </>
                 )}
 
                 {/* ─── Reconciliation Summary Dashboard ─── */}
-                {arApData?.ar.reconciliation_summary && mappingRecon && (
+                {(arApData?.ar.reconciliation_summary || arApData?.ap.reconciliation_summary) && mappingRecon && (
                   <div className="bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-xl p-5">
                     <h3 className="text-base font-semibold text-cyan-400 mb-4 flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-cyan-400" />
@@ -3601,37 +3624,41 @@ export function OnboardingFlow({
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                       <div className="text-center">
-                        <div className="text-3xl font-bold text-cyan-400">{arApData.ar.reconciliation_summary.match_rate.toFixed(0)}%</div>
-                        <div className="text-xs text-gray-400 mt-1">Invoice Match Rate</div>
+                        <div className="text-3xl font-bold text-cyan-400">{arApData.ar.reconciliation_summary?.match_rate.toFixed(0) ?? 0}%</div>
+                        <div className="text-xs text-gray-400 mt-1">AR Match Rate</div>
                       </div>
                       <div className="text-center">
-                        <div className="text-3xl font-bold text-emerald-400">{money(arApData.ar.reconciliation_summary.matched_amount)}</div>
+                        <div className="text-3xl font-bold text-emerald-400">{money(arApData.ar.reconciliation_summary?.matched_amount ?? 0)}</div>
                         <div className="text-xs text-gray-400 mt-1">AR Matched</div>
                       </div>
                       <div className="text-center">
-                        <div className="text-3xl font-bold text-amber-400">{money(arApData.ar.reconciliation_summary.unmatched_amount)}</div>
-                        <div className="text-xs text-gray-400 mt-1">AR Unmatched</div>
+                        <div className="text-3xl font-bold text-red-400">{arApData.ap.reconciliation_summary?.match_rate.toFixed(0) ?? 0}%</div>
+                        <div className="text-xs text-gray-400 mt-1">AP Match Rate</div>
                       </div>
                       <div className="text-center">
-                        <div className="text-3xl font-bold text-purple-400">{money(mappingRecon.total_fees_paid)}</div>
-                        <div className="text-xs text-gray-400 mt-1">Fees Identified</div>
+                        <div className="text-3xl font-bold text-red-400">{money(arApData.ap.reconciliation_summary?.matched_amount ?? 0)}</div>
+                        <div className="text-xs text-gray-400 mt-1">AP Matched</div>
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="bg-white/5 rounded-lg p-3">
-                        <div className="text-xs text-gray-400 mb-2">Bank Inflows</div>
+                        <div className="text-xs text-gray-400 mb-2">Bank Inflows (AR)</div>
                         <div className="flex justify-between text-sm">
                           <span className="text-cyan-300">Matched: {money(mappingRecon.total_matched_inflows)}</span>
                           <span className="text-gray-400">Unmatched: {mappingRecon.total_unmatched_inflows} txns</span>
                         </div>
                       </div>
                       <div className="bg-white/5 rounded-lg p-3">
-                        <div className="text-xs text-gray-400 mb-2">Bank Outflows</div>
+                        <div className="text-xs text-gray-400 mb-2">Bank Outflows (AP)</div>
                         <div className="flex justify-between text-sm">
                           <span className="text-cyan-300">Matched: {money(mappingRecon.total_matched_outflows)}</span>
                           <span className="text-gray-400">Unmatched: {mappingRecon.total_unmatched_outflows} txns</span>
                         </div>
                       </div>
+                    </div>
+                    <div className="mt-4 pt-4 border-t border-white/10 text-center">
+                      <span className="text-purple-400 font-semibold">{money(mappingRecon.total_fees_paid)}</span>
+                      <span className="text-xs text-gray-400 ml-2">Total Fees Identified</span>
                     </div>
                   </div>
                 )}
