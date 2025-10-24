@@ -1442,8 +1442,8 @@ export function OnboardingFlow({
                             </p>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                    </div>
+                  ))}
                     <button
                       type="button"
                       onClick={handleAddAnotherAccount}
@@ -1554,8 +1554,8 @@ export function OnboardingFlow({
                         width={120}
                         height={120}
                         className="object-contain max-w-full max-h-full"
-              />
-            </div>
+                      />
+                    </div>
                     <h3 className="text-white font-semibold text-sm leading-tight">
                       {integration.name}
                     </h3>
@@ -1592,10 +1592,10 @@ export function OnboardingFlow({
               ].map((integration) => {
                 const isConnected = connectedContextIntegrations.includes(integration.name)
                 return (
-                  <button
-                    key={integration.name}
-                    type="button"
-                    onClick={() => toggleIntegration(integration.name)}
+                <button
+                  key={integration.name}
+                  type="button"
+                  onClick={() => toggleIntegration(integration.name)}
                     className={`relative rounded-lg p-5 text-center transition-all flex flex-col items-center justify-center hover:border-white/30 hover:bg-white/10 ${
                       isConnected
                         ? "bg-emerald-500/10 border-2 border-emerald-500/50 hover:border-emerald-500/70 hover:bg-emerald-500/15"
@@ -1614,19 +1614,19 @@ export function OnboardingFlow({
                       </span>
                     )}
                   <div className="w-28 h-28 mb-4 flex items-center justify-center">
-                      <Image
-                        src={integration.logo || "/placeholder.svg"}
-                        alt={`${integration.name} logo`}
+                    <Image
+                      src={integration.logo || "/placeholder.svg"}
+                      alt={`${integration.name} logo`}
                       width={120}
                       height={120}
-                        className="object-contain max-w-full max-h-full"
-                      />
-                    </div>
-                    <h3 className="text-white font-semibold text-sm leading-tight">{integration.name}</h3>
+                      className="object-contain max-w-full max-h-full"
+                    />
+                  </div>
+                  <h3 className="text-white font-semibold text-sm leading-tight">{integration.name}</h3>
                     {isConnected && (
                       <span className="text-xs font-medium text-emerald-400 mt-1">Connected</span>
                     )}
-                  </button>
+                </button>
                 )
               })}
             </div>
@@ -1635,7 +1635,7 @@ export function OnboardingFlow({
 
       case 5:
         return (
-              <div>
+          <div>
             <div className="text-center mb-6">
               <h2 className="text-2xl font-semibold text-white mb-3">Choose your communication channels</h2>
               <p className="text-gray-400 text-base">
@@ -1680,8 +1680,8 @@ export function OnboardingFlow({
                       width={80}
                       height={80}
                       className="object-contain max-w-full max-h-full"
-                />
-              </div>
+                    />
+                  </div>
                   <h3 className="text-white font-semibold text-sm leading-tight">{channel.name}</h3>
                 </button>
               ))}

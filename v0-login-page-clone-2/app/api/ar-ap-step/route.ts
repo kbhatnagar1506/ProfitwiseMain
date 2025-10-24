@@ -14,6 +14,7 @@ import {
 import { getMovementsPendingWaterfallReview } from "@/lib/reconciliation-waterfall"
 import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
+import { tagMovements } from "@/lib/movement-tag-enrich"
 import type { OutstandingInvoice, OutstandingBill } from "@/lib/state/types"
 
 const WATERFALL_REVIEW_PREVIEW = 15
@@ -23,11 +24,15 @@ type ReconTotals = {
   total_matched_outflows: number
   total_unmatched_inflows: number
   total_unmatched_outflows: number
+  total_excluded_inflows: number
+  total_excluded_outflows: number
   total_fees_paid: number
   matched_inflows: ReconMovementRow[]
   matched_outflows: ReconMovementRow[]
   unmatched_inflows: ReconMovementRow[]
   unmatched_outflows: ReconMovementRow[]
+  excluded_inflows: ReconMovementRow[]
+  excluded_outflows: ReconMovementRow[]
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -50,6 +55,11 @@ async function runReconciliationInBackground(userId: string) {
     
     await refreshEntityAliasesFromAccounting(userId)
     await refreshMovementEntityIds(userId)
+    
+    // Ensure movement tags are up-to-date before reconciliation
+    // This populates economic_class which is used for filtering transfers, fees, etc.
+    console.log("[ar-ap-step] Running tagMovements for user:", userId)
+    await tagMovements(userId)
     
     await runFinancialBrain(userId, {
       outstandingInvoices: invoices,
@@ -154,21 +164,28 @@ function computeReconciliationSummary(invoices: OutstandingInvoice[]) {
     .reduce((sum, i) => sum + (i.matched_amount ?? 0), 0)
 
   // Bank-verified outstanding calculation
-  // Accounting outstanding = sum of open/partially_paid invoices
+  // Accounting outstanding = sum of amount_due for open/partially_paid invoices
   const accountingOutstanding = invoices
     .filter((i) => i.status !== "paid")
     .reduce((sum, i) => sum + i.amount_due, 0)
 
-  // Bank-verified matched = sum of matched amounts from bank
-  const bankVerifiedMatched = invoices
-    .filter((i) => i.reconciliation_status === "matched" || i.reconciliation_status === "partial")
-    .reduce((sum, i) => sum + (i.matched_amount ?? 0), 0)
-
-  // Bank-verified outstanding = accounting outstanding - bank verified matched (for open invoices)
+  // For open invoices that are matched/partial, calculate how much has been verified by bank
+  // Cap matched_amount at the invoice amount to avoid over-counting from entity-level matching
   const openInvoicesMatched = invoices
     .filter((i) => i.status !== "paid" && (i.reconciliation_status === "matched" || i.reconciliation_status === "partial"))
-    .reduce((sum, i) => sum + (i.matched_amount ?? 0), 0)
-  const bankVerifiedOutstanding = accountingOutstanding - openInvoicesMatched
+    .reduce((sum, i) => {
+      const matchedAmt = i.matched_amount ?? 0
+      // Cap at invoice amount to prevent over-counting
+      return sum + Math.min(matchedAmt, i.amount_due)
+    }, 0)
+
+  // Bank-verified outstanding = what accounting says is outstanding minus what bank has verified
+  const bankVerifiedOutstanding = Math.max(0, accountingOutstanding - openInvoicesMatched)
+
+  // Total bank-verified matched across all invoices (for display purposes)
+  const bankVerifiedMatched = invoices
+    .filter((i) => i.reconciliation_status === "matched" || i.reconciliation_status === "partial")
+    .reduce((sum, i) => sum + Math.min(i.matched_amount ?? 0, i.amount), 0)
 
   // Suspicious: paid in accounting but no bank match
   const suspicious = invoices.filter(
@@ -176,8 +193,8 @@ function computeReconciliationSummary(invoices: OutstandingInvoice[]) {
   )
   const suspiciousAmount = suspicious.reduce((sum, i) => sum + i.amount, 0)
 
-  // Discrepancy: difference between accounting and bank-verified
-  const discrepancy = accountingOutstanding - bankVerifiedOutstanding
+  // Discrepancy: how much has been verified by bank
+  const discrepancy = openInvoicesMatched
 
   return {
     total_invoices: total,
@@ -215,18 +232,28 @@ function computeApReconciliationSummary(bills: OutstandingBill[]) {
     .reduce((sum, b) => sum + (b.matched_amount ?? 0), 0)
 
   // Bank-verified outstanding calculation for AP
+  // accountingOutstanding = sum of amount_due for open bills
   const accountingOutstanding = bills
     .filter((b) => b.status !== "paid")
     .reduce((sum, b) => sum + b.amount_due, 0)
 
-  const bankVerifiedMatched = bills
-    .filter((b) => b.reconciliation_status === "matched" || b.reconciliation_status === "partial")
-    .reduce((sum, b) => sum + (b.matched_amount ?? 0), 0)
-
+  // For open bills that are matched/partial, calculate how much has been verified by bank
+  // Cap matched_amount at the bill amount to avoid over-counting from entity-level matching
   const openBillsMatched = bills
     .filter((b) => b.status !== "paid" && (b.reconciliation_status === "matched" || b.reconciliation_status === "partial"))
-    .reduce((sum, b) => sum + (b.matched_amount ?? 0), 0)
-  const bankVerifiedOutstanding = accountingOutstanding - openBillsMatched
+    .reduce((sum, b) => {
+      const matchedAmt = b.matched_amount ?? 0
+      // Cap at bill amount to prevent over-counting
+      return sum + Math.min(matchedAmt, b.amount_due)
+    }, 0)
+
+  // Bank-verified outstanding = what accounting says is outstanding minus what bank has verified
+  const bankVerifiedOutstanding = Math.max(0, accountingOutstanding - openBillsMatched)
+
+  // Total bank-verified matched across all bills (for display purposes)
+  const bankVerifiedMatched = bills
+    .filter((b) => b.reconciliation_status === "matched" || b.reconciliation_status === "partial")
+    .reduce((sum, b) => sum + Math.min(b.matched_amount ?? 0, b.amount), 0)
 
   // Suspicious: paid in accounting but no bank match
   const suspicious = bills.filter(
@@ -234,7 +261,8 @@ function computeApReconciliationSummary(bills: OutstandingBill[]) {
   )
   const suspiciousAmount = suspicious.reduce((sum, b) => sum + b.amount, 0)
 
-  const discrepancy = accountingOutstanding - bankVerifiedOutstanding
+  // Discrepancy: difference between what accounting says is matched vs what bank shows
+  const discrepancy = openBillsMatched
 
   return {
     total_bills: total,
@@ -261,6 +289,8 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     total_matched_outflows: 0,
     total_unmatched_inflows: 0,
     total_unmatched_outflows: 0,
+    total_excluded_inflows: 0,
+    total_excluded_outflows: 0,
     total_fees_paid: 0,
   }
 
@@ -270,8 +300,8 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     fees: string
   }>(
     `SELECT
-       COALESCE(SUM(CASE WHEN m.direction = 'inflow'  AND a.component_type = 'ar' THEN ABS(a.net_amount::float) ELSE 0 END), 0)::text AS inflow,
-       COALESCE(SUM(CASE WHEN m.direction = 'outflow' AND a.component_type = 'ap' THEN ABS(a.net_amount::float) ELSE 0 END), 0)::text AS outflow,
+       COALESCE(SUM(CASE WHEN m.direction = 'inflow'  AND a.component_type IN ('ar', 'settlement') THEN ABS(a.net_amount::float) ELSE 0 END), 0)::text AS inflow,
+       COALESCE(SUM(CASE WHEN m.direction = 'outflow' AND a.component_type IN ('ap', 'settlement') THEN ABS(a.net_amount::float) ELSE 0 END), 0)::text AS outflow,
        COALESCE(SUM(CASE WHEN a.component_type = 'fee' THEN ABS(a.net_amount::float) ELSE 0 END), 0)::text AS fees
      FROM movement_attributions a
      JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
@@ -287,6 +317,8 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
   const lists = await fetchReconciliationMovementRows(userId)
   totals.total_unmatched_inflows = lists.unmatched_inflows.length
   totals.total_unmatched_outflows = lists.unmatched_outflows.length
+  totals.total_excluded_inflows = lists.excluded_inflows.length
+  totals.total_excluded_outflows = lists.excluded_outflows.length
 
   return {
     ...totals,
@@ -294,6 +326,8 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     matched_outflows: lists.matched_outflows,
     unmatched_inflows: lists.unmatched_inflows,
     unmatched_outflows: lists.unmatched_outflows,
+    excluded_inflows: lists.excluded_inflows,
+    excluded_outflows: lists.excluded_outflows,
   }
 }
 

@@ -781,6 +781,7 @@ export async function ensureMovementsSchema(): Promise<void> {
     CREATE TABLE IF NOT EXISTS movement_tags (
       id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       movement_id       UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE UNIQUE,
+      user_id           UUID REFERENCES users(id) ON DELETE CASCADE,
       economic_class    TEXT NOT NULL,
       cashflow_bucket   TEXT NOT NULL,
       counterparty_role TEXT NOT NULL,
@@ -792,6 +793,21 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_tags_movement ON movement_tags (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_tags_eclass ON movement_tags (economic_class)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_tags_bucket ON movement_tags (cashflow_bucket)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_tags_user ON movement_tags (user_id)")
+  // Add user_id column if it doesn't exist (migration for existing tables)
+  await p.query(`
+    DO $$ BEGIN
+      ALTER TABLE movement_tags ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `)
+  // Backfill user_id from movements table for existing rows
+  await p.query(`
+    UPDATE movement_tags mt
+    SET user_id = m.user_id
+    FROM movements m
+    WHERE mt.movement_id = m.id AND mt.user_id IS NULL
+  `)
   // State snapshots for prior-state comparison and rolling averages
   await p.query(`
     CREATE TABLE IF NOT EXISTS state_snapshots (

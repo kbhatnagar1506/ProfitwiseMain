@@ -663,10 +663,11 @@ async function persistTags(
 
     for (const t of batch) {
       const ov = overridesByMovementId.get(t.movement_id)
-      const offsets = Array.from({ length: 5 }, (_, k) => `$${idx + k + 1}`)
+      const offsets = Array.from({ length: 6 }, (_, k) => `$${idx + k + 1}`)
       values.push(`(${offsets.join(", ")})`)
       params.push(
         t.movement_id,
+        userId,
         t.economic_class,
         t.cashflow_bucket,
         t.counterparty_role,
@@ -707,13 +708,14 @@ async function persistTags(
           user_override_at: ov?.user_override_at ?? null,
         }),
       )
-      idx += 5
+      idx += 6
     }
 
     await query(
-      `INSERT INTO movement_tags (movement_id, economic_class, cashflow_bucket, counterparty_role, tag_data)
+      `INSERT INTO movement_tags (movement_id, user_id, economic_class, cashflow_bucket, counterparty_role, tag_data)
        VALUES ${values.join(", ")}
        ON CONFLICT (movement_id) DO UPDATE SET
+         user_id = EXCLUDED.user_id,
          economic_class = EXCLUDED.economic_class,
          cashflow_bucket = EXCLUDED.cashflow_bucket,
          counterparty_role = EXCLUDED.counterparty_role,

@@ -5,6 +5,22 @@
 import { query } from "./db"
 import { resolveReconciliationBankLabelsForMatch } from "./display-name-resolve"
 
+// Economic classes that should be excluded from AR/AP reconciliation display
+// These are handled separately (transfers, owner activity, fees, settlements)
+const EXCLUDED_FROM_RECON_DISPLAY = new Set<string>([
+  "transfer",
+  "owner_contribution",
+  "owner_draw",
+  "bank_fee",
+  "bank_fee_refund",
+  "interest",
+  "opening_balance",
+  "account_verification",
+  "system_adjustment",
+  "processor_fee",
+  "processor_payout",
+])
+
 export type ReconAllocationRow = {
   gross: number
   fee: number
@@ -20,6 +36,7 @@ export type ReconMovementRow = {
   counterparty: string | null
   display_name?: string | null
   allocations: ReconAllocationRow[]
+  economic_class?: string | null
 }
 
 type FlatRow = {
@@ -35,6 +52,7 @@ type FlatRow = {
   gross_amount: string | null
   net_amount: string | null
   metadata: unknown
+  economic_class: string | null
 }
 
 type Grouped = {
@@ -43,6 +61,7 @@ type Grouped = {
   attrs: ReconAllocationRow[]
   counterparty_entity_id: string | null
   movement_metadata: Record<string, unknown>
+  economic_class: string | null
 }
 
 function feeFromMeta(md: unknown): number {
@@ -55,19 +74,24 @@ function feeFromMeta(md: unknown): number {
 
 /**
  * Lists movements with AR/AP attributions vs those still needing AR (inflow) or AP (outflow) links.
+ * Excludes movements with economic_class in EXCLUDED_FROM_RECON_DISPLAY (transfers, fees, settlements, etc.)
  */
 export async function fetchReconciliationMovementRows(userId: string): Promise<{
   matched_inflows: ReconMovementRow[]
   matched_outflows: ReconMovementRow[]
   unmatched_inflows: ReconMovementRow[]
   unmatched_outflows: ReconMovementRow[]
+  excluded_inflows: ReconMovementRow[]
+  excluded_outflows: ReconMovementRow[]
 }> {
   const { rows } = await query<FlatRow>(
     `SELECT m.id AS movement_id, m.direction, m.amount::text AS amount, m.date::text AS date, m.counterparty,
             m.counterparty_entity_id::text AS counterparty_entity_id, m.metadata AS movement_metadata,
-            a.component_type, a.entity_id, a.gross_amount::text, a.net_amount::text, a.metadata
+            a.component_type, a.entity_id, a.gross_amount::text, a.net_amount::text, a.metadata,
+            mt.economic_class
      FROM movements m
      LEFT JOIN movement_attributions a ON a.movement_id = m.id AND a.user_id = m.user_id
+     LEFT JOIN movement_tags mt ON mt.movement_id = m.id
      WHERE m.user_id = $1::uuid AND m.duplicate_of IS NULL
      ORDER BY m.date DESC NULLS LAST, m.id, a.created_at ASC NULLS LAST`,
     [userId],
@@ -91,10 +115,12 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
           date: typeof r.date === "string" ? r.date.slice(0, 10) : "",
           counterparty: r.counterparty,
           display_name: r.counterparty,
+          economic_class: r.economic_class,
         },
         attrs: [],
         counterparty_entity_id: r.counterparty_entity_id,
         movement_metadata: md,
+        economic_class: r.economic_class,
       }
       byMovement.set(id, g)
     }
@@ -128,24 +154,43 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
   const matched_outflows: ReconMovementRow[] = []
   const unmatched_inflows: ReconMovementRow[] = []
   const unmatched_outflows: ReconMovementRow[] = []
+  const excluded_inflows: ReconMovementRow[] = []
+  const excluded_outflows: ReconMovementRow[] = []
 
-  for (const { direction, base, attrs } of groupedList) {
+  for (const { direction, base, attrs, economic_class } of groupedList) {
     const resolved = displayMap.get(base.movement_id)?.display_name ?? null
     const row: ReconMovementRow = {
       ...base,
       display_name: resolved ?? base.display_name ?? base.counterparty,
       allocations: attrs,
     }
+
+    // Check if this movement should be excluded from AR/AP reconciliation
+    const isExcluded = economic_class && EXCLUDED_FROM_RECON_DISPLAY.has(economic_class)
+
+    // Check for AR/AP/settlement attributions
     const hasAr = attrs.some((a) => a.entity_type === "ar")
     const hasAp = attrs.some((a) => a.entity_type === "ap")
+    const hasSettlement = attrs.some((a) => a.entity_type === "settlement")
+
     if (direction === "inflow") {
-      if (hasAr) matched_inflows.push(row)
-      else unmatched_inflows.push(row)
+      if (isExcluded) {
+        excluded_inflows.push(row)
+      } else if (hasAr || hasSettlement) {
+        matched_inflows.push(row)
+      } else {
+        unmatched_inflows.push(row)
+      }
     } else {
-      if (hasAp) matched_outflows.push(row)
-      else unmatched_outflows.push(row)
+      if (isExcluded) {
+        excluded_outflows.push(row)
+      } else if (hasAp || hasSettlement) {
+        matched_outflows.push(row)
+      } else {
+        unmatched_outflows.push(row)
+      }
     }
   }
 
-  return { matched_inflows, matched_outflows, unmatched_inflows, unmatched_outflows }
+  return { matched_inflows, matched_outflows, unmatched_inflows, unmatched_outflows, excluded_inflows, excluded_outflows }
 }
