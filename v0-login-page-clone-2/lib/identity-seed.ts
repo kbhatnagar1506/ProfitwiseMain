@@ -74,7 +74,8 @@ function isKnownProcessor(name: string): boolean {
 function isTestOrNoiseEntity(alias: string, aliasType: string, canonicalName: string): boolean {
   if (aliasType === "email" || /^[^\s]+@[^\s]+\.[^\s]+$/.test(alias)) return true
   const cn = canonicalName.trim().toLowerCase()
-  if (/\b(test|jruby|jack\s*test)\b/.test(cn)) return true
+  // Filter out test accounts
+  if (/\b(test)\b/.test(cn)) return true
   if (cn.length <= 2) return true
   return false
 }

@@ -117,8 +117,8 @@ export async function canonicalizeEntitiesBatch(
   const systemPrompt = `You are a financial identity normalizer. Given an array of raw bank/processor transaction descriptions, return a JSON array of objects: [{"raw": "<exact original>", "canonical": "<clean name>"}].
 
 Rules:
-- "MARLINS TEAM5618/Payment 30280 PERFORMAN" -> "Marlins Team (Invoice 30280)"
-- Strip TEAM1234, /Payment 30280, truncations
+- Clean up truncated company names and payment references
+- Strip TEAM1234 suffixes, /Payment 30280 patterns, truncations
 - Title-case company names
 - Keep invoice numbers in parentheses when relevant
 - "raw" must match the input string exactly. "canonical" is the human-readable name.
@@ -165,7 +165,7 @@ type InterventionForExecution = {
 
 /**
  * Generate execution suggestions: reminder text, email draft, etc.
- * Turns "Accelerate Sarah Katz" into "Send reminder", "Draft payment reminder email".
+ * Converts intervention labels into actionable suggestions.
  */
 export async function generateExecutionSuggestions(
   interventions: InterventionForExecution[],

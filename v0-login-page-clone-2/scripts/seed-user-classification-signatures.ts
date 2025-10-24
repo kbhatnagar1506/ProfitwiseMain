@@ -14,14 +14,14 @@ const LEGACY_SEED: Array<{
   signatures: string[]
 }> = [
   {
-    canonical_key: "sarah_katz_marlins",
+    canonical_key: "example_customer_team",
     alias_role: "customer",
-    signatures: ["MARLINS TEAM5618", "SARAH KATZ", "MARLINS TEAM"],
+    signatures: ["EXAMPLE TEAM1234", "EXAMPLE CUSTOMER", "EXAMPLE TEAM"],
   },
   {
-    canonical_key: "jack_rubenstein",
+    canonical_key: "owner_account",
     alias_role: "owner",
-    signatures: ["JACK S RUBENSTEIN", "JACK TEST", "JRUBY14@GMAIL"],
+    signatures: ["OWNER NAME", "OWNER TEST", "OWNER@EXAMPLE.COM"],
   },
   {
     canonical_key: "chase_corporate_card",
