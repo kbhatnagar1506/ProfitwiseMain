@@ -906,12 +906,13 @@ export function OnboardingFlow({
     setMappingError(null)
     setArApError(null)
     try {
-      const r = await fetch("/api/ar-ap-step")
+      const r = await fetch("/api/ar-ap-step?run=true")
       const data = (await r.json()) as {
         ar?: ARState
         ap?: APState
         recon?: MappingReconData
         waterfall_review?: WaterfallReviewData
+        is_reconciling?: boolean
         error?: string
         detail?: string
       }
@@ -926,12 +927,47 @@ export function OnboardingFlow({
       }
       setMappingRecon(data.recon ?? null)
       setWaterfallReview(data.waterfall_review ?? null)
+      
+      if (data.is_reconciling) {
+        setTimeout(() => {
+          void pollReconciliationStatus()
+        }, 3000)
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to reconcile"
       setMappingError(msg)
       setArApError(msg)
     } finally {
       setReconRefreshLoading(false)
+    }
+  }, [])
+
+  const pollReconciliationStatus = useCallback(async () => {
+    try {
+      const r = await fetch("/api/ar-ap-step")
+      const data = (await r.json()) as {
+        ar?: ARState
+        ap?: APState
+        recon?: MappingReconData
+        waterfall_review?: WaterfallReviewData
+        is_reconciling?: boolean
+      }
+      if (r.ok) {
+        if (data.ar && data.ap) {
+          setArApData({ ar: data.ar, ap: data.ap })
+          setMappingArAp({ ar: data.ar, ap: data.ap })
+        }
+        setMappingRecon(data.recon ?? null)
+        setWaterfallReview(data.waterfall_review ?? null)
+        
+        if (data.is_reconciling) {
+          setTimeout(() => {
+            void pollReconciliationStatus()
+          }, 3000)
+        }
+      }
+    } catch {
+      // Ignore polling errors
     }
   }, [])
 
