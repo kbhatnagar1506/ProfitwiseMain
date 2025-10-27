@@ -392,3 +392,67 @@ export async function runLLMStage4(
 
   return { matches, applied }
 }
+
+/**
+ * Get all unreconciled movements (no attributions) that are AR/AP eligible.
+ * Used for LLM Stage 4 to process ALL unmatched movements, not just flagged ones.
+ */
+export async function getAllUnreconciledMovements(
+  userId: string,
+): Promise<Array<{
+  movement_id: string
+  amount: number
+  date: string
+  counterparty: string | null
+  raw_description: string | null
+  direction: "inflow" | "outflow"
+  economic_class: string | null
+}>> {
+  const AR_ELIGIBLE = new Set(["customer_receipt", "customer_cash_in", "revenue"])
+  const AP_ELIGIBLE = new Set(["vendor_payment", "vendor_cash_out", "opex", "cogs"])
+  const EXCLUDED = new Set([
+    "transfer", "internal_transfer", "owner_draw", "owner_contribution",
+    "processor_payout", "processor_fee", "settlement_in", "settlement_adjustment",
+    "bank_fee", "interest", "loan_payment", "loan_disbursement"
+  ])
+
+  const { rows } = await query<{
+    id: string
+    direction: string
+    amount: string
+    date: string
+    counterparty: string | null
+    raw_description: string | null
+    economic_class: string | null
+  }>(
+    `SELECT m.id, m.direction, m.amount::float, m.date::text, m.counterparty, m.raw_description, mt.economic_class
+     FROM movements m
+     LEFT JOIN movement_tags mt ON mt.movement_id = m.id
+     WHERE m.user_id = $1::uuid
+       AND m.duplicate_of IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM movement_attributions ma 
+         WHERE ma.movement_id = m.id 
+           AND ma.component_type IN ('ar', 'ap')
+       )`,
+    [userId]
+  )
+
+  return rows
+    .filter((r) => {
+      const ec = r.economic_class ?? "unknown"
+      if (EXCLUDED.has(ec)) return false
+      if (r.direction === "inflow") return AR_ELIGIBLE.has(ec) || ec === "unknown"
+      if (r.direction === "outflow") return AP_ELIGIBLE.has(ec) || ec === "unknown"
+      return false
+    })
+    .map((r) => ({
+      movement_id: r.id,
+      amount: Math.abs(parseFloat(String(r.amount))),
+      date: r.date,
+      counterparty: r.counterparty,
+      raw_description: r.raw_description,
+      direction: r.direction as "inflow" | "outflow",
+      economic_class: r.economic_class,
+    }))
+}
