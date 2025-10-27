@@ -42,12 +42,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 const reconInProgress = new Map<string, boolean>()
 
 async function runReconciliationInBackground(userId: string) {
-  if (reconInProgress.get(userId)) {
-    console.log("[ar-ap-step] Reconciliation already in progress for user:", userId)
-    return
-  }
-  
-  reconInProgress.set(userId, true)
+  // Note: reconInProgress flag is set by the caller before this function is invoked
   console.log("[ar-ap-step] Starting background reconciliation for user:", userId)
   
   try {
@@ -134,9 +129,14 @@ export async function GET(request: Request) {
   const runRecon = url.searchParams.get("run") === "true"
 
   if (runRecon) {
-    runReconciliationInBackground(user.id).catch((e) => {
-      console.error("[ar-ap-step] Background task error:", e)
-    })
+    // Set flag BEFORE starting background task to ensure is_reconciling is true in response
+    if (!reconInProgress.get(user.id)) {
+      reconInProgress.set(user.id, true)
+      runReconciliationInBackground(user.id).catch((e) => {
+        console.error("[ar-ap-step] Background task error:", e)
+        reconInProgress.delete(user.id)
+      })
+    }
   }
 
   const invoices = await fetchInvoicesForReconciliation(user.id)
