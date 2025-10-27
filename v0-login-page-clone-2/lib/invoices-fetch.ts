@@ -370,7 +370,7 @@ export async function enrichInvoicesWithReconciliationStatus(
      FROM movement_attributions
      WHERE user_id = $1
        AND component_type = 'ar'
-       AND source = 'rule'`,
+       AND source IN ('rule', 'llm')`,
     [userId]
   )
 
