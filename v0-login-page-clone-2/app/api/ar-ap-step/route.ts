@@ -42,7 +42,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 const reconInProgress = new Map<string, boolean>()
 
 async function runReconciliationInBackground(userId: string) {
-  // Note: reconInProgress flag is set by the caller before this function is invoked
+  // Note: reconInProgress flag is managed by the caller
   console.log("[ar-ap-step] Starting background reconciliation for user:", userId)
   
   try {
@@ -112,9 +112,8 @@ async function runReconciliationInBackground(userId: string) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error("[ar-ap-step] Background reconciliation failed:", msg)
-  } finally {
-    reconInProgress.delete(userId)
   }
+  // Note: flag cleanup is handled by the caller's finally block
 }
 
 export async function GET(request: Request) {
@@ -130,10 +129,14 @@ export async function GET(request: Request) {
 
   if (runRecon) {
     // Set flag BEFORE starting background task to ensure is_reconciling is true in response
-    if (!reconInProgress.get(user.id)) {
-      reconInProgress.set(user.id, true)
+    // Always set the flag when run=true is requested, even if already running
+    reconInProgress.set(user.id, true)
+    if (!reconInProgress.get(user.id + "_task")) {
+      reconInProgress.set(user.id + "_task", true)
       runReconciliationInBackground(user.id).catch((e) => {
         console.error("[ar-ap-step] Background task error:", e)
+      }).finally(() => {
+        reconInProgress.delete(user.id + "_task")
         reconInProgress.delete(user.id)
       })
     }
