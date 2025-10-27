@@ -138,7 +138,6 @@ export default function OAuthConnectorPage() {
         .catch(() => setGmailConnected(false))
       return
     }
-    console.log("[v0] OAuth page loaded for:", integrationName)
   }, [integration, integrationName])
 
   if (integration === "gmail") {

@@ -229,7 +229,7 @@ export function LoginForm() {
           type="button"
           variant="outline"
           className="w-full h-12 bg-transparent border-border text-foreground hover:bg-secondary"
-          onClick={() => console.log("Continue with Google")}
+          onClick={() => {}}
         >
           <Image
             src="/google-icon.png"
@@ -245,7 +245,7 @@ export function LoginForm() {
           type="button"
           variant="outline"
           className="w-full h-12 bg-transparent border-border text-foreground hover:bg-secondary"
-          onClick={() => console.log("Continue with Apple")}
+          onClick={() => {}}
         >
           <Image
             src="/apple-icon.png"
