@@ -108,6 +108,7 @@ export async function POST(req: Request) {
       0.9,
       "manual",
     )
+    await query("DELETE FROM reconciliation_cache WHERE user_id = $1", [user.id]).catch(() => {})
     return NextResponse.json({ suggestions: [], allocation })
   }
 

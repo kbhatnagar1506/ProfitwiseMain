@@ -760,6 +760,18 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_movement ON movement_allocations (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_entity ON movement_allocations (entity_type, entity_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_user ON movement_allocations (user_id)")
+  // Reconciliation cache for background processing
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS reconciliation_cache (
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      ar_ap_only        BOOLEAN NOT NULL DEFAULT true,
+      status            TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('processing', 'ready', 'error')),
+      data              JSONB,
+      error_message     TEXT,
+      updated_at        TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, ar_ap_only)
+    )
+  `)
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }

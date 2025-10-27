@@ -36,29 +36,63 @@ export default function ReconciliationPage() {
   const [totalUnmappedAr, setTotalUnmappedAr] = useState(0)
   const [llmMatching, setLlmMatching] = useState(false)
   const [llmResults, setLlmResults] = useState<{ ar: LLMARMatch[]; ap: LLMAPMatch[] } | null>(null)
+  const llmRunRef = useRef(false)
 
-  const refresh = useCallback(() => {
+  const applyData = useCallback((data: Record<string, unknown>) => {
+    setInvoices((data.invoices as InvoiceRow[]) ?? [])
+    setBills((data.bills as BillRow[]) ?? [])
+    const matched: PaymentRow[] = [
+      ...((data.matched_inflows as unknown[]) ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({ ...m, direction: "inflow" })),
+      ...((data.matched_outflows as unknown[]) ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({ ...m, direction: "outflow" })),
+    ]
+    const unmatched: PaymentRow[] = [
+      ...((data.unmatched_inflows as unknown[]) ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow", allocations: [] })),
+      ...((data.unmatched_outflows as unknown[]) ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow", allocations: [] })),
+    ]
+    setPayments([...matched, ...unmatched].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
+    setUnmappedAr((data.unmapped_ar as { movement_id: string; amount: number; date: string; counterparty: string | null }[]) ?? [])
+    setTotalUnmappedAr((data.total_unmapped_ar as number) ?? 0)
+  }, [])
+
+  const fetchReconciliation = useCallback(() => {
     const params = new URLSearchParams()
     if (!arApOnly) params.set("arApOnly", "false")
     return fetch(`/api/ar-ap-reconciliation${params.toString() ? `?${params}` : ""}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Failed"))))
-      .then((data) => {
-        setInvoices(data.invoices ?? [])
-        setBills(data.bills ?? [])
-        const matched: PaymentRow[] = [
-          ...(data.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({ ...m, direction: "inflow" })),
-          ...(data.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations: Allocation[] }) => ({ ...m, direction: "outflow" })),
-        ]
-        const unmatched: PaymentRow[] = [
-          ...(data.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow", allocations: [] })),
-          ...(data.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow", allocations: [] })),
-        ]
-        setPayments([...matched, ...unmatched].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
-        setUnmappedAr(data.unmapped_ar ?? [])
-        setTotalUnmappedAr(data.total_unmapped_ar ?? 0)
-      })
-      .catch(() => { setInvoices([]); setBills([]); setPayments([]); setUnmappedAr([]); setTotalUnmappedAr(0) })
   }, [arApOnly])
+
+  const refresh = useCallback(() => {
+    return fetchReconciliation()
+      .then((data) => {
+        if (data?.status === "processing") {
+          return new Promise<Record<string, unknown>>((resolve, reject) => {
+            const poll = () => {
+              fetchReconciliation()
+                .then((d) => {
+                  if (d?.status === "processing") {
+                    setTimeout(poll, 2000)
+                    return
+                  }
+                  applyData(d ?? {})
+                  resolve(d ?? {})
+                })
+                .catch(reject)
+            }
+            setTimeout(poll, 2000)
+          })
+        }
+        applyData(data ?? {})
+        return data
+      })
+      .catch(() => {
+        setInvoices([])
+        setBills([])
+        setPayments([])
+        setUnmappedAr([])
+        setTotalUnmappedAr(0)
+        throw new Error("Failed")
+      })
+  }, [fetchReconciliation, applyData])
 
   useEffect(() => {
     setLoading(true)
@@ -95,8 +129,10 @@ export default function ReconciliationPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex bg-black font-sans items-center justify-center">
-        <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+      <div className="min-h-screen flex bg-black font-sans items-center justify-center flex-col gap-4">
+        <div className="h-8 w-8 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+        <p className="text-sm text-gray-400">Loading reconciliation…</p>
+        <p className="text-xs text-gray-500">This may take a moment</p>
       </div>
     )
   }
