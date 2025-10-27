@@ -31,6 +31,7 @@ import {
 } from "./identity-seed"
 import { normalizeForMatch } from "./alias-normalize"
 import { enrichUnresolved } from "./unresolved-enrich"
+import { searchEntityContextFromSupermemory } from "./supermemory"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
@@ -1617,7 +1618,78 @@ async function persistFamilies(userId: string, families: Map<string, MovementFam
 
 type LlmClassResult = { index: number; movement_type: string; confidence: number }
 
+const NOISY_DESC_PATTERN = /^(SQ\s*\*|TST\*|PAYPAL\s*\*|PREAUTHORIZED|MISCELLANEOUS|TRANSFER\s+(CREDIT|DEBIT)|ACH\s+(CREDIT|DEBIT)|ZELLE\s+)/i
+
+function formatMovementForLlm(
+  m: CanonicalMovement,
+  identity: MovementIdentityEntry | null,
+  idx: number,
+  normalizedCounterparty?: string | null
+): string {
+  const cp = normalizedCounterparty ?? m.counterparty ?? "unknown"
+  const roleTag = identity ? ` role=${identity.role} (${identity.canonical_name})` : ""
+  const src = m.evidence.map((e) => `${e.source}/${e.source_type}`).join(", ")
+  const pfcPrimary = (m.plaid_pfc?.primary ?? "").toUpperCase()
+  const pfcDetailed = (m.plaid_pfc?.detailed ?? "").toUpperCase()
+  const plaidCat = (m.plaid_category ?? []).join(", ") || "—"
+  const acctType = (m.metadata?.account_type as string) ?? ""
+  const acctSubtype = (m.metadata?.account_subtype as string) ?? ""
+  const acctInfo = [acctType, acctSubtype].filter(Boolean).join("/") || "—"
+  const descDisplay = normalizedCounterparty ? `[normalized: ${normalizedCounterparty}] ${m.raw_description ?? "(none)"}` : (m.raw_description ?? "(none)")
+  return `${idx}. [${m.direction.toUpperCase()}] $${m.amount.toFixed(2)} | desc: ${descDisplay} | counterparty: ${cp}${roleTag} | source: ${src} | date: ${m.date} | account: ${m.cash_account_name ?? "unknown"} (${acctInfo}) | plaid_pfc: ${pfcPrimary}${pfcDetailed ? ` / ${pfcDetailed}` : ""} | plaid_category: ${plaidCat}`
+}
+
+/** Stage 1: Normalize noisy bank descriptions to clean counterparty names for better classification. */
+async function llmNormalizeCounterpartiesBatch(
+  batch: Array<{ movement: CanonicalMovement }>
+): Promise<Map<number, string>> {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey || batch.length === 0) return new Map()
+
+  const toNormalize = batch
+    .map(({ movement: m }, idx) => ({ idx, raw: m.raw_description?.trim() || m.counterparty?.trim() || "" }))
+    .filter(({ raw }) => raw.length > 2 && NOISY_DESC_PATTERN.test(raw))
+  if (toNormalize.length === 0) return new Map()
+
+  const numbered = toNormalize.map(({ idx, raw }) => `${idx + 1}. ${raw}`).join("\n")
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: `Normalize bank transaction descriptions to clean company/person names. Strip prefixes: SQ *, TST*, PAYPAL *, PREAUTHORIZED ACH, etc. Extract entity name only. Return JSON array: [{"index": 1, "normalized": "Acme Corp"}] Index is 1-based. Output ONLY valid JSON.`,
+          },
+          { role: "user", content: `Normalize:\n${numbered}` },
+        ],
+        max_tokens: 1024,
+        temperature: 0.05,
+      }),
+    })
+    if (!res.ok) return new Map()
+    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
+    const content = data.choices?.[0]?.message?.content ?? ""
+    const jsonStr = content.replace(/```json?\s*/gi, "").replace(/```/g, "").trim()
+    const parsed = JSON.parse(jsonStr) as Array<{ index: number; normalized: string }>
+    const map = new Map<number, string>()
+    if (Array.isArray(parsed)) {
+      for (const p of parsed) {
+        const orig = toNormalize[p.index - 1]
+        if (orig && p.normalized?.trim()) map.set(orig.idx, p.normalized.trim())
+      }
+    }
+    return map
+  } catch {
+    return new Map()
+  }
+}
+
 async function llmClassifyBatch(
+  userId: string,
+  selfCtx: SelfContext,
   unclassified: Array<{ movement: CanonicalMovement; identity: MovementIdentityEntry | null }>
 ): Promise<LlmClassResult[]> {
   const apiKey = process.env.OPENAI_API_KEY
@@ -1626,18 +1698,32 @@ async function llmClassifyBatch(
   const results: LlmClassResult[] = []
   const batchSize = 40
 
+  const selfNamesStr = selfCtx.selfNames.length > 0 ? selfCtx.selfNames.join(", ") : "(not provided)"
+  const ownerNamesStr = selfCtx.ownerNames.length > 0 ? selfCtx.ownerNames.join(", ") : ""
+
   for (let i = 0; i < unclassified.length; i += batchSize) {
     const batch = unclassified.slice(i, i + batchSize)
-    const numbered = batch.map(({ movement: m, identity }, idx) => {
-      const cp = m.counterparty ?? "unknown"
-      const roleTag = identity ? ` (${identity.role})` : ""
-      const src = m.evidence.map((e) => `${e.source}/${e.source_type}`).join(", ")
-      return `${idx + 1}. [${m.direction.toUpperCase()}] $${m.amount.toFixed(2)} | ${m.raw_description ?? "(no description)"} | counterparty: ${cp}${roleTag} | source: ${src} | date: ${m.date} | account: ${m.cash_account_name ?? "unknown"}`
-    }).join("\n")
+    const searchText = batch.map(({ movement: m }) => `${m.raw_description ?? ""} ${m.counterparty ?? ""}`).join(" ")
+    let entityContext = ""
+    try {
+      const supermemoryContext = await searchEntityContextFromSupermemory(userId, searchText.slice(0, 500))
+      if (supermemoryContext) entityContext = `\n\n${supermemoryContext}`
+    } catch {
+      // Supermemory unavailable
+    }
+
+    // Stage 1: Normalize noisy counterparties for better classification
+    const normalizedMap = await llmNormalizeCounterpartiesBatch(batch)
+
+    const numbered = batch.map(({ movement: m, identity }, idx) =>
+      formatMovementForLlm(m, identity, idx + 1, normalizedMap.get(idx) ?? undefined)
+    ).join("\n")
 
     const typeList = ALL_MOVEMENT_TYPES.join(", ")
 
-    const systemPrompt = `You classify cash movements for a small business. For each record, determine the movement_type.
+    const systemPrompt = `You classify cash movements for a small business. The business is called "${selfNamesStr}".${ownerNamesStr ? ` Owner(s): ${ownerNamesStr}. Use this to distinguish owner contributions/draws from customer payments.` : ""}${entityContext}
+
+For each record, determine the movement_type. Use plaid_pfc (Plaid primary/detailed category) and plaid_category as strong signals when present. The counterparty role (vendor/customer/processor/owner) from the identity graph is a strong signal.
 
 Types: ${typeList}
 
@@ -1674,8 +1760,6 @@ IMPORTANT: "MERCHANT BANKCD/DEPOSIT" or "BANKCD DEPOSIT" descriptors are merchan
 
 Fallback:
 - unknown_inflow / unknown_outflow / unknown_transfer_candidate
-
-The counterparty role in parentheses (if present) is a strong signal from the identity graph.
 
 Return a JSON array. Each element: {"index": 1, "movement_type": "...", "confidence": 0.0-1.0}
 Output ONLY valid JSON array. No markdown.`
@@ -1864,6 +1948,9 @@ export async function classifyMovements(userId: string): Promise<{
         coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
       })
       stats.rule_classified++
+      if (conf.score < 0.6 && !isCrossAccountTransfer) {
+        needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+      }
       continue
     }
 
@@ -1885,6 +1972,9 @@ export async function classifyMovements(userId: string): Promise<{
         coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
       })
       stats.rule_classified++
+      if (conf.score < 0.6) {
+        needsLlm.push({ idx: classified.length - 1, movement: m, identity })
+      }
       continue
     }
 
@@ -1906,6 +1996,7 @@ export async function classifyMovements(userId: string): Promise<{
         coalesced_group_id: m.provenance === "coalesced" ? m.evidence.map((e) => e.source_id).sort().join(":") : null,
       })
       stats.provisional_classified++
+      needsLlm.push({ idx: classified.length - 1, movement: m, identity })
       continue
     }
 
@@ -1927,9 +2018,9 @@ export async function classifyMovements(userId: string): Promise<{
     })
   }
 
-  // Step 8: LLM assist — upgrade fallback classifications
+  // Step 8: LLM assist — upgrade fallback classifications and low-confidence rule/provisional
   if (needsLlm.length > 0) {
-    const llmResults = await llmClassifyBatch(needsLlm.map((n) => ({ movement: n.movement, identity: n.identity })))
+    const llmResults = await llmClassifyBatch(userId, selfCtx, needsLlm.map((n) => ({ movement: n.movement, identity: n.identity })))
 
     for (const llmResult of llmResults) {
       const globalIdx = llmResult.index
