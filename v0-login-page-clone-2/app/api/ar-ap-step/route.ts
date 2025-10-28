@@ -269,9 +269,29 @@ export async function GET(request: Request) {
         console.error("[ar-ap-step] Background task error:", e)
         releaseReconciliationLock(user.id, "failed", e instanceof Error ? e.message : String(e))
       })
+      
+      // Return immediately with is_reconciling=true so frontend knows to poll
+      // Don't read database state while reconciliation is actively mutating it
+      const reconciliationStatus = await getReconciliationLockStatus(user.id)
+      return NextResponse.json({
+        is_reconciling: true,
+        reconciliation_status: reconciliationStatus,
+        message: "Reconciliation started, poll for updates",
+      })
     } else {
       console.log("[ar-ap-step] Reconciliation already running for user:", user.id)
     }
+  }
+
+  // Check if reconciliation is currently running - if so, return minimal response
+  // to avoid reading mid-mutation database state
+  const reconciliationStatus = await getReconciliationLockStatus(user.id)
+  if (reconciliationStatus.is_running) {
+    return NextResponse.json({
+      is_reconciling: true,
+      reconciliation_status: reconciliationStatus,
+      message: "Reconciliation in progress, poll for updates",
+    })
   }
 
   const invoices = await fetchInvoicesForReconciliation(user.id)
