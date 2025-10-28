@@ -1,23 +1,26 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
+import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { getEntityProfile, aggregateEntityTransactions } from "@/lib/entity-profiles"
 import { generateEntityNarratives, updateEntityNarratives } from "@/lib/entity-profile-ai"
 import type { EntityTransaction, EntityNarratives, ForecastFeatures, EntityArchetype } from "@/lib/state/types"
 
-async function getUserId(): Promise<string | null> {
+async function getUser() {
   const cookieStore = await cookies()
-  return cookieStore.get("user_id")?.value ?? null
+  const sessionToken = cookieStore.get(getSessionCookieName())?.value
+  return getUserBySessionToken(sessionToken ?? "")
 }
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const userId = await getUserId()
-  if (!userId) {
+  const user = await getUser()
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
+  const userId = user.id
 
   const { id: entityId } = await params
   const { searchParams } = new URL(request.url)
