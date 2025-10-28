@@ -18,6 +18,8 @@ import { tagMovements } from "@/lib/movement-tag-enrich"
 import { runLLMStage4, getAllUnreconciledMovements, type InvoiceForMatch, type BillForMatch } from "@/lib/reconciliation-llm-match"
 import { toEntityUriApBill } from "@/lib/entity-uri"
 import type { OutstandingInvoice, OutstandingBill } from "@/lib/state/types"
+import { buildEntityProfiles } from "@/lib/entity-profiles"
+import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
 
 const WATERFALL_REVIEW_PREVIEW = 15
 const LOCK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - consider stale locks as failed
@@ -220,6 +222,22 @@ async function runReconciliationInBackground(userId: string) {
       })
     } else {
       console.log("[ar-ap-step] No unreconciled movements for LLM Stage 4")
+    }
+    
+    // Build entity profiles after reconciliation completes
+    try {
+      console.log("[ar-ap-step] Building entity profiles for user:", userId)
+      const profilesBuilt = await buildEntityProfiles(userId)
+      console.log("[ar-ap-step] Entity profiles built:", profilesBuilt)
+      
+      // Generate AI narratives for top entities (async, don't block)
+      refreshEntityNarratives(userId, { maxEntities: 25 }).then((count) => {
+        console.log("[ar-ap-step] Entity narratives refreshed:", count)
+      }).catch((e) => {
+        console.warn("[ar-ap-step] Failed to refresh entity narratives:", e)
+      })
+    } catch (e) {
+      console.warn("[ar-ap-step] Failed to build entity profiles:", e)
     }
     
     console.log("[ar-ap-step] Background reconciliation completed for user:", userId)
