@@ -457,6 +457,22 @@ export async function syncCashEventsForUser(
       [userId, apStableIds],
     )
   }
+
+  // Clean up orphaned attributions pointing to stale cash_events
+  // This prevents inflated matched amounts when invoices/bills are deleted from accounting system
+  const { rowCount: orphanedCount } = await query(
+    `DELETE FROM movement_attributions
+     WHERE user_id = $1::uuid
+       AND entity_id IN (
+         SELECT entity_id FROM cash_events 
+         WHERE user_id = $1::uuid 
+           AND metadata->>'stale_reason' = 'removed_from_source'
+       )`,
+    [userId]
+  )
+  if (orphanedCount && orphanedCount > 0) {
+    console.log(`[cash-events-build] Cleaned up ${orphanedCount} orphaned attributions for user:`, userId)
+  }
 }
 
 /** Aggregate inflow/outflow by counterparty entity from attributions + movements. */

@@ -9,8 +9,10 @@
  * High-confidence matches can be auto-applied; lower confidence requires review.
  */
 
-import { query } from "@/lib/db"
-import { createAttribution, type CreateAttributionOpts } from "@/lib/attribution-persist"
+import { query, withTransaction } from "@/lib/db"
+import { insertAttributionWithClient, type CreateAttributionOpts } from "@/lib/attribution-persist"
+import { safeParseFloat } from "@/lib/utils"
+import type { PoolClient } from "pg"
 
 const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
 const API_KEY = process.env.FORECAST_LLM_API_KEY ?? process.env.OPENAI_API_KEY
@@ -70,7 +72,7 @@ function parseARMatchLines(content: string, movementIds: Set<string>, invoiceIds
     const confMatch = line.match(/\b(high|medium|low)\b/i)
     const conf = (confMatch?.[1] ?? "medium").toLowerCase() as "high" | "medium" | "low"
     const amountMatch = line.match(/\$?([\d,]+\.?\d*)\s*(?:matched|applied|allocated)/i)
-    const amount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, "")) : undefined
+    const amount = amountMatch ? safeParseFloat(amountMatch[1].replace(/,/g, ""), undefined as unknown as number) : undefined
     const reasonParts = line.split(/:|->/).slice(2).join(":").trim()
     const reason = reasonParts || "LLM suggested match based on entity and amount analysis"
     if (mid && iid && !seen.has(`${mid}:${iid}`)) {
@@ -91,7 +93,7 @@ function parseAPMatchLines(content: string, movementIds: Set<string>, obligation
     const confMatch = line.match(/\b(high|medium|low)\b/i)
     const conf = (confMatch?.[1] ?? "medium").toLowerCase() as "high" | "medium" | "low"
     const amountMatch = line.match(/\$?([\d,]+\.?\d*)\s*(?:matched|applied|allocated)/i)
-    const amount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, "")) : undefined
+    const amount = amountMatch ? safeParseFloat(amountMatch[1].replace(/,/g, ""), undefined as unknown as number) : undefined
     const reasonParts = line.split(/:|->/).slice(2).join(":").trim()
     const reason = reasonParts || "LLM suggested match based on entity and amount analysis"
     if (mid && oid && !seen.has(`${mid}:${oid}`)) {
@@ -210,6 +212,7 @@ Output matches (one per line):`
 /**
  * Apply high-confidence LLM matches automatically.
  * Creates attributions for matches with confidence >= minConfidence.
+ * All operations are wrapped in a transaction for atomicity.
  */
 export async function applyLLMMatches(
   userId: string,
@@ -219,116 +222,152 @@ export async function applyLLMMatches(
   movementAmounts: Map<string, number>,
   minConfidence: "high" | "medium" | "low" = "high",
 ): Promise<LLMMatchApplyResult> {
-  const result: LLMMatchApplyResult = { applied: 0, skipped: 0, errors: [] }
   const confidenceOrder = { high: 3, medium: 2, low: 1 }
   const minLevel = confidenceOrder[minConfidence]
 
-  for (const ar of matches.ar) {
-    if (confidenceOrder[ar.confidence] < minLevel) {
-      result.skipped++
-      continue
-    }
+  return withTransaction(async (client: PoolClient) => {
+    const result: LLMMatchApplyResult = { applied: 0, skipped: 0, errors: [] }
 
-    const invoice = invoiceMap.get(ar.invoice_id)
-    if (!invoice) {
-      result.errors.push(`Invoice ${ar.invoice_id} not found`)
-      continue
-    }
-
-    const movementAmount = movementAmounts.get(ar.movement_id) ?? 0
-    const grossAmount = ar.amount_matched ?? invoice.amount_due
-    const netAmount = Math.min(movementAmount, grossAmount)
-    const feeAmount = Math.max(0, grossAmount - netAmount)
-
-    try {
-      const opts: CreateAttributionOpts = {
-        userId,
-        movementId: ar.movement_id,
-        component_type: "ar",
-        entity_id: invoice.entity_id ?? `ar://invoice/qbo/${ar.invoice_id}`,
-        reference_id: ar.invoice_id,
-        gross_amount: grossAmount,
-        net_amount: netAmount,
-        confidence: ar.confidence === "high" ? 0.88 : ar.confidence === "medium" ? 0.75 : 0.6,
-        source: "llm",
-        metadata: {
-          match_method: "llm_entity_match",
-          waterfall_stage: "llm_stage4",
-          llm_confidence: ar.confidence,
-          llm_reasoning: ar.reasoning,
-          fee_amount: feeAmount,
-        },
+    for (const ar of matches.ar) {
+      if (confidenceOrder[ar.confidence] < minLevel) {
+        result.skipped++
+        continue
       }
-      await createAttribution(opts)
 
-      if (feeAmount > 0.01) {
-        await createAttribution({
+      const invoice = invoiceMap.get(ar.invoice_id)
+      if (!invoice) {
+        result.errors.push(`Invoice ${ar.invoice_id} not found`)
+        continue
+      }
+
+      const movementAmount = movementAmounts.get(ar.movement_id) ?? 0
+      const grossAmount = ar.amount_matched ?? invoice.amount_due
+      const netAmount = Math.min(movementAmount, grossAmount)
+      const feeAmount = Math.max(0, grossAmount - netAmount)
+
+      try {
+        const opts: CreateAttributionOpts = {
           userId,
           movementId: ar.movement_id,
-          component_type: "fee",
-          entity_id: "fee://processor",
-          reference_id: null,
-          gross_amount: 0,
-          net_amount: -feeAmount,
-          confidence: opts.confidence,
+          component_type: "ar",
+          entity_id: invoice.entity_id ?? `ar://invoice/qbo/${ar.invoice_id}`,
+          reference_id: ar.invoice_id,
+          gross_amount: grossAmount,
+          net_amount: netAmount,
+          confidence: ar.confidence === "high" ? 0.88 : ar.confidence === "medium" ? 0.75 : 0.6,
           source: "llm",
           metadata: {
             match_method: "llm_entity_match",
-            waterfall_stage: "llm_stage4_fee",
+            waterfall_stage: "llm_stage4",
+            llm_confidence: ar.confidence,
+            llm_reasoning: ar.reasoning,
             fee_amount: feeAmount,
           },
-        })
+        }
+        await insertAttributionWithClient(client, opts)
+
+        // Update cash_events.outstanding_amount to prevent re-matching
+        await client.query(
+          `UPDATE cash_events 
+           SET outstanding_amount = GREATEST(0, outstanding_amount - $2), 
+               status = CASE 
+                 WHEN GREATEST(0, outstanding_amount - $2) <= 0.01 THEN 'paid'
+                 WHEN GREATEST(0, outstanding_amount - $2) < amount THEN 'partially_paid'
+                 ELSE status 
+               END,
+               updated_at = NOW()
+           WHERE user_id = $1::uuid 
+             AND entity_id = $3 
+             AND event_type = 'ar'`,
+          [userId, grossAmount, invoice.entity_id ?? `ar://invoice/qbo/${ar.invoice_id}`]
+        )
+
+        if (feeAmount > 0.01) {
+          await insertAttributionWithClient(client, {
+            userId,
+            movementId: ar.movement_id,
+            component_type: "fee",
+            entity_id: "fee://processor",
+            reference_id: null,
+            gross_amount: 0,
+            net_amount: -feeAmount,
+            confidence: opts.confidence,
+            source: "llm",
+            metadata: {
+              match_method: "llm_entity_match",
+              waterfall_stage: "llm_stage4_fee",
+              fee_amount: feeAmount,
+            },
+          })
+        }
+
+        result.applied++
+      } catch (e) {
+        result.errors.push(`AR ${ar.movement_id}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    for (const ap of matches.ap) {
+      if (confidenceOrder[ap.confidence] < minLevel) {
+        result.skipped++
+        continue
       }
 
-      result.applied++
-    } catch (e) {
-      result.errors.push(`AR ${ar.movement_id}: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
-
-  for (const ap of matches.ap) {
-    if (confidenceOrder[ap.confidence] < minLevel) {
-      result.skipped++
-      continue
-    }
-
-    const bill = billMap.get(ap.obligation_id)
-    if (!bill) {
-      result.errors.push(`Bill ${ap.obligation_id} not found`)
-      continue
-    }
-
-    const movementAmount = movementAmounts.get(ap.movement_id) ?? 0
-    const grossAmount = ap.amount_matched ?? bill.amount_due
-    const netAmount = Math.min(movementAmount, grossAmount)
-
-    try {
-      const opts: CreateAttributionOpts = {
-        userId,
-        movementId: ap.movement_id,
-        component_type: "ap",
-        entity_id: bill.entity_id ?? ap.obligation_id,
-        reference_id: bill.bill_id,
-        gross_amount: grossAmount,
-        net_amount: netAmount,
-        confidence: ap.confidence === "high" ? 0.88 : ap.confidence === "medium" ? 0.75 : 0.6,
-        source: "llm",
-        metadata: {
-          match_method: "llm_entity_match",
-          waterfall_stage: "llm_stage4",
-          llm_confidence: ap.confidence,
-          llm_reasoning: ap.reasoning,
-        },
+      const bill = billMap.get(ap.obligation_id)
+      if (!bill) {
+        result.errors.push(`Bill ${ap.obligation_id} not found`)
+        continue
       }
-      await createAttribution(opts)
-      result.applied++
-    } catch (e) {
-      result.errors.push(`AP ${ap.movement_id}: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
 
-  console.log("[LLM-Match] Applied", result.applied, "matches, skipped", result.skipped, ", errors:", result.errors.length)
-  return result
+      const movementAmount = movementAmounts.get(ap.movement_id) ?? 0
+      const grossAmount = ap.amount_matched ?? bill.amount_due
+      const netAmount = Math.min(movementAmount, grossAmount)
+
+      try {
+        const opts: CreateAttributionOpts = {
+          userId,
+          movementId: ap.movement_id,
+          component_type: "ap",
+          entity_id: bill.entity_id ?? ap.obligation_id,
+          reference_id: bill.bill_id,
+          gross_amount: grossAmount,
+          net_amount: netAmount,
+          confidence: ap.confidence === "high" ? 0.88 : ap.confidence === "medium" ? 0.75 : 0.6,
+          source: "llm",
+          metadata: {
+            match_method: "llm_entity_match",
+            waterfall_stage: "llm_stage4",
+            llm_confidence: ap.confidence,
+            llm_reasoning: ap.reasoning,
+          },
+        }
+        await insertAttributionWithClient(client, opts)
+
+        // Update cash_events.outstanding_amount to prevent re-matching
+        await client.query(
+          `UPDATE cash_events 
+           SET outstanding_amount = GREATEST(0, outstanding_amount - $2), 
+               status = CASE 
+                 WHEN GREATEST(0, outstanding_amount - $2) <= 0.01 THEN 'paid'
+                 WHEN GREATEST(0, outstanding_amount - $2) < amount THEN 'partially_paid'
+                 ELSE status 
+               END,
+               updated_at = NOW()
+           WHERE user_id = $1::uuid 
+             AND entity_id = $3 
+             AND event_type = 'ap'`,
+          [userId, grossAmount, bill.entity_id ?? ap.obligation_id]
+        )
+
+        result.applied++
+      } catch (e) {
+        result.errors.push(`AP ${ap.movement_id}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    console.log("[LLM-Match] Applied", result.applied, "matches, skipped", result.skipped, ", errors:", result.errors.length)
+    return result
+  })
 }
 
 /**
@@ -460,7 +499,7 @@ export async function getAllUnreconciledMovements(
     })
     .map((r) => ({
       movement_id: r.id,
-      amount: Math.abs(parseFloat(String(r.amount))),
+      amount: Math.abs(safeParseFloat(r.amount)),
       date: r.date,
       counterparty: r.counterparty,
       raw_description: r.raw_description,

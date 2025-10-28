@@ -93,7 +93,7 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
             mt.economic_class
      FROM movements m
      LEFT JOIN movement_attributions a ON a.movement_id = m.id AND a.user_id = m.user_id
-     LEFT JOIN movement_tags mt ON mt.movement_id = m.id
+     LEFT JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
      WHERE m.user_id = $1::uuid AND m.duplicate_of IS NULL
      ORDER BY m.date DESC NULLS LAST, m.id, a.created_at ASC NULLS LAST`,
     [userId],

@@ -8,7 +8,7 @@
 //   Level 2: Identity-aware — customer receipt, vendor payment, owner, processor
 //   Level 3: Inference — cogs vs opex, recurrence, anomaly, first-seen counterparty
 
-import { query, ensureMovementsSchema } from "@/lib/db"
+import { query, ensureMovementsSchema, withTransaction } from "@/lib/db"
 import { log } from "@/lib/logger"
 import { resolveDisplayNames } from "@/lib/display-name-resolve"
 import { normalizeForMatch, isInvoiceSludge } from "@/lib/alias-normalize"
@@ -191,7 +191,8 @@ function tagLevel1(m: CanonicalMovement): BaseTag | null {
       tag.cashflow_bucket = "contra_revenue"
       tag.counterparty_role = "customer"
     } else {
-      tag.cashflow_bucket = "opex_out"
+      // Inbound refund (money coming back from vendor) is an operating inflow
+      tag.cashflow_bucket = "other_operating_in"
       tag.counterparty_role = "vendor"
     }
   }
@@ -364,7 +365,7 @@ type InferenceFlags = {
 function tagLevel3(
   m: CanonicalMovement,
   ctx: TagContext,
-  firstSeenKeys: Set<string>,
+  firstSeenMovementIds: Set<string>,
 ): InferenceFlags {
   const key = familyKeyFromMovement(m)
   const family = ctx.families.get(key)
@@ -376,11 +377,8 @@ function tagLevel3(
   const is_large_outlier = stddev > 0 && m.amount > mean + 3 * stddev
   const is_anomaly = stddev > 0 && m.amount > mean + 2.5 * stddev
 
-  const cp = (m.metadata?.counterparty as string) ?? ""
-  const entityIdFromAlias = cp && !isInvoiceSludge(cp) ? ctx.aliasToEntityId.get(normalizeForMatch(cp)) : undefined
-  const cpFallback = cp && !isInvoiceSludge(cp) ? cp.toLowerCase() : "unknown"
-  const entityKey = (m.entity_id ?? entityIdFromAlias ?? cpFallback).trim()
-  const is_first_seen_counterparty = !!entityKey && firstSeenKeys.has(entityKey)
+  // Check if this specific movement is the first one for its entity
+  const is_first_seen_counterparty = firstSeenMovementIds.has(m.id)
 
   return { recurrence_family_id, is_recurring, is_anomaly, is_large_outlier, is_first_seen_counterparty }
 }
@@ -481,16 +479,17 @@ export async function tagMovements(userId: string): Promise<{
   const displayNames = await resolveDisplayNames(displayInputs)
 
   // Phase 3.1 + Phase 8: First-seen on canonical entity ID (avoid overcount: variations of same entity -> one first-seen)
+  // Track only the first movement_id per entity, not just the entity key
   const byDateAsc = [...movements].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime())
   const earliestDate = byDateAsc.length > 0 ? byDateAsc[0].occurred_at : ""
-  const firstSeenKeys = new Set<string>()
+  const firstSeenMovementIds = new Set<string>()
   const seenInWindow = new Set<string>()
   for (const m of byDateAsc) {
     const cp = (m.metadata?.counterparty as string) ?? ""
     const entityIdFromAlias = cp ? ctx.aliasToEntityId.get(normalizeForMatch(cp)) : undefined
     const key = (m.entity_id ?? entityIdFromAlias ?? cp.toLowerCase()).trim()
     if (key && !seenInWindow.has(key)) {
-      firstSeenKeys.add(key)
+      firstSeenMovementIds.add(m.id) // Track the movement, not the entity
       seenInWindow.add(key)
     }
   }
@@ -515,7 +514,7 @@ export async function tagMovements(userId: string): Promise<{
     }
 
     // Level 3: inference
-    const inference = tagLevel3(m, ctx, firstSeenKeys)
+    const inference = tagLevel3(m, ctx, firstSeenMovementIds)
     stats.inferred++
     if (inference.is_recurring) stats.recurring++
     if (inference.is_anomaly) stats.anomalies++
@@ -652,78 +651,81 @@ async function persistTags(
 ): Promise<void> {
   if (tags.length === 0) return
 
-  await query("DELETE FROM movement_tags WHERE movement_id IN (SELECT id FROM movements WHERE user_id = $1)", [userId])
+  // Wrap in transaction to prevent data loss on crash between DELETE and INSERT
+  await withTransaction(async (client) => {
+    await client.query("DELETE FROM movement_tags WHERE movement_id IN (SELECT id FROM movements WHERE user_id = $1)", [userId])
 
-  const BATCH_SIZE = 50
-  for (let i = 0; i < tags.length; i += BATCH_SIZE) {
-    const batch = tags.slice(i, i + BATCH_SIZE)
-    const values: string[] = []
-    const params: unknown[] = []
-    let idx = 0
+    const BATCH_SIZE = 50
+    for (let i = 0; i < tags.length; i += BATCH_SIZE) {
+      const batch = tags.slice(i, i + BATCH_SIZE)
+      const values: string[] = []
+      const params: unknown[] = []
+      let idx = 0
 
-    for (const t of batch) {
-      const ov = overridesByMovementId.get(t.movement_id)
-      const offsets = Array.from({ length: 6 }, (_, k) => `$${idx + k + 1}`)
-      values.push(`(${offsets.join(", ")})`)
-      params.push(
-        t.movement_id,
-        userId,
-        t.economic_class,
-        t.cashflow_bucket,
-        t.counterparty_role,
-        JSON.stringify({
-          state_scope: t.state_scope,
-          state_inclusion_policy: t.state_inclusion_policy,
-          policy_status: t.policy_status,
-          is_operating: t.is_operating,
-          is_financing: t.is_financing,
-          is_investing: t.is_investing,
-          is_owner_related: t.is_owner_related,
-          hits_pnl: t.hits_pnl,
-          hits_working_capital: t.hits_working_capital,
-          classification_confidence: t.classification_confidence,
-          evidence_strength: t.evidence_strength,
-          needs_review: t.needs_review,
-          review_reasons: t.review_reasons,
-          entity_id: t.entity_id,
-          customer_id: t.customer_id,
-          vendor_id: t.vendor_id,
-          processor_id: t.processor_id,
-          account_id: t.account_id,
-          order_id: t.order_id,
-          invoice_id: t.invoice_id,
-          bill_id: t.bill_id,
-          recurrence_family_id: t.recurrence_family_id,
-          is_recurring: t.is_recurring,
-          is_anomaly: t.is_anomaly,
-          is_large_outlier: t.is_large_outlier,
-          is_first_seen_counterparty: t.is_first_seen_counterparty,
-          settlement_subtype: t.settlement_subtype ?? null,
-          expense_subtype: t.expense_subtype ?? null,
-          display_name: t.display_name ?? null,
-          is_user_overridden: ov?.is_user_overridden ?? false,
-          user_override_policy_status: ov?.user_override_policy_status ?? null,
-          user_override_state_inclusion_policy: ov?.user_override_state_inclusion_policy ?? null,
-          user_override_reason: ov?.user_override_reason ?? null,
-          user_override_at: ov?.user_override_at ?? null,
-        }),
+      for (const t of batch) {
+        const ov = overridesByMovementId.get(t.movement_id)
+        const offsets = Array.from({ length: 6 }, (_, k) => `$${idx + k + 1}`)
+        values.push(`(${offsets.join(", ")})`)
+        params.push(
+          t.movement_id,
+          userId,
+          t.economic_class,
+          t.cashflow_bucket,
+          t.counterparty_role,
+          JSON.stringify({
+            state_scope: t.state_scope,
+            state_inclusion_policy: t.state_inclusion_policy,
+            policy_status: t.policy_status,
+            is_operating: t.is_operating,
+            is_financing: t.is_financing,
+            is_investing: t.is_investing,
+            is_owner_related: t.is_owner_related,
+            hits_pnl: t.hits_pnl,
+            hits_working_capital: t.hits_working_capital,
+            classification_confidence: t.classification_confidence,
+            evidence_strength: t.evidence_strength,
+            needs_review: t.needs_review,
+            review_reasons: t.review_reasons,
+            entity_id: t.entity_id,
+            customer_id: t.customer_id,
+            vendor_id: t.vendor_id,
+            processor_id: t.processor_id,
+            account_id: t.account_id,
+            order_id: t.order_id,
+            invoice_id: t.invoice_id,
+            bill_id: t.bill_id,
+            recurrence_family_id: t.recurrence_family_id,
+            is_recurring: t.is_recurring,
+            is_anomaly: t.is_anomaly,
+            is_large_outlier: t.is_large_outlier,
+            is_first_seen_counterparty: t.is_first_seen_counterparty,
+            settlement_subtype: t.settlement_subtype ?? null,
+            expense_subtype: t.expense_subtype ?? null,
+            display_name: t.display_name ?? null,
+            is_user_overridden: ov?.is_user_overridden ?? false,
+            user_override_policy_status: ov?.user_override_policy_status ?? null,
+            user_override_state_inclusion_policy: ov?.user_override_state_inclusion_policy ?? null,
+            user_override_reason: ov?.user_override_reason ?? null,
+            user_override_at: ov?.user_override_at ?? null,
+          }),
+        )
+        idx += 6
+      }
+
+      await client.query(
+        `INSERT INTO movement_tags (movement_id, user_id, economic_class, cashflow_bucket, counterparty_role, tag_data)
+         VALUES ${values.join(", ")}
+         ON CONFLICT (movement_id) DO UPDATE SET
+           user_id = EXCLUDED.user_id,
+           economic_class = EXCLUDED.economic_class,
+           cashflow_bucket = EXCLUDED.cashflow_bucket,
+           counterparty_role = EXCLUDED.counterparty_role,
+           tag_data = EXCLUDED.tag_data,
+           updated_at = NOW()`,
+        params,
       )
-      idx += 6
     }
-
-    await query(
-      `INSERT INTO movement_tags (movement_id, user_id, economic_class, cashflow_bucket, counterparty_role, tag_data)
-       VALUES ${values.join(", ")}
-       ON CONFLICT (movement_id) DO UPDATE SET
-         user_id = EXCLUDED.user_id,
-         economic_class = EXCLUDED.economic_class,
-         cashflow_bucket = EXCLUDED.cashflow_bucket,
-         counterparty_role = EXCLUDED.counterparty_role,
-         tag_data = EXCLUDED.tag_data,
-         updated_at = NOW()`,
-      params,
-    )
-  }
+  })
 }
 
 // ─── Derived: Unresolved Impact (unknown = risk) ────────────────────

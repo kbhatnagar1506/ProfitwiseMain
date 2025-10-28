@@ -895,6 +895,18 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_movement ON movement_attributions (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user ON movement_attributions (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_component_entity ON movement_attributions (component_type, entity_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user_component ON movement_attributions (user_id, component_type)")
+  // Unique indexes to prevent duplicate attributions
+  await p.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_movement_entity_unique 
+    ON movement_attributions (movement_id, component_type, entity_id, source) 
+    WHERE reference_id IS NULL
+  `)
+  await p.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_movement_ref_unique 
+    ON movement_attributions (movement_id, component_type, reference_id, source) 
+    WHERE reference_id IS NOT NULL
+  `)
   // Cash events bridge (forecast / decisions)
   await p.query(`
     CREATE TABLE IF NOT EXISTS cash_events (
@@ -1020,6 +1032,16 @@ export async function ensureMovementsSchema(): Promise<void> {
   } catch {
     // PK may already be updated
   }
+  // Database-backed reconciliation locking (replaces in-memory Map for multi-dyno support)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS reconciliation_locks (
+      user_id       UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      status        TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'completed', 'failed')),
+      error_message TEXT,
+      completed_at  TIMESTAMPTZ
+    )
+  `)
   // LLM-suggested entity aliases (human review before insert into entity_aliases)
   await p.query(`
     CREATE TABLE IF NOT EXISTS entity_alias_suggestions (
