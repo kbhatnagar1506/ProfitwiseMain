@@ -257,6 +257,186 @@ export async function searchEntityContextFromSupermemory(
   }
 }
 
+/** Search Supermemory for entity-specific context (contracts, payment terms, relationships). */
+export async function searchEntityProfileContext(
+  userId: string,
+  entityName: string,
+  entityType: "customer" | "vendor" | null
+): Promise<{ contractTerms: string | null; relationshipNotes: string | null; rawContext: string }> {
+  if (!process.env.SUPERMEMORY_API_KEY || !entityName.trim()) {
+    return { contractTerms: null, relationshipNotes: null, rawContext: "" }
+  }
+  try {
+    const client = getClient()
+    const containerTag = getUserFinanceTag(userId)
+    
+    // Search for contract terms, payment terms, and relationship context
+    const typeHint = entityType === "customer" ? "customer client" : entityType === "vendor" ? "vendor supplier" : ""
+    const searchQuery = `${entityName} ${typeHint} contract payment terms agreement relationship`.trim()
+    
+    const searchRes = await client.search.execute({
+      q: searchQuery.slice(0, 500),
+      containerTags: [containerTag],
+      limit: 15,
+      includeSummary: true,
+      chunkThreshold: 0.35,
+    })
+    
+    const results = (searchRes as { results?: Array<{ chunks?: Array<{ content?: string }>; summary?: string | null; content?: string | null }> })?.results ?? []
+    const snippets: string[] = []
+    const seen = new Set<string>()
+    
+    for (const r of results) {
+      if (r.summary && !seen.has(r.summary)) {
+        seen.add(r.summary)
+        snippets.push(r.summary)
+      }
+      if (r.content && !seen.has(r.content)) {
+        seen.add(r.content)
+        snippets.push(r.content)
+      }
+      for (const ch of r.chunks ?? []) {
+        if (ch.content && !seen.has(ch.content)) {
+          seen.add(ch.content)
+          snippets.push(ch.content)
+        }
+      }
+    }
+    
+    if (snippets.length === 0) {
+      return { contractTerms: null, relationshipNotes: null, rawContext: "" }
+    }
+    
+    const rawContext = snippets.join("\n\n").slice(0, 3000)
+    
+    // Extract contract terms and relationship notes using simple pattern matching
+    let contractTerms: string | null = null
+    let relationshipNotes: string | null = null
+    
+    const lowerContext = rawContext.toLowerCase()
+    
+    // Look for payment terms patterns
+    const paymentTermsPatterns = [
+      /net\s*(\d+)/i,
+      /payment\s*terms?[:\s]+([^.]+)/i,
+      /due\s*in\s*(\d+)\s*days/i,
+      /(\d+)\s*days?\s*payment/i,
+    ]
+    for (const pattern of paymentTermsPatterns) {
+      const match = rawContext.match(pattern)
+      if (match) {
+        contractTerms = match[0].trim()
+        break
+      }
+    }
+    
+    // Look for relationship context
+    if (lowerContext.includes("strategic") || lowerContext.includes("key account") || lowerContext.includes("important")) {
+      relationshipNotes = "Strategic/key relationship"
+    } else if (lowerContext.includes("preferred") || lowerContext.includes("primary")) {
+      relationshipNotes = "Preferred partner"
+    } else if (lowerContext.includes("new") && (lowerContext.includes("relationship") || lowerContext.includes("account"))) {
+      relationshipNotes = "New relationship"
+    }
+    
+    log("supermemory.entity_profile_context.searched", { 
+      userId, 
+      entityName, 
+      resultsCount: results.length,
+      hasContractTerms: !!contractTerms,
+      hasRelationshipNotes: !!relationshipNotes,
+    }, "supermemory")
+    
+    return { contractTerms, relationshipNotes, rawContext }
+  } catch (err) {
+    log("supermemory.entity_profile_context.failed", { 
+      userId, 
+      entityName, 
+      error: err instanceof Error ? err.message : String(err) 
+    }, "supermemory")
+    return { contractTerms: null, relationshipNotes: null, rawContext: "" }
+  }
+}
+
+/** Store entity profile in Supermemory for AI chat access. */
+export async function addEntityProfileToSupermemory(
+  userId: string,
+  profile: {
+    entityId: string
+    canonicalName: string
+    entityType: "customer" | "vendor" | null
+    archetype: string | null
+    lifetimeValue: number | null
+    outstandingAmount: number | null
+    overdueAmount: number | null
+    avgDaysToPay: number | null
+    onTimePaymentRate: number | null
+    transactionCount: number
+    riskScore: number | null
+    riskFactors: string[] | null
+    aiSummary: string | null
+  }
+): Promise<void> {
+  if (!process.env.SUPERMEMORY_API_KEY) return
+  try {
+    const client = getClient()
+    const containerTag = getUserFinanceTag(userId)
+    
+    const typeLabel = profile.entityType === "customer" ? "Customer" : profile.entityType === "vendor" ? "Vendor" : "Entity"
+    const formatCurrency = (amt: number | null) => {
+      if (amt === null || amt === undefined) return "$0"
+      if (Math.abs(amt) >= 1000000) return `$${(amt / 1000000).toFixed(1)}M`
+      if (Math.abs(amt) >= 1000) return `$${(amt / 1000).toFixed(1)}K`
+      return `$${amt.toFixed(0)}`
+    }
+    
+    const content = `
+${typeLabel} Profile: ${profile.canonicalName}
+
+Payment Behavior:
+- Archetype: ${profile.archetype || "Unknown"}
+- Average days to pay: ${profile.avgDaysToPay?.toFixed(0) ?? "N/A"} days
+- On-time payment rate: ${profile.onTimePaymentRate != null ? (profile.onTimePaymentRate * 100).toFixed(0) + "%" : "N/A"}
+- Total transactions: ${profile.transactionCount}
+
+Financial Summary:
+- Lifetime value: ${formatCurrency(profile.lifetimeValue)}
+- Outstanding amount: ${formatCurrency(profile.outstandingAmount)}
+- Overdue amount: ${formatCurrency(profile.overdueAmount)}
+
+Risk Assessment:
+- Risk score: ${profile.riskScore != null ? (profile.riskScore * 100).toFixed(0) + "%" : "N/A"}
+- Risk factors: ${profile.riskFactors?.length ? profile.riskFactors.join(", ") : "None identified"}
+
+AI Summary: ${profile.aiSummary || "No summary available"}
+`.trim()
+
+    const safeEntityId = profile.entityId.replace(/[^a-zA-Z0-9_-]/g, "_")
+    await client.add({
+      content,
+      containerTag,
+      customId: `entity_profile_${safeEntityId}`,
+      metadata: { 
+        source: "profitwise_entity_profile",
+        entity_type: profile.entityType || "unknown",
+        entity_name: profile.canonicalName,
+      },
+    })
+    
+    log("supermemory.entity_profile.added", { 
+      userId, 
+      entityId: profile.entityId, 
+      entityName: profile.canonicalName 
+    }, "supermemory")
+  } catch (err) {
+    log("supermemory.entity_profile.failed", { 
+      userId, 
+      entityId: profile.entityId, 
+      error: err instanceof Error ? err.message : String(err) 
+    }, "supermemory")
+  }
+}
+
 /** Save a merchant override to Supermemory so future normalizations use it. One document per merchant (customId = merchant_${userId}_${accountId}_${rawName}). */
 export async function addMerchantOverrideToSupermemory(
   userId: string,

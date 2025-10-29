@@ -1,9 +1,11 @@
 /**
  * Entity Profile AI Narratives
  * Generates LLM-powered summaries, forecast notes, and risk explanations for entity profiles.
+ * Enhanced with Supermemory context for richer insights.
  */
 
 import { query } from "@/lib/db"
+import { searchEntityProfileContext, addEntityProfileToSupermemory } from "@/lib/supermemory"
 import type {
   EntityTransaction,
   BehavioralMetrics,
@@ -75,10 +77,17 @@ interface EntityProfileData {
   outstandingAmount: number
   overdueAmount: number
   recentTransactions: EntityTransaction[]
+  // Supermemory context (optional)
+  supermemoryContext?: {
+    contractTerms: string | null
+    relationshipNotes: string | null
+    rawContext: string
+  }
 }
 
 /**
  * Generate AI narratives for an entity profile
+ * Enhanced with Supermemory document context for richer insights
  */
 export async function generateEntityNarratives(
   data: EntityProfileData
@@ -94,6 +103,7 @@ export async function generateEntityNarratives(
     outstandingAmount,
     overdueAmount,
     recentTransactions,
+    supermemoryContext,
   } = data
 
   // Build context for LLM
@@ -105,12 +115,24 @@ export async function generateEntityNarratives(
     })
     .join("\n")
 
+  // Build Supermemory context section
+  let documentContextSection = ""
+  if (supermemoryContext?.rawContext) {
+    documentContextSection = `
+Document Context (from company files):
+${supermemoryContext.contractTerms ? `- Contract/Payment Terms: ${supermemoryContext.contractTerms}` : ""}
+${supermemoryContext.relationshipNotes ? `- Relationship: ${supermemoryContext.relationshipNotes}` : ""}
+${supermemoryContext.rawContext.slice(0, 1500)}
+`
+  }
+
   const systemPrompt = `You are a financial analyst providing concise insights about customer/vendor payment behavior.
 Your responses should be:
 - Clear and actionable for a business owner
 - Data-driven but easy to understand
 - 1-2 sentences per section
 - No jargon or unnecessary qualifiers
+- Incorporate any contract terms or relationship context when available
 
 Respond in JSON format with exactly these fields:
 {
@@ -146,7 +168,8 @@ Seasonality:
 - Low months: ${seasonality.low_months.length > 0 ? formatMonths(seasonality.low_months) : "None detected"}
 
 Recent Transactions:
-${transactionSummary || "No recent transactions"}`
+${transactionSummary || "No recent transactions"}
+${documentContextSection}`
 
   const response = await callLLM(
     [
@@ -376,9 +399,19 @@ export async function refreshEntityNarratives(
 
   for (const p of profiles.rows) {
     try {
+      // Fetch Supermemory context for this entity
+      const entityType = (p.entity_type as EntityType) || "customer"
+      let supermemoryContext: { contractTerms: string | null; relationshipNotes: string | null; rawContext: string } | undefined
+      
+      try {
+        supermemoryContext = await searchEntityProfileContext(userId, p.canonical_name, entityType)
+      } catch (smErr) {
+        console.warn(`[entity-profile-ai] Supermemory context fetch failed for ${p.canonical_name}:`, smErr)
+      }
+
       const data: EntityProfileData = {
         name: p.canonical_name,
-        entityType: (p.entity_type as EntityType) || "customer",
+        entityType,
         archetype: (p.archetype as EntityArchetype) || "low_data",
         metrics: {
           transaction_count: p.transaction_count,
@@ -410,16 +443,39 @@ export async function refreshEntityNarratives(
         outstandingAmount: p.outstanding_amount || 0,
         overdueAmount: p.overdue_amount || 0,
         recentTransactions: [], // We'll skip detailed transactions for bulk updates
+        supermemoryContext,
       }
 
       const narratives = await generateEntityNarratives(data)
       await updateEntityNarratives(userId, p.entity_id, narratives)
+      
+      // Sync profile back to Supermemory for AI chat access
+      try {
+        await addEntityProfileToSupermemory(userId, {
+          entityId: p.entity_id,
+          canonicalName: p.canonical_name,
+          entityType,
+          archetype: p.archetype,
+          lifetimeValue: p.lifetime_value,
+          outstandingAmount: p.outstanding_amount,
+          overdueAmount: p.overdue_amount,
+          avgDaysToPay: p.avg_days_to_pay,
+          onTimePaymentRate: p.on_time_payment_rate,
+          transactionCount: p.transaction_count,
+          riskScore: p.risk_score,
+          riskFactors: p.risk_factors,
+          aiSummary: narratives.ai_summary,
+        })
+      } catch (syncErr) {
+        console.warn(`[entity-profile-ai] Supermemory sync failed for ${p.canonical_name}:`, syncErr)
+      }
+      
       updated++
     } catch (e) {
       console.warn(`[entity-profile-ai] Failed to generate narratives for ${p.entity_id}:`, e)
     }
   }
 
-  console.log(`[entity-profile-ai] Updated ${updated} entity narratives for user ${userId}`)
+  console.log(`[entity-profile-ai] Updated ${updated} entity narratives for user ${userId} (with Supermemory integration)`)
   return updated
 }
