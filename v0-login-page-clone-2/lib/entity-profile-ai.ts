@@ -47,8 +47,18 @@ async function callLLM(
   }
 }
 
-function formatCurrency(amount: number | null | undefined): string {
-  const num = typeof amount === "number" && !isNaN(amount) ? amount : 0
+function formatCurrency(amount: number | string | null | undefined): string {
+  let num: number
+  if (amount === null || amount === undefined) {
+    num = 0
+  } else if (typeof amount === "string") {
+    num = parseFloat(amount)
+    if (isNaN(num)) num = 0
+  } else if (typeof amount === "number" && !isNaN(amount)) {
+    num = amount
+  } else {
+    num = 0
+  }
   if (num >= 1000000) return `$${(num / 1000000).toFixed(1)}M`
   if (num >= 1000) return `$${(num / 1000).toFixed(1)}K`
   return `$${num.toFixed(0)}`
@@ -439,9 +449,9 @@ export async function refreshEntityNarratives(
           low_months: p.low_months || [],
           month_weights: p.month_weights || new Array(12).fill(1),
         },
-        lifetimeValue: p.lifetime_value || 0,
-        outstandingAmount: p.outstanding_amount || 0,
-        overdueAmount: p.overdue_amount || 0,
+        lifetimeValue: typeof p.lifetime_value === "string" ? parseFloat(p.lifetime_value) || 0 : p.lifetime_value || 0,
+        outstandingAmount: typeof p.outstanding_amount === "string" ? parseFloat(p.outstanding_amount) || 0 : p.outstanding_amount || 0,
+        overdueAmount: typeof p.overdue_amount === "string" ? parseFloat(p.overdue_amount) || 0 : p.overdue_amount || 0,
         recentTransactions: [], // We'll skip detailed transactions for bulk updates
         supermemoryContext,
       }
