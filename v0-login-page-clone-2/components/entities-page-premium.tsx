@@ -200,18 +200,18 @@ function EntityCard({ entity, onClick }: { entity: EntitySummary; onClick: () =>
         <div className="mb-3">
           <div className="flex items-center justify-between text-[10px] mb-1">
             <span className="text-gray-400">Reliability Score</span>
-            <span className={`font-medium ${entity.reliability_score > 0.7 ? "text-emerald-400" : entity.reliability_score > 0.4 ? "text-amber-400" : "text-red-400"}`}>
-              {(entity.reliability_score * 100).toFixed(0)}%
+            <span className={`font-medium ${(entity.reliability_score ?? 0) > 0.7 ? "text-emerald-400" : (entity.reliability_score ?? 0) > 0.4 ? "text-amber-400" : "text-red-400"}`}>
+              {((entity.reliability_score ?? 0) * 100).toFixed(0)}%
             </span>
           </div>
           <div className="h-1.5 bg-gray-700/50 rounded-full overflow-hidden">
             <div 
               className={`h-full rounded-full transition-all duration-500 ${
-                entity.reliability_score > 0.7 ? "bg-gradient-to-r from-emerald-500 to-teal-400" :
-                entity.reliability_score > 0.4 ? "bg-gradient-to-r from-amber-500 to-yellow-400" :
+                (entity.reliability_score ?? 0) > 0.7 ? "bg-gradient-to-r from-emerald-500 to-teal-400" :
+                (entity.reliability_score ?? 0) > 0.4 ? "bg-gradient-to-r from-amber-500 to-yellow-400" :
                 "bg-gradient-to-r from-red-500 to-orange-400"
               }`}
-              style={{ width: `${entity.reliability_score * 100}%` }}
+              style={{ width: `${(entity.reliability_score ?? 0) * 100}%` }}
             />
           </div>
         </div>
