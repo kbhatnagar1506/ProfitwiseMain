@@ -3922,9 +3922,16 @@ export function OnboardingFlow({
                             </TableRow>
                           ) : (
                             allReconRows.map((r) => {
-                              const totalFee = (r.allocations ?? []).reduce((s: number, a: { fee: number }) => s + a.fee, 0)
-                              const totalGross = (r.allocations ?? []).reduce((s: number, a: { gross: number }) => s + a.gross, 0)
-                              const totalNet = (r.allocations ?? []).reduce((s: number, a: { net: number }) => s + a.net, 0)
+                              // Only sum AR/AP allocations for gross/net - exclude fee allocations
+                              const arApAllocations = (r.allocations ?? []).filter((a: { entity_type?: string }) => 
+                                a.entity_type === "ar" || a.entity_type === "ap" || a.entity_type === "settlement"
+                              )
+                              // Gross/Net from AR/AP allocations only
+                              const totalGross = arApAllocations.reduce((s: number, a: { gross: number }) => s + a.gross, 0)
+                              const totalNet = arApAllocations.reduce((s: number, a: { net: number }) => s + a.net, 0)
+                              // Fee is simply the difference between gross and net
+                              // This avoids double-counting from separate fee allocations
+                              const totalFee = Math.max(0, totalGross - totalNet)
                               const linked = (r.allocations ?? []).length > 0
                                 ? (r.allocations ?? [])
                                     .map((a: { entity_type?: string; entity_id?: string }) => {

@@ -93,6 +93,25 @@ export function attributionToMovementAllocation(row: MovementAttributionRow): Mo
 
 export async function createAttribution(opts: CreateAttributionOpts): Promise<MovementAttributionRow> {
   await ensureMovementsSchema()
+  
+  // Validate attribution values to prevent impossible data
+  if (opts.component_type !== "fee") {
+    // For AR/AP/settlement allocations, gross should be >= net (fee can't be negative)
+    if (opts.gross_amount < opts.net_amount - 0.01) {
+      console.warn(`[Attribution] Invalid: gross (${opts.gross_amount}) < net (${opts.net_amount}) for ${opts.component_type}`)
+      // Swap to make valid - net becomes gross, gross becomes net
+      const temp = opts.gross_amount
+      opts.gross_amount = opts.net_amount
+      opts.net_amount = temp
+    }
+    // Fee should be reasonable (< 20% of gross for AR/AP)
+    const impliedFee = opts.gross_amount - opts.net_amount
+    const feeRate = opts.gross_amount > 0 ? impliedFee / opts.gross_amount : 0
+    if (feeRate > 0.20) {
+      console.warn(`[Attribution] High fee rate (${(feeRate * 100).toFixed(1)}%) for ${opts.component_type}: gross=${opts.gross_amount}, net=${opts.net_amount}`)
+    }
+  }
+  
   const metadata = { ...opts.metadata }
   const confDetail = opts.confidenceEnvelope
     ? serializeConfidenceEnvelope(opts.confidenceEnvelope)
@@ -134,6 +153,24 @@ export async function insertAttributionWithClient(
   client: PoolClient,
   opts: CreateAttributionOpts,
 ): Promise<MovementAttributionRow> {
+  // Validate attribution values to prevent impossible data
+  if (opts.component_type !== "fee") {
+    // For AR/AP/settlement allocations, gross should be >= net (fee can't be negative)
+    if (opts.gross_amount < opts.net_amount - 0.01) {
+      console.warn(`[Attribution] Invalid: gross (${opts.gross_amount}) < net (${opts.net_amount}) for ${opts.component_type}`)
+      // Swap to make valid - net becomes gross, gross becomes net
+      const temp = opts.gross_amount
+      opts.gross_amount = opts.net_amount
+      opts.net_amount = temp
+    }
+    // Fee should be reasonable (< 20% of gross for AR/AP)
+    const impliedFee = opts.gross_amount - opts.net_amount
+    const feeRate = opts.gross_amount > 0 ? impliedFee / opts.gross_amount : 0
+    if (feeRate > 0.20) {
+      console.warn(`[Attribution] High fee rate (${(feeRate * 100).toFixed(1)}%) for ${opts.component_type}: gross=${opts.gross_amount}, net=${opts.net_amount}`)
+    }
+  }
+
   const metadata = { ...opts.metadata }
   const confDetail = opts.confidenceEnvelope
     ? serializeConfidenceEnvelope(opts.confidenceEnvelope)
