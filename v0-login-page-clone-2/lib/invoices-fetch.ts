@@ -399,6 +399,7 @@ export async function enrichInvoicesWithReconciliationStatus(
 
   // Track matches by specific invoice reference_id ONLY
   // We no longer use entity-level fallback as it caused incorrect aggregation
+  // Handle both old format (qbo/178) and new format (178) for reference_id
   const matchesByInvoiceId = new Map<string, { movementIds: string[]; totalMatched: number }>()
 
   for (const attr of attrRows) {
@@ -406,10 +407,15 @@ export async function enrichInvoicesWithReconciliationStatus(
     
     // Only count attributions that have a specific reference_id (invoice_id)
     if (attr.reference_id) {
-      const existing = matchesByInvoiceId.get(attr.reference_id) ?? { movementIds: [], totalMatched: 0 }
+      // Normalize reference_id: strip source prefix if present (e.g., "qbo/178" -> "178")
+      const normalizedRefId = attr.reference_id.includes('/') 
+        ? attr.reference_id.split('/').pop() ?? attr.reference_id
+        : attr.reference_id
+      
+      const existing = matchesByInvoiceId.get(normalizedRefId) ?? { movementIds: [], totalMatched: 0 }
       existing.movementIds.push(attr.movement_id)
       existing.totalMatched += gross
-      matchesByInvoiceId.set(attr.reference_id, existing)
+      matchesByInvoiceId.set(normalizedRefId, existing)
     }
     // Note: Attributions without reference_id are NOT counted toward any specific invoice
     // This prevents the bug where ALL customer payments were aggregated together
