@@ -99,41 +99,26 @@ const steps = [
   },
   {
     id: 10,
-    title: "Money movements",
-    description: "Every transaction classified: what it is, whether it hits the P&L, and which accounts are involved.",
+    title: "Money movements & tags",
+    description: "Every transaction classified and tagged: P&L impact, economic class, cashflow bucket, and counterparty role.",
   },
   {
     id: 11,
-    title: "Business semantics",
-    description: "Every movement tagged with economic class, cashflow bucket, counterparty role, and structural flags.",
+    title: "AR/AP & reconciliation",
+    description: "Expected inflows (AR) and outflows (AP). Bank payments matched to invoices. Gross − Fee = Net.",
   },
   {
     id: 12,
-    title: "AR & AP Business State Layer",
-    description: "Expected inflows (AR) from invoices; expected outflows (AP).",
-  },
-  {
-    id: 13,
-    title: "Tagged bank transactions",
-    description: "Bank payments matched to AR/AP. Gross − Fee = Net. View all reconciliation in one table.",
-  },
-  {
-    id: 14,
-    title: "AR/AP to Payments Mapping",
-    description: "Link payments to invoices and obligations. Gross − Fee = Net. Matched, unmatched, and fees.",
-  },
-  {
-    id: 15,
     title: "State objects",
     description: "Revenue, Spend, and Liquidity states computed from frozen tags, plus transition detectors.",
   },
   {
-    id: 16,
+    id: 13,
     title: "Cashflow forecast",
     description: "Simulate future cash based on behavioral component models, not simple time-series prediction.",
   },
   {
-    id: 17,
+    id: 14,
     title: "Decisions & actions",
     description: "Top actions ranked by impact, combined strategies, and execution steps.",
   },
@@ -784,69 +769,14 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 11: Business semantics (tagging)
+  // Step 11: AR/AP & reconciliation (merged)
   useEffect(() => {
     if (currentStep !== 11) return
-    let cancelled = false
-
-    setTagLoading(true)
-    setTagError(null)
-
-    // First trigger tagging, then load tagged movements
-    setTagRunning(true)
-    fetch("/api/movements/tag", { method: "POST" })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then((result: { tagged: number; stats: TagStats; unresolved_impact?: UnresolvedImpact; owner_dependency?: OwnerDependency; working_capital?: WorkingCapitalSignals }) => {
-        if (cancelled) return
-        setTagRunning(false)
-        return fetch("/api/movements")
-          .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-          .then((data: { movements: TaggedMovement[]; summary: unknown }) => {
-            if (cancelled) return
-            setTagData({ movements: data.movements, stats: result.stats, unresolved_impact: result.unresolved_impact, owner_dependency: result.owner_dependency, working_capital: result.working_capital })
-            setTagLoading(false)
-          })
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setTagError(err instanceof Error ? err.message : "Failed to run tagging")
-        setTagLoading(false)
-        setTagRunning(false)
-      })
-
-    return () => { cancelled = true }
-  }, [currentStep])
-
-  // Step 12: AR & AP Business State Layer
-  useEffect(() => {
-    if (currentStep !== 12) return
     let cancelled = false
 
     setArApLoading(true)
     setArApError(null)
     setArApData(null)
-
-    fetch("/api/ar-ap")
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then((data: { ar: ARState; ap: APState }) => {
-        if (cancelled) return
-        setArApData(data)
-        setArApLoading(false)
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setArApError(err instanceof Error ? err.message : "Failed to load AR/AP")
-        setArApLoading(false)
-      })
-
-    return () => { cancelled = true }
-  }, [currentStep])
-
-  // Step 13 & 17: AR/AP to Payments Mapping / Tagged bank transactions
-  useEffect(() => {
-    if (currentStep !== 13 && currentStep !== 14) return
-    let cancelled = false
-
     setMappingLoading(true)
     setMappingError(null)
     setMappingArAp(null)
@@ -858,22 +788,26 @@ export function OnboardingFlow({
     ])
       .then(([arApData, reconData]) => {
         if (cancelled) return
+        setArApData(arApData)
         setMappingArAp(arApData)
         setMappingRecon(reconData)
+        setArApLoading(false)
         setMappingLoading(false)
       })
       .catch((e) => {
         if (cancelled) return
         setMappingError(e instanceof Error ? e.message : "Failed to load")
+        setArApError(e instanceof Error ? e.message : "Failed to load")
+        setArApLoading(false)
         setMappingLoading(false)
       })
 
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 14: State objects (computed from frozen tags)
+  // Step 12: State objects (computed from frozen tags)
   useEffect(() => {
-    if (currentStep !== 15) return
+    if (currentStep !== 12) return
     let cancelled = false
 
     setStateLoading(true)
@@ -896,9 +830,9 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 15 & 16: Cashflow forecast + Decisions (share forecast data)
+  // Step 13 & 14: Cashflow forecast + Decisions (share forecast data)
   useEffect(() => {
-    if (currentStep !== 16 && currentStep !== 17) return
+    if (currentStep !== 13 && currentStep !== 14) return
     let cancelled = false
 
     setForecastLoading(true)
@@ -2383,6 +2317,17 @@ export function OnboardingFlow({
           other_operating: "Other Operating",
         }
 
+        const BUCKET_LABELS: Record<string, string> = {
+          revenue_in: "Revenue", contra_revenue: "Contra Rev", cogs_out: "COGS", opex_out: "OpEx",
+          other_operating_in: "Op In", other_income: "Other Inc", financing_in: "Fin In", financing_out: "Fin Out",
+          transfer: "Transfer", settlement: "Settlement", system_setup: "Setup", unknown: "—",
+        }
+        const ROLE_LABELS: Record<string, string> = {
+          customer: "Customer", vendor: "Vendor", owner: "Owner", employee: "Employee",
+          processor: "Processor", bank: "Bank", tax_authority: "Tax", lender: "Lender",
+          marketplace: "Marketplace", unknown: "—",
+        }
+
         const hasSettlementSplit = (classCounts["settlement_in"] ?? 0) > 0 || (classCounts["settlement_adjustment"] ?? 0) > 0
         const pnlClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "pnl").map(([k]) => k).filter((k) => (classCounts[k] ?? 0) > 0)
         const nonPnlClasses = Object.entries(CLASS_META).filter(([, v]) => v.group === "non_pnl").map(([k]) => k).filter((k) => {
@@ -2488,6 +2433,8 @@ export function OnboardingFlow({
                         <th className="text-center text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Dir</th>
                         <th className="text-right text-gray-400 font-medium px-3 py-2 text-xs w-[100px]">Amount</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Counterparty</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[90px]" title="Cashflow bucket">Bucket</th>
+                        <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[70px]" title="Counterparty role">Role</th>
                         {(classKey === "unknown" || classKey === "merchant_deposit" || classKey === "settlement_in" || classKey === "settlement_adjustment") && <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[110px]">Detail</th>}
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs">Description</th>
                         <th className="text-left text-gray-400 font-medium px-3 py-2 text-xs w-[50px]">Prov</th>
@@ -2511,6 +2458,8 @@ export function OnboardingFlow({
                             ${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
                           <td className="text-white px-3 py-1.5 text-xs truncate max-w-[180px]" title={(m.metadata?.counterparty as string) ?? undefined}>{displayLabelForCounterparty(m.metadata?.counterparty as string, (m as { tag?: { display_name?: string; entity_canonical_name?: string } }).tag?.display_name ?? (m as { tag?: { entity_canonical_name?: string } }).tag?.entity_canonical_name)}</td>
+                          <td className="text-gray-500 px-3 py-1.5 text-[10px]">{BUCKET_LABELS[(m as { tag?: { cashflow_bucket?: string } }).tag?.cashflow_bucket ?? "unknown"] ?? "—"}</td>
+                          <td className="text-gray-500 px-3 py-1.5 text-[10px]">{ROLE_LABELS[(m as { tag?: { counterparty_role?: string } }).tag?.counterparty_role ?? "unknown"] ?? "—"}</td>
                           {(classKey === "unknown" || classKey === "merchant_deposit" || classKey === "settlement_in" || classKey === "settlement_adjustment") && (
                             <td className="px-3 py-1.5 text-xs">
                               <span className="text-[10px] text-gray-500 bg-white/5 rounded px-1.5 py-0.5">
@@ -2797,446 +2746,9 @@ export function OnboardingFlow({
       }
 
       case 11: {
-        const tagged = tagData?.movements ?? []
-        const stats = tagData?.stats
-
-        const ECLASS_LABELS: Record<string, { label: string; color: string }> = {
-          customer_receipt:      { label: "Customer Receipt",      color: "bg-emerald-500/80" },
-          vendor_payment:        { label: "Vendor Payment",        color: "bg-orange-500/80" },
-          payroll:               { label: "Payroll",                color: "bg-orange-700/80" },
-          bank_fee:              { label: "Bank Fee",               color: "bg-red-500/80" },
-          bank_fee_refund:       { label: "Bank Fee Refund",       color: "bg-red-400/70" },
-          transfer:              { label: "Transfer",               color: "bg-slate-500/80" },
-          owner_contribution:    { label: "Owner Contribution",     color: "bg-rose-400/80" },
-          owner_draw:            { label: "Owner Draw",             color: "bg-rose-600/80" },
-          processor_fee:         { label: "Processor Fee",          color: "bg-violet-700/80" },
-          processor_payout:      { label: "Processor Payout",       color: "bg-violet-500/80" },
-          refund:                { label: "Refund",                 color: "bg-amber-500/80" },
-          tax:                   { label: "Tax",                    color: "bg-red-700/80" },
-          debt_payment:          { label: "Debt Payment",           color: "bg-indigo-500/80" },
-          interest:              { label: "Interest",               color: "bg-teal-500/80" },
-          opening_balance:       { label: "Opening Balance",        color: "bg-gray-600/80" },
-          account_verification:  { label: "Account Verification",   color: "bg-gray-500/80" },
-          system_adjustment:     { label: "System Adjustment",      color: "bg-gray-500/70" },
-          unknown:               { label: "Unknown",                color: "bg-zinc-500/80" },
-        }
-
-        const BUCKET_LABELS: Record<string, { label: string; color: string }> = {
-          revenue_in:      { label: "Revenue In",      color: "text-emerald-400" },
-          contra_revenue:  { label: "Contra Revenue",  color: "text-amber-400" },
-          cogs_out:        { label: "COGS Out",        color: "text-orange-400" },
-          opex_out:        { label: "OpEx Out",        color: "text-amber-400" },
-          other_operating_in: { label: "Other Operating In", color: "text-teal-400" },
-          other_income:    { label: "Other Income",    color: "text-cyan-400" },
-          financing_in:    { label: "Financing In",    color: "text-blue-400" },
-          financing_out:   { label: "Financing Out",   color: "text-indigo-400" },
-          transfer:        { label: "Transfer",        color: "text-slate-400" },
-          settlement:      { label: "Settlement",      color: "text-violet-400" },
-          system_setup:    { label: "System / Setup",  color: "text-gray-500" },
-          unknown:         { label: "Unknown",         color: "text-zinc-400" },
-        }
-
-        const ROLE_LABELS: Record<string, string> = {
-          customer: "Customer", vendor: "Vendor", owner: "Owner", employee: "Employee",
-          processor: "Processor", bank: "Bank", tax_authority: "Tax Authority",
-          lender: "Lender", marketplace: "Marketplace", unknown: "Unknown",
-        }
-
-        // Aggregate by bucket
-        const bucketAgg: Record<string, { count: number; total: number }> = {}
-        for (const m of tagged) {
-          const bucket = m.tag?.cashflow_bucket ?? "unknown"
-          if (!bucketAgg[bucket]) bucketAgg[bucket] = { count: 0, total: 0 }
-          bucketAgg[bucket].count++
-          bucketAgg[bucket].total += m.amount
-        }
-
-        // Aggregate by economic class
-        const eclassAgg: Record<string, { count: number; total: number }> = {}
-        for (const m of tagged) {
-          const ec = m.tag?.economic_class ?? "unknown"
-          if (!eclassAgg[ec]) eclassAgg[ec] = { count: 0, total: 0 }
-          eclassAgg[ec].count++
-          eclassAgg[ec].total += m.amount
-        }
-
-        // Structural flag counts
-        const flagCounts = { operating: 0, financing: 0, investing: 0, owner_related: 0, hits_pnl: 0, working_capital: 0, recurring: 0, anomalies: 0, first_seen: 0 }
-        for (const m of tagged) {
-          if (m.tag?.is_operating) flagCounts.operating++
-          if (m.tag?.is_financing) flagCounts.financing++
-          if (m.tag?.is_investing) flagCounts.investing++
-          if (m.tag?.is_owner_related) flagCounts.owner_related++
-          if (m.tag?.hits_pnl) flagCounts.hits_pnl++
-          if (m.tag?.hits_working_capital) flagCounts.working_capital++
-          if (m.tag?.is_recurring) flagCounts.recurring++
-          if (m.tag?.is_anomaly) flagCounts.anomalies++
-          if (m.tag?.is_first_seen_counterparty) flagCounts.first_seen++
-        }
-
-        return (
-          <div className="space-y-6">
-            <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">Tagged Money Movement</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[10].description}</p>
-
-              {(tagLoading || tagRunning) && (
-                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
-                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  {tagRunning ? "Tagging movements with business semantics\u2026" : "Loading tagged movements\u2026"}
-                </div>
-              )}
-
-              {tagError && !tagLoading && !tagRunning && (
-                <p className="text-red-300 text-sm mb-4">Failed: {tagError}</p>
-              )}
-            </div>
-
-            {!tagLoading && !tagRunning && tagged.length > 0 && (
-              <div className="space-y-6">
-
-                {/* State inclusion policy */}
-                {stats && (
-                  <div className="space-y-3">
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                      <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">State Inclusion Policy</h3>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-4 py-3 text-center">
-                          <div className="text-2xl font-bold text-emerald-400">{stats.policy_include + stats.policy_provisional}</div>
-                          <div className="text-xs text-emerald-300/70 mt-1 font-medium">Include</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">Conf &ge; 55%</div>
-                        </div>
-                        <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-center">
-                          <div className="text-2xl font-bold text-red-400">{stats.policy_exclude}</div>
-                          <div className="text-xs text-red-300/70 mt-1 font-medium">Exclude &amp; Review</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">Conf &lt; 55%</div>
-                        </div>
-                      </div>
-                      {stats.total > 0 && (
-                        <div className="mt-3 h-2 rounded-full overflow-hidden flex bg-white/5">
-                          <div className="bg-emerald-500 transition-all" style={{ width: `${((stats.policy_include + stats.policy_provisional) / stats.total) * 100}%` }} />
-                          <div className="bg-red-500 transition-all" style={{ width: `${(stats.policy_exclude / stats.total) * 100}%` }} />
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
-                        <div className="text-2xl font-bold text-white">{stats.total}</div>
-                        <div className="text-xs text-gray-400 mt-1">Total Tagged</div>
-                      </div>
-                      <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
-                        <div className="text-2xl font-bold text-emerald-400">{stats.deterministic}</div>
-                        <div className="text-xs text-gray-400 mt-1">Deterministic</div>
-                      </div>
-                      <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
-                        <div className="text-2xl font-bold text-blue-400">{stats.identity_aware}</div>
-                        <div className="text-xs text-gray-400 mt-1">Identity-Aware</div>
-                      </div>
-                      <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-center">
-                        <div className="text-2xl font-bold text-amber-400">{stats.recurring}</div>
-                        <div className="text-xs text-gray-400 mt-1">Recurring</div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Unresolved Impact (Risk) */}
-                {tagData?.unresolved_impact && tagData.unresolved_impact.unresolved_count > 0 && (
-                  <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
-                    <h3 className="text-sm font-semibold text-red-300 mb-3 uppercase tracking-wider">Unresolved Impact (Risk)</h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-red-400">{tagData.unresolved_impact.unresolved_count}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Unresolved</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-emerald-400">${tagData.unresolved_impact.unresolved_inflow_total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Unresolved Inflow</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-red-400">${tagData.unresolved_impact.unresolved_outflow_total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Unresolved Outflow</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-amber-400">${tagData.unresolved_impact.unresolved_operating_exposure.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Operating Exposure</div>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3 mt-3">
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className={`text-lg font-bold ${tagData.unresolved_impact.unresolved_pct_of_inflows > 5 ? "text-red-400" : "text-gray-300"}`}>{tagData.unresolved_impact.unresolved_pct_of_inflows}%</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">% of All Inflows</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className={`text-lg font-bold ${tagData.unresolved_impact.unresolved_pct_of_operating_inflows > 5 ? "text-red-400" : "text-gray-300"}`}>{tagData.unresolved_impact.unresolved_pct_of_operating_inflows}%</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">% of Operating Inflows</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className={`text-lg font-bold ${tagData.unresolved_impact.unresolved_pct_of_last_30d > 5 ? "text-red-400" : "text-gray-300"}`}>{tagData.unresolved_impact.unresolved_pct_of_last_30d}%</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">% of Last 30d Cash</div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Owner Dependency */}
-                {tagData?.owner_dependency && tagData.owner_dependency.contribution_count > 0 && (
-                  <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-4">
-                    <h3 className="text-sm font-semibold text-rose-300 mb-3 uppercase tracking-wider">Owner Dependency</h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-rose-400">{(tagData.owner_dependency.owner_dependency_ratio * 100).toFixed(1)}%</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Owner Dependency</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-emerald-400">${tagData.owner_dependency.owner_inflow_total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Owner In ({tagData.owner_dependency.contribution_count}x)</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-red-400">${tagData.owner_dependency.owner_draw_total.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Owner Out ({tagData.owner_dependency.draw_count}x)</div>
-                      </div>
-                      <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xl font-bold text-white">${tagData.owner_dependency.net_owner_flow.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">Net Owner Flow</div>
-                      </div>
-                    </div>
-                    {tagData.owner_dependency.owner_dependency_ratio > 0.25 && (
-                      <div className="mt-3 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 text-xs text-amber-300">
-                        High owner dependency: {(tagData.owner_dependency.owner_dependency_ratio * 100).toFixed(0)}% of inflows come from the owner. Business may be dependent on personal funding.
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Working Capital Signals */}
-                {tagData?.working_capital && (() => {
-                  const wc = tagData.working_capital
-                  const confMeta: Record<string, { label: string; color: string }> = {
-                    high: { label: "High confidence", color: "text-emerald-400" },
-                    medium: { label: "Medium confidence", color: "text-amber-400" },
-                    low: { label: "Low confidence — treat as directional", color: "text-red-400" },
-                    insufficient_data: { label: "Insufficient data", color: "text-gray-500" },
-                  }
-                  const conf = confMeta[wc.confidence] ?? confMeta.insufficient_data
-                  const suppress = wc.confidence === "insufficient_data"
-                  const fmtDays = (v: number | null) => {
-                    if (v === null || suppress) return "—"
-                    return `~${Math.round(v)}d`
-                  }
-                  const fmtPct = (v: number) => {
-                    if (suppress) return "—"
-                    return `~${Math.round(v * 100)}%`
-                  }
-                  return (
-                    <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-semibold text-blue-300 uppercase tracking-wider">Working Capital Signals</h3>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] font-medium ${conf.color}`}>{conf.label}</span>
-                          <span className="text-[10px] text-gray-600 border border-gray-700 rounded px-1.5 py-0.5">BETA</span>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-violet-400"}`}>{fmtDays(wc.avg_settlement_lag_days)}</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">Settlement Lag</div>
-                        </div>
-                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-emerald-400"}`}>{fmtDays(wc.avg_inflow_cadence_days)}</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">Inflow Cadence</div>
-                        </div>
-                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-red-400"}`}>{fmtDays(wc.avg_outflow_cadence_days)}</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">Outflow Cadence</div>
-                        </div>
-                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-emerald-400"}`}>{fmtPct(wc.inflow_regularity)}</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">Inflow Regularity</div>
-                        </div>
-                        <div className="bg-white/5 rounded-lg px-3 py-2 text-center">
-                          <div className={`text-xl font-bold ${suppress ? "text-gray-600" : "text-red-400"}`}>{fmtPct(wc.outflow_regularity)}</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5">Outflow Regularity</div>
-                        </div>
-                      </div>
-                      <div className="mt-2 text-[10px] text-gray-600">
-                        {wc.data_span_days}d data span · {wc.sample_sizes.revenue_inflows} revenue inflows · {wc.sample_sizes.spend_outflows} spend outflows · {wc.sample_sizes.settlements} settlements
-                      </div>
-                    </div>
-                  )
-                })()}
-
-                {/* Structural flags summary */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Structural Flags</h3>
-                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center">
-                    {[
-                      { label: "Operating", val: flagCounts.operating, color: "text-emerald-400" },
-                      { label: "Financing", val: flagCounts.financing, color: "text-blue-400" },
-                      { label: "Owner", val: flagCounts.owner_related, color: "text-rose-400" },
-                      { label: "Hits P&L", val: flagCounts.hits_pnl, color: "text-amber-400" },
-                      { label: "Working Cap", val: flagCounts.working_capital, color: "text-orange-400" },
-                      { label: "Recurring", val: flagCounts.recurring, color: "text-violet-400" },
-                      { label: "Anomalies", val: flagCounts.anomalies, color: "text-red-400" },
-                      { label: "First-Seen CP", val: flagCounts.first_seen, color: "text-cyan-400" },
-                    ].map((f) => (
-                      <div key={f.label} className="bg-white/5 rounded-lg px-2 py-2">
-                        <div className={`text-lg font-bold ${f.color}`}>{f.val}</div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">{f.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Money movement (ground truth) */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider flex items-center gap-2">
-                    <span className="text-emerald-400">✓</span> Money Movement (ground truth)
-                  </h3>
-                  <div className="space-y-2">
-                    {Object.entries(bucketAgg)
-                      .sort((a, b) => b[1].total - a[1].total)
-                      .map(([bucket, agg]) => {
-                        const meta = BUCKET_LABELS[bucket] ?? { label: bucket, color: "text-gray-400" }
-                        return (
-                          <div key={bucket} className="flex items-center justify-between px-3 py-2 bg-white/5 rounded-lg">
-                            <div className="flex items-center gap-2">
-                              <span className={`text-sm font-medium ${meta.color}`}>{meta.label}</span>
-                              <span className="text-xs text-gray-500">{agg.count} movements</span>
-                            </div>
-                            <span className="text-sm font-mono text-white">${Math.abs(agg.total).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                          </div>
-                        )
-                    })}
-                  </div>
-                </div>
-
-                {/* Economic class breakdown */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Economic Classes</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {Object.entries(eclassAgg)
-                      .sort((a, b) => b[1].count - a[1].count)
-                      .map(([ec, agg]) => {
-                        const meta = ECLASS_LABELS[ec] ?? { label: ec, color: "bg-zinc-500/80" }
-                        return (
-                          <div key={ec} className={`${meta.color} rounded-lg px-3 py-2`}>
-                            <div className="text-sm font-medium text-white">{meta.label}</div>
-                            <div className="flex items-baseline gap-2 mt-1">
-                              <span className="text-lg font-bold text-white">{agg.count}</span>
-                              <span className="text-xs text-white/70">${Math.abs(agg.total).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
-                            </div>
-                          </div>
-                        )
-                    })}
-                  </div>
-                </div>
-
-                {/* Movement detail table */}
-                <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-white/10">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Tagged Movements</h3>
-                  </div>
-                  <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-                    <table className="w-full text-sm">
-                      <thead className="sticky top-0 bg-black/80 backdrop-blur">
-                        <tr className="text-left text-xs text-gray-500 uppercase tracking-wider">
-                          <th className="px-3 py-2">Date</th>
-                          <th className="px-3 py-2">Dir</th>
-                          <th className="px-3 py-2 text-right">Amount</th>
-                          <th className="px-3 py-2">Economic Class</th>
-                          <th className="px-3 py-2">Bucket</th>
-                          <th className="px-3 py-2">CP Role</th>
-                          <th className="px-3 py-2">Policy</th>
-                          <th className="px-3 py-2">Flags</th>
-                          <th className="px-3 py-2">Description</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {tagged.map((m) => {
-                          const ec = m.tag?.economic_class ?? "unknown"
-                          const bucket = m.tag?.cashflow_bucket ?? "unknown"
-                          const role = m.tag?.counterparty_role ?? "unknown"
-                          const ecMeta = ECLASS_LABELS[ec] ?? { label: ec, color: "bg-zinc-500/80" }
-                          const bucketMeta = BUCKET_LABELS[bucket] ?? { label: bucket, color: "text-gray-400" }
-                          const policy = m.tag?.state_inclusion_policy ?? "exclude_and_review"
-                          const policyMeta = policy === "exclude_and_review"
-                            ? { label: "Exclude", cls: "text-red-400 bg-red-500/15" }
-                            : { label: "Include", cls: "text-emerald-400 bg-emerald-500/15" }
-                          const flags: string[] = []
-                          if (m.tag?.is_recurring) flags.push("🔁")
-                          if (m.tag?.is_anomaly) flags.push("⚠")
-                          if (m.tag?.is_large_outlier) flags.push("📈")
-                          if (m.tag?.is_first_seen_counterparty) flags.push("🆕")
-                          if (m.tag?.is_owner_related) flags.push("👤")
-
-                          return (
-                            <tr key={m.id} className="hover:bg-white/5 transition-colors">
-                              <td className="px-3 py-2 text-gray-300 whitespace-nowrap">{m.occurred_at?.slice(0, 10)}</td>
-                              <td className="px-3 py-2">
-                                <span className={m.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
-                                  {m.direction === "inflow" ? "↑ In" : "↓ Out"}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono text-white">${m.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td>
-                              <td className="px-3 py-2">
-                                <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium text-white ${ecMeta.color}`}>
-                                  {ecMeta.label}
-                                </span>
-                              </td>
-                              <td className={`px-3 py-2 text-xs font-medium ${bucketMeta.color}`}>{bucketMeta.label}</td>
-                              <td className="px-3 py-2 text-xs text-gray-400">{ROLE_LABELS[role] ?? role}</td>
-                              <td className="px-3 py-2">
-                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${policyMeta.cls}`}>
-                                  {policyMeta.label}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-sm" title={flags.join(" ")}>{flags.join(" ") || "—"}</td>
-                              <td className="px-3 py-2 text-gray-500 text-xs max-w-[200px] truncate">{m.raw_description ?? "—"}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Re-tag button */}
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    disabled={tagRunning}
-                    onClick={() => {
-                      setTagRunning(true)
-                      setTagData(null)
-                      fetch("/api/movements/tag", { method: "POST" })
-                        .then((res) => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
-                        .then((result: { tagged: number; stats: TagStats; unresolved_impact?: UnresolvedImpact; owner_dependency?: OwnerDependency; working_capital?: WorkingCapitalSignals }) => {
-                          return fetch("/api/movements")
-                            .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
-                            .then((data: { movements: TaggedMovement[]; summary: unknown }) => {
-                              setTagData({ movements: data.movements, stats: result.stats, unresolved_impact: result.unresolved_impact, owner_dependency: result.owner_dependency, working_capital: result.working_capital })
-                              setTagRunning(false)
-                            })
-                        })
-                        .catch(() => { setTagRunning(false) })
-                    }}
-                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <div className="text-sm font-medium text-white">{tagRunning ? "Tagging\u2026" : "Re-tag"}</div>
-                    <div className="text-xs text-gray-400">Re-run tagging engine</div>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )
-      }
-
-      case 12: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const moneySmall = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        const money2 = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         const sourceBadge = (s: string) => {
           const c = s === "qbo" ? "bg-blue-500/20 text-blue-300" : s === "xero" ? "bg-teal-500/20 text-teal-300" : s === "stripe" ? "bg-purple-500/20 text-purple-300" : "bg-gray-500/20 text-gray-300"
           return <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded uppercase ${c}`}>{s}</span>
@@ -3250,28 +2762,38 @@ export function OnboardingFlow({
         const arInvoices = arApData?.ar.invoices ?? []
         const arOverdueFirst = [...arInvoices].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0))
         const apObligations = arApData?.ap.obligations ?? []
+        const allReconRows = mappingRecon
+          ? [
+              ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "inflow" as const })),
+              ...(mappingRecon.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "outflow" as const })),
+              ...(mappingRecon.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow" as const, allocations: [] })),
+              ...(mappingRecon.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow" as const, allocations: [] })),
+            ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+          : []
 
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
-              <p className="text-gray-400 text-lg mb-1">{steps[11].description}</p>
-              <p className="text-[11px] text-gray-500 mb-5">Uses only data from steps 1–11 (bank, accounting, identity, tagged movements).</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[10].title}</h2>
+              <p className="text-gray-400 text-lg mb-1">{steps[10].description}</p>
+              <p className="text-[11px] text-gray-500 mb-5">Bank payments matched to invoices and obligations. Gross − Fee = Net.</p>
 
-              {arApLoading && (
+              {(arApLoading || mappingLoading) && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Loading AR & AP…
+                  Loading AR/AP & reconciliation…
                 </div>
               )}
 
-              {arApError && !arApLoading && (
-                <p className="text-red-300 text-sm mb-4">Failed: {arApError}</p>
+              {(arApError || mappingError) && !arApLoading && !mappingLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed: {arApError || mappingError}</p>
               )}
             </div>
 
-            {!arApLoading && arApData && (
+            {!arApLoading && !mappingLoading && (arApData || mappingRecon) && (
               <div className="space-y-6">
+                {arApData && (
+                <>
                 {/* ─── Summary bar ─── */}
                 <div className="flex flex-wrap gap-4 justify-center text-sm">
                   <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
@@ -3502,23 +3024,94 @@ export function OnboardingFlow({
                     <div className="p-8 text-center text-gray-500 text-sm">No recurring vendor obligations detected in the next 30 days.</div>
                   )}
                 </div>
+                </>
+                )}
+
+                {/* ─── Tagged bank transactions (reconciliation) ─── */}
+                {mappingRecon && allReconRows.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+                    <h3 className="text-base font-semibold text-white px-4 py-3 border-b border-white/10">Tagged bank transactions</h3>
+                    <div className="max-h-[320px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
+                            <TableHead className="text-[10px] uppercase text-gray-500">Payment</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 w-24">Gross</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 w-20">Fee</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 w-24">Net</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500">Linked AR/AP</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {allReconRows.slice(0, 80).map((r) => {
+                            const totalFee = (r.allocations ?? []).reduce((s: number, a: { fee: number }) => s + a.fee, 0)
+                            const totalGross = (r.allocations ?? []).reduce((s: number, a: { gross: number }) => s + a.gross, 0)
+                            const totalNet = (r.allocations ?? []).reduce((s: number, a: { net: number }) => s + a.net, 0)
+                            const linked = (r.allocations ?? []).length > 0
+                              ? (r.allocations ?? []).map((a: { entity_type: string; entity_id: string }) => `${a.entity_type.toUpperCase()}: ${a.entity_id.slice(0, 12)}...`).join(", ")
+                              : "—"
+                            return (
+                              <TableRow key={r.movement_id} className={`border-white/5 ${(r.allocations ?? []).length === 0 ? "bg-amber-500/5" : ""}`}>
+                                <TableCell className="py-2">
+                                  <span className={r.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
+                                    {r.direction === "inflow" ? "+" : "-"}{money2(r.amount)}
+                                  </span>
+                                  <span className="text-gray-500 text-xs block">{(r as { date?: string }).date} · {(r as { display_name?: string | null }).display_name ?? r.counterparty ?? "—"}</span>
+                                </TableCell>
+                                <TableCell className="py-2 font-mono text-sm">{totalGross > 0 ? money2(totalGross) : money2(r.amount)}</TableCell>
+                                <TableCell className="py-2 font-mono text-amber-400 text-sm">{totalFee > 0 ? money2(totalFee) : "—"}</TableCell>
+                                <TableCell className="py-2 font-mono text-sm">{totalNet > 0 ? money2(totalNet) : money2(r.amount)}</TableCell>
+                                <TableCell className="py-2 text-xs text-gray-400 truncate max-w-[160px]">{linked}</TableCell>
+                              </TableRow>
+                            )
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500 flex justify-between items-center">
+                      <span>{allReconRows.length} transactions</span>
+                      <Link href="/reconciliation" className="text-gray-400 hover:text-white underline">View all</Link>
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Payments summary ─── */}
+                {mappingArAp && mappingRecon && (
+                  <div className="flex gap-4">
+                    <Link href="/payments" className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium">
+                      Payments View
+                    </Link>
+                    <Link href="/reconciliation" className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium">
+                      Reconciliation View
+                    </Link>
+                  </div>
+                )}
 
                 {/* ─── Refresh ─── */}
                 <div className="flex justify-end">
                   <button
                     type="button"
-                    disabled={arApLoading}
+                    disabled={arApLoading || mappingLoading}
                     onClick={() => {
                       setArApLoading(true)
+                      setMappingLoading(true)
                       setArApError(null)
-                      fetch("/api/ar-ap")
-                        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-                        .then((data: { ar: ARState; ap: APState }) => { setArApData(data); setArApLoading(false) })
-                        .catch((err) => { setArApError(err instanceof Error ? err.message : "Failed"); setArApLoading(false) })
+                      setMappingError(null)
+                      Promise.all([
+                        fetch("/api/ar-ap").then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP failed")))),
+                        fetch("/api/ar-ap-reconciliation").then((r) => (r.ok ? r.json() : Promise.reject(new Error("Reconciliation failed")))),
+                      ])
+                        .then(([arApData, reconData]) => {
+                          setArApData(arApData)
+                          setMappingArAp(arApData)
+                          setMappingRecon(reconData)
+                        })
+                        .catch((e) => { setArApError(e instanceof Error ? e.message : "Failed"); setMappingError(e instanceof Error ? e.message : "Failed") })
+                        .finally(() => { setArApLoading(false); setMappingLoading(false) })
                     }}
                     className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <div className="text-sm font-medium text-white">{arApLoading ? "Loading…" : "Refresh AR/AP"}</div>
+                    <div className="text-sm font-medium text-white">{arApLoading || mappingLoading ? "Loading…" : "Refresh AR/AP & reconciliation"}</div>
                   </button>
                 </div>
               </div>
@@ -3527,183 +3120,7 @@ export function OnboardingFlow({
         )
       }
 
-      case 13: {
-        const money2 = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        const allRows = mappingRecon
-          ? [
-              ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "inflow" as const })),
-              ...(mappingRecon.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "outflow" as const })),
-              ...(mappingRecon.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow" as const, allocations: [] })),
-              ...(mappingRecon.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow" as const, allocations: [] })),
-            ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-          : []
-        return (
-          <div className="space-y-6">
-            <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
-
-              {mappingLoading && (
-                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
-                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Loading tagged transactions…
-                </div>
-              )}
-              {mappingError && !mappingLoading && (
-                <p className="text-red-300 text-sm mb-4">Failed: {mappingError}</p>
-              )}
-            </div>
-            {!mappingLoading && mappingRecon && (
-              <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
-                <h3 className="text-base font-semibold text-white px-4 py-3 border-b border-white/10">All tagged bank transactions</h3>
-                <div className="max-h-[420px] overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-white/10 hover:bg-transparent bg-white/5 sticky top-0 z-10 backdrop-blur-sm">
-                        <TableHead className="text-[10px] uppercase text-gray-500">Payment</TableHead>
-                        <TableHead className="text-[10px] uppercase text-gray-500 w-24">Gross</TableHead>
-                        <TableHead className="text-[10px] uppercase text-gray-500 w-20">Fee</TableHead>
-                        <TableHead className="text-[10px] uppercase text-gray-500 w-24">Net</TableHead>
-                        <TableHead className="text-[10px] uppercase text-gray-500">Linked AR/AP</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {allRows.slice(0, 100).map((r) => {
-                        const totalFee = (r.allocations ?? []).reduce((s: number, a: { fee: number }) => s + a.fee, 0)
-                        const totalGross = (r.allocations ?? []).reduce((s: number, a: { gross: number }) => s + a.gross, 0)
-                        const totalNet = (r.allocations ?? []).reduce((s: number, a: { net: number }) => s + a.net, 0)
-                        const linked = (r.allocations ?? []).length > 0
-                          ? (r.allocations ?? []).map((a: { entity_type: string; entity_id: string }) => `${a.entity_type.toUpperCase()}: ${a.entity_id.slice(0, 12)}...`).join(", ")
-                          : "—"
-                        return (
-                          <TableRow key={r.movement_id} className={`border-white/5 ${(r.allocations ?? []).length === 0 ? "bg-amber-500/5" : ""}`}>
-                            <TableCell className="py-2">
-                              <span className={r.direction === "inflow" ? "text-emerald-400" : "text-red-400"}>
-                                {r.direction === "inflow" ? "+" : "-"}{money2(r.amount)}
-                              </span>
-                              <span className="text-gray-500 text-xs block">{(r as { date?: string }).date} · {(r as { display_name?: string | null }).display_name ?? r.counterparty ?? "—"}</span>
-                            </TableCell>
-                            <TableCell className="py-2 font-mono text-sm">{totalGross > 0 ? money2(totalGross) : money2(r.amount)}</TableCell>
-                            <TableCell className="py-2 font-mono text-amber-400 text-sm">{totalFee > 0 ? money2(totalFee) : "—"}</TableCell>
-                            <TableCell className="py-2 font-mono text-sm">{totalNet > 0 ? money2(totalNet) : money2(r.amount)}</TableCell>
-                            <TableCell className="py-2 text-xs text-gray-400 truncate max-w-[160px]">{linked}</TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-                <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500">
-                  {allRows.length} transactions · <Link href="/reconciliation" className="text-gray-400 hover:text-white underline">View all</Link>
-                </div>
-              </div>
-            )}
-          </div>
-        )
-      }
-
-      case 14: {
-        const moneyMap = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
-        return (
-          <div className="space-y-6">
-            <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
-
-              {mappingLoading && (
-                <div className="flex justify-center gap-2 py-6 text-gray-400">
-                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Loading AR/AP mapping…
-                </div>
-              )}
-
-              {mappingError && !mappingLoading && (
-                <p className="text-red-300 text-sm mb-4">Failed: {mappingError}</p>
-              )}
-            </div>
-
-            {!mappingLoading && mappingArAp && mappingRecon && (
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-6">
-                    <h2 className="text-base font-semibold text-emerald-400 mb-4">AR (Accounts Receivable)</h2>
-                    <div className="space-y-3">
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Total Outstanding</span>
-                        <span className="font-mono font-semibold text-emerald-400">{moneyMap(mappingArAp.ar.total_outstanding)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Collected This Period</span>
-                        <span className="font-mono text-white">{moneyMap(mappingRecon.total_matched_inflows)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Overdue</span>
-                        <span className="font-mono text-red-400">{moneyMap(mappingArAp.ar.total_overdue)} ({mappingArAp.ar.overdue_count})</span>
-                      </div>
-                      {mappingArAp.ar.total_outstanding > 0 && (
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Collection Rate</span>
-                          <span className="font-mono text-white">{Math.round(((mappingRecon.total_matched_inflows / (mappingRecon.total_matched_inflows + mappingArAp.ar.total_outstanding)) || 0) * 100)}%</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-6">
-                    <h2 className="text-base font-semibold text-red-400 mb-4">AP (Accounts Payable)</h2>
-                    <div className="space-y-3">
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Total Due (30d)</span>
-                        <span className="font-mono font-semibold text-red-400">{moneyMap(mappingArAp.ap.total_expected_30d)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Paid This Period</span>
-                        <span className="font-mono text-white">{moneyMap(mappingRecon.total_matched_outflows)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Obligations</span>
-                        <span className="font-mono text-white">{mappingArAp.ap.obligation_count}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="bg-white/5 border border-white/10 rounded-xl p-6">
-                  <h2 className="text-base font-semibold text-white mb-4">Payments (Gross − Fee = Net)</h2>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                      <div className="text-2xl font-bold font-mono text-emerald-400">{moneyMap(mappingRecon.total_matched_inflows + mappingRecon.total_unmatched_inflows)}</div>
-                      <div className="text-[10px] text-gray-500">Total Inflows</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold font-mono text-red-400">{moneyMap(mappingRecon.total_matched_outflows + mappingRecon.total_unmatched_outflows)}</div>
-                      <div className="text-[10px] text-gray-500">Total Outflows</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold font-mono text-amber-400">{moneyMap(mappingRecon.total_fees_paid)}</div>
-                      <div className="text-[10px] text-gray-500">Fees Paid</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold font-mono text-white">
-                        {moneyMap((mappingRecon.total_matched_inflows + mappingRecon.total_unmatched_inflows) - (mappingRecon.total_matched_outflows + mappingRecon.total_unmatched_outflows))}
-                      </div>
-                      <div className="text-[10px] text-gray-500">Net Cash Movement</div>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex gap-4">
-                  <Link href="/payments" className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium">
-                    Payments View
-                  </Link>
-                  <Link href="/reconciliation" className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium">
-                    Reconciliation View
-                  </Link>
-                </div>
-              </div>
-            )}
-          </div>
-        )
-      }
-
-      case 15: {
+      case 12: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const badge = (severity: "info" | "warning" | "critical") =>
           severity === "critical"
@@ -3719,8 +3136,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[14].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[14].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[11].description}</p>
 
               {stateLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -4101,7 +3518,7 @@ export function OnboardingFlow({
         )
       }
 
-      case 16: {
+      case 13: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const behaviorLabel = (b: ComponentBehavior) => b === "recurring" ? "Recurring" : b === "episodic" ? "Episodic" : b === "seasonal" ? "Seasonal" : "One-time"
@@ -4113,8 +3530,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[15].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[15].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
 
               {forecastLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -5305,13 +4722,13 @@ export function OnboardingFlow({
         )
       }
 
-      case 17: {
+      case 14: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[16].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[16].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
               {forecastLoading && (
                 <div className="flex justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
@@ -5459,12 +4876,12 @@ export function OnboardingFlow({
       default:
         return (
           <div className="text-center py-12">
-            <div>
-              <h2 className="text-2xl font-semibold text-white mb-3">{steps[currentStep - 1]?.title}</h2>
-              <p className="text-gray-400 text-base">{steps[currentStep - 1]?.description}</p>
+            <div className="mb-6">
+              <h2 className="text-2xl font-semibold text-white mb-2">{steps[currentStep - 1]?.title}</h2>
+              <p className="text-gray-400 text-base max-w-lg mx-auto">{steps[currentStep - 1]?.description}</p>
             </div>
-            <div className="bg-white/5 border border-white/10 rounded-lg p-6 max-w-md mx-auto">
-              <p className="text-sm text-gray-400">This step will be available soon</p>
+            <div className="bg-white/5 border border-white/10 rounded-xl p-8 max-w-md mx-auto">
+              <p className="text-sm text-gray-500">This step will be available soon.</p>
             </div>
           </div>
         )
@@ -5472,7 +4889,7 @@ export function OnboardingFlow({
   }
 
   const isStep6 = currentStep === 6
-  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14 || currentStep === 15 || currentStep === 16 || currentStep === 17
+  const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14
   return (
     <div
       className={
@@ -5484,12 +4901,12 @@ export function OnboardingFlow({
       }
     >
       {showQboError && qboError && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-amber-200">
+        <div className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3.5 text-amber-200 backdrop-blur-sm">
           <p className="text-sm">{QBO_ERROR_MESSAGES[qboError]}</p>
           <button
             type="button"
             onClick={() => setDismissedError(true)}
-            className="shrink-0 rounded p-1 text-amber-300 hover:bg-amber-500/20"
+            className="shrink-0 rounded-lg p-2 text-amber-300 hover:bg-amber-500/20 transition-colors"
             aria-label="Dismiss"
           >
             ×
@@ -5503,22 +4920,22 @@ export function OnboardingFlow({
             alt="ProfitWise"
             width={320}
             height={96}
-            className="h-20 w-auto object-contain mx-0 px-0 my-0.5"
+            className="h-16 md:h-20 w-auto object-contain mx-0 px-0 my-0.5"
           />
         </div>
         {!isStep6 && (
-        <div className="w-full max-w-2xl mx-auto py-[13px] pt-0">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-white">
+        <div className="w-full max-w-2xl mx-auto py-4 pt-2">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="text-sm font-medium text-white/90">
               Step {currentStep} of {steps.length}
             </span>
-            <span className="text-sm font-medium text-white">
-              {Math.round((currentStep / steps.length) * 100)}% Complete
+            <span className="text-sm font-medium text-emerald-400/90 tabular-nums">
+              {Math.round((currentStep / steps.length) * 100)}%
             </span>
           </div>
-          <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+          <div className="w-full h-2.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
             <div
-              className="bg-white h-2 rounded-full transition-all duration-500 ease-out"
+              className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500 ease-out shadow-[0_0_12px_rgba(16,185,129,0.4)]"
               style={{ width: `${(currentStep / steps.length) * 100}%` }}
             />
           </div>
@@ -5530,13 +4947,13 @@ export function OnboardingFlow({
         {renderStepContent()}
       </div>
 
-      <div className="flex justify-between gap-4">
+      <div className="flex justify-between gap-4 pt-2">
         <Button
           type="button"
           onClick={handleBack}
           disabled={currentStep === 1}
           variant="outline"
-          className="w-32 h-11 bg-white/5 border-white/10 text-white hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+          className="min-w-[120px] h-12 px-6 bg-white/5 border-white/20 text-white hover:bg-white/10 hover:border-white/30 disabled:opacity-40 disabled:cursor-not-allowed font-medium rounded-xl transition-all duration-200"
         >
           Back
         </Button>
@@ -5544,9 +4961,14 @@ export function OnboardingFlow({
           type="button"
           onClick={handleNextOrFinish}
           disabled={afterIdentityLoading}
-          className="w-32 h-11 bg-white hover:bg-white/90 text-black font-medium disabled:opacity-70 disabled:cursor-not-allowed"
+          className="min-w-[120px] h-12 px-6 bg-white hover:bg-white/95 text-black font-semibold disabled:opacity-70 disabled:cursor-not-allowed rounded-xl transition-all duration-200 shadow-lg shadow-white/10"
         >
-          {afterIdentityLoading ? "Loading…" : currentStep === 6 || currentStep === 7 || currentStep === steps.length ? "Finish" : "Next"}
+          {afterIdentityLoading ? (
+            <span className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading…
+            </span>
+          ) : currentStep === 6 || currentStep === 7 || currentStep === steps.length ? "Finish" : "Next"}
         </Button>
       </div>
     </div>
