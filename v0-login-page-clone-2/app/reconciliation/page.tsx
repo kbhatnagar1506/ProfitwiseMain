@@ -41,6 +41,9 @@ export default function ReconciliationPage() {
     partially_explained: number
     unexplained: number
     explanation_pct: number
+    ar_explained?: number
+    ap_explained?: number
+    fee_explained?: number
   } | null>(null)
   const [llmMatching, setLlmMatching] = useState(false)
   const [llmResults, setLlmResults] = useState<{ ar: LLMARMatch[]; ap: LLMAPMatch[] } | null>(null)
@@ -61,7 +64,7 @@ export default function ReconciliationPage() {
     setPayments([...matched, ...unmatched].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
     setUnmappedAr((data.unmapped_ar as { movement_id: string; amount: number; date: string; counterparty: string | null }[]) ?? [])
     setTotalUnmappedAr((data.total_unmapped_ar as number) ?? 0)
-    setCashExplanation((data.cash_explanation as { fully_explained: number; partially_explained: number; unexplained: number; explanation_pct: number }) ?? null)
+    setCashExplanation((data.cash_explanation as { fully_explained: number; partially_explained: number; unexplained: number; explanation_pct: number; ar_explained?: number; ap_explained?: number; fee_explained?: number }) ?? null)
     setRunSuggestions({
       ar: (data.ar_suggestions as RunARSuggestion[]) ?? [],
       ap: (data.ap_suggestions as RunAPSuggestion[]) ?? [],
@@ -165,22 +168,37 @@ export default function ReconciliationPage() {
         </div>
 
         {cashExplanation && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Fully explained</p>
-              <p className="text-xl font-semibold text-emerald-400 mt-1">{money(cashExplanation.fully_explained)}</p>
+          <div className="mb-6 space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">Fully explained</p>
+                <p className="text-xl font-semibold text-emerald-400 mt-1">{money(cashExplanation.fully_explained)}</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">Partially explained</p>
+                <p className="text-xl font-semibold text-amber-400 mt-1">{money(cashExplanation.partially_explained)}</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">Unexplained</p>
+                <p className="text-xl font-semibold text-red-400 mt-1">{money(cashExplanation.unexplained)}</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">Explanation %</p>
+                <p className="text-xl font-semibold text-white mt-1">{cashExplanation.explanation_pct}%</p>
+              </div>
             </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Partially explained</p>
-              <p className="text-xl font-semibold text-amber-400 mt-1">{money(cashExplanation.partially_explained)}</p>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Unexplained</p>
-              <p className="text-xl font-semibold text-red-400 mt-1">{money(cashExplanation.unexplained)}</p>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Explanation %</p>
-              <p className="text-xl font-semibold text-white mt-1">{cashExplanation.explanation_pct}%</p>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <span className="text-gray-500">
+                AR reconciled: <span className="text-emerald-400 font-medium">{money(cashExplanation.ar_explained ?? 0)}</span>
+              </span>
+              <span className="text-gray-500">
+                AP reconciled: <span className="text-red-400 font-medium">{money(cashExplanation.ap_explained ?? 0)}</span>
+              </span>
+              {(cashExplanation.fee_explained ?? 0) > 0 && (
+                <span className="text-gray-500">
+                  Fees: <span className="text-amber-400 font-medium">{money(cashExplanation.fee_explained ?? 0)}</span>
+                </span>
+              )}
             </div>
           </div>
         )}
