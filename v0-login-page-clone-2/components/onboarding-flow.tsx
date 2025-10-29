@@ -2376,12 +2376,7 @@ export function OnboardingFlow({
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
                     P&L
                   </span>
-                ) : meta.group === "review" ? (
-                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 text-[11px] text-yellow-400 font-medium">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400" />
-                    Needs review
-                  </span>
-                ) : (
+                ) : meta.group === "review" ? null : (
                   <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-white/5 border border-white/10 px-2 py-0.5 text-[11px] text-gray-500 font-medium">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-gray-500" />
                     Non-P&L
