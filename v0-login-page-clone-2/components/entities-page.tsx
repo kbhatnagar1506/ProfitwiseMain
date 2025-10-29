@@ -31,11 +31,13 @@ type Summary = {
 
 type FilterType = "all" | "customer" | "vendor" | "at_risk"
 
-function formatCurrency(amount: number | null): string {
+function formatCurrency(amount: number | string | null): string {
   if (amount === null || amount === undefined) return "$0"
-  if (amount >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`
-  if (amount >= 1000) return `$${(amount / 1000).toFixed(1)}K`
-  return `$${amount.toFixed(0)}`
+  const num = typeof amount === "string" ? parseFloat(amount) : amount
+  if (isNaN(num)) return "$0"
+  if (num >= 1000000) return `$${(num / 1000000).toFixed(1)}M`
+  if (num >= 1000) return `$${(num / 1000).toFixed(1)}K`
+  return `$${num.toFixed(0)}`
 }
 
 function getRiskColor(riskScore: number | null): string {

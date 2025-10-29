@@ -62,21 +62,27 @@ type EntityDetail = {
   transactions: EntityTransaction[]
 }
 
-function fmt(amount: number | null | undefined): string {
+function fmt(amount: number | string | null | undefined): string {
   if (amount === null || amount === undefined) return "$0"
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount)
+  const num = typeof amount === "string" ? parseFloat(amount) : amount
+  if (isNaN(num)) return "$0"
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(num)
 }
 
-function fmtCompact(amount: number | null | undefined): string {
+function fmtCompact(amount: number | string | null | undefined): string {
   if (amount === null || amount === undefined) return "$0"
-  if (Math.abs(amount) >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`
-  if (Math.abs(amount) >= 1000) return `$${(amount / 1000).toFixed(1)}K`
-  return `$${amount.toFixed(0)}`
+  const num = typeof amount === "string" ? parseFloat(amount) : amount
+  if (isNaN(num)) return "$0"
+  if (Math.abs(num) >= 1000000) return `$${(num / 1000000).toFixed(1)}M`
+  if (Math.abs(num) >= 1000) return `$${(num / 1000).toFixed(1)}K`
+  return `$${num.toFixed(0)}`
 }
 
-function pct(value: number | null | undefined): string {
+function pct(value: number | string | null | undefined): string {
   if (value === null || value === undefined) return "—"
-  return `${(value * 100).toFixed(0)}%`
+  const num = typeof value === "string" ? parseFloat(value) : value
+  if (isNaN(num)) return "—"
+  return `${(num * 100).toFixed(0)}%`
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -227,9 +233,9 @@ export function EntityDetailPremium({ entityId, onClose }: { entityId: string; o
               <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Payment Behavior</h3>
               <div className="space-y-3">
                 {[
-                  { icon: <Clock className="w-3.5 h-3.5 text-gray-500" />, label: "Days to pay", value: profile.avg_days_to_pay != null ? `${profile.avg_days_to_pay.toFixed(0)}d` : "—", sub: profile.std_days_to_pay != null ? `±${profile.std_days_to_pay.toFixed(0)}d` : "" },
+                  { icon: <Clock className="w-3.5 h-3.5 text-gray-500" />, label: "Days to pay", value: profile.avg_days_to_pay != null ? `${Number(profile.avg_days_to_pay).toFixed(0)}d` : "—", sub: profile.std_days_to_pay != null ? `±${Number(profile.std_days_to_pay).toFixed(0)}d` : "" },
                   { icon: <Shield className="w-3.5 h-3.5 text-gray-500" />, label: "On-time", value: pct(profile.on_time_payment_rate), sub: "" },
-                  { icon: <Activity className="w-3.5 h-3.5 text-gray-500" />, label: "Frequency", value: profile.transactions_per_month != null ? `${profile.transactions_per_month.toFixed(1)}/mo` : "—", sub: "" },
+                  { icon: <Activity className="w-3.5 h-3.5 text-gray-500" />, label: "Frequency", value: profile.transactions_per_month != null ? `${Number(profile.transactions_per_month).toFixed(1)}/mo` : "—", sub: "" },
                   { icon: <BarChart3 className="w-3.5 h-3.5 text-gray-500" />, label: "Transactions", value: String(profile.transaction_count), sub: "" },
                 ].map((r) => (
                   <div key={r.label} className="flex items-center justify-between">
@@ -246,7 +252,7 @@ export function EntityDetailPremium({ entityId, onClose }: { entityId: string; o
               <div className="space-y-3">
                 {[
                   { label: "Archetype", value: archetype.label, color: archetype.color },
-                  { label: "Reliability", value: `${((profile.reliability_score ?? 0) * 100).toFixed(0)}%`, color: (profile.reliability_score ?? 0) > 0.7 ? "text-emerald-400" : (profile.reliability_score ?? 0) > 0.4 ? "text-amber-400" : "text-red-400" },
+                  { label: "Reliability", value: `${((Number(profile.reliability_score) || 0) * 100).toFixed(0)}%`, color: (Number(profile.reliability_score) || 0) > 0.7 ? "text-emerald-400" : (Number(profile.reliability_score) || 0) > 0.4 ? "text-amber-400" : "text-red-400" },
                   { label: "Avg amount", value: fmtCompact(profile.avg_payment_amount), color: "text-white" },
                   { label: "Trend", value: profile.amount_trend || "stable", color: profile.amount_trend === "increasing" ? "text-emerald-400" : profile.amount_trend === "decreasing" ? "text-red-400" : "text-gray-300" },
                 ].map((r) => (
@@ -263,14 +269,14 @@ export function EntityDetailPremium({ entityId, onClose }: { entityId: string; o
           <div className="rounded-xl bg-gray-800/40 border border-gray-700/30 p-4">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-gray-400">Reliability Score</span>
-              <span className={`text-sm font-bold ${(profile.reliability_score ?? 0) > 0.7 ? "text-emerald-400" : (profile.reliability_score ?? 0) > 0.4 ? "text-amber-400" : "text-red-400"}`}>
-                {((profile.reliability_score ?? 0) * 100).toFixed(0)}%
+              <span className={`text-sm font-bold ${(Number(profile.reliability_score) || 0) > 0.7 ? "text-emerald-400" : (Number(profile.reliability_score) || 0) > 0.4 ? "text-amber-400" : "text-red-400"}`}>
+                {((Number(profile.reliability_score) || 0) * 100).toFixed(0)}%
               </span>
             </div>
             <div className="h-2 bg-gray-700/50 rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all duration-700 ${(profile.reliability_score ?? 0) > 0.7 ? "bg-gradient-to-r from-emerald-500 to-teal-400" : (profile.reliability_score ?? 0) > 0.4 ? "bg-gradient-to-r from-amber-500 to-yellow-400" : "bg-gradient-to-r from-red-500 to-orange-400"}`}
-                style={{ width: `${(profile.reliability_score ?? 0) * 100}%` }}
+                className={`h-full rounded-full transition-all duration-700 ${(Number(profile.reliability_score) || 0) > 0.7 ? "bg-gradient-to-r from-emerald-500 to-teal-400" : (Number(profile.reliability_score) || 0) > 0.4 ? "bg-gradient-to-r from-amber-500 to-yellow-400" : "bg-gradient-to-r from-red-500 to-orange-400"}`}
+                style={{ width: `${(Number(profile.reliability_score) || 0) * 100}%` }}
               />
             </div>
             <p className="text-[10px] text-gray-500 mt-1.5">{archetype.desc}</p>

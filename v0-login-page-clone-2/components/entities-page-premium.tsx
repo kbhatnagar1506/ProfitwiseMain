@@ -55,26 +55,32 @@ type Summary = {
 type FilterType = "all" | "customer" | "vendor" | "at_risk"
 type SortType = "lifetime_value" | "transaction_count" | "risk_score" | "last_transaction_date" | "reliability_score"
 
-function formatCurrency(amount: number | null | undefined): string {
+function formatCurrency(amount: number | string | null | undefined): string {
   if (amount === null || amount === undefined) return "$0"
-  if (Math.abs(amount) >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`
-  if (Math.abs(amount) >= 1000) return `$${(amount / 1000).toFixed(1)}K`
-  return `$${amount.toFixed(0)}`
+  const num = typeof amount === "string" ? parseFloat(amount) : amount
+  if (isNaN(num)) return "$0"
+  if (Math.abs(num) >= 1000000) return `$${(num / 1000000).toFixed(1)}M`
+  if (Math.abs(num) >= 1000) return `$${(num / 1000).toFixed(1)}K`
+  return `$${num.toFixed(0)}`
 }
 
-function formatCompactCurrency(amount: number | null | undefined): string {
+function formatCompactCurrency(amount: number | string | null | undefined): string {
   if (amount === null || amount === undefined) return "$0"
+  const num = typeof amount === "string" ? parseFloat(amount) : amount
+  if (isNaN(num)) return "$0"
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(amount)
+  }).format(num)
 }
 
-function formatPercent(value: number | null | undefined): string {
+function formatPercent(value: number | string | null | undefined): string {
   if (value === null || value === undefined) return "—"
-  return `${(value * 100).toFixed(0)}%`
+  const num = typeof value === "string" ? parseFloat(value) : value
+  if (isNaN(num)) return "—"
+  return `${(num * 100).toFixed(0)}%`
 }
 
 function getArchetypeConfig(archetype: string | null): { label: string; color: string; bg: string; icon: React.ReactNode } {
@@ -95,13 +101,15 @@ function getRiskConfig(riskScore: number | null): { label: string; color: string
   return { label: "Low Risk", color: "text-emerald-400", bg: "bg-emerald-500/10", dot: "bg-emerald-500" }
 }
 
-function TrendIndicator({ value, suffix = "" }: { value: number | null | undefined; suffix?: string }) {
+function TrendIndicator({ value, suffix = "" }: { value: number | string | null | undefined; suffix?: string }) {
   if (value === null || value === undefined) return <span className="text-gray-500">—</span>
-  const isPositive = value > 0
+  const num = typeof value === "string" ? parseFloat(value) : value
+  if (isNaN(num)) return <span className="text-gray-500">—</span>
+  const isPositive = num > 0
   return (
     <span className={`flex items-center gap-0.5 ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
       {isPositive ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-      {Math.abs(value).toFixed(0)}{suffix}
+      {Math.abs(num).toFixed(0)}{suffix}
     </span>
   )
 }
@@ -200,18 +208,18 @@ function EntityCard({ entity, onClick }: { entity: EntitySummary; onClick: () =>
         <div className="mb-3">
           <div className="flex items-center justify-between text-[10px] mb-1">
             <span className="text-gray-400">Reliability Score</span>
-            <span className={`font-medium ${(entity.reliability_score ?? 0) > 0.7 ? "text-emerald-400" : (entity.reliability_score ?? 0) > 0.4 ? "text-amber-400" : "text-red-400"}`}>
-              {((entity.reliability_score ?? 0) * 100).toFixed(0)}%
+            <span className={`font-medium ${(Number(entity.reliability_score) || 0) > 0.7 ? "text-emerald-400" : (Number(entity.reliability_score) || 0) > 0.4 ? "text-amber-400" : "text-red-400"}`}>
+              {((Number(entity.reliability_score) || 0) * 100).toFixed(0)}%
             </span>
           </div>
           <div className="h-1.5 bg-gray-700/50 rounded-full overflow-hidden">
             <div 
               className={`h-full rounded-full transition-all duration-500 ${
-                (entity.reliability_score ?? 0) > 0.7 ? "bg-gradient-to-r from-emerald-500 to-teal-400" :
-                (entity.reliability_score ?? 0) > 0.4 ? "bg-gradient-to-r from-amber-500 to-yellow-400" :
+                (Number(entity.reliability_score) || 0) > 0.7 ? "bg-gradient-to-r from-emerald-500 to-teal-400" :
+                (Number(entity.reliability_score) || 0) > 0.4 ? "bg-gradient-to-r from-amber-500 to-yellow-400" :
                 "bg-gradient-to-r from-red-500 to-orange-400"
               }`}
-              style={{ width: `${(entity.reliability_score ?? 0) * 100}%` }}
+              style={{ width: `${(Number(entity.reliability_score) || 0) * 100}%` }}
             />
           </div>
         </div>
