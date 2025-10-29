@@ -45,10 +45,18 @@ async function callLLM(
   }
 }
 
-function formatCurrency(amount: number): string {
-  if (amount >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`
-  if (amount >= 1000) return `$${(amount / 1000).toFixed(1)}K`
-  return `$${amount.toFixed(0)}`
+function formatCurrency(amount: number | null | undefined): string {
+  const num = typeof amount === "number" && !isNaN(amount) ? amount : 0
+  if (num >= 1000000) return `$${(num / 1000000).toFixed(1)}M`
+  if (num >= 1000) return `$${(num / 1000).toFixed(1)}K`
+  return `$${num.toFixed(0)}`
+}
+
+function safeToFixed(value: number | null | undefined, decimals: number): string {
+  if (value === null || value === undefined || typeof value !== "number" || isNaN(value)) {
+    return "N/A"
+  }
+  return value.toFixed(decimals)
 }
 
 function formatMonths(months: number[]): string {
@@ -122,14 +130,14 @@ Overdue: ${formatCurrency(overdueAmount)}
 
 Payment Metrics:
 - Transaction count: ${metrics.transaction_count}
-- Avg days to pay: ${metrics.avg_days_to_pay?.toFixed(1) ?? "N/A"}
-- On-time rate: ${metrics.on_time_payment_rate ? (metrics.on_time_payment_rate * 100).toFixed(0) + "%" : "N/A"}
+- Avg days to pay: ${safeToFixed(metrics.avg_days_to_pay, 1)}
+- On-time rate: ${metrics.on_time_payment_rate != null ? (metrics.on_time_payment_rate * 100).toFixed(0) + "%" : "N/A"}
 - Avg amount: ${formatCurrency(metrics.avg_transaction_amount)}
 - Amount trend: ${metrics.amount_trend}
-- Interval: ${metrics.avg_interval_days?.toFixed(0) ?? "N/A"} days avg
+- Interval: ${safeToFixed(metrics.avg_interval_days, 0)} days avg
 
 Risk Assessment:
-- Risk score: ${(risk.risk_score * 100).toFixed(0)}%
+- Risk score: ${safeToFixed(risk.risk_score != null ? risk.risk_score * 100 : null, 0)}%
 - Risk factors: ${risk.risk_factors.length > 0 ? risk.risk_factors.join(", ") : "None"}
 - Recent trend: ${risk.recent_trend}
 
@@ -187,7 +195,7 @@ function generateFallbackSummary(data: EntityProfileData): string {
   }
 
   const desc = archetypeDescriptions[archetype] || "typical"
-  const avgDays = metrics.avg_days_to_pay
+  const avgDays = metrics.avg_days_to_pay != null && typeof metrics.avg_days_to_pay === "number"
     ? `typically pays in ${metrics.avg_days_to_pay.toFixed(0)} days`
     : `${metrics.transaction_count} transactions recorded`
 
