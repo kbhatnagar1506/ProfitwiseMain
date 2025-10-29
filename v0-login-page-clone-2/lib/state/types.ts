@@ -192,6 +192,7 @@ export type OutstandingInvoice = {
   customer_name: string
   customer_source_id: string | null
   entity_id: string | null
+  entity_uri?: string
   amount: number
   amount_due: number
   due_date: string | null
@@ -649,6 +650,7 @@ export type OutstandingBill = {
   vendor_name: string
   vendor_source_id: string | null
   entity_id: string | null
+  entity_uri?: string
   amount: number
   amount_due: number
   due_date: string | null

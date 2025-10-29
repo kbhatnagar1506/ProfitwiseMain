@@ -1172,7 +1172,7 @@ function buildSettlementModel(movements: TaggedMovement[]): SettlementModel {
   for (const m of movements) {
     const t = m.tag
     if (t.state_inclusion_policy === "exclude_and_review") continue
-    if (t.cashflow_bucket !== "settlement") continue
+    if (t.economic_class !== "processor_payout" && t.economic_class !== "settlement_adjustment") continue
     const d = m.occurred_at
     if (!d) continue
     const ts = new Date(d).getTime()

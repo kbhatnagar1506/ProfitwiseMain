@@ -11,7 +11,9 @@ import { query, ensureMovementsSchema } from "@/lib/db"
 import { matchARPayment, suggestARMatches, type InflowPayment, type ARMatchSuggestion } from "@/lib/ar-payment-match"
 import { suggestARMatchesLLM } from "@/lib/ar-llm-match"
 import { createAllocation } from "@/lib/allocation-persist"
+import { toEntityUriAr } from "@/lib/entity-uri"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
+import { computeEntityPaymentProfiles } from "@/lib/entity-payment-profiles"
 
 export async function POST(req: Request) {
   const cookieStore = await cookies()
@@ -59,33 +61,37 @@ export async function POST(req: Request) {
     }
 
     const outstandingInvoices = await fetchInvoicesForReconciliation(user.id)
+    const entityProfiles = await computeEntityPaymentProfiles(user.id)
 
     // Confirm: persist allocation when invoice_id provided
     const invoiceId = body.invoice_id
     if (invoiceId && typeof invoiceId === "string") {
       const invoice = outstandingInvoices.find((i) => i.invoice_id === invoiceId)
       if (!invoice) return NextResponse.json({ error: "Invoice not found" }, { status: 404 })
-      const match = matchARPayment(payment, [invoice])
+      const match = matchARPayment(payment, [invoice], entityProfiles)
       const gross = match?.gross_applied ?? invoice.amount_due
       const net = payment.amount
       const fee = Math.max(0, gross - net)
-      const allocation = await createAllocation(
-        user.id,
+      const entityUri = invoice.entity_uri ?? toEntityUriAr(invoice.source, invoice.invoice_id)
+      const allocation = await createAllocation({
+        userId: user.id,
         movementId,
-        "ar",
-        invoiceId,
-        gross,
-        fee,
-        net,
-        match?.confidence ?? 0.5,
-        match?.match_method ?? "manual",
-      )
+        entity_type: "ar",
+        entity_id: entityUri,
+        gross_applied: gross,
+        fee_amount: fee,
+        net_applied: net,
+        confidence: match?.confidence ?? 0.5,
+        match_method: match?.match_method ?? "manual",
+        source_id: `${invoice.source}/${invoice.invoice_id}`,
+        reconcile_at: new Date(),
+      })
       await query("DELETE FROM reconciliation_cache WHERE user_id = $1", [user.id]).catch(() => {})
       return NextResponse.json({ suggestions: [], allocation })
     }
 
     // Suggest: return matches
-    const match = matchARPayment(payment, outstandingInvoices)
+    const match = matchARPayment(payment, outstandingInvoices, entityProfiles)
     if (match) {
       return NextResponse.json({
         suggestions: [{
@@ -101,7 +107,7 @@ export async function POST(req: Request) {
         allocation: null,
       })
     }
-    const suggestions = suggestARMatches(payment, outstandingInvoices)
+    const suggestions = suggestARMatches(payment, outstandingInvoices, entityProfiles)
     if (suggestions.length === 0) {
       const llmSuggestions = await suggestARMatchesLLM(payment, outstandingInvoices)
       if (llmSuggestions.length > 0) {

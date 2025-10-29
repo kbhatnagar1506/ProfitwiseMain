@@ -5,6 +5,9 @@
  */
 
 import type { OutstandingInvoice } from "./state/types"
+import type { EntityPaymentProfile } from "./entity-payment-profiles"
+import { getEntityPaymentRatio } from "./entity-payment-profiles"
+import { toEntityUriAr } from "./entity-uri"
 
 const AMOUNT_TOLERANCE_PCT = 0.05
 const AR_DATE_TOLERANCE_DAYS = 45
@@ -62,10 +65,14 @@ function namesMatch(a: string | null | undefined, b: string | null | undefined):
   return overlap >= Math.min(tokensA.size, tokensB.size, 2)
 }
 
+const PROFILE_RATIO_TOLERANCE = 0.02
+const PROFILE_CONFIDENCE_BOOST = 0.05
+
 /** Deterministic AR match: entity + time ±45d + amount ±5%. When entity_id is missing on one side, use counterparty name. */
 function deterministicARMatch(
   payment: InflowPayment,
   invoice: OutstandingInvoice,
+  entityProfiles?: Map<string, EntityPaymentProfile>,
 ): { confidence: number; gross: number; fee: number; net: number; method: "exact" | "tolerance" } | null {
   if (payment.amount <= 0 || invoice.amount_due <= 0) return null
 
@@ -96,8 +103,17 @@ function deterministicARMatch(
   const amountMatch = 1 - Math.abs(ratio - 1)
   const dateMatch = 1 - diffDays / AR_DATE_TOLERANCE_DAYS
   const entityScore = entityMatch ? 1 : nameMatch ? 0.85 : 0.5
-  const confidence = (amountMatch + dateMatch + entityScore) / 3
+  let confidence = (amountMatch + dateMatch + entityScore) / 3
   const method = ratio >= 0.99 && ratio <= 1.01 && diffDays <= 3 ? "exact" : "tolerance"
+
+  // Entity payment memory: when invoice has a profile and ratio matches typical pattern, boost confidence
+  if (entityProfiles) {
+    const entityUri = invoice.entity_uri ?? toEntityUriAr(invoice.source as "stripe" | "qbo" | "xero" | "gmail", invoice.invoice_id)
+    const avgRatio = getEntityPaymentRatio(entityProfiles, entityUri)
+    if (avgRatio !== 1 && Math.abs(ratio - avgRatio) < PROFILE_RATIO_TOLERANCE) {
+      confidence = Math.min(1, confidence + PROFILE_CONFIDENCE_BOOST)
+    }
+  }
 
   return { confidence, gross, fee, net, method }
 }
@@ -107,14 +123,16 @@ const DETERMINISTIC_THRESHOLD = 0.7
 /**
  * Find best AR match for an inflow payment.
  * Returns allocation candidate or null.
+ * Optional entityProfiles: when provided, applies confidence boost when payment ratio matches entity's typical pattern.
  */
 export function matchARPayment(
   payment: InflowPayment,
   invoices: OutstandingInvoice[],
+  entityProfiles?: Map<string, EntityPaymentProfile>,
 ): AllocationCandidate | null {
   let best: { cand: AllocationCandidate; conf: number } | null = null
   for (const inv of invoices) {
-    const m = deterministicARMatch(payment, inv)
+    const m = deterministicARMatch(payment, inv, entityProfiles)
     if (m && m.confidence >= DETERMINISTIC_THRESHOLD) {
       if (!best || m.confidence > best.conf) {
         best = {
@@ -142,10 +160,11 @@ export function matchARPayment(
 export function suggestARMatches(
   payment: InflowPayment,
   invoices: OutstandingInvoice[],
+  entityProfiles?: Map<string, EntityPaymentProfile>,
 ): ARMatchSuggestion[] {
   const withConf: { s: ARMatchSuggestion; c: number }[] = []
   for (const inv of invoices) {
-    const m = deterministicARMatch(payment, inv)
+    const m = deterministicARMatch(payment, inv, entityProfiles)
     if (m && m.confidence >= 0.3) {
       withConf.push({
         c: m.confidence,

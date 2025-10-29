@@ -3,6 +3,7 @@
  */
 
 import { query, ensureQBOSchema } from "@/lib/db"
+import { toEntityUriAr } from "@/lib/entity-uri"
 import type { OutstandingInvoice } from "./state/types"
 
 export async function fetchOutstandingInvoices(userId: string): Promise<OutstandingInvoice[]> {
@@ -52,7 +53,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "qbo",
         customer_name: custName, customer_source_id: custSourceId,
-        entity_id: entityId, amount: totalAmt, amount_due: balance,
+        entity_id: entityId, entity_uri: toEntityUriAr("qbo", row.entity_id),
+        amount: totalAmt, amount_due: balance,
         due_date: dueDate, days_until_due: daysToDue, days_overdue: daysOverdue, status,
       })
     }
@@ -86,7 +88,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "xero",
         customer_name: custName, customer_source_id: null,
-        entity_id: null, amount: total, amount_due: amountDue,
+        entity_id: null, entity_uri: toEntityUriAr("xero", row.entity_id),
+        amount: total, amount_due: amountDue,
         due_date: dueDate?.slice(0, 10) ?? null, days_until_due: daysToDue,
         days_overdue: daysOverdue, status,
       })
@@ -120,7 +123,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
       outstandingInvoices.push({
         invoice_id: invoiceId, source: "gmail",
         customer_name: custName, customer_source_id: null,
-        entity_id: null, amount: total, amount_due: amountDue,
+        entity_id: null, entity_uri: toEntityUriAr("gmail", invoiceId),
+        amount: total, amount_due: amountDue,
         due_date: dueDate, days_until_due: daysToDue, days_overdue: daysOverdue, status,
       })
     }
@@ -151,7 +155,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "stripe",
         customer_name: custName, customer_source_id: String(d.customer ?? ""),
-        entity_id: null, amount: total, amount_due: amountDue,
+        entity_id: null, entity_uri: toEntityUriAr("stripe", row.entity_id),
+        amount: total, amount_due: amountDue,
         due_date: dueDate, days_until_due: daysToDue,
         days_overdue: daysOverdue, status,
       })
@@ -212,6 +217,7 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         customer_name: custName,
         customer_source_id: custSourceId,
         entity_id: entityId,
+        entity_uri: toEntityUriAr("qbo", row.entity_id),
         amount: totalAmt,
         amount_due: totalAmt,
         due_date: dueDate,
@@ -248,6 +254,7 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         customer_name: custName,
         customer_source_id: null,
         entity_id: null,
+        entity_uri: toEntityUriAr("xero", row.entity_id),
         amount: total,
         amount_due: total,
         due_date: dueDate?.slice(0, 10) ?? null,
@@ -281,6 +288,7 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         customer_name: custName,
         customer_source_id: String(d.customer ?? ""),
         entity_id: null,
+        entity_uri: toEntityUriAr("stripe", row.entity_id),
         amount: total,
         amount_due: total,
         due_date: dueDate,

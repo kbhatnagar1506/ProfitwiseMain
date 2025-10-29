@@ -35,7 +35,8 @@ const DEFAULT_ENTITY_TYPES: StripeEntityType[] = [
 
 async function fetchAllStripeList(
   accessToken: string,
-  path: string
+  path: string,
+  expand?: string[]
 ): Promise<unknown[]> {
   const baseUrl = "https://api.stripe.com"
   const out: unknown[] = []
@@ -43,6 +44,7 @@ async function fetchAllStripeList(
   for (;;) {
     const params = new URLSearchParams({ limit: "100" })
     if (startingAfter) params.set("starting_after", startingAfter)
+    if (expand?.length) expand.forEach((e) => params.append("expand[]", e))
     const url = `${baseUrl}${path}?${params.toString()}`
     const res = await fetch(url, {
       method: "GET",
@@ -114,7 +116,18 @@ export async function runStripeSyncForUser(
     for (const entityType of entityTypesToSync) {
       const cfg = STRIPE_ENTITY_CONFIG[entityType]
       try {
-        const data = await fetchAllStripeList(tokenPayload.accessToken, cfg.path)
+        const expand = entityType === "payout" ? ["data.balance_transaction"] : undefined
+        let data = await fetchAllStripeList(tokenPayload.accessToken, cfg.path, expand)
+        if (entityType === "payout" && Array.isArray(data)) {
+          data = data.map((p) => {
+            const payout = p as Record<string, unknown>
+            const bt = payout.balance_transaction
+            if (bt && typeof bt === "object" && "fee" in bt && typeof (bt as { fee?: number }).fee === "number") {
+              return { ...payout, fee: (bt as { fee: number }).fee }
+            }
+            return payout
+          })
+        }
         const upserted = await upsertStripeEntities(accountId, entityType, data, { userId })
         perAccount.push({ entityType, fetched: data.length, upserted })
         log(
