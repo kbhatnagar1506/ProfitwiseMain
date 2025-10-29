@@ -369,6 +369,10 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
 /**
  * Enrich invoices with reconciliation status from movement_attributions.
  * Queries the attributions table to find which invoices have been matched to bank movements.
+ * 
+ * IMPORTANT: Only uses reference_id (invoice_id) for matching, NOT entity-level fallback.
+ * Entity-level fallback was removed because it incorrectly aggregated ALL attributions 
+ * for a customer across ALL their invoices, causing misleading "partial" matches.
  */
 export async function enrichInvoicesWithReconciliationStatus(
   userId: string,
@@ -393,41 +397,33 @@ export async function enrichInvoicesWithReconciliationStatus(
     [userId]
   )
 
-  // Track matches by specific invoice reference_id
+  // Track matches by specific invoice reference_id ONLY
+  // We no longer use entity-level fallback as it caused incorrect aggregation
   const matchesByInvoiceId = new Map<string, { movementIds: string[]; totalMatched: number }>()
-  // Track matches by entity_uri for fallback (entity-level matching)
-  const matchesByEntityUri = new Map<string, { movementIds: string[]; totalMatched: number }>()
 
   for (const attr of attrRows) {
     const gross = safeParseFloat(attr.gross_amount)
     
+    // Only count attributions that have a specific reference_id (invoice_id)
     if (attr.reference_id) {
-      // This attribution is linked to a specific invoice - only add to invoice-level map
       const existing = matchesByInvoiceId.get(attr.reference_id) ?? { movementIds: [], totalMatched: 0 }
       existing.movementIds.push(attr.movement_id)
       existing.totalMatched += gross
       matchesByInvoiceId.set(attr.reference_id, existing)
-    } else if (attr.entity_id) {
-      // Only add to entity-level map when there's no specific reference
-      // This prevents double-counting when an attribution has both reference_id and entity_id
-      const existing = matchesByEntityUri.get(attr.entity_id) ?? { movementIds: [], totalMatched: 0 }
-      existing.movementIds.push(attr.movement_id)
-      existing.totalMatched += gross
-      matchesByEntityUri.set(attr.entity_id, existing)
     }
+    // Note: Attributions without reference_id are NOT counted toward any specific invoice
+    // This prevents the bug where ALL customer payments were aggregated together
   }
 
   return invoices.map((inv) => {
     // Use amount_due if available, otherwise fall back to amount
-    // A $1000 invoice with $300 outstanding, matched for $300, should be "matched" not "partial"
     const targetAmount = (inv.amount_due != null && inv.amount_due > 0) ? inv.amount_due : inv.amount
     
-    // First, try to match by specific invoice_id (reference_id)
+    // Match by specific invoice_id (reference_id) ONLY
     const byId = matchesByInvoiceId.get(inv.invoice_id)
     
     if (byId && byId.movementIds.length > 0) {
       // We have a specific invoice-level match
-      // Cap the matched amount at the target amount for display purposes
       const rawMatchedAmount = byId.totalMatched
       const matchedAmount = Math.min(rawMatchedAmount, targetAmount)
       const tolerance = 0.01
@@ -449,38 +445,12 @@ export async function enrichInvoicesWithReconciliationStatus(
       }
     }
 
-    // Fallback: try entity-level matching
-    const byUri = inv.entity_uri ? matchesByEntityUri.get(inv.entity_uri) : undefined
-
-    if (!byUri || byUri.movementIds.length === 0) {
-      return {
-        ...inv,
-        reconciliation_status: "unmatched" as const,
-        matched_movement_ids: [],
-        matched_amount: 0,
-      }
-    }
-
-    // For entity-level matching, cap the matched amount at the target amount
-    // This prevents showing inflated "matched" amounts when multiple invoices share an entity
-    const entityMatchedAmount = byUri.totalMatched
-    const cappedMatchedAmount = Math.min(entityMatchedAmount, targetAmount)
-    const tolerance = 0.01
-
-    let reconciliationStatus: "matched" | "unmatched" | "partial"
-    if (Math.abs(cappedMatchedAmount - targetAmount) < tolerance || cappedMatchedAmount >= targetAmount - tolerance) {
-      reconciliationStatus = "matched"
-    } else if (cappedMatchedAmount > 0) {
-      reconciliationStatus = "partial"
-    } else {
-      reconciliationStatus = "unmatched"
-    }
-
+    // No specific match found - invoice is unmatched
     return {
       ...inv,
-      reconciliation_status: reconciliationStatus,
-      matched_movement_ids: [...new Set(byUri.movementIds)],
-      matched_amount: cappedMatchedAmount,
+      reconciliation_status: "unmatched" as const,
+      matched_movement_ids: [],
+      matched_amount: 0,
     }
   })
 }

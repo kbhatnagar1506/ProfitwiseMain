@@ -348,6 +348,10 @@ export async function fetchBillsForReconciliation(userId: string): Promise<Outst
 
 /**
  * Enrich bills with reconciliation status from movement_attributions.
+ * 
+ * IMPORTANT: Only uses reference_id (bill_id) for matching, NOT entity-level fallback.
+ * Entity-level fallback was removed because it incorrectly aggregated ALL attributions 
+ * for a vendor across ALL their bills, causing misleading "partial" matches.
  */
 export async function enrichBillsWithReconciliationStatus(
   userId: string,
@@ -372,41 +376,33 @@ export async function enrichBillsWithReconciliationStatus(
     [userId]
   )
 
-  // Track matches by specific bill reference_id
+  // Track matches by specific bill reference_id ONLY
+  // We no longer use entity-level fallback as it caused incorrect aggregation
   const matchesByBillId = new Map<string, { movementIds: string[]; totalMatched: number }>()
-  // Track matches by entity_uri for fallback (entity-level matching)
-  const matchesByEntityUri = new Map<string, { movementIds: string[]; totalMatched: number }>()
 
   for (const attr of attrRows) {
     const gross = safeParseFloat(attr.gross_amount)
     
+    // Only count attributions that have a specific reference_id (bill_id)
     if (attr.reference_id) {
-      // This attribution is linked to a specific bill - only add to bill-level map
       const existing = matchesByBillId.get(attr.reference_id) ?? { movementIds: [], totalMatched: 0 }
       existing.movementIds.push(attr.movement_id)
       existing.totalMatched += gross
       matchesByBillId.set(attr.reference_id, existing)
-    } else if (attr.entity_id) {
-      // Only add to entity-level map when there's no specific reference
-      // This prevents double-counting when an attribution has both reference_id and entity_id
-      const existing = matchesByEntityUri.get(attr.entity_id) ?? { movementIds: [], totalMatched: 0 }
-      existing.movementIds.push(attr.movement_id)
-      existing.totalMatched += gross
-      matchesByEntityUri.set(attr.entity_id, existing)
     }
+    // Note: Attributions without reference_id are NOT counted toward any specific bill
+    // This prevents the bug where ALL vendor payments were aggregated together
   }
 
   return bills.map((bill) => {
     // Use amount_due if available, otherwise fall back to amount
-    // A $1000 bill with $300 outstanding, matched for $300, should be "matched" not "partial"
     const targetAmount = (bill.amount_due != null && bill.amount_due > 0) ? bill.amount_due : bill.amount
     
-    // First, try to match by specific bill_id (reference_id)
+    // Match by specific bill_id (reference_id) ONLY
     const byId = matchesByBillId.get(bill.bill_id)
     
     if (byId && byId.movementIds.length > 0) {
       // We have a specific bill-level match
-      // Cap the matched amount at the target amount for display purposes
       const rawMatchedAmount = byId.totalMatched
       const matchedAmount = Math.min(rawMatchedAmount, targetAmount)
       const tolerance = 0.01
@@ -428,38 +424,12 @@ export async function enrichBillsWithReconciliationStatus(
       }
     }
 
-    // Fallback: try entity-level matching
-    const byUri = bill.entity_uri ? matchesByEntityUri.get(bill.entity_uri) : undefined
-
-    if (!byUri || byUri.movementIds.length === 0) {
-      return {
-        ...bill,
-        reconciliation_status: "unmatched" as const,
-        matched_movement_ids: [],
-        matched_amount: 0,
-      }
-    }
-
-    // For entity-level matching, cap the matched amount at the target amount
-    // This prevents showing inflated "matched" amounts when multiple bills share an entity
-    const entityMatchedAmount = byUri.totalMatched
-    const cappedMatchedAmount = Math.min(entityMatchedAmount, targetAmount)
-    const tolerance = 0.01
-
-    let reconciliationStatus: "matched" | "unmatched" | "partial"
-    if (Math.abs(cappedMatchedAmount - targetAmount) < tolerance || cappedMatchedAmount >= targetAmount - tolerance) {
-      reconciliationStatus = "matched"
-    } else if (cappedMatchedAmount > 0) {
-      reconciliationStatus = "partial"
-    } else {
-      reconciliationStatus = "unmatched"
-    }
-
+    // No specific match found - bill is unmatched
     return {
       ...bill,
-      reconciliation_status: reconciliationStatus,
-      matched_movement_ids: [...new Set(byUri.movementIds)],
-      matched_amount: cappedMatchedAmount,
+      reconciliation_status: "unmatched" as const,
+      matched_movement_ids: [],
+      matched_amount: 0,
     }
   })
 }
