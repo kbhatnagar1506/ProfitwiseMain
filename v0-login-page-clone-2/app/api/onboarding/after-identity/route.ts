@@ -2,9 +2,8 @@
  * POST /api/onboarding/after-identity
  * Called when user leaves Identity graph step (step 9).
  * 1. Sync entities to Supermemory
- * 2. Classify movements (await)
- * 3. Tag movements (await)
- * Returns when all done. Frontend shows loading until complete.
+ * 2. Classify movements (background) + tag movements
+ * Returns 202 immediately to avoid Heroku 30s timeout. Frontend polls /api/movements until done.
  */
 
 import { NextResponse } from "next/server"
@@ -14,6 +13,7 @@ import { query, ensureMovementsSchema, ensureIdentitySchema } from "@/lib/db"
 import { addEntitiesToSupermemory } from "@/lib/supermemory"
 import { classifyMovements } from "@/lib/movement-classify"
 import { tagMovements } from "@/lib/movement-tag-enrich"
+import { log } from "@/lib/logger"
 
 export async function POST() {
   const cookieStore = await cookies()
@@ -53,13 +53,15 @@ export async function POST() {
       await addEntitiesToSupermemory(user.id, entityHints)
     }
 
-    // 2. Classify movements (await — may take a while)
-    await classifyMovements(user.id)
+    // 2. Classify + tag in background (avoids Heroku 30s request timeout)
+    classifyMovements(user.id)
+      .then(() => tagMovements(user.id))
+      .then(() => log("onboarding.after_identity.classify_done", { userId: user.id }, "onboarding"))
+      .catch((err) =>
+        log("onboarding.after_identity.classify_error", { userId: user.id, error: err instanceof Error ? err.message : String(err) }, "onboarding")
+      )
 
-    // 3. Tag movements (await)
-    await tagMovements(user.id)
-
-    return NextResponse.json({ ok: true, status: "done" })
+    return NextResponse.json({ ok: true, status: "classifying" }, { status: 202 })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return NextResponse.json({ error: msg }, { status: 500 })

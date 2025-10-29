@@ -1002,10 +1002,47 @@ export function OnboardingFlow({
       setAfterIdentityLoading(true)
       setIdentityError(null)
       fetch("/api/onboarding/after-identity", { method: "POST" })
-        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-        .then(() => handleNext())
-        .catch(() => setIdentityError("Failed to sync and tag. Please try again."))
-        .finally(() => setAfterIdentityLoading(false))
+        .then((res) => {
+          if (res.status === 202) return res.json()
+          if (res.ok) return res.json()
+          throw new Error(res.statusText)
+        })
+        .then((data) => {
+          // 202 = classification running in background; poll until done
+          if (data?.status === "classifying") {
+            const start = Date.now()
+            const poll = () => {
+              fetch("/api/movements")
+                .then((r) => r.ok ? r.json() : null)
+                .then((d: { summary_from_tags?: unknown; movements?: unknown[] } | null) => {
+                  const elapsed = Date.now() - start
+                  const hasTags = d?.summary_from_tags != null
+                  if (hasTags || elapsed > 120_000) {
+                    handleNext()
+                    setAfterIdentityLoading(false)
+                    return
+                  }
+                  setTimeout(poll, 3000)
+                })
+                .catch(() => {
+                  if (Date.now() - start > 120_000) {
+                    handleNext()
+                    setAfterIdentityLoading(false)
+                  } else {
+                    setTimeout(poll, 3000)
+                  }
+                })
+            }
+            poll()
+          } else {
+            handleNext()
+            setAfterIdentityLoading(false)
+          }
+        })
+        .catch(() => {
+          setIdentityError("Failed to sync and tag. Please try again.")
+          setAfterIdentityLoading(false)
+        })
     } else if (currentStep >= steps.length) {
       router.push("/dashboard")
     } else {
