@@ -79,6 +79,7 @@ type MutableCashEvent = CashEventRow & {
 
 function statusFromOutstanding(outstanding: number, grossAmount: number): "open" | "partially_paid" | "paid" {
   if (outstanding <= EPS) return "paid"
+  if (grossAmount <= EPS) return "paid" // $0 events are always considered paid
   if (outstanding < grossAmount - EPS) return "partially_paid"
   return "open"
 }
@@ -94,7 +95,10 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
             mt.economic_class, mt.tag_data,
             (ABS(m.amount::float) - COALESCE(allocated.allocated_sum, 0))::float AS available_cash
      FROM movements m
-     LEFT JOIN movement_tags mt ON mt.movement_id = m.id
+     LEFT JOIN LATERAL (
+       SELECT economic_class, tag_data, cashflow_bucket
+       FROM movement_tags WHERE movement_id = m.id AND user_id = m.user_id LIMIT 1
+     ) mt ON true
      LEFT JOIN (
        SELECT movement_id,
               SUM(ABS(net_amount::float)) FILTER (WHERE component_type != 'fee') AS allocated_sum
@@ -155,7 +159,8 @@ function matchesEntity(
   const bankLabel = resolvedBankDisplayName ?? movement.counterparty
   const cp = normalizeEntityName(bankLabel)
   if (cn && cp && cn === cp) return true
-  if (cn.length >= 4 && cp.length >= 4 && (cn.includes(cp) || cp.includes(cn))) return true
+  // Require minimum 8 chars for substring matching to reduce false positives
+  if (cn.length >= 8 && cp.length >= 8 && (cn.includes(cp) || cp.includes(cn))) return true
   
   // Extract organization name from parentheses in customer name
   // Handles cases where bank shows org name but invoice is under contact name
@@ -163,16 +168,16 @@ function matchesEntity(
     const orgMatch = customerName.match(/\(([^)]+)\)/)
     if (orgMatch) {
       const orgName = normalizeEntityName(orgMatch[1])
-      if (orgName && cp && orgName.length >= 3 && (orgName.includes(cp) || cp.includes(orgName))) {
+      if (orgName && cp && orgName.length >= 8 && (orgName.includes(cp) || cp.includes(orgName))) {
         return true
       }
       // Also check against raw description for org name
       const rawDesc = normalizeEntityName(movement.raw_description)
-      if (orgName && rawDesc && orgName.length >= 3 && (rawDesc.includes(orgName) || orgName.includes(rawDesc.slice(0, 20)))) {
+      if (orgName && rawDesc && orgName.length >= 8 && (rawDesc.includes(orgName) || orgName.includes(rawDesc.slice(0, 20)))) {
         return true
       }
       // Check if bank label or raw description contains the org name
-      if (orgName && orgName.length >= 4) {
+      if (orgName && orgName.length >= 6) {
         const bankLabelNorm = normalizeEntityName(bankLabel)
         if (bankLabelNorm && bankLabelNorm.includes(orgName)) {
           return true
@@ -180,7 +185,8 @@ function matchesEntity(
       }
       // Handle abbreviations (e.g., abbreviated state/city names matching full names)
       // Extract significant words from org name and check if they appear in bank label
-      const orgWords = (orgMatch[1] || "").toLowerCase().split(/\s+/).filter(w => w.length >= 4)
+      const ENTITY_STOPWORDS = new Set(["city","team","west","east","north","south","tech","data","home","care","blue","state","food","foods","group","sports","sport"])
+      const orgWords = (orgMatch[1] || "").toLowerCase().split(/\s+/).filter(w => w.length >= 5 && !ENTITY_STOPWORDS.has(w))
       const bankLabelLower = (bankLabel || "").toLowerCase()
       const rawDescLower = (movement.raw_description || "").toLowerCase()
       for (const word of orgWords) {
@@ -202,8 +208,8 @@ function matchesEntity(
         return true
       }
       // Also check significant words from org name
-      const orgWords = (orgMatch[1] || "").toLowerCase().split(/\s+/).filter(w => w.length >= 4)
-      for (const word of orgWords) {
+      const orgWords2 = (orgMatch[1] || "").toLowerCase().split(/\s+/).filter(w => w.length >= 5 && !new Set(["city","team","west","east","north","south","tech","data","home","care","blue","state","food","foods","group","sports","sport"]).has(w))
+      for (const word of orgWords2) {
         if (rawDescNorm.includes(word.replace(/[^a-z0-9]/g, ""))) {
           return true
         }
@@ -279,6 +285,30 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
      ORDER BY expected_date ASC, id ASC`,
     [userId],
   )
+  return parseCashEventRows(rows)
+}
+
+async function loadOpenCashEventsWithLock(userId: string, client: PoolClient): Promise<MutableCashEvent[]> {
+  const { rows } = await client.query<
+    CashEventRow & {
+      amount: string
+      outstanding_amount: string | null
+      expected_date: string
+    }
+  >(
+    `SELECT id, user_id, entity_id, event_type, amount::float, outstanding_amount::float, status,
+            probability::float, expected_date::text, source, movement_id, attribution_id, metadata
+     FROM cash_events
+     WHERE user_id = $1::uuid
+       AND event_type IN ('ar', 'ap')
+     ORDER BY expected_date ASC, id ASC
+     FOR UPDATE`,
+    [userId],
+  )
+  return parseCashEventRows(rows)
+}
+
+function parseCashEventRows(rows: Array<CashEventRow & { amount: string; outstanding_amount: string | null; expected_date: string }>): MutableCashEvent[] {
   return rows.map((r) => {
     const gross = parseFloat(String(r.amount))
     const out =
@@ -468,7 +498,10 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     let wfOutcome = "none"
     // #endregion
 
-    const pushAttr = (opts: CreateAttributionOpts) => {
+    const pushAttr = (opts: CreateAttributionOpts, matchedEventId?: string) => {
+      if (matchedEventId && opts.metadata) {
+        (opts.metadata as Record<string, unknown>).matched_event_id = matchedEventId
+      }
       pendingAttributions.push(opts)
     }
 
@@ -548,7 +581,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           is_historical_reconciliation: isHistoricalDirectLink,
           linked_via: tagData?.invoice_id ? "invoice_id" : "bill_id",
         },
-      })
+      }, directLinkMatch.id)
       // Handle fee if there's a difference (processor fee)
       const feeAmount = Math.max(0, matchAmount - remainingCash)
       if (feeAmount > EPS && targetType === "ar") {
@@ -628,7 +661,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           waterfall_stage: isHistoricalMatch ? "sniper_historical" : "sniper",
           is_historical_reconciliation: isHistoricalMatch,
         },
-      })
+      }, exactMatch.id)
       if (s1FeeAmount > EPS && targetType === "ar") {
         const processor = isProcessorLikeMovement(movement) ? "stripe" : "processor"
         pushAttr({
@@ -660,8 +693,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       continue
     }
 
-    // --- Stage 2: processor fee band (AR inflow only) ---
-    if (isInflow) {
+    // --- Stage 2: processor fee band (AR inflow only, processor-like movements) ---
+    if (isInflow && isProcessorLikeMovement(movement)) {
       const feeMatch = entityEvents.find((e) => {
         const matchAmount = e.status === "paid" ? e.amount : e.outstanding_amount
         if (matchAmount <= EPS) return false
@@ -693,7 +726,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             waterfall_stage: isHistoricalFeeMatch ? "processor_historical" : "processor",
             is_historical_reconciliation: isHistoricalFeeMatch,
           },
-        })
+        }, feeMatch.id)
         if (feeAmt > EPS) {
           const processor = isProcessorLikeMovement(movement) ? "stripe" : "processor"
           pushAttr({
@@ -766,7 +799,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             waterfall_stage: isHistoricalFifo ? "fifo_historical" : "fifo",
             is_historical_reconciliation: isHistoricalFifo,
           },
-        })
+        }, event.id)
         if (feeAmt > EPS && targetType === "ar") {
           const processor = isProcessorLikeMovement(movement) ? "stripe" : "processor"
           pushAttr({
@@ -821,7 +854,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             waterfall_stage: isHistoricalFifo ? "fifo_partial_historical" : "fifo_partial",
             is_historical_reconciliation: isHistoricalFifo,
           },
-        })
+        }, event.id)
         if (feeAmt > EPS && targetType === "ar") {
           const processor = isProcessorLikeMovement(movement) ? "stripe" : "processor"
           pushAttr({
@@ -844,7 +877,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         }
         remainingCash -= netApplied
         if (!isHistoricalFifo) {
-          event.outstanding_amount -= grossApplied
+          event.outstanding_amount = Math.max(0, event.outstanding_amount - grossApplied)
           event.status = statusFromOutstanding(event.outstanding_amount, event.amount)
         } else {
           // Mark this paid event as used so it won't be matched again in this run
@@ -886,9 +919,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   }
 
   // #region agent log
-  // Heroku (and other hosts): localhost ingest is unavailable — emit one grep-friendly JSON line for `heroku logs`.
+  // Emit one grep-friendly JSON line for logs
   const wfPayload = {
-    sessionId: "fee5c4",
     hypothesisId: "WF_SUMMARY",
     location: "reconciliation-waterfall.ts:runReconciliationWaterfall",
     message: "waterfall_stage_counts",
@@ -896,27 +928,6 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     timestamp: Date.now(),
   }
   console.log("[reconciliation-waterfall:debug]", JSON.stringify(wfPayload))
-  fetch("http://127.0.0.1:7242/ingest/b0bb6c9e-7e1d-4674-9db3-ac21c3d4fa72", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "fee5c4" },
-    body: JSON.stringify({
-      sessionId: "fee5c4",
-      hypothesisId: "WF_BREAKDOWN",
-      location: "reconciliation-waterfall.ts:runReconciliationWaterfall",
-      message: "zeroCand_split",
-      data: {
-        evAr: debugWf.evAr,
-        evAp: debugWf.evAp,
-        mInflow: debugWf.mInflow,
-        mOutflow: debugWf.mOutflow,
-        zeroByNoType: debugWf.zeroByNoType,
-        zeroByEntityOnly: debugWf.zeroByEntityOnly,
-        zeroCandNullBankLabel: debugWf.zeroCandNullBankLabel,
-        openEvents: debugWf.openEvents,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {})
   // #endregion
 
   if (pendingAttributions.length === 0 && touchedEventIds.size === 0 && stage4Reviews.length === 0) {
@@ -947,20 +958,31 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     // D6: Re-load cash events inside transaction to avoid TOCTOU race.
     // Outstanding amounts may have changed since the initial load if a concurrent
     // waterfall was committed. Rebuild eventById from fresh data inside the txn.
+    // Re-load cash events with row-level locking to prevent concurrent modification
     eventById.clear()
-    for (const e of await loadOpenCashEvents(userId)) {
+    for (const e of await loadOpenCashEventsWithLock(userId, client)) {
       eventById.set(e.id, e)
     }
 
     // D7: Replay pending attributions against fresh cash events to compute correct outstanding amounts.
-    // The in-memory mutations from Stages 0-3 were against stale data; we need to re-apply them.
+    // Use specific matched_event_id to avoid corrupting sibling events for the same entity.
     for (const opts of pendingAttributions) {
       if (opts.component_type !== 'ar' && opts.component_type !== 'ap') continue
-      const matchedEvents = [...eventById.values()].filter(e => e.entity_id === opts.entity_id)
-      for (const ev of matchedEvents) {
-        ev.outstanding_amount = Math.max(0, ev.outstanding_amount - opts.gross_amount)
-        ev.status = statusFromOutstanding(ev.outstanding_amount, ev.amount)
-        touchedEventIds.add(ev.id)
+      const eventId = (opts.metadata as Record<string, unknown>)?.matched_event_id as string | undefined
+      if (eventId) {
+        const ev = eventById.get(eventId)
+        if (ev) {
+          ev.outstanding_amount = Math.max(0, ev.outstanding_amount - opts.gross_amount)
+          ev.status = statusFromOutstanding(ev.outstanding_amount, ev.amount)
+          touchedEventIds.add(ev.id)
+        }
+      } else {
+        const matchedEvents = [...eventById.values()].filter(e => e.entity_id === opts.entity_id)
+        for (const ev of matchedEvents) {
+          ev.outstanding_amount = Math.max(0, ev.outstanding_amount - opts.gross_amount)
+          ev.status = statusFromOutstanding(ev.outstanding_amount, ev.amount)
+          touchedEventIds.add(ev.id)
+        }
       }
     }
 

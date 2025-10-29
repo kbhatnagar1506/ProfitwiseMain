@@ -86,6 +86,8 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
   excluded_inflows: ReconMovementRow[]
   excluded_outflows: ReconMovementRow[]
 }> {
+  // Limit to most recent 5000 movements to prevent memory exhaustion
+  const MAX_MOVEMENTS = 5000
   const { rows } = await query<FlatRow>(
     `SELECT m.id AS movement_id, m.direction, m.amount::text AS amount, m.date::text AS date, m.counterparty,
             m.counterparty_entity_id::text AS counterparty_entity_id, m.metadata AS movement_metadata,
@@ -93,9 +95,12 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
             mt.economic_class
      FROM movements m
      LEFT JOIN movement_attributions a ON a.movement_id = m.id AND a.user_id = m.user_id
-     LEFT JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
+     LEFT JOIN LATERAL (
+       SELECT economic_class FROM movement_tags WHERE movement_id = m.id AND user_id = m.user_id LIMIT 1
+     ) mt ON true
      WHERE m.user_id = $1::uuid AND m.duplicate_of IS NULL
-     ORDER BY m.date DESC NULLS LAST, m.id, a.created_at ASC NULLS LAST`,
+     ORDER BY m.date DESC NULLS LAST, m.id, a.created_at ASC NULLS LAST
+     LIMIT ${MAX_MOVEMENTS * 3}`,
     [userId],
   )
 
@@ -176,18 +181,18 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
     const hasSettlement = attrs.some((a) => a.entity_type === "settlement")
 
     if (direction === "inflow") {
-      if (isExcluded) {
-        excluded_inflows.push(row)
-      } else if (hasAr || hasSettlement) {
+      if (hasAr || hasSettlement) {
         matched_inflows.push(row)
+      } else if (isExcluded) {
+        excluded_inflows.push(row)
       } else {
         unmatched_inflows.push(row)
       }
     } else {
-      if (isExcluded) {
-        excluded_outflows.push(row)
-      } else if (hasAp || hasSettlement) {
+      if (hasAp || hasSettlement) {
         matched_outflows.push(row)
+      } else if (isExcluded) {
+        excluded_outflows.push(row)
       } else {
         unmatched_outflows.push(row)
       }

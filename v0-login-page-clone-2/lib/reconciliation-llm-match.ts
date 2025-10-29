@@ -20,8 +20,8 @@ const MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
 export type UnmatchedInflow = { movement_id: string; amount: number; date: string; counterparty: string | null; raw_description: string | null }
 export type UnmatchedOutflow = { movement_id: string; amount: number; date: string; counterparty: string | null; raw_description: string | null }
-export type InvoiceForMatch = { invoice_id: string; customer_name: string; amount_due: number; due_date: string | null; entity_id?: string }
-export type BillForMatch = { bill_id: string; obligation_id: string; vendor_name: string; amount_due: number; due_date: string | null; entity_id?: string }
+export type InvoiceForMatch = { invoice_id: string; customer_name: string; amount_due: number; due_date: string | null; entity_id?: string; source?: string }
+export type BillForMatch = { bill_id: string; obligation_id: string; vendor_name: string; amount_due: number; due_date: string | null; entity_id?: string; source?: string }
 
 export type ARMatchSuggestion = { movement_id: string; invoice_id: string; confidence: "high" | "medium" | "low"; reasoning: string; amount_matched?: number }
 export type APMatchSuggestion = { movement_id: string; obligation_id: string; confidence: "high" | "medium" | "low"; reasoning: string; amount_matched?: number }
@@ -34,8 +34,12 @@ export type LLMMatchApplyResult = {
   errors: string[]
 }
 
+const LLM_TIMEOUT_MS = 60000 // 60 second timeout for LLM calls
+
 async function callLLM(messages: { role: string; content: string }[], maxTokens = 4000): Promise<string | null> {
   if (!API_KEY) return null
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS)
   try {
     const res = await fetch(API_URL, {
       method: "POST",
@@ -49,6 +53,7 @@ async function callLLM(messages: { role: string; content: string }[], maxTokens 
         max_tokens: maxTokens,
         temperature: 0,
       }),
+      signal: controller.signal,
     })
     if (!res.ok) {
       console.error("[LLM-Match] API error:", res.status, await res.text().catch(() => ""))
@@ -57,8 +62,14 @@ async function callLLM(messages: { role: string; content: string }[], maxTokens 
     const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
     return data.choices?.[0]?.message?.content?.trim() ?? null
   } catch (e) {
-    console.error("[LLM-Match] fetch error:", e)
+    if (e instanceof Error && e.name === "AbortError") {
+      console.error("[LLM-Match] Request timed out after", LLM_TIMEOUT_MS, "ms")
+    } else {
+      console.error("[LLM-Match] fetch error:", e)
+    }
     return null
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 
@@ -242,20 +253,32 @@ async function applyLLMMatchesWithClear(
   const confidenceOrder = { high: 3, medium: 2, low: 1 }
   const minLevel = confidenceOrder[minConfidence]
 
+  // Collect movement IDs that will be re-matched
+  const movementIdsToRematch = new Set([
+    ...matches.ar.filter(ar => confidenceOrder[ar.confidence] >= minLevel).map(ar => ar.movement_id),
+    ...matches.ap.filter(ap => confidenceOrder[ap.confidence] >= minLevel).map(ap => ap.movement_id),
+  ])
+
   return withTransaction(async (client: PoolClient) => {
     const result: LLMMatchApplyResult = { applied: 0, skipped: 0, errors: [] }
 
-    // Clear previous LLM attributions inside the transaction to prevent race conditions
-    if (clearPrevious) {
+    // Clear previous LLM attributions only for movements being re-matched (scoped delete)
+    if (clearPrevious && movementIdsToRematch.size > 0) {
       await client.query(
         `DELETE FROM movement_attributions
          WHERE user_id = $1::uuid
            AND source = 'llm'
-           AND component_type IN ('ar', 'ap', 'fee')`,
-        [userId]
+           AND component_type IN ('ar', 'ap', 'fee')
+           AND movement_id = ANY($2::uuid[])`,
+        [userId, [...movementIdsToRematch]]
       )
-      console.log("[LLM-Stage4] Cleared previous LLM attributions for user:", userId)
+      console.log("[LLM-Stage4] Cleared previous LLM attributions for", movementIdsToRematch.size, "movements")
     }
+
+    // Track remaining available cash per movement to prevent double-attribution
+    const remainingByMovement = new Map(
+      [...movementAmounts.entries()].map(([k, v]) => [k, v])
+    )
 
     for (const ar of matches.ar) {
       if (confidenceOrder[ar.confidence] < minLevel) {
@@ -269,9 +292,10 @@ async function applyLLMMatchesWithClear(
         continue
       }
 
-      const movementAmount = movementAmounts.get(ar.movement_id) ?? 0
-      const grossAmount = ar.amount_matched ?? invoice.amount_due
-      const netAmount = Math.min(movementAmount, grossAmount)
+      const remaining = remainingByMovement.get(ar.movement_id) ?? 0
+      if (remaining < 0.01) { result.skipped++; continue }
+      const grossAmount = Math.min(ar.amount_matched ?? invoice.amount_due, remaining)
+      const netAmount = Math.min(remaining, grossAmount)
       const feeAmount = Math.max(0, grossAmount - netAmount)
 
       try {
@@ -279,7 +303,7 @@ async function applyLLMMatchesWithClear(
           userId,
           movementId: ar.movement_id,
           component_type: "ar",
-          entity_id: invoice.entity_id ?? `ar://invoice/qbo/${ar.invoice_id}`,
+          entity_id: invoice.entity_id ?? `ar://invoice/${invoice.source ?? 'qbo'}/${ar.invoice_id}`,
           reference_id: ar.invoice_id,
           gross_amount: grossAmount,
           net_amount: netAmount,
@@ -294,6 +318,7 @@ async function applyLLMMatchesWithClear(
           },
         }
         await insertAttributionWithClient(client, opts)
+        remainingByMovement.set(ar.movement_id, remaining - netAmount)
 
         // Update cash_events.outstanding_amount to prevent re-matching
         await client.query(
@@ -308,7 +333,7 @@ async function applyLLMMatchesWithClear(
            WHERE user_id = $1::uuid 
              AND entity_id = $3 
              AND event_type = 'ar'`,
-          [userId, grossAmount, invoice.entity_id ?? `ar://invoice/qbo/${ar.invoice_id}`]
+          [userId, grossAmount, invoice.entity_id ?? `ar://invoice/${invoice.source ?? 'qbo'}/${ar.invoice_id}`]
         )
 
         if (feeAmount > 0.01) {
@@ -348,9 +373,10 @@ async function applyLLMMatchesWithClear(
         continue
       }
 
-      const movementAmount = movementAmounts.get(ap.movement_id) ?? 0
-      const grossAmount = ap.amount_matched ?? bill.amount_due
-      const netAmount = Math.min(movementAmount, grossAmount)
+      const remaining = remainingByMovement.get(ap.movement_id) ?? 0
+      if (remaining < 0.01) { result.skipped++; continue }
+      const grossAmount = Math.min(ap.amount_matched ?? bill.amount_due, remaining)
+      const netAmount = Math.min(remaining, grossAmount)
 
       try {
         const opts: CreateAttributionOpts = {
@@ -371,6 +397,7 @@ async function applyLLMMatchesWithClear(
           },
         }
         await insertAttributionWithClient(client, opts)
+        remainingByMovement.set(ap.movement_id, remaining - netAmount)
 
         // Update cash_events.outstanding_amount to prevent re-matching
         await client.query(
@@ -497,17 +524,25 @@ export async function getAllUnreconciledMovements(
     counterparty: string | null
     raw_description: string | null
     economic_class: string | null
+    available_cash: string
   }>(
-    `SELECT m.id, m.direction, m.amount::float, m.date::text, m.counterparty, m.raw_description, mt.economic_class
+    `SELECT DISTINCT ON (m.id) m.id, m.direction, m.amount::float, m.date::text, m.counterparty, m.raw_description, mt.economic_class,
+            (ABS(m.amount::float) - COALESCE(alloc.allocated_sum, 0))::float AS available_cash
      FROM movements m
-     LEFT JOIN movement_tags mt ON mt.movement_id = m.id
+     LEFT JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
+     LEFT JOIN (
+       SELECT movement_id, SUM(ABS(net_amount::float)) FILTER (WHERE component_type != 'fee') AS allocated_sum
+       FROM movement_attributions WHERE user_id = $1::uuid GROUP BY movement_id
+     ) alloc ON alloc.movement_id = m.id
      WHERE m.user_id = $1::uuid
        AND m.duplicate_of IS NULL
        AND NOT EXISTS (
          SELECT 1 FROM movement_attributions ma 
          WHERE ma.movement_id = m.id 
            AND ma.component_type IN ('ar', 'ap')
-       )`,
+       )
+       AND (ABS(m.amount::float) - COALESCE(alloc.allocated_sum, 0)) > 0.01
+     ORDER BY m.id, mt.created_at DESC NULLS LAST`,
     [userId]
   )
 
@@ -521,7 +556,7 @@ export async function getAllUnreconciledMovements(
     })
     .map((r) => ({
       movement_id: r.id,
-      amount: Math.abs(safeParseFloat(r.amount)),
+      amount: Math.abs(safeParseFloat(r.available_cash)),
       date: r.date,
       counterparty: r.counterparty,
       raw_description: r.raw_description,
