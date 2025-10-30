@@ -114,6 +114,16 @@ export type LiquidityState = {
   operating_dependency_ratio: number
   liquidity_regime: LiquidityRegime
   excluded_cash: number
+
+  // Derived cash position metrics
+  starting_cash: number
+  ending_cash: number
+  avg_daily_outflow: number
+  burn_rate: number
+  runway_days: number | null
+  bank_account_count: number
+  largest_account_balance: number
+  transfer_count: number
 }
 
 export type StateConfidence = {

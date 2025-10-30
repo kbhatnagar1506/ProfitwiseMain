@@ -340,13 +340,17 @@ export function computeLiquidityState(
   let ownerIn = 0, ownerOut = 0
   let excludedCash = 0
   let transferVolume = 0
+  let transferCount = 0
 
   const accountFlows = new Map<string, AccountCash>()
 
   for (const m of movements) {
     const t = m.tag
     if (!t.state_scope.affects_liquidity) {
-      if (isTransfer(t.economic_class)) transferVolume += m.amount
+      if (isTransfer(t.economic_class)) {
+        transferVolume += m.amount
+        transferCount++
+      }
       continue
     }
 
@@ -407,12 +411,40 @@ export function computeLiquidityState(
 
   const settlementLag = computeSettlementLag(movements)
 
+  // Calculate derived cash position metrics
+  const periodDays = daysBetween(periodStart, periodEnd) || 30
+  const avgDailyOutflow = totalOut / Math.max(1, periodDays)
+  const netCashFlow = totalIn - totalOut
+  
+  // Burn rate: monthly outflow excluding owner draws and transfers (operating burn)
+  // Use operating outflows as the "burn" since that's what sustains the business
+  const monthlyBurnRate = (opOut / Math.max(1, periodDays)) * 30
+  
+  // For starting/ending cash, we derive from net flows
+  // Since we don't have actual bank balances here, we use the largest account's net flow as a proxy
+  // In production, this should be fetched from Plaid balances
+  const largestAccountBalance = cashByAccount.length > 0 
+    ? Math.max(...cashByAccount.map(a => Math.abs(a.net_flow)))
+    : 0
+  
+  // Estimate ending cash as the sum of positive net flows (money that came in and stayed)
+  const endingCash = cashByAccount.reduce((sum, a) => sum + Math.max(0, a.net_flow), 0)
+  const startingCash = endingCash - netCashFlow
+  
+  // Runway: how many days until cash runs out at current burn rate
+  // Only calculate if we have positive ending cash and positive burn
+  const runwayDays = avgDailyOutflow > 0 && endingCash > 0
+    ? Math.round(endingCash / avgDailyOutflow)
+    : null
+
+  const bankAccountCount = cashByAccount.filter(a => a.account_id !== "__external_unknown__").length
+
   return {
     period_start: periodStart,
     period_end: periodEnd,
     total_inflows: r2(totalIn),
     total_outflows: r2(totalOut),
-    period_net_cash_flow: r2(totalIn - totalOut),
+    period_net_cash_flow: r2(netCashFlow),
     operating_inflows: r2(opIn),
     operating_outflows: r2(opOut),
     net_operating: r2(opIn - opOut),
@@ -432,6 +464,15 @@ export function computeLiquidityState(
     operating_dependency_ratio: Math.round(operatingDependencyRatio * 1000) / 1000,
     liquidity_regime: liquidityRegime,
     excluded_cash: r2(excludedCash),
+    // New derived fields
+    starting_cash: r2(startingCash),
+    ending_cash: r2(endingCash),
+    avg_daily_outflow: r2(avgDailyOutflow),
+    burn_rate: r2(monthlyBurnRate),
+    runway_days: runwayDays,
+    bank_account_count: bankAccountCount,
+    largest_account_balance: r2(largestAccountBalance),
+    transfer_count: transferCount,
   }
 }
 
