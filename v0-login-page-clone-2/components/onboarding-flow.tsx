@@ -1269,7 +1269,7 @@ export function OnboardingFlow({
   }
 
   const renderStepContent = () => {
-    if ([12, 13, 14].includes(currentStep)) {
+    if ([13, 14].includes(currentStep)) {
       const s = steps[currentStep - 1]
       return (
         <div className="space-y-6">
@@ -4015,17 +4015,23 @@ export function OnboardingFlow({
       }
 
       case 12: {
-        const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
-        const badge = (severity: "info" | "warning" | "critical") =>
-          severity === "critical"
-            ? "text-red-300 bg-red-500/10 border-red-500/20"
-            : severity === "warning"
-              ? "text-amber-300 bg-amber-500/10 border-amber-500/20"
-              : "text-blue-300 bg-blue-500/10 border-blue-500/20"
-        const bandColor = (b: SeverityBand) =>
-          b === "critical" ? "text-red-400" : b === "high" ? "text-orange-400" : b === "elevated" ? "text-amber-400" : b === "moderate" ? "text-yellow-300" : "text-emerald-400"
-        const pct = (n: number) => `${(n * 100).toFixed(1)}%`
-        const confColor = (c: number) => c >= 95 ? "text-emerald-400" : c >= 85 ? "text-yellow-300" : c >= 70 ? "text-amber-400" : "text-red-400"
+        const money = (n: number | string | null | undefined) => {
+          const num = typeof n === "string" ? parseFloat(n) : n
+          if (num == null || isNaN(num)) return "$0"
+          if (Math.abs(num) >= 1000000) return `$${(num / 1000000).toFixed(1)}M`
+          if (Math.abs(num) >= 1000) return `$${(num / 1000).toFixed(1)}K`
+          return `$${num.toFixed(0)}`
+        }
+        const archetypeLabel = (a: string | null) => {
+          const labels: Record<string, string> = { clockwork: "Clockwork", slow_reliable: "Reliable", bursty: "Bursty", volatile: "Volatile", low_data: "New" }
+          return a ? labels[a] || a : "—"
+        }
+        const archetypeColor = (a: string | null) => {
+          const colors: Record<string, string> = { clockwork: "text-emerald-400 bg-emerald-500/10", slow_reliable: "text-blue-400 bg-blue-500/10", bursty: "text-amber-400 bg-amber-500/10", volatile: "text-red-400 bg-red-500/10", low_data: "text-gray-400 bg-gray-500/10" }
+          return a ? colors[a] || "text-gray-400 bg-gray-500/10" : "text-gray-400 bg-gray-500/10"
+        }
+        const customers = entityProfiles.filter(e => e.entity_type === "customer").slice(0, 5)
+        const vendors = entityProfiles.filter(e => e.entity_type === "vendor").slice(0, 5)
 
         return (
           <div className="space-y-6">
@@ -4033,378 +4039,92 @@ export function OnboardingFlow({
               <h2 className="text-2xl font-semibold text-white mb-1">{steps[11].title}</h2>
               <p className="text-gray-400 text-lg mb-5">{steps[11].description}</p>
 
-              {stateLoading && (
+              {entityProfilesLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Loading state objects…
+                  Loading entity profiles…
                 </div>
               )}
 
-              {stateError && !stateLoading && (
-                <p className="text-red-300 text-sm mb-4">Failed: {stateError}</p>
+              {entityProfilesError && !entityProfilesLoading && (
+                <p className="text-red-300 text-sm mb-4">Failed: {entityProfilesError}</p>
               )}
             </div>
 
-            {!stateLoading && stateData && (
+            {!entityProfilesLoading && entityProfilesSummary && (
               <div className="space-y-6">
-                {/* ─── Insight Block ─── */}
-                {stateData.insight_block && (
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
-                    <div className="text-xs uppercase tracking-wider text-emerald-400/80 mb-2">Summary</div>
-                    <p className="text-sm text-gray-200 leading-relaxed">{stateData.insight_block}</p>
+                {/* Summary Stats */}
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                    <div className="text-2xl font-bold text-emerald-400">{entityProfilesSummary.total_customers}</div>
+                    <div className="text-xs text-gray-400 mt-1">Customers</div>
                   </div>
-                )}
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                    <div className="text-2xl font-bold text-blue-400">{entityProfilesSummary.total_vendors}</div>
+                    <div className="text-xs text-gray-400 mt-1">Vendors</div>
+                  </div>
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                    <div className="text-2xl font-bold text-white">{money(entityProfilesSummary.total_lifetime_value)}</div>
+                    <div className="text-xs text-gray-400 mt-1">Lifetime Value</div>
+                  </div>
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                    <div className="text-2xl font-bold text-amber-400">{entityProfilesSummary.at_risk_count}</div>
+                    <div className="text-xs text-gray-400 mt-1">At Risk</div>
+                  </div>
+                </div>
 
-                {/* ─── Insights ─── */}
-                {stateData.insights.length > 0 && (
+                {/* Top Customers */}
+                {customers.length > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                    <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Insights</div>
+                    <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Top Customers</div>
                     <div className="space-y-2">
-                      {stateData.insights.map((ins) => (
-                        <div key={ins.id} className="flex items-start gap-2.5">
-                          <span className={`mt-0.5 shrink-0 w-2 h-2 rounded-full ${ins.severity === "high" ? "bg-red-400" : ins.severity === "medium" ? "bg-amber-400" : "bg-blue-400"}`} />
-                          <span className="text-sm text-gray-200">{ins.message}</span>
+                      {customers.map((e) => (
+                        <div key={e.id} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+                          <div className="flex items-center gap-3">
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full ${archetypeColor(e.archetype)}`}>{archetypeLabel(e.archetype)}</span>
+                            <span className="text-sm text-white truncate max-w-[200px]">{e.display_name || e.canonical_name}</span>
+                          </div>
+                          <div className="flex items-center gap-4 text-xs">
+                            <span className="text-gray-400">{e.transaction_count} txns</span>
+                            <span className="text-emerald-400 font-medium">{money(e.lifetime_value)}</span>
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* ─── Financial Risk ─── */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Financial Risk</h3>
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
-                      stateData.risk.overall === "high" ? "bg-red-500/20 text-red-300 border border-red-500/30"
-                        : stateData.risk.overall === "medium" ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                        : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                    }`}>
-                      {stateData.risk.overall.toUpperCase()} RISK
-                    </span>
-                  </div>
-
-                  <div className="space-y-3">
-                    {(["liquidity_risk", "concentration_risk", "dependency_risk", "anomaly_risk", "uncertainty_risk"] as const).map((key) => {
-                      const dim = stateData.risk[key]
-                      const label = key.replace(/_risk$/, "").replace(/_/g, " ")
-                      const barColor = dim.level === "high" ? "bg-red-400" : dim.level === "medium" ? "bg-amber-400" : "bg-emerald-400"
-                      const textColor = dim.level === "high" ? "text-red-400" : dim.level === "medium" ? "text-amber-400" : "text-emerald-400"
-                      const bufferTooltip = key === "liquidity_risk" ? "Based on period net cash flow and average daily outflows. Excludes transfers and owner inflows from burn calculation." : undefined
-                      return (
-                        <div key={key}>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm text-gray-300 capitalize">{label}</span>
-                            <span className={`text-xs font-semibold ${textColor}`}>{dim.level.toUpperCase()}</span>
+                {/* Top Vendors */}
+                {vendors.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Top Vendors</div>
+                    <div className="space-y-2">
+                      {vendors.map((e) => (
+                        <div key={e.id} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+                          <div className="flex items-center gap-3">
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full ${archetypeColor(e.archetype)}`}>{archetypeLabel(e.archetype)}</span>
+                            <span className="text-sm text-white truncate max-w-[200px]">{e.display_name || e.canonical_name}</span>
                           </div>
-                          <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mb-1">
-                            <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${Math.min(dim.score, 100)}%` }} />
+                          <div className="flex items-center gap-4 text-xs">
+                            <span className="text-gray-400">{e.transaction_count} txns</span>
+                            <span className="text-blue-400 font-medium">{money(e.lifetime_value)}</span>
                           </div>
-                          <div className="text-[11px] text-gray-500" title={bufferTooltip}>{dim.reason}</div>
                         </div>
-                      )
-                    })}
-                  </div>
-
-                  <div className="mt-4 pt-3 border-t border-white/10">
-                    <div className="text-center mb-2">
-                      <span className="text-xs text-gray-500">Overall risk score: </span>
-                      <span className={`text-sm font-bold ${
-                        stateData.risk.overall === "high" ? "text-red-400" : stateData.risk.overall === "medium" ? "text-amber-400" : "text-emerald-400"
-                      }`}>{stateData.risk.overall_score}/100</span>
-                    </div>
-                    <div className="text-[10px] text-gray-500 text-center flex flex-wrap justify-center gap-x-3 gap-y-1">
-                      <span>Liquidity 30% → {Math.round(stateData.risk.liquidity_risk.score * 0.30)}</span>
-                      <span>Concentration 20% → {Math.round(stateData.risk.concentration_risk.score * 0.20)}</span>
-                      <span>Dependency 25% → {Math.round(stateData.risk.dependency_risk.score * 0.25)}</span>
-                      <span>Anomaly 10% → {Math.round(stateData.risk.anomaly_risk.score * 0.10)}</span>
-                      <span>Uncertainty 15% → {Math.round(stateData.risk.uncertainty_risk.score * 0.15)}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ─── Excluded & Unresolved ─── */}
-                {(stateData.revenue.excluded_revenue > 0 || stateData.spend.excluded_spend > 0 || stateData.liquidity.excluded_cash > 0) && (
-                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
-                    <div className="text-xs uppercase tracking-wider text-amber-400/90 mb-2">Excluded from state</div>
-                    <div className="text-xs text-gray-300 space-y-1">
-                      {stateData.revenue.excluded_revenue > 0 && (
-                        <div>Revenue: {money(stateData.revenue.excluded_revenue)} ({stateData.revenue.gross_revenue > 0 ? Math.round((stateData.revenue.excluded_revenue / stateData.revenue.gross_revenue) * 100) : 0}% of gross)</div>
-                      )}
-                      {stateData.spend.excluded_spend > 0 && (
-                        <div>Spend: {money(stateData.spend.excluded_spend)} ({stateData.spend.total_spend > 0 ? Math.round((stateData.spend.excluded_spend / stateData.spend.total_spend) * 100) : 0}% of total)</div>
-                      )}
-                      {stateData.liquidity.excluded_cash > 0 && (
-                        <div>Liquidity: {money(stateData.liquidity.excluded_cash)} ({(stateData.liquidity.total_inflows + stateData.liquidity.total_outflows) > 0 ? Math.round((stateData.liquidity.excluded_cash / (stateData.liquidity.total_inflows + stateData.liquidity.total_outflows)) * 100) : 0}% of total flow)</div>
-                      )}
+                      ))}
                     </div>
                   </div>
                 )}
 
-                {/* ─── State Confidence ─── */}
-                <div className="flex items-center justify-center gap-6 text-xs">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-gray-500">Revenue confidence:</span>
-                    <span className={`font-semibold ${confColor(stateData.state_confidence.revenue_confidence)}`}>{stateData.state_confidence.revenue_confidence}%</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-gray-500">Spend confidence:</span>
-                    <span className={`font-semibold ${confColor(stateData.state_confidence.spend_confidence)}`}>{stateData.state_confidence.spend_confidence}%</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-gray-500">Liquidity confidence:</span>
-                    <span className={`font-semibold ${confColor(stateData.state_confidence.liquidity_confidence)}`}>{stateData.state_confidence.liquidity_confidence}%</span>
-                  </div>
-                </div>
-
-                {/* ─── Revenue State ─── */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-                  <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Revenue state</div>
-                  <div className="flex items-baseline gap-3 mb-1">
-                    <div className="text-3xl font-bold text-emerald-400">{money(stateData.revenue.net_revenue)}</div>
-                    <div className="text-xs text-gray-500">net revenue</div>
-                  </div>
-                  <div className="text-xs text-gray-500 mb-4">
-                    Gross {money(stateData.revenue.gross_revenue)} − Contra {money(stateData.revenue.contra_revenue)} = Net {money(stateData.revenue.net_revenue)}
-                  </div>
-                  <div className="grid grid-cols-5 gap-2 text-center mb-4">
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{stateData.revenue.customer_count}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Customers</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{money(stateData.revenue.avg_receipt)}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Avg receipt</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{stateData.revenue.top_customer_pct}%</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of revenue from the single largest customer.">Top cust %</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{Math.round(stateData.revenue.repeat_revenue_ratio * 100)}%</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of revenue in this period from customers who also paid in a prior period.">Repeat revenue</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{stateData.revenue.concentration_index}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">HHI</div>
-                    </div>
-                  </div>
-                  {stateData.revenue.revenue_by_customer.length > 0 && (
-                    <div>
-                      <div className="text-[10px] uppercase text-gray-500 mb-1.5">Top customers</div>
-                      <div className="space-y-1">
-                        {stateData.revenue.revenue_by_customer.slice(0, 5).map((c, i) => (
-                          <div key={i} className="flex items-center justify-between text-xs">
-                            <span className="text-gray-300 truncate max-w-[60%]">{c.name}</span>
-                            <span className="text-gray-400 font-mono">{money(c.total)} ({c.count}x)</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {(stateData.revenue.provisional_revenue > 0 || stateData.revenue.excluded_revenue > 0) && (
-                    <div className="mt-3 pt-3 border-t border-white/5 text-[10px] text-gray-600">
-                      {stateData.revenue.provisional_revenue > 0 && <span>Provisional: {money(stateData.revenue.provisional_revenue)} · </span>}
-                      {stateData.revenue.excluded_revenue > 0 && <span>Excluded: {money(stateData.revenue.excluded_revenue)}</span>}
-                    </div>
-                  )}
-                </div>
-
-                {/* ─── Spend State ─── */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-                  <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Spend state</div>
-                  <div className="flex items-baseline gap-3 mb-1">
-                    <div className="text-3xl font-bold text-amber-400">{money(stateData.spend.total_spend)}</div>
-                    <div className="text-xs text-gray-500">total</div>
-                  </div>
-                  <div className={`text-xs text-gray-500 ${stateData.spend.direct_cost_candidates > 0 ? "mb-2" : "mb-4"}`}>
-                    Booked: OpEx {money(stateData.spend.total_opex)} · COGS {money(stateData.spend.total_cogs)}
-                  </div>
-                  {stateData.spend.direct_cost_candidates > 0 && (
-                    <div className="text-xs text-gray-500 mb-4" title="Direct cost estimate is inferred from supplier patterns, not from accounting records.">
-                      Analytical: Estimated direct-cost share {money(stateData.spend.direct_cost_candidates)} (not in COGS)
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs mb-4">
-                    <div className="flex justify-between"><span className="text-gray-400">Vendor payments</span><span className="text-white font-mono">{money(stateData.spend.vendor_payments)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Payroll</span><span className="text-white font-mono">{money(stateData.spend.payroll)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Processor fees</span><span className="text-white font-mono">{money(stateData.spend.processor_fees)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Bank fees</span><span className="text-white font-mono">{money(stateData.spend.bank_fees)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Taxes</span><span className="text-white font-mono">{money(stateData.spend.taxes)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400">Recurring ({stateData.spend.recurring_obligation_count})</span><span className="text-white font-mono">{money(stateData.spend.recurring_obligations)}</span></div>
-                    {(stateData.spend.recurring_fixed_contractual != null || stateData.spend.recurring_soft != null || stateData.spend.recurring_discretionary != null) && (
-                      <div className="grid grid-cols-2 gap-x-6 gap-y-1 pl-2 border-l-2 border-white/10">
-                        {stateData.spend.recurring_fixed_contractual != null && stateData.spend.recurring_fixed_contractual > 0 && (
-                          <div className="flex justify-between"><span className="text-gray-500 text-[11px]">Fixed contractual</span><span className="text-gray-400 font-mono text-[11px]">{money(stateData.spend.recurring_fixed_contractual)}</span></div>
-                        )}
-                        {stateData.spend.recurring_soft != null && stateData.spend.recurring_soft > 0 && (
-                          <div className="flex justify-between"><span className="text-gray-500 text-[11px]">Soft recurring</span><span className="text-gray-400 font-mono text-[11px]">{money(stateData.spend.recurring_soft)}</span></div>
-                        )}
-                        {stateData.spend.recurring_discretionary != null && stateData.spend.recurring_discretionary > 0 && (
-                          <div className="flex justify-between"><span className="text-gray-500 text-[11px]">Discretionary recurring</span><span className="text-gray-400 font-mono text-[11px]">{money(stateData.spend.recurring_discretionary)}</span></div>
-                        )}
-                      </div>
-                    )}
-                    <div className="flex justify-between"><span className="text-gray-400">Non-recurring</span><span className="text-white font-mono">{money(stateData.spend.non_recurring_spend)}</span></div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 text-center mb-4">
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{stateData.spend.vendor_count}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Vendors</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{stateData.spend.top_vendor_pct}%</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of spend with the single largest vendor.">Top vendor %</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{stateData.spend.supplier_concentration_index}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Supplier HHI</div>
-                    </div>
-                  </div>
-
-                  {stateData.spend.spend_by_vendor.length > 0 && (
-                    <div>
-                      <div className="text-[10px] uppercase text-gray-500 mb-1.5">Top vendors</div>
-                      <div className="space-y-1">
-                        {stateData.spend.spend_by_vendor.slice(0, 5).map((v, i) => (
-                          <div key={i} className="flex items-center justify-between text-xs">
-                            <span className="text-gray-300 truncate max-w-[50%]">{v.name}</span>
-                            <span className="text-gray-400 font-mono">{money(v.total)} ({v.pct_of_spend}%) · {v.count}x</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {(stateData.spend.provisional_spend > 0 || stateData.spend.excluded_spend > 0) && (
-                    <div className="mt-3 pt-3 border-t border-white/5 text-[10px] text-gray-600">
-                      {stateData.spend.provisional_spend > 0 && <span>Provisional: {money(stateData.spend.provisional_spend)} · </span>}
-                      {stateData.spend.excluded_spend > 0 && <span>Excluded: {money(stateData.spend.excluded_spend)}</span>}
-                    </div>
-                  )}
-                </div>
-
-                {/* ─── Liquidity State ─── */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-                  <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Liquidity state</div>
-                  <div className="flex items-baseline gap-3 mb-1">
-                    <div className="text-3xl font-bold text-blue-300">{money(stateData.liquidity.period_net_cash_flow)}</div>
-                    <div className="text-xs text-gray-500">period net cash flow</div>
-                  </div>
-                  <div className="text-xs text-gray-500 mb-4">
-                    In {money(stateData.liquidity.total_inflows)} · Out {money(stateData.liquidity.total_outflows)}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs mb-4">
-                    <div className="flex justify-between"><span className="text-gray-400" title="Business-generated net cash">Net operating</span><span className="text-white font-mono">{money(stateData.liquidity.net_operating)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400" title="Debt, credit, owner contributions">Net financing</span><span className="text-white font-mono">{money(stateData.liquidity.net_financing)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400" title="Timing-related processor inflows/outflows">Net settlement</span><span className="text-white font-mono">{money(stateData.liquidity.net_settlement)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-400" title="Owner/personal support (subset of financing)">Net owner</span><span className="text-white font-mono">{money(stateData.liquidity.net_owner)}</span></div>
-                    {stateData.liquidity.settlement_lag && stateData.liquidity.settlement_lag.confidence !== "insufficient" && (
-                      <div className="flex justify-between"><span className="text-gray-400" title="Average days from customer payment (e.g. card charge) to funds arriving in your bank.">Settlement lag (payment → bank)</span><span className="text-white font-mono">~{stateData.liquidity.settlement_lag.avg_settlement_lag_days.toFixed(1)}d ({stateData.liquidity.settlement_lag.sample_count} samples)</span></div>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-2 text-center mb-4">
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className={`text-sm font-semibold ${stateData.liquidity.liquidity_regime === "strong" ? "text-emerald-400" : stateData.liquidity.liquidity_regime === "stable" ? "text-yellow-300" : "text-amber-400"}`}>{stateData.liquidity.liquidity_regime}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Liquidity regime</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className={`text-sm font-semibold ${stateData.liquidity.operating_dependency_ratio >= 0.7 ? "text-emerald-400" : stateData.liquidity.operating_dependency_ratio >= 0.5 ? "text-yellow-300" : "text-red-400"}`}>{pct(stateData.liquidity.operating_dependency_ratio)}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of total inflows from operating activities (customer receipts, vendor refunds, etc.), excluding transfers and financing.">Operating driven</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className="text-sm font-semibold text-white">{pct(stateData.liquidity.transfer_dependency_ratio)}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5" title="Share of total cash flow that is internal transfers between accounts (reallocation, not new cash).">Transfer dep.</div>
-                    </div>
-                    <div className="bg-white/5 rounded-lg px-2 py-2">
-                      <div className={`text-sm font-semibold ${stateData.liquidity.owner_support_ratio > 0.25 ? "text-amber-400" : "text-white"}`}>{pct(stateData.liquidity.owner_support_ratio)}</div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">Owner support</div>
-                    </div>
-                  </div>
-
-                  {stateData.liquidity.cash_by_account.length > 0 && (
-                    <div className="bg-white/5 rounded-lg p-3">
-                      <div className="text-[10px] uppercase text-gray-500 mb-2">Cash by account</div>
-                      <div className="space-y-1.5">
-                        {stateData.liquidity.cash_by_account.map((a, i) => (
-                          <div key={i} className="flex items-center justify-between text-xs">
-                            <div className="flex items-center gap-2 min-w-0 max-w-[55%]">
-                              <span className="text-gray-300 truncate">{a.account_name}</span>
-                              {a.account_type && <span className="text-[10px] text-gray-600 shrink-0">{a.account_type}</span>}
-                            </div>
-                            <div className="text-right font-mono">
-                              <span className={a.net_flow >= 0 ? "text-emerald-400" : "text-red-400"}>{a.net_flow >= 0 ? "+" : "-"}{money(Math.abs(a.net_flow))}</span>
-                              <span className="text-gray-600 ml-2">({a.movement_count})</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {stateData.liquidity.excluded_cash > 0 && (
-                    <div className="mt-3 text-[10px] text-gray-600">Excluded: {money(stateData.liquidity.excluded_cash)}</div>
-                  )}
-                </div>
-
-                {/* ─── Transitions ─── */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Transition signals</h3>
-                    <div className="text-[10px] text-gray-500">Computed {stateData.computed_at.slice(0, 19).replace("T", " ")}</div>
-                  </div>
-
-                  <div className="space-y-2">
-                    {stateData.transitions.length === 0 && (
-                      <div className="text-sm text-gray-500">No transition signals.</div>
-                    )}
-
-                    {stateData.transitions.map((s) => (
-                      <div key={s.signal} className="flex items-start justify-between gap-3 bg-white/5 rounded-lg px-3 py-2.5">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`inline-block text-[10px] font-semibold border rounded px-1.5 py-0.5 ${badge(s.severity)}`}>
-                              {s.severity.toUpperCase()}
-                            </span>
-                            <div className="text-sm font-medium text-white">{s.signal.replace(/_/g, " ")}</div>
-                            {s.triggered && <span className="text-[10px] text-red-300 font-semibold">TRIGGERED</span>}
-                          </div>
-                          <div className="text-xs text-gray-500 mt-1">{s.description}</div>
-                          <div className="flex items-center gap-3 mt-1.5">
-                            <span className={`text-[10px] font-semibold ${bandColor(s.current_band)}`}>{s.current_state}</span>
-                            {s.regime_change && s.previous_state && (
-                              <span className="text-[10px] text-gray-600">← was {s.previous_state}</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-right text-xs text-gray-400 font-mono whitespace-nowrap">
-                          {s.current_value}{s.previous_value !== null ? ` (prev ${s.previous_value})` : ""}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* ─── Refresh ─── */}
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    disabled={stateLoading}
-                    onClick={() => {
-                      setStateLoading(true)
-                      setStateError(null)
-                      fetch("/api/state")
-                        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-                        .then((data: BusinessState) => { setStateData(data); setStateLoading(false) })
-                        .catch((err) => { setStateError(err instanceof Error ? err.message : "Failed to load state"); setStateLoading(false) })
-                    }}
-                    className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                {/* View All Link */}
+                <div className="text-center">
+                  <a
+                    href="/entities"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 text-sm text-emerald-400 hover:text-emerald-300 transition-colors"
                   >
-                    <div className="text-sm font-medium text-white">{stateLoading ? "Loading…" : "Refresh state"}</div>
-                    <div className="text-xs text-gray-400">Recompute from latest tags</div>
-                  </button>
+                    View all {entityProfiles.length} entities →
+                  </a>
                 </div>
               </div>
             )}
