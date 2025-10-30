@@ -412,13 +412,15 @@ export function computeLiquidityState(
   const settlementLag = computeSettlementLag(movements)
 
   // Calculate derived cash position metrics
-  const periodDays = daysBetween(periodStart, periodEnd) || 30
-  const avgDailyOutflow = totalOut / Math.max(1, periodDays)
+  const periodDays = Math.max(1, daysBetween(periodStart, periodEnd))
+  const avgDailyOutflow = totalOut / periodDays
   const netCashFlow = totalIn - totalOut
   
-  // Burn rate: monthly outflow excluding owner draws and transfers (operating burn)
+  // Burn rate: monthly operating outflow (what it costs to run the business)
   // Use operating outflows as the "burn" since that's what sustains the business
-  const monthlyBurnRate = (opOut / Math.max(1, periodDays)) * 30
+  // Ensure we have at least 7 days of data for a meaningful monthly projection
+  const effectivePeriodDays = Math.max(7, periodDays)
+  const monthlyBurnRate = (opOut / effectivePeriodDays) * 30
   
   // For starting/ending cash, we derive from net flows
   // Since we don't have actual bank balances here, we use the largest account's net flow as a proxy
@@ -431,10 +433,11 @@ export function computeLiquidityState(
   const endingCash = cashByAccount.reduce((sum, a) => sum + Math.max(0, a.net_flow), 0)
   const startingCash = endingCash - netCashFlow
   
-  // Runway: how many days until cash runs out at current burn rate
-  // Only calculate if we have positive ending cash and positive burn
-  const runwayDays = avgDailyOutflow > 0 && endingCash > 0
-    ? Math.round(endingCash / avgDailyOutflow)
+  // Runway: how many days until cash runs out at current operating burn rate
+  // Use daily operating burn (not total outflows which includes one-time items)
+  const dailyOperatingBurn = opOut / effectivePeriodDays
+  const runwayDays = dailyOperatingBurn > 0 && endingCash > 0
+    ? Math.round(endingCash / dailyOperatingBurn)
     : null
 
   const bankAccountCount = cashByAccount.filter(a => a.account_id !== "__external_unknown__").length
