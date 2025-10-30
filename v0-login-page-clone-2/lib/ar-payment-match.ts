@@ -8,6 +8,7 @@ import type { OutstandingInvoice } from "./state/types"
 import type { EntityPaymentProfile } from "./entity-payment-profiles"
 import { getEntityPaymentRatio } from "./entity-payment-profiles"
 import { toEntityUriAr } from "./entity-uri"
+import { CLASSIFICATION_RECONCILIATION_MAX } from "./movement-types"
 
 const AMOUNT_TOLERANCE_PCT = 0.05
 const AR_DATE_TOLERANCE_DAYS = 45
@@ -118,8 +119,6 @@ function deterministicARMatch(
   return { confidence, gross, fee, net, method }
 }
 
-const DETERMINISTIC_THRESHOLD = 0.7
-
 /**
  * Find best AR match for an inflow payment.
  * Returns allocation candidate or null.
@@ -133,7 +132,8 @@ export function matchARPayment(
   let best: { cand: AllocationCandidate; conf: number } | null = null
   for (const inv of invoices) {
     const m = deterministicARMatch(payment, inv, entityProfiles)
-    if (m && m.confidence >= DETERMINISTIC_THRESHOLD) {
+    // 78% and below: route to reconciliation / LLM — only strictly above band auto-allocates
+    if (m && m.confidence > CLASSIFICATION_RECONCILIATION_MAX) {
       if (!best || m.confidence > best.conf) {
         best = {
           conf: m.confidence,

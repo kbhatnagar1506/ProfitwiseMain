@@ -786,6 +786,94 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_movement ON movement_allocations (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_entity ON movement_allocations (entity_type, entity_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_allocations_user ON movement_allocations (user_id)")
+  // Attribution core: canonical cash decomposition per movement (replaces allocations as SSOT for new writes)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS movement_attributions (
+      id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      movement_id           UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
+      component_type        TEXT NOT NULL CHECK (component_type IN ('ar', 'ap', 'fee', 'transfer', 'settlement', 'unknown')),
+      entity_id             TEXT NOT NULL,
+      reference_id          TEXT,
+      gross_amount          NUMERIC NOT NULL DEFAULT 0,
+      net_amount            NUMERIC NOT NULL,
+      confidence            REAL NOT NULL DEFAULT 0.5,
+      source                TEXT NOT NULL DEFAULT 'rule' CHECK (source IN ('rule', 'model', 'llm', 'user')),
+      metadata              JSONB NOT NULL DEFAULT '{}'::jsonb,
+      confidence_detail     JSONB,
+      migrated_from_allocation_id UUID,
+      created_at            TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("ALTER TABLE movement_attributions ADD COLUMN IF NOT EXISTS migrated_from_allocation_id UUID")
+  await p.query(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_migrated_alloc_unique ON movement_attributions (migrated_from_allocation_id) WHERE migrated_from_allocation_id IS NOT NULL",
+  )
+  await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_movement ON movement_attributions (movement_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user ON movement_attributions (user_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_component_entity ON movement_attributions (component_type, entity_id)")
+  // Cash events bridge (forecast / decisions)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS cash_events (
+      id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id             TEXT NOT NULL,
+      event_type            TEXT NOT NULL CHECK (event_type IN ('ar', 'ap', 'settlement')),
+      amount                NUMERIC NOT NULL,
+      probability           REAL NOT NULL DEFAULT 1,
+      expected_date         DATE NOT NULL,
+      source                TEXT NOT NULL CHECK (source IN ('invoice', 'inferred', 'model', 'attribution')),
+      movement_id           UUID REFERENCES movements(id) ON DELETE SET NULL,
+      attribution_id        UUID REFERENCES movement_attributions(id) ON DELETE SET NULL,
+      metadata              JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at            TIMESTAMPTZ DEFAULT NOW(),
+      updated_at            TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_cash_events_user_date ON cash_events (user_id, expected_date)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_cash_events_entity ON cash_events (user_id, entity_id)")
+  // Extend entity payment profiles (cash graph v1)
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS total_inflow NUMERIC NOT NULL DEFAULT 0")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS total_outflow NUMERIC NOT NULL DEFAULT 0")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS avg_payment_amount NUMERIC NOT NULL DEFAULT 0")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS reliability_score REAL NOT NULL DEFAULT 0.5")
+  // One-time backfill: allocations → attributions (idempotent)
+  try {
+    await p.query(`
+      INSERT INTO movement_attributions (
+        user_id, movement_id, component_type, entity_id, reference_id,
+        gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id
+      )
+      SELECT
+        ma.user_id,
+        ma.movement_id,
+        ma.entity_type,
+        ma.entity_id,
+        ma.source_id,
+        ma.gross_applied,
+        ma.net_applied,
+        ma.confidence,
+        CASE ma.match_method
+          WHEN 'llm_suggested' THEN 'llm'
+          WHEN 'manual' THEN 'user'
+          ELSE 'rule'
+        END,
+        jsonb_build_object(
+          'fee_amount', ma.fee_amount,
+          'match_method', ma.match_method,
+          'synthetic_invoice', ma.synthetic_invoice,
+          'reconcile_at', ma.reconcile_at
+        ),
+        NULL,
+        ma.id
+      FROM movement_allocations ma
+      WHERE NOT EXISTS (
+        SELECT 1 FROM movement_attributions x WHERE x.migrated_from_allocation_id = ma.id
+      )
+    `)
+  } catch (e) {
+    log("attributions.backfill.error", { err: String(e) }, "db")
+  }
   // Reconciliation cache for background processing
   await p.query(`
     CREATE TABLE IF NOT EXISTS reconciliation_cache (

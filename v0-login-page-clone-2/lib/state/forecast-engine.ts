@@ -3717,6 +3717,7 @@ export function computeCashflowForecast(
   identityCtx: IdentityContext = { entityNames: new Map(), entityTypes: new Map(), aliasToEntityId: new Map(), counterpartyByMovement: new Map(), familyMembers: new Map() },
   bills: OutstandingBill[] = [],
   forecastCtx: ForecastContext | null = null,
+  bridgeEvents30d: ForecastEvent[] | null = null,
 ): CashflowForecast {
   setIdentityContext(identityCtx)
   const dates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
@@ -3731,8 +3732,12 @@ export function computeCashflowForecast(
   // Entity-level behavioral models (enhanced with invoice + bill data)
   const behavioral_models = buildBehavioralModels(movements, invoices, bills)
 
-  // Event generation: discrete 30-day forecast
-  const events_30d = generateEvents30d(behavioral_models, components)
+  // Event generation: discrete 30-day forecast (+ optional cash_events bridge)
+  let events_30d = generateEvents30d(behavioral_models, components)
+  const mergeBridge = process.env.FORECAST_USE_CASH_EVENTS !== "0"
+  if (mergeBridge && bridgeEvents30d && bridgeEvents30d.length > 0) {
+    events_30d = [...events_30d, ...bridgeEvents30d]
+  }
 
   // Daily cashflow simulation: cash[t+1] = cash[t] + inflows[t] - outflows[t]
   const daily_simulation = simulateDaily(events_30d, startingCash)

@@ -126,9 +126,12 @@ export function isClassPnlEligible(mc: MovementClass): boolean {
 // ─── Phase 2: State Inclusion Policy ────────────────────────────────
 //
 // Confidence drives computation, not just display.
-//   >= 80% classification → fully trusted, include in all state calculations
-//   55–79% classification → included but marked provisional in sensitive metrics
+//   > 78% classification → fully trusted, include in all state calculations (reconciled band)
+//   55–78% classification → included but marked provisional in sensitive metrics (needs reconciliation)
 //   < 55%  classification → excluded from core metrics, routed to unresolved buckets
+
+/** Max classification score still in the “needs reconciliation” band; above this can be fully included. */
+export const CLASSIFICATION_RECONCILIATION_MAX = 0.78
 
 export type StateInclusionPolicy = "include" | "include_provisional" | "exclude_and_review"
 
@@ -143,7 +146,7 @@ export function computeStatePolicy(
 ): StateInclusionPolicy {
   if (economicClass === "unknown") return "exclude_and_review" // Never include unknowns until resolved
   if (needsReview || classificationConfidence < 0.55) return "exclude_and_review"
-  if (classificationConfidence >= 0.80 && evidenceStrength >= 0.15) return "include"
+  if (classificationConfidence > CLASSIFICATION_RECONCILIATION_MAX && evidenceStrength >= 0.15) return "include"
   return "include_provisional"
 }
 
