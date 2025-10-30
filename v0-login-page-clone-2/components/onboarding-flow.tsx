@@ -116,8 +116,8 @@ const steps = [
   },
   {
     id: 12,
-    title: "State objects",
-    description: "Revenue, Spend, and Liquidity states computed from frozen tags, plus transition detectors.",
+    title: "Entity profiles",
+    description: "AI-powered customer and vendor intelligence with payment behavior analysis and risk scoring.",
   },
   {
     id: 13,
@@ -320,6 +320,37 @@ export function OnboardingFlow({
   const [expandedObligationId, setExpandedObligationId] = useState<string | null>(null)
   const [stateLoading, setStateLoading] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
+  
+  // Entity profiles state (Step 12)
+  type EntitySummary = {
+    id: string
+    canonical_name: string
+    display_name: string | null
+    entity_type: "customer" | "vendor" | null
+    archetype: string | null
+    lifetime_value: number | null
+    outstanding_amount: number | null
+    overdue_amount: number | null
+    reliability_score: number
+    risk_score: number | null
+    transaction_count: number
+    last_transaction_date: string | null
+    ai_summary: string | null
+  }
+  type EntityProfilesSummary = {
+    total_entities: number
+    total_customers: number
+    total_vendors: number
+    total_ar_outstanding: number
+    total_ap_outstanding: number
+    total_lifetime_value: number
+    at_risk_count: number
+  }
+  const [entityProfiles, setEntityProfiles] = useState<EntitySummary[]>([])
+  const [entityProfilesSummary, setEntityProfilesSummary] = useState<EntityProfilesSummary | null>(null)
+  const [entityProfilesLoading, setEntityProfilesLoading] = useState(false)
+  const [entityProfilesError, setEntityProfilesError] = useState<string | null>(null)
+  
   type MappingReconRow = {
     movement_id: string
     amount: number
@@ -1041,32 +1072,26 @@ export function OnboardingFlow({
     }
   }, [])
 
-  // Step 12: State objects (computed from frozen tags)
+  // Step 12: Entity Profiles (AI-powered customer/vendor intelligence)
   useEffect(() => {
     if (currentStep !== 12) return
-    if (DISABLE_ADVANCED_STEPS_FROM_ONBOARDING) {
-      setStateLoading(false)
-      setStateError(null)
-      setStateData(null)
-      return
-    }
     let cancelled = false
 
-    setStateLoading(true)
-    setStateError(null)
-    setStateData(null)
+    setEntityProfilesLoading(true)
+    setEntityProfilesError(null)
 
-    fetch("/api/state")
+    fetch("/api/entities?sort=lifetime_value&min_transactions=1")
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then((data: BusinessState) => {
+      .then((data: { entities: EntitySummary[]; summary: EntityProfilesSummary }) => {
         if (cancelled) return
-        setStateData(data)
-        setStateLoading(false)
+        setEntityProfiles(data.entities || [])
+        setEntityProfilesSummary(data.summary || null)
+        setEntityProfilesLoading(false)
       })
       .catch((err) => {
         if (cancelled) return
-        setStateError(err instanceof Error ? err.message : "Failed to load state")
-        setStateLoading(false)
+        setEntityProfilesError(err instanceof Error ? err.message : "Failed to load entity profiles")
+        setEntityProfilesLoading(false)
       })
 
     return () => { cancelled = true }
