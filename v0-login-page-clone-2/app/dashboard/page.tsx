@@ -164,15 +164,9 @@ export default function DashboardPage() {
         <div className="flex gap-4">
           <Link
             href="/payments"
-            className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium"
+            className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 hover:bg-emerald-500/15 transition text-sm font-medium text-white"
           >
-            Payments View
-          </Link>
-          <Link
-            href="/reconciliation"
-            className="rounded-lg border border-white/20 bg-white/5 px-4 py-3 hover:bg-white/10 transition text-sm font-medium"
-          >
-            Reconciliation View
+            Open AR/AP dashboard
           </Link>
         </div>
       </div>
