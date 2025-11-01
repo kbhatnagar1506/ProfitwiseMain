@@ -19,6 +19,7 @@ build/
 # IDE
 .idea/
 .vscode/
+.cursor/
 
 # GCP keys (use env var instead)
 *-mainapp-*.json
