@@ -68,7 +68,7 @@ function createPoolWithUrl(): Pool | null {
     }
   }
   return new Pool({
-    connectionString: url,
+      connectionString: url,
     ssl: isLocal ? false : { rejectUnauthorized: false },
   })
 }
@@ -938,6 +938,21 @@ export async function ensureMovementsSchema(): Promise<void> {
   `)
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_user_classification_signatures_user ON user_classification_signatures (user_id)",
+  )
+  // Blacklist mistaken alias→entity links so identity resolution won't rematch them
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS entity_alias_blacklist (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id       UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      alias           TEXT NOT NULL,
+      reason          TEXT,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, entity_id, alias)
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_entity_alias_blacklist_user ON entity_alias_blacklist (user_id, entity_id)",
   )
   // Backfill allocation URIs (idempotent)
   try {
