@@ -6,7 +6,11 @@
 
 import { scrubMovementText } from "./text-cleaner"
 import { interceptProcessor } from "./processor-rules"
-import { tryResolveCanonicalAlias, type AliasRole } from "./entity-resolution"
+import {
+  tryResolveCanonicalAliasFromRows,
+  type AliasRole,
+  type UserClassificationSignatureRow,
+} from "./entity-resolution"
 import type { SelfContext, MovementIdentityEntry } from "./identity-seed"
 
 /** Minimal movement shape to avoid importing movement-classify (circular). */
@@ -70,7 +74,8 @@ function movementFromAliasRole(
 export function applyClassificationPrecedence(
   m: PrecedenceMovement,
   _identity: MovementIdentityEntry | null,
-  _selfCtx: SelfContext
+  _selfCtx: SelfContext,
+  signatureRows: UserClassificationSignatureRow[],
 ): PrecedenceResult | null {
   if (process.env.CLASSIFICATION_PRECEDENCE === "false") return null
 
@@ -110,8 +115,8 @@ export function applyClassificationPrecedence(
     }
   }
 
-  // 3) Canonical alias map (exact signatures on scrubbed text)
-  const alias = tryResolveCanonicalAlias(scrubbed)
+  // 3) Tenant canonical signatures (substring match on scrubbed text)
+  const alias = tryResolveCanonicalAliasFromRows(scrubbed, signatureRows)
   if (alias) {
     const mapped = movementFromAliasRole(alias.role, m.direction)
     if (mapped) {

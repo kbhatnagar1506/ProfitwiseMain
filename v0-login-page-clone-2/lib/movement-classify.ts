@@ -33,6 +33,7 @@ import {
 import { normalizeForMatch } from "./alias-normalize"
 import { enrichUnresolved } from "./unresolved-enrich"
 import { applyClassificationPrecedence } from "./classification-precedence"
+import { loadUserClassificationSignatures } from "./entity-resolution"
 import { searchEntityContextFromSupermemory } from "./supermemory"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
@@ -2204,6 +2205,8 @@ export async function classifyMovements(userId: string): Promise<{
     identityContextSize: identityCtx.size,
   }, "movements")
 
+  const classificationSignatureRows = await loadUserClassificationSignatures(userId)
+
   // Steps 5-7: Classify
   const classified: ClassifiedMovement[] = []
   const needsLlm: Array<{ idx: number; movement: CanonicalMovement; identity: MovementIdentityEntry | null }> = []
@@ -2213,7 +2216,7 @@ export async function classifyMovements(userId: string): Promise<{
     const sa = sourceAgreementScore(m.evidence)
 
     // Step 4b: Strict precedence (text scrub + processor + P2P + alias) — before legacy rules
-    const prec = applyClassificationPrecedence(m, identity, selfCtx)
+    const prec = applyClassificationPrecedence(m, identity, selfCtx, classificationSignatureRows)
     if (prec) {
       const validType = (ALL_MOVEMENT_TYPES as readonly string[]).includes(prec.movement_type)
         ? (prec.movement_type as MovementType)

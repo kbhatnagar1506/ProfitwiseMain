@@ -923,6 +923,22 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_entity_alias_suggestions_user_status ON entity_alias_suggestions (user_id, status, created_at DESC)",
   )
+  // Per-tenant classification precedence signatures (substring → role); replaces hardcoded CANONICAL_ALIAS_MAP
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS user_classification_signatures (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      signature       TEXT NOT NULL,
+      alias_role      TEXT NOT NULL CHECK (alias_role IN ('customer', 'owner', 'vendor', 'bank', 'processor')),
+      canonical_key   TEXT NOT NULL,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, signature)
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_user_classification_signatures_user ON user_classification_signatures (user_id)",
+  )
   // Backfill allocation URIs (idempotent)
   try {
     const { migrateAllocationUris } = await import("./allocation-migrate-uris")
