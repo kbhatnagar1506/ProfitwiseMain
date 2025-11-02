@@ -416,11 +416,16 @@ export function computeLiquidityState(
   const avgDailyOutflow = totalOut / periodDays
   const netCashFlow = totalIn - totalOut
   
-  // Burn rate: monthly operating outflow (what it costs to run the business)
-  // Use operating outflows as the "burn" since that's what sustains the business
-  // Ensure we have at least 7 days of data for a meaningful monthly projection
-  const effectivePeriodDays = Math.max(7, periodDays)
-  const monthlyBurnRate = (opOut / effectivePeriodDays) * 30
+  // Burn rate: use actual period data without aggressive monthly projection
+  // If period < 30 days, show the actual daily burn * 30 but cap at reasonable multiple
+  // This prevents misleading projections from short data windows
+  const dailyOperatingBurn = opOut / periodDays
+  
+  // For monthly burn rate: if we have >= 30 days of data, use actual monthly average
+  // Otherwise, use the daily rate but don't over-project from very short periods
+  const monthlyBurnRate = periodDays >= 30 
+    ? (opOut / periodDays) * 30  // Actual monthly average
+    : opOut  // Just show the period total if < 30 days (more honest)
   
   // For starting/ending cash, we derive from net flows
   // Since we don't have actual bank balances here, we use the largest account's net flow as a proxy
@@ -434,8 +439,6 @@ export function computeLiquidityState(
   const startingCash = endingCash - netCashFlow
   
   // Runway: how many days until cash runs out at current operating burn rate
-  // Use daily operating burn (not total outflows which includes one-time items)
-  const dailyOperatingBurn = opOut / effectivePeriodDays
   const runwayDays = dailyOperatingBurn > 0 && endingCash > 0
     ? Math.round(endingCash / dailyOperatingBurn)
     : null
@@ -476,6 +479,7 @@ export function computeLiquidityState(
     bank_account_count: bankAccountCount,
     largest_account_balance: r2(largestAccountBalance),
     transfer_count: transferCount,
+    period_days: periodDays,
   }
 }
 

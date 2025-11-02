@@ -124,6 +124,7 @@ export type LiquidityState = {
   bank_account_count: number
   largest_account_balance: number
   transfer_count: number
+  period_days: number
 }
 
 export type StateConfidence = {

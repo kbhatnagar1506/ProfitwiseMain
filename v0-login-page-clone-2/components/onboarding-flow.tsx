@@ -288,7 +288,7 @@ export function OnboardingFlow({
   type AccountCash = { account_id: string; account_name: string; account_type: string; net_flow: number; inflows: number; outflows: number; movement_count: number }
   type StateConfidence = { revenue_confidence: number; spend_confidence: number; liquidity_confidence: number }
   type SettlementLagSignal = { avg_settlement_lag_days: number; sample_count: number; confidence: string }
-  type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; period_net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; settlement_lag?: SettlementLagSignal; owner_inflows: number; owner_outflows: number; net_owner: number; cash_by_account: AccountCash[]; transfer_dependency_ratio: number; owner_support_ratio: number; operating_dependency_ratio: number; liquidity_regime: "strong" | "stable" | "tightening"; excluded_cash: number; starting_cash: number; ending_cash: number; avg_daily_outflow: number; burn_rate: number; runway_days: number | null; bank_account_count: number; largest_account_balance: number; transfer_count: number }
+  type LiquidityState = { period_start: string; period_end: string; total_inflows: number; total_outflows: number; period_net_cash_flow: number; operating_inflows: number; operating_outflows: number; net_operating: number; financing_inflows: number; financing_outflows: number; net_financing: number; settlement_inflows: number; settlement_outflows: number; net_settlement: number; settlement_lag?: SettlementLagSignal; owner_inflows: number; owner_outflows: number; net_owner: number; cash_by_account: AccountCash[]; transfer_dependency_ratio: number; owner_support_ratio: number; operating_dependency_ratio: number; liquidity_regime: "strong" | "stable" | "tightening"; excluded_cash: number; starting_cash: number; ending_cash: number; avg_daily_outflow: number; burn_rate: number; runway_days: number | null; bank_account_count: number; largest_account_balance: number; transfer_count: number; period_days: number }
   type Insight = { id: string; type: "revenue" | "spend" | "liquidity" | "risk"; severity: "low" | "medium" | "high"; message: string; metric: number }
   type RiskLevel = "low" | "medium" | "high"
   type RiskDimension = { level: RiskLevel; score: number; reason: string }
@@ -4387,7 +4387,9 @@ export function OnboardingFlow({
                     </div>
                     <div className="text-center">
                       <div className="text-2xl font-bold text-white">{money(stateData.liquidity.burn_rate)}</div>
-                      <div className="text-xs text-gray-500 mt-1">Burn Rate/mo</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {stateData.liquidity.period_days >= 30 ? "Burn Rate/mo" : `Spend (${stateData.liquidity.period_days}d)`}
+                      </div>
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-3 text-xs">
