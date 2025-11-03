@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { runShopifySyncForAllConnections } from "@/lib/shopify-sync"
 import { convertShopifyOrdersToMovements } from "@/lib/shopify-movements"
 import { listAllShopifyConnectionsWithToken } from "@/lib/shopify-token-store"
+import { autoResolveDuplicates } from "@/lib/cross-source-dedup"
 import { log } from "@/lib/logger"
 
 export const dynamic = "force-dynamic"
@@ -35,7 +36,19 @@ export async function GET(request: NextRequest) {
       }
     }
     
-    log("shopify.cron.complete", { total: result.total, shops: result.shops.length, movements: movementResults.length }, "shopify")
+    // Run deduplication for each user
+    const userIds = [...new Set(connections.map(c => c.userId))]
+    const dedupResults: Array<{ userId: string; resolved: number; candidates: number }> = []
+    for (const userId of userIds) {
+      try {
+        const dedupStats = await autoResolveDuplicates(userId)
+        dedupResults.push({ userId, ...dedupStats })
+      } catch (e) {
+        log("shopify.cron.dedup_error", { userId, error: String(e) }, "shopify")
+      }
+    }
+    
+    log("shopify.cron.complete", { total: result.total, shops: result.shops.length, movements: movementResults.length, dedup: dedupResults.length }, "shopify")
     
     return NextResponse.json({
       ok: true,
@@ -55,6 +68,11 @@ export async function GET(request: NextRequest) {
         created: m.stats.created,
         updated: m.stats.updated,
         errors: m.stats.errors,
+      })),
+      deduplication: dedupResults.map((d) => ({
+        userId: d.userId,
+        resolved: d.resolved,
+        candidates: d.candidates,
       })),
     })
   } catch (e) {
