@@ -193,6 +193,11 @@ export function OnboardingFlow({
   const [accountingStepLinkLoading, setAccountingStepLinkLoading] = useState(false)
   const [connectedIntegrations, setConnectedIntegrations] = useState<string[]>([])
   const [shopifyScopeWarning, setShopifyScopeWarning] = useState<string | null>(null)
+  const [shopifyModalOpen, setShopifyModalOpen] = useState(false)
+  const [shopifyShopDomain, setShopifyShopDomain] = useState("")
+  const [shopifyConnecting, setShopifyConnecting] = useState(false)
+  const [shopifyConnections, setShopifyConnections] = useState<{ shopDomain: string; status: string; missingScopes: string[] }[]>([])
+  const [shopifySyncLoading, setShopifySyncLoading] = useState(false)
   const [accountingSyncLoading, setAccountingSyncLoading] = useState(false)
   const [disconnectAccountingLoading, setDisconnectAccountingLoading] = useState(false)
   const [connectedContextIntegrations, setConnectedContextIntegrations] = useState<string[]>([])
@@ -640,17 +645,32 @@ export function OnboardingFlow({
       .catch(() => setConnectedIntegrations([]))
     fetch("/api/shopify/status")
       .then((res) => (res.ok ? res.json() : { connections: [] }))
-      .then((data: { connections?: { shopDomain?: string; missingScopes?: string[] }[] }) => {
-        const problematic = (data.connections ?? []).find((c) => (c.missingScopes ?? []).length > 0)
+      .then((data: { connected?: boolean; connections?: { shopDomain?: string; status?: string; missingScopes?: string[] }[] }) => {
+        const connections = (data.connections ?? []).map((c) => ({
+          shopDomain: c.shopDomain ?? "",
+          status: c.status ?? "unknown",
+          missingScopes: c.missingScopes ?? [],
+        }))
+        setShopifyConnections(connections)
+        
+        // Update connected integrations to include Shopify if connected
+        if (data.connected) {
+          setConnectedIntegrations((prev) => prev.includes("Shopify") ? prev : [...prev, "Shopify"])
+        }
+        
+        const problematic = connections.find((c) => c.missingScopes.length > 0)
         if (problematic) {
           setShopifyScopeWarning(
-            `Shopify connection for ${problematic.shopDomain ?? "your store"} is missing scopes: ${(problematic.missingScopes ?? []).join(", ")}`
+            `Shopify connection for ${problematic.shopDomain || "your store"} is missing scopes: ${problematic.missingScopes.join(", ")}`
           )
         } else {
           setShopifyScopeWarning(null)
         }
       })
-      .catch(() => setShopifyScopeWarning(null))
+      .catch(() => {
+        setShopifyScopeWarning(null)
+        setShopifyConnections([])
+      })
   }, [currentStep])
 
   useEffect(() => {
@@ -1644,6 +1664,7 @@ export function OnboardingFlow({
               {integrations.map((integration) => {
                 const usePlaid = PLAID_INTEGRATIONS.includes(integration.name)
                 const isStripe = integration.name === "Stripe"
+                const isShopify = integration.name === "Shopify"
                 const plaidDisabled = usePlaid && (accountingStepLinkLoading || !plaidReady)
                 const isConnected = connectedIntegrations.includes(integration.name)
                 return (
@@ -1655,6 +1676,8 @@ export function OnboardingFlow({
                         openPlaidLink()
                       } else if (isStripe) {
                         window.location.href = "/oauth/stripe"
+                      } else if (isShopify) {
+                        setShopifyModalOpen(true)
                       } else {
                         toggleIntegration(integration.name)
                       }
@@ -1701,6 +1724,171 @@ export function OnboardingFlow({
                 )
               })}
             </div>
+
+            {/* Shopify Connection Modal */}
+            {shopifyModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                <div className="bg-[#1a1a2e] border border-white/10 rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-white">Connect Shopify Store</h3>
+                    <button
+                      onClick={() => {
+                        setShopifyModalOpen(false)
+                        setShopifyShopDomain("")
+                      }}
+                      className="text-gray-400 hover:text-white transition-colors"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  
+                  <p className="text-sm text-gray-400 mb-4">
+                    Enter your Shopify store domain to connect. We'll sync your orders, customers, and products.
+                  </p>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1.5">Store Domain</label>
+                      <div className="flex items-center">
+                        <input
+                          type="text"
+                          value={shopifyShopDomain}
+                          onChange={(e) => setShopifyShopDomain(e.target.value)}
+                          placeholder="your-store"
+                          className="flex-1 bg-white/5 border border-white/10 rounded-l-lg px-3 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30"
+                        />
+                        <span className="bg-white/10 border border-l-0 border-white/10 rounded-r-lg px-3 py-2.5 text-gray-400 text-sm">
+                          .myshopify.com
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        Find this in your Shopify admin URL: https://<span className="text-emerald-400">your-store</span>.myshopify.com
+                      </p>
+                    </div>
+                    
+                    {/* Show existing connections */}
+                    {shopifyConnections.length > 0 && (
+                      <div className="border-t border-white/10 pt-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs text-gray-400">Connected stores:</p>
+                          <button
+                            onClick={async () => {
+                              setShopifySyncLoading(true)
+                              try {
+                                const res = await fetch("/api/shopify/sync", { method: "POST" })
+                                if (!res.ok) throw new Error("Sync failed")
+                                // Refresh status after sync
+                                const statusRes = await fetch("/api/shopify/status")
+                                if (statusRes.ok) {
+                                  const data = await statusRes.json()
+                                  const connections = (data.connections ?? []).map((c: { shopDomain?: string; status?: string; missingScopes?: string[] }) => ({
+                                    shopDomain: c.shopDomain ?? "",
+                                    status: c.status ?? "unknown",
+                                    missingScopes: c.missingScopes ?? [],
+                                  }))
+                                  setShopifyConnections(connections)
+                                }
+                              } catch {
+                                // ignore
+                              } finally {
+                                setShopifySyncLoading(false)
+                              }
+                            }}
+                            disabled={shopifySyncLoading}
+                            className="text-xs text-emerald-400 hover:text-emerald-300 disabled:text-gray-500 transition-colors flex items-center gap-1"
+                          >
+                            {shopifySyncLoading ? (
+                              <>
+                                <div className="h-3 w-3 rounded-full border border-emerald-400/30 border-t-emerald-400 animate-spin" />
+                                Syncing...
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Sync Now
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <div className="space-y-2">
+                          {shopifyConnections.map((conn) => (
+                            <div key={conn.shopDomain} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
+                              <span className="text-sm text-white">{conn.shopDomain}</span>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${conn.status === "connected" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
+                                  {conn.status === "connected" ? "Connected" : "Needs Reauth"}
+                                </span>
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm(`Disconnect ${conn.shopDomain}? This will remove all synced data.`)) return
+                                    try {
+                                      const res = await fetch("/api/shopify/disconnect", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ shop: conn.shopDomain }),
+                                      })
+                                      if (res.ok) {
+                                        setShopifyConnections((prev) => prev.filter((c) => c.shopDomain !== conn.shopDomain))
+                                        setConnectedIntegrations((prev) => {
+                                          const remaining = shopifyConnections.filter((c) => c.shopDomain !== conn.shopDomain)
+                                          if (remaining.length === 0) return prev.filter((i) => i !== "Shopify")
+                                          return prev
+                                        })
+                                      }
+                                    } catch {
+                                      // ignore
+                                    }
+                                  }}
+                                  className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                                >
+                                  Disconnect
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div className="flex gap-3 pt-2">
+                      <button
+                        onClick={() => {
+                          setShopifyModalOpen(false)
+                          setShopifyShopDomain("")
+                        }}
+                        className="flex-1 px-4 py-2.5 border border-white/20 rounded-lg text-gray-300 hover:bg-white/5 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          const domain = shopifyShopDomain.trim().toLowerCase()
+                          if (!domain) return
+                          const fullDomain = domain.includes(".myshopify.com") ? domain : `${domain}.myshopify.com`
+                          setShopifyConnecting(true)
+                          window.location.href = `/api/shopify/oauth/authorize?shop=${encodeURIComponent(fullDomain)}`
+                        }}
+                        disabled={!shopifyShopDomain.trim() || shopifyConnecting}
+                        className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed rounded-lg text-white font-medium transition-colors flex items-center justify-center gap-2"
+                      >
+                        {shopifyConnecting ? (
+                          <>
+                            <div className="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                            Connecting...
+                          </>
+                        ) : (
+                          "Connect Store"
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )
 

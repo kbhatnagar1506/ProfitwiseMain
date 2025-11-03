@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { normalizeShopDomain } from "@/lib/shopify"
 import { runShopifySyncForUser } from "@/lib/shopify-sync"
+import { convertAllShopifyOrdersToMovements, convertShopifyOrdersToMovements } from "@/lib/shopify-movements"
 import { log } from "@/lib/logger"
 
 export async function POST(request: NextRequest) {
@@ -20,11 +21,25 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // First sync from Shopify API
     const result = await runShopifySyncForUser(user.id, shopDomain ? { shopDomain } : undefined)
     if (!result.ok) {
       return NextResponse.json({ error: "No Shopify connections found" }, { status: 400 })
     }
-    return NextResponse.json({ ok: true, ...result })
+
+    // Then convert orders to movements
+    let movementStats
+    if (shopDomain) {
+      movementStats = await convertShopifyOrdersToMovements(user.id, shopDomain)
+    } else {
+      movementStats = await convertAllShopifyOrdersToMovements(user.id)
+    }
+
+    return NextResponse.json({ 
+      ok: true, 
+      ...result,
+      movements: movementStats,
+    })
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     log("shopify.sync.route.failed", { userId: user.id, error: message }, "shopify")
