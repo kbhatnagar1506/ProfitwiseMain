@@ -30,6 +30,8 @@ export async function POST(req: Request) {
   let runWaterfall = false
   let waterfallDryRun = false
   let waterfallMinAiReviewAmount: number | undefined
+  let runStage4Suggestions = false
+  let stage4BatchSize: number | undefined
   try {
     const body = await req.json().catch(() => ({}))
     if (typeof body.arApOnly === "boolean") arApOnly = body.arApOnly
@@ -40,6 +42,8 @@ export async function POST(req: Request) {
     if (typeof body.waterfallMinAiReviewAmount === "number" && body.waterfallMinAiReviewAmount >= 0) {
       waterfallMinAiReviewAmount = body.waterfallMinAiReviewAmount
     }
+    if (typeof body.runStage4Suggestions === "boolean") runStage4Suggestions = body.runStage4Suggestions
+    if (typeof body.stage4BatchSize === "number" && body.stage4BatchSize > 0) stage4BatchSize = Math.floor(body.stage4BatchSize)
   } catch {
     const { searchParams } = new URL(req.url)
     arApOnly = searchParams.get("arApOnly") !== "false"
@@ -50,6 +54,12 @@ export async function POST(req: Request) {
     if (minAiRaw != null) {
       const parsed = parseFloat(minAiRaw)
       if (!Number.isNaN(parsed) && parsed >= 0) waterfallMinAiReviewAmount = parsed
+    }
+    runStage4Suggestions = searchParams.get("runStage4Suggestions") === "true"
+    const stage4BatchRaw = searchParams.get("stage4BatchSize")
+    if (stage4BatchRaw != null) {
+      const parsed = parseFloat(stage4BatchRaw)
+      if (!Number.isNaN(parsed) && parsed > 0) stage4BatchSize = Math.floor(parsed)
     }
   }
 
@@ -71,6 +81,8 @@ export async function POST(req: Request) {
       runWaterfall,
       waterfallDryRun,
       ...(waterfallMinAiReviewAmount != null ? { waterfallMinAiReviewAmount } : {}),
+      runStage4Suggestions,
+      ...(stage4BatchSize != null ? { stage4BatchSize } : {}),
     })
 
     return NextResponse.json({
@@ -81,6 +93,7 @@ export async function POST(req: Request) {
       ar_suggestions: result.attribution.arSuggestions.length,
       ap_suggestions: result.attribution.apSuggestions.length,
       waterfall: result.waterfall,
+      stage4: result.stage4,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
