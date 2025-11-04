@@ -915,15 +915,33 @@ export function OnboardingFlow({
         runWaterfall: true,
         waterfallDryRun: false,
         waterfallMinAiReviewAmount: 1000,
-        // Keep the blocking brain run under Heroku's 30s timeout.
-        // Stage 4 suggestions are loaded from review queue after the core run.
-        runStage4Suggestions: false,
+        runStage4Suggestions: true,
+        stage4BatchSize: 60,
+        runInBackground: true,
       }),
     })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Brain run failed"))))
-      .then((brainData: BrainRunResult) => {
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Brain run start failed"))))
+      .then(async () => {
+        let attempts = 0
+        const maxAttempts = 60 // ~3 minutes @ 3s interval
+        while (!cancelled && attempts < maxAttempts) {
+          attempts++
+          await new Promise((resolve) => setTimeout(resolve, 3000))
+          const pollRes = await fetch("/api/brain?arApOnly=true&merchantOnly=false")
+          const pollData = await pollRes.json().catch(() => ({}))
+          if (!pollRes.ok) throw new Error("Brain poll failed")
+          if (pollData?.status === "ready" && pollData?.data) {
+            setBrainRunResult(pollData.data as BrainRunResult)
+            return
+          }
+          if (pollData?.status === "error") {
+            throw new Error(typeof pollData?.error === "string" ? pollData.error : "Brain background run failed")
+          }
+        }
+        if (!cancelled) throw new Error("Brain run timed out")
+      })
+      .then(() => {
         if (cancelled) return Promise.reject(new Error("Cancelled"))
-        setBrainRunResult(brainData)
         return fetch("/api/ar-ap-step").then((res) => (res.ok ? res.json() : Promise.reject(new Error("AR/AP step failed"))))
       })
       .then(async (data: { ar: ARState; ap: APState; recon?: MappingReconData }) => {
