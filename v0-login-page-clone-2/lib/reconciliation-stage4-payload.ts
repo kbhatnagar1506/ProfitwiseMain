@@ -149,7 +149,7 @@ export async function fetchStage4GhostGaps(userId: string): Promise<Map<string, 
        ce.amount::text AS amount,
        COALESCE(ce.outstanding_amount, ce.amount)::text AS outstanding_amount,
        ce.expected_date::text AS expected_date,
-       GREATEST(0, DATE_PART('day', NOW()::date - ce.expected_date::date))::text AS age_days,
+       GREATEST(0, (NOW()::date - ce.expected_date::date))::text AS age_days,
        ce.metadata
      FROM cash_events ce
      WHERE ce.user_id = $1
