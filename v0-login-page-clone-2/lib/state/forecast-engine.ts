@@ -3736,6 +3736,8 @@ export function computeCashflowForecast(
   let events_30d = generateEvents30d(behavioral_models, components)
   const mergeBridge = process.env.FORECAST_USE_CASH_EVENTS !== "0"
   if (mergeBridge && bridgeEvents30d && bridgeEvents30d.length > 0) {
+    // cash_events is the AP/AR source of truth; drop native AP/AR emissions to avoid double counting.
+    events_30d = events_30d.filter((e) => e.type !== "customer_payment" && e.type !== "vendor_payment")
     events_30d = [...events_30d, ...bridgeEvents30d]
   }
 
