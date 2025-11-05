@@ -296,6 +296,10 @@ export function OnboardingFlow({
     total_unmatched_inflows: number
     total_unmatched_outflows: number
     total_fees_paid: number
+    matched_movement_count?: number
+    ar_linked_movement_count?: number
+    ap_linked_movement_count?: number
+    fee_row_count?: number
     matched_inflows?: MappingReconRow[]
     matched_outflows?: MappingReconRow[]
     unmatched_inflows?: MappingReconRow[]
@@ -3153,12 +3157,10 @@ export function OnboardingFlow({
           { paid_count: 0, partial_count: 0, open_count: 0, collected_total: 0, remaining_total: 0 },
         )
         const apObligations = arApData?.ap.obligations ?? []
-        const allReconRows = mappingRecon
+        const matchedReconRows = mappingRecon
           ? [
               ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "inflow" as const })),
               ...(mappingRecon.matched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({ ...m, direction: "outflow" as const })),
-              ...(mappingRecon.unmatched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "inflow" as const, allocations: [] })),
-              ...(mappingRecon.unmatched_outflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null }) => ({ ...m, direction: "outflow" as const, allocations: [] })),
             ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
           : []
 
@@ -3184,7 +3186,7 @@ export function OnboardingFlow({
                 <div className="mx-auto mt-3 max-w-3xl rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-left">
                   <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Auto reconciliation saved</div>
                   <div className="mt-1 text-xs text-gray-300">
-                    Allocations: {brainRunResult.allocation_count} · Cash events synced: {brainRunResult.cash_events_synced ? "yes" : "no"} ·
+                    Matched movements: {mappingRecon?.matched_movement_count ?? 0} · AR-linked: {mappingRecon?.ar_linked_movement_count ?? 0} · AP-linked: {mappingRecon?.ap_linked_movement_count ?? 0} ·
                     Waterfall unresolved: {brainRunResult.waterfall?.unresolved_count ?? 0} (${(brainRunResult.waterfall?.unresolved_amount ?? 0).toLocaleString()})
                   </div>
                 </div>
@@ -3455,10 +3457,13 @@ export function OnboardingFlow({
                 </>
                 )}
 
-                {/* ─── Tagged bank transactions (reconciliation) ─── */}
-                {mappingRecon && allReconRows.length > 0 && (
+                {/* ─── Reconciled bank transactions ─── */}
+                {mappingRecon && matchedReconRows.length > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
-                    <h3 className="text-base font-semibold text-white px-4 py-3 border-b border-white/10">Tagged bank transactions</h3>
+                    <h3 className="text-base font-semibold text-white px-4 py-3 border-b border-white/10">
+                      Reconciled bank transactions
+                      <span className="ml-2 text-xs font-normal text-gray-400">({matchedReconRows.length})</span>
+                    </h3>
                     <div className="max-h-[min(70vh,900px)] overflow-y-auto">
                       <Table>
                         <TableHeader>
@@ -3471,10 +3476,15 @@ export function OnboardingFlow({
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {allReconRows.map((r) => {
-                            const totalFee = (r.allocations ?? []).reduce((s: number, a: { fee: number }) => s + a.fee, 0)
-                            const totalGross = (r.allocations ?? []).reduce((s: number, a: { gross: number }) => s + a.gross, 0)
-                            const totalNet = (r.allocations ?? []).reduce((s: number, a: { net: number }) => s + a.net, 0)
+                          {matchedReconRows.map((r) => {
+                            const allocs = r.allocations ?? []
+                            const nonFeeAllocs = allocs.filter((a: { entity_type?: string }) => a.entity_type !== "fee")
+                            const feeRows = allocs.filter((a: { entity_type?: string }) => a.entity_type === "fee")
+                            const feeFromRows = feeRows.reduce((s: number, a: { net: number }) => s + Math.abs(a.net), 0)
+                            const feeFromPrimary = nonFeeAllocs.reduce((s: number, a: { fee: number }) => s + Math.abs(a.fee), 0)
+                            const totalFee = feeFromRows > 0 ? feeFromRows : feeFromPrimary
+                            const totalGross = nonFeeAllocs.reduce((s: number, a: { gross: number }) => s + Math.abs(a.gross), 0)
+                            const totalNet = nonFeeAllocs.reduce((s: number, a: { net: number }) => s + Math.abs(a.net), 0)
                             const linked = (r.allocations ?? []).length > 0
                               ? (r.allocations ?? []).map((a: { entity_type: string; entity_id: string }) => `${a.entity_type.toUpperCase()}: ${a.entity_id.slice(0, 12)}...`).join(", ")
                               : "—"
