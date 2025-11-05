@@ -1372,22 +1372,6 @@ export function OnboardingFlow({
   }
 
   const renderStepContent = () => {
-    if ([14, 15].includes(currentStep)) {
-      const s = steps[currentStep - 1]
-      return (
-        <div className="space-y-6">
-          <div className="text-center">
-            <h2 className="text-2xl font-semibold text-white mb-1">{s.title}</h2>
-            <p className="text-gray-400 text-lg mb-5">{s.description}</p>
-            <div className="bg-white/5 border border-white/10 rounded-xl p-8 max-w-2xl mx-auto">
-              <p className="text-sm text-gray-300">
-                Cashflow forecast and decisions are coming soon.
-              </p>
-            </div>
-          </div>
-        </div>
-      )
-    }
     switch (currentStep) {
       case 1:
         return (
