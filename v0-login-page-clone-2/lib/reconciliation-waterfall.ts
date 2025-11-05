@@ -59,6 +59,32 @@ function normalizeEntityName(name: string | null | undefined): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "").trim()
 }
 
+function tokenizeName(name: string | null | undefined): string[] {
+  if (!name) return []
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 3 && !["inc", "llc", "ltd", "corp", "co", "the"].includes(s))
+}
+
+function fuzzyEntityNameMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normalizeEntityName(a)
+  const nb = normalizeEntityName(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  if (na.includes(nb) || nb.includes(na)) return true
+
+  const ta = tokenizeName(a)
+  const tb = tokenizeName(b)
+  if (ta.length === 0 || tb.length === 0) return false
+  const setB = new Set(tb)
+  const overlap = ta.filter((t) => setB.has(t)).length
+  const ratio = overlap / Math.min(ta.length, tb.length)
+  return ratio >= 0.67
+}
+
 function statusFromOutstanding(outstanding: number, amount: number): "open" | "partially_paid" | "paid" {
   if (outstanding <= 0.01) return "paid"
   if (outstanding < amount) return "partially_paid"
@@ -150,14 +176,17 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
     if (remainingCash <= 0.01) continue
     const isInflow = movement.direction === "inflow"
     const targetType: "ar" | "ap" = isInflow ? "ar" : "ap"
-    const movementNameNorm = normalizeEntityName(movement.counterparty)
+    const movementCounterparty = movement.counterparty ?? ""
+    const movementDescription = movement.raw_description ?? ""
     const movementEntityId = movement.counterparty_entity_id
 
     const entityEvents = openEvents
       .filter((e) => e.event_type === targetType && e.outstanding_num > 0.01)
       .filter((e) => {
         const idMatch = Boolean(movementEntityId && movementEntityId === e.entity_id)
-        const nameMatch = movementNameNorm.length > 0 && movementNameNorm === normalizeEntityName(e.canonical_name)
+        const nameMatch =
+          fuzzyEntityNameMatch(movementCounterparty, e.canonical_name) ||
+          fuzzyEntityNameMatch(movementDescription, e.canonical_name)
         return idMatch || nameMatch
       })
       .sort((a, b) => a.expected_date.localeCompare(b.expected_date))
