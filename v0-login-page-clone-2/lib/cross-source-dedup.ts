@@ -59,6 +59,7 @@ export async function findCrossSourceDuplicates(userId: string): Promise<Duplica
   const shopifyMovements = rows.filter(m => m.provenance === "shopify" && m.direction === "inflow")
   const qboMovements = rows.filter(m => m.provenance === "qbo" && m.direction === "inflow")
   const stripeMovements = rows.filter(m => m.provenance === "stripe" && m.direction === "inflow")
+  const xeroMovements = rows.filter(m => m.provenance === "xero" && m.direction === "inflow")
   const plaidMovements = rows.filter(m => m.provenance === "plaid")
   
   // Shopify vs QBO: Same sale recorded in both systems
@@ -90,6 +91,96 @@ export async function findCrossSourceDuplicates(userId: string): Promise<Duplica
       }
     }
   }
+
+  // Stripe vs Shopify: Same sale from payment processor and e-commerce
+  for (const stripe of stripeMovements) {
+    for (const shopify of shopifyMovements) {
+      const match = matchMovements(stripe, shopify)
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: shopify.id,
+          targetMovementId: stripe.id,
+          confidence: match.confidence,
+          reason: `Stripe charge matches Shopify order: ${match.reason}`,
+        })
+      }
+    }
+  }
+
+  // Stripe vs Bank: Payment processor deposit to bank
+  for (const stripe of stripeMovements) {
+    for (const bank of plaidMovements.filter(m => m.direction === "inflow")) {
+      const match = matchMovements(stripe, bank, { dateTolerance: 5 })
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: stripe.id,
+          targetMovementId: bank.id,
+          confidence: match.confidence,
+          reason: `Stripe charge matches bank deposit: ${match.reason}`,
+        })
+      }
+    }
+  }
+
+  // Xero vs QBO: Two accounting systems recording the same transaction
+  for (const xero of xeroMovements) {
+    for (const qbo of qboMovements) {
+      const match = matchMovements(xero, qbo)
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: xero.id,
+          targetMovementId: qbo.id,
+          confidence: match.confidence,
+          reason: `Xero invoice matches QBO invoice: ${match.reason}`,
+        })
+      }
+    }
+  }
+
+  // Xero vs Bank: Accounting entry matches bank deposit
+  for (const xero of xeroMovements) {
+    for (const bank of plaidMovements.filter(m => m.direction === "inflow")) {
+      const match = matchMovements(xero, bank, { dateTolerance: 5 })
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: xero.id,
+          targetMovementId: bank.id,
+          confidence: match.confidence,
+          reason: `Xero invoice matches bank deposit: ${match.reason}`,
+        })
+      }
+    }
+  }
+
+  // Xero vs Shopify: Accounting entry matches e-commerce order
+  for (const xero of xeroMovements) {
+    for (const shopify of shopifyMovements) {
+      const match = matchMovements(xero, shopify)
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: shopify.id,
+          targetMovementId: xero.id,
+          confidence: match.confidence,
+          reason: `Xero invoice matches Shopify order: ${match.reason}`,
+        })
+      }
+    }
+  }
+
+  // Xero vs Stripe
+  for (const xero of xeroMovements) {
+    for (const stripe of stripeMovements) {
+      const match = matchMovements(xero, stripe)
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: stripe.id,
+          targetMovementId: xero.id,
+          confidence: match.confidence,
+          reason: `Xero invoice matches Stripe charge: ${match.reason}`,
+        })
+      }
+    }
+  }
   
   // Shopify vs Bank: Order payment deposited to bank
   for (const shopify of shopifyMovements) {
@@ -105,6 +196,53 @@ export async function findCrossSourceDuplicates(userId: string): Promise<Duplica
       }
     }
   }
+
+  // Also check outflow duplicates: QBO bills vs Xero bills, QBO vs Bank outflows
+  const qboOutflows = rows.filter(m => m.provenance === "qbo" && m.direction === "outflow")
+  const xeroOutflows = rows.filter(m => m.provenance === "xero" && m.direction === "outflow")
+  const bankOutflows = plaidMovements.filter(m => m.direction === "outflow")
+
+  for (const xero of xeroOutflows) {
+    for (const qbo of qboOutflows) {
+      const match = matchMovements(xero, qbo)
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: xero.id,
+          targetMovementId: qbo.id,
+          confidence: match.confidence,
+          reason: `Xero bill matches QBO bill: ${match.reason}`,
+        })
+      }
+    }
+  }
+
+  for (const qbo of qboOutflows) {
+    for (const bank of bankOutflows) {
+      const match = matchMovements(qbo, bank, { dateTolerance: 5 })
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: qbo.id,
+          targetMovementId: bank.id,
+          confidence: match.confidence,
+          reason: `QBO bill matches bank payment: ${match.reason}`,
+        })
+      }
+    }
+  }
+
+  for (const xero of xeroOutflows) {
+    for (const bank of bankOutflows) {
+      const match = matchMovements(xero, bank, { dateTolerance: 5 })
+      if (match.isMatch) {
+        candidates.push({
+          sourceMovementId: xero.id,
+          targetMovementId: bank.id,
+          confidence: match.confidence,
+          reason: `Xero bill matches bank payment: ${match.reason}`,
+        })
+      }
+    }
+  }
   
   return candidates
 }
@@ -115,11 +253,13 @@ function matchMovements(
   options: { dateTolerance?: number; amountTolerance?: number } = {}
 ): { isMatch: boolean; confidence: number; reason: string } {
   const dateTolerance = options.dateTolerance ?? 3 // days
-  const amountTolerance = options.amountTolerance ?? 0.01 // dollars
+  const amountTolerance = options.amountTolerance ?? 0.05 // 5% relative tolerance
   
-  // Amount must match (within tolerance)
+  // Amount must match (within percentage tolerance for processing fees)
   const amountDiff = Math.abs(a.amount - b.amount)
-  if (amountDiff > amountTolerance) {
+  const maxAmount = Math.max(a.amount, b.amount)
+  const relativeDiff = maxAmount > 0 ? amountDiff / maxAmount : 0
+  if (relativeDiff > amountTolerance && amountDiff > 1.0) {
     return { isMatch: false, confidence: 0, reason: "Amount mismatch" }
   }
   
@@ -136,6 +276,8 @@ function matchMovements(
   
   // Exact amount match
   if (amountDiff < 0.01) confidence += 0.2
+  else if (relativeDiff < 0.01) confidence += 0.15
+  else if (relativeDiff < 0.03) confidence += 0.1
   
   // Same day
   if (daysDiff < 1) confidence += 0.15
@@ -284,10 +426,10 @@ export async function autoResolveDuplicates(userId: string): Promise<{
   for (const candidate of candidates) {
     if (candidate.confidence < 0.85) continue // Only auto-resolve high-confidence matches
     
-    // Get provenance for both movements
+    // Get provenance for both movements (scoped to user)
     const { rows } = await query<{ id: string; provenance: string }>(
-      `SELECT id, provenance FROM movements WHERE id IN ($1, $2)`,
-      [candidate.sourceMovementId, candidate.targetMovementId]
+      `SELECT id, provenance FROM movements WHERE id IN ($1, $2) AND user_id = $3`,
+      [candidate.sourceMovementId, candidate.targetMovementId, userId]
     )
     
     const sourceRow = rows.find(r => r.id === candidate.sourceMovementId)

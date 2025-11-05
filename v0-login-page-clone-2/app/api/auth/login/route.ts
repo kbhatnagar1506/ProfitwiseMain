@@ -27,7 +27,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Email and password required" }, { status: 400 })
   }
 
-  if (process.env.RECAPTCHA_SECRET_KEY && recaptchaToken) {
+  if (process.env.RECAPTCHA_SECRET_KEY) {
+    if (!recaptchaToken) {
+      log("auth.login.rejected", { reason: "recaptcha_missing" }, "auth")
+      return NextResponse.json({ error: "Verification required. Please try again." }, { status: 400 })
+    }
     const recaptcha = await verifyRecaptcha(recaptchaToken, "login")
     if (!recaptcha.success) {
       log("auth.login.rejected", { reason: "recaptcha_failed" }, "auth")

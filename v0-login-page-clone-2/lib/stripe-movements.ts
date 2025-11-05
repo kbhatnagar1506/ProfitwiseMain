@@ -121,11 +121,6 @@ export async function convertStripeToMovements(userId: string, stripeAccountId: 
 
       const movementId = `stripe_invoice_${stripeAccountId}_${invoiceId}`
 
-      const { rowCount: existingCount } = await query(
-        `SELECT 1 FROM movements WHERE id = $1 AND user_id = $2`,
-        [movementId, userId]
-      )
-
       const metadata = {
         source: "stripe",
         stripe_account_id: stripeAccountId,
@@ -142,52 +137,32 @@ export async function convertStripeToMovements(userId: string, stripeAccountId: 
         })),
       }
 
-      if (existingCount && existingCount > 0) {
-        await query(
-          `UPDATE movements SET
-            amount = $1,
-            date = $2,
-            counterparty = $3,
-            raw_description = $4,
-            metadata = $5,
-            currency = $6,
-            updated_at = NOW()
-          WHERE id = $7 AND user_id = $8`,
-          [
-            amount,
-            invoiceDate,
-            customerName,
-            `Stripe Invoice ${invoice.number || invoiceId} - ${customerName}`,
-            JSON.stringify(metadata),
-            currency,
-            movementId,
-            userId,
-          ]
-        )
-        stats.updated++
-      } else {
-        await query(
-          `INSERT INTO movements (
-            id, user_id, direction, amount, date, movement_type, provenance,
-            counterparty, raw_description, metadata, currency, confidence, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [
-            movementId,
-            userId,
-            "inflow",
-            amount,
-            invoiceDate,
-            "stripe_invoice",
-            "stripe",
-            customerName,
-            `Stripe Invoice ${invoice.number || invoiceId} - ${customerName}`,
-            JSON.stringify(metadata),
-            currency,
-            0.9,
-          ]
-        )
-        stats.created++
-      }
+      await query(
+        `INSERT INTO movements (
+          id, user_id, direction, amount, date, movement_type, provenance,
+          counterparty, raw_description, metadata, currency, confidence, created_at
+        ) VALUES ($1, $2, 'inflow', $3, $4, 'stripe_invoice', 'stripe', $5, $6, $7, $8, 0.9, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          date = EXCLUDED.date,
+          counterparty = EXCLUDED.counterparty,
+          raw_description = EXCLUDED.raw_description,
+          metadata = EXCLUDED.metadata,
+          currency = EXCLUDED.currency,
+          updated_at = NOW()
+        WHERE movements.user_id = $2`,
+        [
+          movementId,
+          userId,
+          amount,
+          invoiceDate,
+          customerName,
+          `Stripe Invoice ${invoice.number || invoiceId} - ${customerName}`,
+          JSON.stringify(metadata),
+          currency,
+        ]
+      )
+      stats.created++
     } catch (e) {
       stats.errors++
       log("stripe.movements.invoice_error", { userId, stripeAccountId, invoiceId, error: String(e) }, "stripe")
@@ -195,6 +170,17 @@ export async function convertStripeToMovements(userId: string, stripeAccountId: 
   }
 
   // Process payment intents (direct charges - inflows)
+  // Skip payment intents that back an invoice to avoid double-counting.
+  // An invoice's payment_intent is already captured via the invoice movement above.
+  const invoicePaymentIntentIds = new Set<string>()
+  for (const row of invoiceRows) {
+    const inv = row.data
+    if (inv.paid || inv.status === "paid") {
+      const piId = (inv as Record<string, unknown>).payment_intent
+      if (typeof piId === "string" && piId) invoicePaymentIntentIds.add(piId)
+    }
+  }
+
   const { rows: paymentRows } = await query<{ entity_id: string; data: StripePaymentIntent }>(
     `SELECT entity_id, data FROM stripe_entities 
      WHERE user_id = $1 AND stripe_account_id = $2 AND entity_type = 'payment_intent'`,
@@ -207,8 +193,8 @@ export async function convertStripeToMovements(userId: string, stripeAccountId: 
     const paymentId = payment.id
 
     try {
-      // Only process succeeded payments
       if (payment.status !== "succeeded") continue
+      if (invoicePaymentIntentIds.has(paymentId)) continue
 
       const amount = parseAmount(payment.amount_received || payment.amount)
       if (amount <= 0) continue
@@ -220,11 +206,6 @@ export async function convertStripeToMovements(userId: string, stripeAccountId: 
 
       const movementId = `stripe_payment_${stripeAccountId}_${paymentId}`
 
-      const { rowCount: existingCount } = await query(
-        `SELECT 1 FROM movements WHERE id = $1 AND user_id = $2`,
-        [movementId, userId]
-      )
-
       const metadata = {
         source: "stripe",
         stripe_account_id: stripeAccountId,
@@ -234,147 +215,42 @@ export async function convertStripeToMovements(userId: string, stripeAccountId: 
         status: payment.status,
       }
 
-      if (existingCount && existingCount > 0) {
-        await query(
-          `UPDATE movements SET
-            amount = $1,
-            date = $2,
-            counterparty = $3,
-            raw_description = $4,
-            metadata = $5,
-            currency = $6,
-            updated_at = NOW()
-          WHERE id = $7 AND user_id = $8`,
-          [
-            amount,
-            paymentDate,
-            customerName,
-            payment.description || `Stripe Payment - ${customerName}`,
-            JSON.stringify(metadata),
-            currency,
-            movementId,
-            userId,
-          ]
-        )
-        stats.updated++
-      } else {
-        await query(
-          `INSERT INTO movements (
-            id, user_id, direction, amount, date, movement_type, provenance,
-            counterparty, raw_description, metadata, currency, confidence, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [
-            movementId,
-            userId,
-            "inflow",
-            amount,
-            paymentDate,
-            "stripe_payment",
-            "stripe",
-            customerName,
-            payment.description || `Stripe Payment - ${customerName}`,
-            JSON.stringify(metadata),
-            currency,
-            0.9,
-          ]
-        )
-        stats.created++
-      }
+      await query(
+        `INSERT INTO movements (
+          id, user_id, direction, amount, date, movement_type, provenance,
+          counterparty, raw_description, metadata, currency, confidence, created_at
+        ) VALUES ($1, $2, 'inflow', $3, $4, 'stripe_payment', 'stripe', $5, $6, $7, $8, 0.9, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          date = EXCLUDED.date,
+          counterparty = EXCLUDED.counterparty,
+          raw_description = EXCLUDED.raw_description,
+          metadata = EXCLUDED.metadata,
+          currency = EXCLUDED.currency,
+          updated_at = NOW()
+        WHERE movements.user_id = $2`,
+        [
+          movementId,
+          userId,
+          amount,
+          paymentDate,
+          customerName,
+          payment.description || `Stripe Payment - ${customerName}`,
+          JSON.stringify(metadata),
+          currency,
+        ]
+      )
+      stats.created++
     } catch (e) {
       stats.errors++
       log("stripe.movements.payment_error", { userId, stripeAccountId, paymentId, error: String(e) }, "stripe")
     }
   }
 
-  // Process payouts (bank transfers - outflows from Stripe to bank)
-  const { rows: payoutRows } = await query<{ entity_id: string; data: StripePayout }>(
-    `SELECT entity_id, data FROM stripe_entities 
-     WHERE user_id = $1 AND stripe_account_id = $2 AND entity_type = 'payout'`,
-    [userId, stripeAccountId]
-  )
-
-  for (const row of payoutRows) {
-    stats.processed++
-    const payout = row.data
-    const payoutId = payout.id
-
-    try {
-      // Only process paid/in_transit payouts
-      if (!["paid", "in_transit"].includes(payout.status || "")) continue
-
-      const amount = parseAmount(payout.amount)
-      if (amount <= 0) continue
-
-      const payoutDate = timestampToDate(payout.arrival_date || payout.created)
-      const currency = (payout.currency || "usd").toUpperCase()
-
-      const movementId = `stripe_payout_${stripeAccountId}_${payoutId}`
-
-      const { rowCount: existingCount } = await query(
-        `SELECT 1 FROM movements WHERE id = $1 AND user_id = $2`,
-        [movementId, userId]
-      )
-
-      const metadata = {
-        source: "stripe",
-        stripe_account_id: stripeAccountId,
-        payout_id: payoutId,
-        destination: payout.destination,
-        status: payout.status,
-        fee: parseAmount(payout.fee),
-      }
-
-      if (existingCount && existingCount > 0) {
-        await query(
-          `UPDATE movements SET
-            amount = $1,
-            date = $2,
-            counterparty = $3,
-            raw_description = $4,
-            metadata = $5,
-            currency = $6,
-            updated_at = NOW()
-          WHERE id = $7 AND user_id = $8`,
-          [
-            amount,
-            payoutDate,
-            "Stripe Payout",
-            payout.description || `Stripe Payout to Bank`,
-            JSON.stringify(metadata),
-            currency,
-            movementId,
-            userId,
-          ]
-        )
-        stats.updated++
-      } else {
-        await query(
-          `INSERT INTO movements (
-            id, user_id, direction, amount, date, movement_type, provenance,
-            counterparty, raw_description, metadata, currency, confidence, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [
-            movementId,
-            userId,
-            "inflow", // Payout is inflow to bank account
-            amount,
-            payoutDate,
-            "stripe_payout",
-            "stripe",
-            "Stripe Payout",
-            payout.description || `Stripe Payout to Bank`,
-            JSON.stringify(metadata),
-            currency,
-            0.85, // Slightly lower confidence as it may match bank deposit
-          ]
-        )
-        stats.created++
-      }
-    } catch (e) {
-      stats.errors++
-      log("stripe.movements.payout_error", { userId, stripeAccountId, payoutId, error: String(e) }, "stripe")
-    }
-  }
+  // Payouts are internal transfers (Stripe balance -> bank), not new revenue.
+  // They will appear as bank deposits via Plaid. Recording them here as movements
+  // would double-count the cash. Instead, we skip payout conversion entirely.
+  // The bank-side deposit (from Plaid) is the canonical movement for this cash.
 
   log("stripe.movements.converted", { userId, stripeAccountId, ...stats }, "stripe")
   return stats

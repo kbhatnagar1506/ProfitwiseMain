@@ -40,8 +40,10 @@ type XeroPayment = {
     InvoiceID?: string
     InvoiceNumber?: string
     Contact?: { Name?: string }
+    CurrencyCode?: string
   }
   Amount?: number
+  CurrencyCode?: string
   CurrencyRate?: number
   Date?: string
   Reference?: string
@@ -111,6 +113,9 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
 
   const stats = { processed: 0, created: 0, updated: 0, errors: 0 }
 
+  // Track which invoice IDs we convert to avoid double-counting with payments
+  const convertedInvoiceIds = new Set<string>()
+
   // Process invoices (both sales invoices and bills)
   const { rows: invoiceRows } = await query<{ entity_id: string; data: XeroInvoice }>(
     `SELECT entity_id, data FROM xero_entities 
@@ -124,9 +129,9 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
     const invoiceId = invoice.InvoiceID
 
     try {
-      // Only process paid or partially paid invoices
+      // Only process fully paid invoices (AUTHORISED may have partial/zero payment)
       const status = invoice.Status?.toUpperCase()
-      if (!["PAID", "AUTHORISED"].includes(status || "")) continue
+      if (status !== "PAID") continue
 
       const amountPaid = parseAmount(invoice.AmountPaid)
       if (amountPaid <= 0) continue
@@ -137,11 +142,6 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
       const currency = (invoice.CurrencyCode || "USD").toUpperCase()
 
       const movementId = `xero_invoice_${tenantId}_${invoiceId}`
-
-      const { rowCount: existingCount } = await query(
-        `SELECT 1 FROM movements WHERE id = $1 AND user_id = $2`,
-        [movementId, userId]
-      )
 
       const metadata = {
         source: "xero",
@@ -168,54 +168,36 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
         ? `Xero Invoice ${invoice.InvoiceNumber || invoiceId} - ${counterpartyName}`
         : `Xero Bill ${invoice.InvoiceNumber || invoiceId} - ${counterpartyName}`
 
-      if (existingCount && existingCount > 0) {
-        await query(
-          `UPDATE movements SET
-            amount = $1,
-            date = $2,
-            counterparty = $3,
-            raw_description = $4,
-            metadata = $5,
-            currency = $6,
-            direction = $7,
-            updated_at = NOW()
-          WHERE id = $8 AND user_id = $9`,
-          [
-            amountPaid,
-            invoiceDate,
-            counterpartyName,
-            description,
-            JSON.stringify(metadata),
-            currency,
-            direction,
-            movementId,
-            userId,
-          ]
-        )
-        stats.updated++
-      } else {
-        await query(
-          `INSERT INTO movements (
-            id, user_id, direction, amount, date, movement_type, provenance,
-            counterparty, raw_description, metadata, currency, confidence, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [
-            movementId,
-            userId,
-            direction,
-            amountPaid,
-            invoiceDate,
-            movementType,
-            "xero",
-            counterpartyName,
-            description,
-            JSON.stringify(metadata),
-            currency,
-            0.9,
-          ]
-        )
-        stats.created++
-      }
+      await query(
+        `INSERT INTO movements (
+          id, user_id, direction, amount, date, movement_type, provenance,
+          counterparty, raw_description, metadata, currency, confidence, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'xero', $7, $8, $9, $10, 0.9, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          date = EXCLUDED.date,
+          counterparty = EXCLUDED.counterparty,
+          raw_description = EXCLUDED.raw_description,
+          metadata = EXCLUDED.metadata,
+          currency = EXCLUDED.currency,
+          direction = EXCLUDED.direction,
+          updated_at = NOW()
+        WHERE movements.user_id = $2`,
+        [
+          movementId,
+          userId,
+          direction,
+          amountPaid,
+          invoiceDate,
+          movementType,
+          counterpartyName,
+          description,
+          JSON.stringify(metadata),
+          currency,
+        ]
+      )
+      stats.created++
+      convertedInvoiceIds.add(invoiceId)
     } catch (e) {
       stats.errors++
       log("xero.movements.invoice_error", { userId, tenantId, invoiceId, error: String(e) }, "xero")
@@ -237,6 +219,10 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
     try {
       if (payment.Status?.toUpperCase() === "DELETED") continue
 
+      // Skip payments for invoices already converted — prevents double-counting
+      const linkedInvoiceId = payment.Invoice?.InvoiceID
+      if (linkedInvoiceId && convertedInvoiceIds.has(linkedInvoiceId)) continue
+
       const amount = parseAmount(payment.Amount)
       if (amount <= 0) continue
 
@@ -244,11 +230,6 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
       const paymentDate = parseXeroDate(payment.Date)
 
       const movementId = `xero_payment_${tenantId}_${paymentId}`
-
-      const { rowCount: existingCount } = await query(
-        `SELECT 1 FROM movements WHERE id = $1 AND user_id = $2`,
-        [movementId, userId]
-      )
 
       const metadata = {
         source: "xero",
@@ -267,53 +248,36 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
       const isReceive = payment.PaymentType?.toUpperCase().includes("RECEIVE") ||
                         payment.PaymentType?.toUpperCase().includes("ACCRECPAYMENT")
       const direction = isReceive ? "inflow" : "outflow"
+      const paymentCurrency = (payment.CurrencyCode || payment.Invoice?.CurrencyCode || "USD").toUpperCase()
 
-      if (existingCount && existingCount > 0) {
-        await query(
-          `UPDATE movements SET
-            amount = $1,
-            date = $2,
-            counterparty = $3,
-            raw_description = $4,
-            metadata = $5,
-            direction = $6,
-            updated_at = NOW()
-          WHERE id = $7 AND user_id = $8`,
-          [
-            amount,
-            paymentDate,
-            counterpartyName,
-            `Xero Payment - ${counterpartyName}`,
-            JSON.stringify(metadata),
-            direction,
-            movementId,
-            userId,
-          ]
-        )
-        stats.updated++
-      } else {
-        await query(
-          `INSERT INTO movements (
-            id, user_id, direction, amount, date, movement_type, provenance,
-            counterparty, raw_description, metadata, currency, confidence, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [
-            movementId,
-            userId,
-            direction,
-            amount,
-            paymentDate,
-            "xero_payment",
-            "xero",
-            counterpartyName,
-            `Xero Payment - ${counterpartyName}`,
-            JSON.stringify(metadata),
-            "USD",
-            0.85,
-          ]
-        )
-        stats.created++
-      }
+      await query(
+        `INSERT INTO movements (
+          id, user_id, direction, amount, date, movement_type, provenance,
+          counterparty, raw_description, metadata, currency, confidence, created_at
+        ) VALUES ($1, $2, $3, $4, $5, 'xero_payment', 'xero', $6, $7, $8, $9, 0.85, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          date = EXCLUDED.date,
+          counterparty = EXCLUDED.counterparty,
+          raw_description = EXCLUDED.raw_description,
+          metadata = EXCLUDED.metadata,
+          direction = EXCLUDED.direction,
+          currency = EXCLUDED.currency,
+          updated_at = NOW()
+        WHERE movements.user_id = $2`,
+        [
+          movementId,
+          userId,
+          direction,
+          amount,
+          paymentDate,
+          counterpartyName,
+          `Xero Payment - ${counterpartyName}`,
+          JSON.stringify(metadata),
+          paymentCurrency,
+        ]
+      )
+      stats.created++
     } catch (e) {
       stats.errors++
       log("xero.movements.payment_error", { userId, tenantId, paymentId, error: String(e) }, "xero")
@@ -344,11 +308,6 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
 
       const movementId = `xero_banktxn_${tenantId}_${txnId}`
 
-      const { rowCount: existingCount } = await query(
-        `SELECT 1 FROM movements WHERE id = $1 AND user_id = $2`,
-        [movementId, userId]
-      )
-
       const metadata = {
         source: "xero",
         tenant_id: tenantId,
@@ -367,59 +326,40 @@ export async function convertXeroToMovements(userId: string, tenantId: string): 
         })),
       }
 
-      // Determine direction based on transaction type
+      // Xero types: RECEIVE, RECEIVE-OVERPAYMENT, RECEIVE-PREPAYMENT = inflow
+      //             SPEND, SPEND-OVERPAYMENT, SPEND-PREPAYMENT = outflow
       const type = txn.Type?.toUpperCase() || ""
-      const isInflow = type.includes("RECEIVE") || type.includes("SPEND") === false
+      const isInflow = type.includes("RECEIVE")
       const direction = isInflow ? "inflow" : "outflow"
 
-      if (existingCount && existingCount > 0) {
-        await query(
-          `UPDATE movements SET
-            amount = $1,
-            date = $2,
-            counterparty = $3,
-            raw_description = $4,
-            metadata = $5,
-            currency = $6,
-            direction = $7,
-            updated_at = NOW()
-          WHERE id = $8 AND user_id = $9`,
-          [
-            amount,
-            txnDate,
-            counterpartyName,
-            `Xero ${txn.Type || "Transaction"} - ${counterpartyName}`,
-            JSON.stringify(metadata),
-            currency,
-            direction,
-            movementId,
-            userId,
-          ]
-        )
-        stats.updated++
-      } else {
-        await query(
-          `INSERT INTO movements (
-            id, user_id, direction, amount, date, movement_type, provenance,
-            counterparty, raw_description, metadata, currency, confidence, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [
-            movementId,
-            userId,
-            direction,
-            amount,
-            txnDate,
-            "xero_bank_transaction",
-            "xero",
-            counterpartyName,
-            `Xero ${txn.Type || "Transaction"} - ${counterpartyName}`,
-            JSON.stringify(metadata),
-            currency,
-            0.85,
-          ]
-        )
-        stats.created++
-      }
+      await query(
+        `INSERT INTO movements (
+          id, user_id, direction, amount, date, movement_type, provenance,
+          counterparty, raw_description, metadata, currency, confidence, created_at
+        ) VALUES ($1, $2, $3, $4, $5, 'xero_bank_transaction', 'xero', $6, $7, $8, $9, 0.85, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          date = EXCLUDED.date,
+          counterparty = EXCLUDED.counterparty,
+          raw_description = EXCLUDED.raw_description,
+          metadata = EXCLUDED.metadata,
+          currency = EXCLUDED.currency,
+          direction = EXCLUDED.direction,
+          updated_at = NOW()
+        WHERE movements.user_id = $2`,
+        [
+          movementId,
+          userId,
+          direction,
+          amount,
+          txnDate,
+          counterpartyName,
+          `Xero ${txn.Type || "Transaction"} - ${counterpartyName}`,
+          JSON.stringify(metadata),
+          currency,
+        ]
+      )
+      stats.created++
     } catch (e) {
       stats.errors++
       log("xero.movements.banktxn_error", { userId, tenantId, txnId, error: String(e) }, "xero")

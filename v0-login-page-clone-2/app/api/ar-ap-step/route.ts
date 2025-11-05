@@ -356,6 +356,43 @@ export async function GET(request: Request) {
 
   // reconciliationStatus already fetched above and we know is_running is false here
 
+  const lifetimeArTotal = enrichedInvoices.reduce((s, i) => s + i.amount, 0)
+  const lifetimeArReconciled = enrichedInvoices
+    .filter(i => i.reconciliation_status === "matched" || i.reconciliation_status === "partial")
+    .reduce((s, i) => s + i.amount, 0)
+  const lifetimeArPaid = paidInvoices.reduce((s, i) => s + i.amount, 0)
+
+  const lifetimeApTotal = enrichedBills.reduce((s, b) => s + b.amount, 0)
+  const lifetimeApReconciled = enrichedBills
+    .filter(b => b.reconciliation_status === "matched" || b.reconciliation_status === "partial")
+    .reduce((s, b) => s + b.amount, 0)
+  const lifetimeApPaid = paidBills.reduce((s, b) => s + b.amount, 0)
+
+  const lifetime = {
+    ar: {
+      total: r2(lifetimeArTotal),
+      reconciled: r2(lifetimeArReconciled),
+      reconciled_pct: lifetimeArTotal > 0 ? r2((lifetimeArReconciled / lifetimeArTotal) * 100) : 0,
+      paid: r2(lifetimeArPaid),
+      paid_pct: lifetimeArTotal > 0 ? r2((lifetimeArPaid / lifetimeArTotal) * 100) : 0,
+      outstanding: r2(lifetimeArTotal - lifetimeArPaid),
+      invoice_count: enrichedInvoices.length,
+      paid_count: paidInvoices.length,
+      open_count: openInvoices.length,
+    },
+    ap: {
+      total: r2(lifetimeApTotal),
+      reconciled: r2(lifetimeApReconciled),
+      reconciled_pct: lifetimeApTotal > 0 ? r2((lifetimeApReconciled / lifetimeApTotal) * 100) : 0,
+      paid: r2(lifetimeApPaid),
+      paid_pct: lifetimeApTotal > 0 ? r2((lifetimeApPaid / lifetimeApTotal) * 100) : 0,
+      outstanding: r2(lifetimeApTotal - lifetimeApPaid),
+      bill_count: enrichedBills.length,
+      paid_count: paidBills.length,
+      open_count: openBills.length,
+    },
+  }
+
   return NextResponse.json({
     ar: {
       ...ar,
@@ -365,6 +402,7 @@ export async function GET(request: Request) {
     },
     ap,
     recon,
+    lifetime,
     excluded_categories: excludedCategories,
     transfer_pairs: transferPairs,
     waterfall_review,

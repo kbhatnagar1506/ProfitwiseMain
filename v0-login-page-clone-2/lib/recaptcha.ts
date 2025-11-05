@@ -31,7 +31,8 @@ export async function verifyRecaptcha(
       score?: number
       action?: string
     }
-    const ok = data.success === true && (data.score ?? 0) >= MIN_SCORE
+    const actionValid = !action || data.action === action
+    const ok = data.success === true && (data.score ?? 0) >= MIN_SCORE && actionValid
     return { success: ok, score: data.score }
   } catch {
     return { success: false }

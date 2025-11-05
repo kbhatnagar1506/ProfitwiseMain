@@ -34,6 +34,6 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     log("cron.graph-maintainer.failed", { error: message }, "movements")
-    return NextResponse.json({ error: "Graph maintainer failed", detail: message }, { status: 500 })
+    return NextResponse.json({ error: "Graph maintainer failed" }, { status: 500 })
   }
 }
