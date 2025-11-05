@@ -14,10 +14,6 @@ type ReconTotals = {
   total_unmatched_inflows: number
   total_unmatched_outflows: number
   total_fees_paid: number
-  matched_movement_count: number
-  ar_linked_movement_count: number
-  ap_linked_movement_count: number
-  fee_row_count: number
   matched_inflows: ReconRow[]
   matched_outflows: ReconRow[]
   unmatched_inflows: ReconRow[]
@@ -89,10 +85,6 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     total_unmatched_inflows: 0,
     total_unmatched_outflows: 0,
     total_fees_paid: 0,
-    matched_movement_count: 0,
-    ar_linked_movement_count: 0,
-    ap_linked_movement_count: 0,
-    fee_row_count: 0,
   }
 
   const { rows: matchedRows } = await query<{
@@ -135,10 +127,6 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
 
   const matched = await fetchMatchedMovementRows(userId)
   const unmatched = await fetchUnmatchedMovementRows(userId)
-  totals.matched_movement_count = matched.length
-  totals.ar_linked_movement_count = matched.filter((m) => m.allocations.some((a) => a.entity_type === "ar")).length
-  totals.ap_linked_movement_count = matched.filter((m) => m.allocations.some((a) => a.entity_type === "ap")).length
-  totals.fee_row_count = matched.reduce((acc, m) => acc + m.allocations.filter((a) => a.entity_type === "fee").length, 0)
 
   return {
     ...totals,
