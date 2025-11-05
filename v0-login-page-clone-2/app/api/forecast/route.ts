@@ -285,8 +285,8 @@ export async function GET() {
     // Fetch all required data in parallel
     const [
       taggedMovements,
-      invoicesResult,
-      billsResult,
+      invoices,
+      bills,
       identityCtx,
       startingCashResult,
     ] = await Promise.all([
@@ -296,9 +296,6 @@ export async function GET() {
       buildIdentityContext(user.id),
       getStartingCash(user.id),
     ])
-
-    const invoices: OutstandingInvoice[] = invoicesResult.invoices
-    const bills: OutstandingBill[] = billsResult.bills
 
     // Sync cash events bridge (AR/AP to forecast events)
     const apObligations = bills.map((b) => ({
