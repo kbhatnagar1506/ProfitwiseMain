@@ -138,7 +138,8 @@ const SCORE_WEIGHTS = {
   behavioral: 0.1,
 } as const
 
-const AUTO_RECONCILE_MIN = 0.8
+const AUTO_RECONCILE_MIN = 0.6
+const ENTITY_CONFLICT_PENALTY = 0.2
 
 function scoreCandidate(
   movement: MovementResidualRow & { available_cash_num: number },
@@ -207,7 +208,7 @@ function scoreCandidate(
 
   // Penalties
   let penalties = 0
-  if (movementEntityId && movementEntityId !== event.entity_id) penalties += 0.5
+  if (movementEntityId && movementEntityId !== event.entity_id) penalties += ENTITY_CONFLICT_PENALTY
 
   const raw =
     SCORE_WEIGHTS.identity * identity +
@@ -339,8 +340,10 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
       .filter((c) => c.score >= AUTO_RECONCILE_MIN)
       .sort((a, b) => b.score - a.score || a.event.expected_date.localeCompare(b.event.expected_date))
 
+    const topScore = scoredCandidates[0]?.score ?? 0
     const topTwoMargin = scoredCandidates.length >= 2 ? scoredCandidates[0].score - scoredCandidates[1].score : 1
-    if (topTwoMargin < 0.08) {
+    // Only block ambiguous low-confidence picks; don't suppress clear high-confidence candidates.
+    if (topScore < 0.8 && topTwoMargin < 0.05) {
       candidateNoneCount++
       unresolvedCount++
       unresolvedAmount += remainingCash
