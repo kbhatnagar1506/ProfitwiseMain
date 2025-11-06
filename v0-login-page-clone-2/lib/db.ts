@@ -833,12 +833,6 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_movement ON movement_attributions (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user ON movement_attributions (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_component_entity ON movement_attributions (component_type, entity_id)")
-  // Stage-4 accept idempotency: prevent duplicate LLM reconciliation packet inserts.
-  await p.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_stage4_accept_unique
-     ON movement_attributions (user_id, movement_id, reference_id, component_type)
-     WHERE source = 'llm' AND metadata->>'match_method' = 'review_queue_accept'`,
-  )
   // Cash events bridge (forecast / decisions)
   await p.query(`
     CREATE TABLE IF NOT EXISTS cash_events (
