@@ -206,13 +206,13 @@ export async function fetchStage4VelocityStats(userId: string): Promise<Map<stri
        SELECT
          entity_id,
          event_type,
-         CASE WHEN expected_date IS NOT NULL THEN (paid_date - expected_date)::float ELSE NULL END AS delay_days
+         CASE WHEN expected_date IS NOT NULL THEN DATE_PART('day', paid_date - expected_date)::float ELSE NULL END AS delay_days
        FROM obs
      )
      SELECT
        entity_id,
        event_type,
-       '0'::text AS expected_days,
+       COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 0), 0)::text AS expected_days,
        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY delay_days)::text AS actual_median_days,
        COUNT(*)::text AS sample_size
      FROM usable
