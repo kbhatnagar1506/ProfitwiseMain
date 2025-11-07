@@ -379,7 +379,100 @@ function sigmoidDecay(overdueRatio: number): number {
   return 1 / (1 + Math.exp(2.5 * (overdueRatio - 2)))
 }
 
-function getCohortPrior(archetype: string): { prob: number; interval: number } {
+// Cohort statistics computed from actual payment data
+type CohortStats = {
+  avg_prob_7d: number
+  avg_prob_14d: number
+  avg_prob_30d: number
+  avg_interval: number
+  sample_count: number
+}
+
+// Global cohort stats - will be populated from actual data
+let globalCohortStats: CohortStats | null = null
+
+function computeCohortStats(customerModels: CustomerModel[]): CohortStats {
+  // Compute cohort-level statistics from customers with actual payment history
+  const withHistory = customerModels.filter(c => c.payment_count >= 3)
+  
+  if (withHistory.length === 0) {
+    // No customers with history - use uninformative prior
+    return {
+      avg_prob_7d: 0.3,
+      avg_prob_14d: 0.5,
+      avg_prob_30d: 0.7,
+      avg_interval: 30,
+      sample_count: 0,
+    }
+  }
+  
+  // Compute average probability from customers with history
+  // Probability = 1 / (1 + days_since_last / avg_interval) weighted by payment count
+  let totalWeight = 0
+  let weightedProb7 = 0
+  let weightedProb14 = 0
+  let weightedProb30 = 0
+  let weightedInterval = 0
+  
+  for (const c of withHistory) {
+    const weight = Math.log(1 + c.payment_count) // Log-weighted by payment count
+    totalWeight += weight
+    
+    // Derive probabilities from interval distribution
+    const interval = c.payment_interval_days || 30
+    const variance = c.interval_variance || interval * 0.3
+    
+    // Probability of payment within N days given interval and variance
+    // Using cumulative normal approximation
+    const prob7 = normalCdf(7, interval, variance)
+    const prob14 = normalCdf(14, interval, variance)
+    const prob30 = normalCdf(30, interval, variance)
+    
+    weightedProb7 += prob7 * weight
+    weightedProb14 += prob14 * weight
+    weightedProb30 += prob30 * weight
+    weightedInterval += interval * weight
+  }
+  
+  return {
+    avg_prob_7d: r2(weightedProb7 / totalWeight),
+    avg_prob_14d: r2(weightedProb14 / totalWeight),
+    avg_prob_30d: r2(weightedProb30 / totalWeight),
+    avg_interval: r2(weightedInterval / totalWeight),
+    sample_count: withHistory.length,
+  }
+}
+
+// Cumulative normal distribution approximation
+function normalCdf(x: number, mean: number, std: number): number {
+  if (std <= 0) return x >= mean ? 1 : 0
+  const z = (x - mean) / std
+  // Approximation of standard normal CDF
+  const t = 1 / (1 + 0.2316419 * Math.abs(z))
+  const d = 0.3989423 * Math.exp(-z * z / 2)
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
+  return z > 0 ? 1 - p : p
+}
+
+function getCohortPrior(archetype: string, cohortStats: CohortStats | null): { prob: number; interval: number } {
+  // If we have cohort data, use it as the base and adjust by archetype
+  if (cohortStats && cohortStats.sample_count > 0) {
+    const archetypeMultipliers: Record<string, { probMult: number; intervalMult: number }> = {
+      clockwork: { probMult: 1.3, intervalMult: 0.8 },
+      bursty: { probMult: 0.9, intervalMult: 1.2 },
+      episodic: { probMult: 0.6, intervalMult: 1.5 },
+      slow_reliable: { probMult: 1.1, intervalMult: 1.3 },
+      volatile: { probMult: 0.7, intervalMult: 1.4 },
+      low_data: { probMult: 1.0, intervalMult: 1.0 }, // Use cohort average directly
+    }
+    const mult = archetypeMultipliers[archetype] ?? { probMult: 1.0, intervalMult: 1.0 }
+    return {
+      prob: Math.min(0.95, cohortStats.avg_prob_30d * mult.probMult),
+      interval: cohortStats.avg_interval * mult.intervalMult,
+    }
+  }
+  
+  // Fallback to uninformative priors if no cohort data
   const defaults: Record<string, { prob: number; interval: number }> = {
     clockwork: { prob: 0.6, interval: 30 },
     bursty: { prob: 0.4, interval: 45 },
@@ -485,89 +578,63 @@ function buildInvoiceForecasts(
   features: CustomerFeatures,
   archetype: CustomerArchetype,
   now: string,
+  portfolioPriors?: PortfolioPriors,
 ): InvoiceForecast[] {
   const forecasts: InvoiceForecast[] = []
   const dso = features.avg_days_to_pay
+  const priors = portfolioPriors ?? defaultPortfolioPriors()
 
   for (const inv of customerInvoices) {
     const daysOverdue = inv.days_overdue ?? 0
     const daysUntilDue = inv.days_until_due ?? 0
 
-    let p7 = 0, p14 = 0, p30 = 0
-    let expectedDate: string
-    let reasoning: string
-
-    if (archetype === "clockwork") {
-      const expectedDelay = dso > 0 ? dso : 5
-      if (daysOverdue > 0) {
-        // Overdue clockwork: high probability of payment in window, but not near-certain
-        p7 = Math.min(0.75, 0.4 + daysOverdue * 0.04)
-        p14 = Math.min(0.85, p7 + 0.12)
-        p30 = Math.min(0.90, p14 + 0.08)
-        expectedDate = addDays(now, Math.max(2, Math.round(expectedDelay - daysOverdue)))
-        reasoning = `Clockwork payer, ${daysOverdue}d overdue — expect payment soon (DSO ${r2(dso)}d)`
-      } else {
-        const daysToExpected = daysUntilDue + expectedDelay
-        p7 = daysToExpected <= 7 ? 0.65 : daysToExpected <= 10 ? 0.35 : 0.08
-        p14 = daysToExpected <= 14 ? 0.75 : daysToExpected <= 20 ? 0.45 : 0.15
-        p30 = daysToExpected <= 30 ? 0.82 : 0.35
-        expectedDate = inv.due_date ? addDays(inv.due_date, Math.round(expectedDelay)) : addDays(now, daysToExpected)
-        reasoning = `Clockwork payer, due in ${daysUntilDue}d — expected ${Math.round(expectedDelay)}d after due (DSO ${r2(dso)}d)`
-      }
-    } else if (archetype === "slow_reliable") {
-      const expectedDelay = Math.max(dso, 15)
-      if (daysOverdue > 0) {
-        p7 = 0.2 + Math.min(0.3, daysOverdue * 0.02)
-        p14 = Math.min(0.65, p7 + 0.2)
-        p30 = Math.min(0.78, p14 + 0.15)
-        expectedDate = addDays(now, Math.max(3, Math.round(expectedDelay - daysOverdue)))
-        reasoning = `Slow but reliable payer, ${daysOverdue}d overdue — historical DSO ${r2(dso)}d`
-      } else {
-        p7 = 0.04
-        p14 = daysUntilDue <= 5 ? 0.18 : 0.08
-        p30 = daysUntilDue <= 15 ? 0.4 : 0.22
-        expectedDate = inv.due_date ? addDays(inv.due_date, Math.round(expectedDelay)) : addDays(now, 30)
-        reasoning = `Slow but reliable — typically pays ${Math.round(expectedDelay)}d after due`
-      }
-    } else if (archetype === "bursty" || archetype === "volatile") {
-      const spread = archetype === "volatile" ? 0.7 : 0.5
-      if (daysOverdue > 0) {
-        p7 = 0.22
-        p14 = 0.38
-        p30 = 0.55
-      } else {
-        p7 = daysUntilDue <= 3 ? 0.18 : 0.07
-        p14 = daysUntilDue <= 10 ? 0.28 : 0.12
-        p30 = 0.4
-      }
-      p7 *= (1 - spread * 0.3)
-      p14 *= (1 - spread * 0.2)
-      expectedDate = inv.due_date ? addDays(inv.due_date, Math.round(dso > 0 ? dso : 10)) : addDays(now, 14)
-      reasoning = `${archetype} payer — wide timing variance (CV ${r2(features.interval_cv)}), probability spread across horizon`
-    } else if (archetype === "low_data") {
-      if (daysOverdue > 0) {
-        p7 = 0.12; p14 = 0.22; p30 = 0.32
-        expectedDate = addDays(now, 7)
-        reasoning = `Low-data customer, ${daysOverdue}d overdue — sparse history penalty applied`
-      } else {
-        p7 = daysUntilDue <= 5 ? 0.1 : 0.04
-        p14 = daysUntilDue <= 10 ? 0.18 : 0.08
-        p30 = 0.25
-        expectedDate = inv.due_date ?? addDays(now, 14)
-        reasoning = `Low-data customer (<3 payments) — anchored to invoice due date with confidence haircut`
-      }
-    } else {
-      if (daysOverdue > 0) {
-        p7 = 0.25; p14 = 0.4; p30 = 0.6
-        expectedDate = addDays(now, 5)
-      } else {
-        p7 = daysUntilDue <= 5 ? 0.3 : 0.1
-        p14 = daysUntilDue <= 10 ? 0.42 : 0.22
-        p30 = 0.55
-        expectedDate = inv.due_date ?? addDays(now, 14)
-      }
-      reasoning = `Episodic payer — opportunity-weighted, not cadence-driven`
+    // Compute base probability from portfolio priors and archetype
+    const archetypeMultiplier = priors.archetype_multipliers[archetype] ?? 1.0
+    
+    // Time-based probability: closer to due date = higher probability
+    // Uses logistic function centered on due date
+    const timeScore = daysOverdue > 0
+      ? Math.min(1, 0.5 + daysOverdue / (priors.avg_collection_delay * 2))
+      : Math.max(0, 1 - daysUntilDue / 30)
+    
+    // Compute probabilities for each horizon using portfolio data
+    let p7 = priors.base_p7 * archetypeMultiplier * (daysOverdue > 0 ? 1.5 : timeScore)
+    let p14 = priors.base_p14 * archetypeMultiplier * (daysOverdue > 0 ? 1.3 : Math.max(timeScore, 0.5))
+    let p30 = priors.base_p30 * archetypeMultiplier
+    
+    // Adjust for customer-specific DSO if available
+    if (dso > 0 && features.payment_count >= 2) {
+      const dsoFactor = Math.max(0.5, Math.min(1.5, priors.avg_collection_delay / dso))
+      p7 *= dsoFactor
+      p14 *= dsoFactor
+      p30 *= Math.sqrt(dsoFactor) // Less impact on 30-day
     }
+    
+    // Reliability adjustment based on payment history
+    if (features.payer_reliability_cluster === "reliable") {
+      p7 *= 1.3; p14 *= 1.2; p30 *= 1.1
+    } else if (features.payer_reliability_cluster === "volatile") {
+      p7 *= 0.7; p14 *= 0.8; p30 *= 0.9
+    }
+    
+    // Cap probabilities
+    p7 = Math.min(0.95, Math.max(0.02, p7))
+    p14 = Math.min(0.95, Math.max(p7, p14))
+    p30 = Math.min(0.95, Math.max(p14, p30))
+    
+    // Expected collection date based on DSO or due date
+    let expectedDate: string
+    if (daysOverdue > 0) {
+      const expectedDelay = dso > 0 ? Math.max(1, dso - daysOverdue) : priors.avg_collection_delay
+      expectedDate = addDays(now, Math.max(1, Math.round(expectedDelay)))
+    } else if (dso > 0) {
+      expectedDate = inv.due_date ? addDays(inv.due_date, Math.round(dso)) : addDays(now, Math.round(dso))
+    } else {
+      expectedDate = inv.due_date ?? addDays(now, priors.avg_collection_delay)
+    }
+    
+    // Build reasoning from data
+    const reasoning = buildInvoiceReasoning(archetype, features, daysOverdue, daysUntilDue, dso, priors)
 
     forecasts.push({
       invoice_id: inv.invoice_id,
@@ -576,9 +643,9 @@ function buildInvoiceForecasts(
       due_date: inv.due_date,
       days_overdue: inv.days_overdue,
       customer_dso: r2(dso),
-      probability_7d: r2(Math.min(0.99, p7)),
-      probability_14d: r2(Math.min(0.99, p14)),
-      probability_30d: r2(Math.min(0.99, p30)),
+      probability_7d: r2(p7),
+      probability_14d: r2(p14),
+      probability_30d: r2(p30),
       expected_collection_date: expectedDate,
       expected_amount: r2(inv.amount_due),
       reasoning,
@@ -588,7 +655,141 @@ function buildInvoiceForecasts(
   return forecasts
 }
 
-function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = []): CustomerModel[] {
+type PortfolioPriors = {
+  base_p7: number
+  base_p14: number
+  base_p30: number
+  avg_collection_delay: number
+  archetype_multipliers: Record<CustomerArchetype, number>
+}
+
+function defaultPortfolioPriors(): PortfolioPriors {
+  return {
+    base_p7: 0.25,
+    base_p14: 0.45,
+    base_p30: 0.65,
+    avg_collection_delay: 14,
+    archetype_multipliers: {
+      clockwork: 1.4,
+      slow_reliable: 0.9,
+      bursty: 0.8,
+      episodic: 0.6,
+      volatile: 0.5,
+      low_data: 0.7,
+    },
+  }
+}
+
+function computePortfolioPriors(movements: TaggedMovement[], invoices: OutstandingInvoice[]): PortfolioPriors {
+  const priors = defaultPortfolioPriors()
+  
+  // Compute actual collection rates from historical data
+  const customerReceipts = movements.filter(m => 
+    m.tag?.economic_class === "customer_receipt" && m.direction === "inflow"
+  )
+  
+  if (customerReceipts.length < 5) {
+    return priors // Not enough data, use defaults
+  }
+  
+  // Compute average collection delay from movements
+  const delays: number[] = []
+  const now = new Date().toISOString().slice(0, 10)
+  
+  // Group receipts by month to estimate collection patterns
+  const byMonth = new Map<string, number[]>()
+  for (const m of customerReceipts) {
+    const month = monthKey(m.occurred_at)
+    const arr = byMonth.get(month) ?? []
+    arr.push(m.amount)
+    byMonth.set(month, arr)
+  }
+  
+  // Estimate base probabilities from payment frequency
+  const monthCount = byMonth.size
+  const avgPaymentsPerMonth = customerReceipts.length / Math.max(1, monthCount)
+  
+  // More payments per month = higher base probability
+  const frequencyFactor = Math.min(2, avgPaymentsPerMonth / 10)
+  priors.base_p7 = Math.min(0.6, 0.15 + 0.1 * frequencyFactor)
+  priors.base_p14 = Math.min(0.75, priors.base_p7 + 0.15 + 0.05 * frequencyFactor)
+  priors.base_p30 = Math.min(0.9, priors.base_p14 + 0.15 + 0.05 * frequencyFactor)
+  
+  // Estimate average collection delay from invoice data if available
+  const paidInvoices = invoices.filter(i => i.status === "paid" && i.due_date)
+  if (paidInvoices.length >= 3) {
+    // Use paid invoices to estimate typical delay
+    const avgDelay = paidInvoices.reduce((sum, i) => {
+      const delay = i.days_overdue ?? 0
+      return sum + Math.max(0, delay)
+    }, 0) / paidInvoices.length
+    priors.avg_collection_delay = Math.max(7, Math.min(45, avgDelay + 7))
+  } else if (customerReceipts.length >= 10) {
+    // Estimate from payment intervals
+    const intervals: number[] = []
+    const sorted = [...customerReceipts].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
+    for (let i = 1; i < sorted.length; i++) {
+      intervals.push(daysBetween(sorted[i-1].occurred_at, sorted[i].occurred_at))
+    }
+    if (intervals.length > 0) {
+      const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length
+      priors.avg_collection_delay = Math.max(7, Math.min(45, avgInterval))
+    }
+  }
+  
+  return priors
+}
+
+function buildInvoiceReasoning(
+  archetype: CustomerArchetype,
+  features: CustomerFeatures,
+  daysOverdue: number,
+  daysUntilDue: number,
+  dso: number,
+  priors: PortfolioPriors,
+): string {
+  const parts: string[] = []
+  
+  // Archetype description
+  const archetypeDesc: Record<CustomerArchetype, string> = {
+    clockwork: "Highly regular payer",
+    slow_reliable: "Pays consistently but late",
+    bursty: "Clusters payments then pauses",
+    episodic: "Project-based, irregular",
+    volatile: "Erratic timing and amounts",
+    low_data: "Insufficient payment history",
+  }
+  parts.push(archetypeDesc[archetype])
+  
+  // Payment history
+  if (features.payment_count > 0) {
+    parts.push(`${features.payment_count} prior payments`)
+    if (dso > 0) {
+      parts.push(`avg ${Math.round(dso)}d to pay`)
+    }
+  } else {
+    parts.push("no payment history")
+  }
+  
+  // Invoice status
+  if (daysOverdue > 0) {
+    parts.push(`${daysOverdue}d overdue`)
+  } else if (daysUntilDue > 0) {
+    parts.push(`due in ${daysUntilDue}d`)
+  }
+  
+  // Reliability
+  if (features.payer_reliability_cluster === "reliable") {
+    parts.push("reliable payer")
+  } else if (features.payer_reliability_cluster === "volatile") {
+    parts.push("volatile payment pattern")
+  }
+  
+  return parts.join(" · ")
+}
+
+function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], portfolioPriors?: PortfolioPriors): CustomerModel[] {
+  const priors = portfolioPriors ?? computePortfolioPriors(movements, invoices)
   const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; isAnomaly: boolean; isOutlier: boolean; isFirstSeen: boolean; confidence: number }[] }>()
 
   for (const m of movements) {
@@ -671,31 +872,21 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
       features.recent_trend,
     )
 
-    // Archetype-driven probability
+    // Data-driven probability based on archetype and payment history
+    const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : (daysSinceLast / priors.avg_collection_delay)
+    const baseProb = priors.archetype_multipliers[archetype] * priors.base_p30
+    
     let probability: number
-    if (archetype === "clockwork") {
-      const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : 0
-      probability = sigmoidDecay(overdueRatio) * (0.55 + 0.25 * Math.min(1, payments.length / 6))
-    } else if (archetype === "bursty") {
-      const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : 0
-      probability = sigmoidDecay(overdueRatio) * 0.6
-    } else if (archetype === "episodic") {
-      probability = daysSinceLast < 45 ? 0.25 : daysSinceLast < 90 ? 0.15 : 0.06
-    } else if (archetype === "slow_reliable") {
-      const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : 0
-      probability = sigmoidDecay(overdueRatio * 0.7) * 0.65
-    } else if (archetype === "volatile") {
-      probability = daysSinceLast < 30 ? 0.22 : daysSinceLast < 60 ? 0.12 : 0.06
+    if (payments.length >= 3) {
+      // Enough data: use sigmoid decay based on overdue ratio
+      probability = sigmoidDecay(overdueRatio) * baseProb * (1 + 0.1 * Math.min(1, payments.length / 6))
+    } else if (customerInvoices.length > 0) {
+      // Low data but has invoices: use invoice status
+      const hasOverdue = customerInvoices.some((i) => i.status === "overdue")
+      probability = baseProb * (hasOverdue ? 1.2 : 0.9)
     } else {
-      // low_data: shrink to cohort prior (hierarchical)
-      const prior = getCohortPrior("low_data")
-      if (customerInvoices.length > 0) {
-        const raw = customerInvoices.some((i) => i.status === "overdue") ? 0.4 : 0.3
-        probability = raw * 0.6 + prior.prob * 0.4
-      } else {
-        const raw = payments.length === 1 && daysSinceLast < 60 ? 0.15 : 0.08
-        probability = raw * 0.5 + prior.prob * 0.5
-      }
+      // Very low data: conservative estimate
+      probability = baseProb * 0.5 * sigmoidDecay(overdueRatio)
     }
 
     // Amount trend dampening
@@ -727,34 +918,31 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     else if (archetype === "bursty" && payments.length >= 4) confidence = "medium"
     else if (payments.length >= 3) confidence = "medium"
 
-    // Invoice boost — scaled by archetype and history quality
+    // Invoice boost — scaled by archetype multiplier from portfolio data
     if (customerInvoices.length > 0) {
       const earliestDue = customerInvoices
         .filter((i) => i.due_date)
         .sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
 
-      // Boost is smaller for low-data/volatile customers (we don't know if they'll pay)
-      const invoiceBoost = archetype === "clockwork" ? 0.2
-        : archetype === "slow_reliable" ? 0.15
-        : archetype === "bursty" ? 0.1
-        : archetype === "low_data" ? 0.08
-        : archetype === "volatile" ? 0.05
-        : 0.1
-      if (probability < 0.8) probability = Math.min(0.9, probability + invoiceBoost)
+      // Boost proportional to archetype reliability
+      const invoiceBoost = (priors.archetype_multipliers[archetype] - 0.5) * 0.2
+      if (probability < 0.8 && invoiceBoost > 0) {
+        probability = Math.min(0.9, probability + invoiceBoost)
+      }
       if (confidence === "low" && payments.length >= 2) confidence = "medium"
 
       if (earliestDue?.due_date && earliestDue.due_date >= now) {
         const dueOffset = daysBetween(now, earliestDue.due_date)
         if (dueOffset <= 30) nextDate = earliestDue.due_date
       } else if (earliestDue?.status === "overdue") {
-        nextDate = addDays(now, 3)
-        probability = Math.min(0.9, probability + 0.05)
+        nextDate = addDays(now, Math.max(1, Math.round(priors.avg_collection_delay / 4)))
+        probability = Math.min(0.9, probability * 1.1)
       }
     }
 
     probability = Math.max(0.02, Math.min(0.98, probability))
 
-    const invoiceForecasts = buildInvoiceForecasts(customerInvoices, features, archetype, now)
+    const invoiceForecasts = buildInvoiceForecasts(customerInvoices, features, archetype, now, priors)
 
     const inflow_event_class: InflowEventClass =
       overdueInvCount > 0 ? "overdue_receivable"
@@ -815,7 +1003,7 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
       last_payment_recency_days: 999, overdue_count: overdueCount, weekday_bias: null,
     }
 
-    const invoiceForecasts = buildInvoiceForecasts(custInvs, features, "low_data", now)
+    const invoiceForecasts = buildInvoiceForecasts(custInvs, features, "low_data", now, priors)
 
     const invCustomerName = custInvs[0].customer_name
     const canonicalName = extractEntityFromRawDescriptor(invCustomerName)
@@ -2129,43 +2317,40 @@ function simulateMonthFromModels(
   let outflows = 0
   const componentAmounts: { component_id: string; amount: number }[] = []
 
-  // Time decay: further-out months are less certain, but not dramatically
-  const monthDecay = 1 / (1 + monthIndex * 0.08)
-
   // Customer receipts: bottom-up from entity models
   let customerTotal = 0
   for (const c of models.customers) {
-    const archDecay = c.archetype === "clockwork" ? 0.92
-      : c.archetype === "slow_reliable" ? 0.8
-      : c.archetype === "bursty" ? 0.55
-      : c.archetype === "episodic" ? 0.3
-      : c.archetype === "volatile" ? 0.2
-      : 0.15 // low_data
+    // Compute decay based on actual customer data quality
+    // More payments = slower decay, higher confidence = slower decay
+    const dataQuality = Math.min(1, c.payment_count / 6) * (c.confidence === "high" ? 1 : c.confidence === "medium" ? 0.7 : 0.4)
+    const monthDecay = 1 / (1 + monthIndex * (0.15 - dataQuality * 0.1))
 
     if (c.next_expected_date && c.next_expected_date >= monthStart && c.next_expected_date < monthEnd) {
       customerTotal += c.avg_amount * c.probability_of_next
     } else if (c.payment_interval_days > 0 && c.payment_interval_days <= 60) {
       const paymentsInMonth = Math.min(4, 30 / c.payment_interval_days)
-      customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth * archDecay * monthDecay
-    } else if (c.archetype === "low_data" && c.outstanding_invoices.length > 0) {
-      const lowDataDecay = monthIndex === 0 ? 0.5 : monthIndex <= 2 ? 0.2 : 0.08
-      customerTotal += c.avg_amount * c.probability_of_next * lowDataDecay
+      customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth * monthDecay
+    } else if (c.outstanding_invoices.length > 0) {
+      // Has invoices: use invoice amounts with decay based on data quality
+      const invoiceDecay = monthIndex === 0 ? 0.6 : Math.max(0.1, 0.4 - monthIndex * 0.08)
+      const totalOutstanding = c.outstanding_invoices.reduce((sum, inv) => sum + inv.amount_due, 0)
+      customerTotal += totalOutstanding * c.probability_of_next * invoiceDecay * (0.5 + dataQuality * 0.5)
     } else if (c.payment_count >= 2 && c.avg_amount > 0) {
-      customerTotal += c.avg_amount * c.probability_of_next * archDecay * monthDecay * 0.3
+      customerTotal += c.avg_amount * c.probability_of_next * monthDecay * 0.5
     }
   }
 
-  // Portfolio floor: individually unreliable customers are collectively reliable.
-  // The historical monthly average from the component aggregate sets a floor
-  // that decays gently, preventing the bottom-up model from cliff-dropping.
+  // Portfolio floor: use historical data to set a minimum projection
+  // The floor decays based on how much historical data we have
   const custComp = components.find((c) => c.category === "customer_receipts" && c.direction === "in")
   if (custComp && custComp.monthly_avg > 0) {
     const historicalAvg = custComp.monthly_avg
-    // Floor decays: month 0 = 80% of historical, month 5 = ~55%
-    const floorDecay = 0.8 / (1 + monthIndex * 0.1)
+    // Compute floor decay from data: more volatile history = faster decay
+    const volatilityFactor = Math.min(1, custComp.volatility ?? 0.5)
+    const floorDecay = (1 - volatilityFactor * 0.3) / (1 + monthIndex * (0.05 + volatilityFactor * 0.1))
     const portfolioFloor = historicalAvg * floorDecay
     if (customerTotal < portfolioFloor) {
-      // Blend: use the higher of bottom-up or floor, weighted toward floor when bottom-up is weak
+      // Blend toward floor when bottom-up is weak
       const blendWeight = Math.min(1, customerTotal / portfolioFloor)
       customerTotal = customerTotal * blendWeight + portfolioFloor * (1 - blendWeight)
     }
@@ -2191,12 +2376,15 @@ function simulateMonthFromModels(
     // Require minimum confidence to project
     if (recConf < 0.25) continue
 
+    // Compute decay based on vendor's recurrence confidence
+    const vendorDecay = 1 / (1 + monthIndex * (0.1 - recConf * 0.05))
+
     if (v.next_expected_date && v.next_expected_date >= monthStart && v.next_expected_date < monthEnd) {
       vendorTotal += v.avg_amount * Math.max(0.5, recConf)
       projectedVendorNames.add(v.name.toLowerCase())
     } else if ((recType === "hard" || recType === "soft" || recType === "seasonal") && v.cadence_interval_days > 0 && v.cadence_interval_days <= 45) {
       const paymentsInMonth = Math.min(4, 30 / v.cadence_interval_days)
-      vendorTotal += v.avg_amount * paymentsInMonth * recConf * monthDecay
+      vendorTotal += v.avg_amount * paymentsInMonth * recConf * vendorDecay
       projectedVendorNames.add(v.name.toLowerCase())
     }
   }
@@ -2243,7 +2431,11 @@ function simulateMonthFromModels(
 
     let amount = comp.monthly_avg
     if (comp.behavior === "one_time") continue
-    if (comp.behavior === "episodic") amount *= 0.5 * monthDecay
+    
+    // Compute decay based on component's volatility
+    const compVolatility = comp.volatility ?? 0.5
+    const compDecay = 1 / (1 + monthIndex * (0.05 + compVolatility * 0.1))
+    if (comp.behavior === "episodic") amount *= 0.5 * compDecay
 
     if (comp.behavior === "seasonal" && comp.seasonal_index) {
       const idx = comp.seasonal_index[targetMonth]
@@ -2627,11 +2819,14 @@ function runScenario(
     const monthEndDate = new Date(futureDate.getFullYear(), futureDate.getMonth() + 1, 0)
     const monthEnd = monthEndDate.toISOString().slice(0, 10)
 
-    const trendFactor = 1 + (config.trend_dampening * (1 / (1 + i * 0.3)))
+    // trend_dampening affects how quickly projections decay over time
+    // Higher values = slower decay = more optimistic about future months
+    // Base: 1.0, Optimistic: 1.2 (slower decay), Pessimistic: 0.5 (faster decay)
+    const decayFactor = 1 / (1 + i * 0.3 / config.trend_dampening)
 
     const { inflows, outflows, componentAmounts } = simulateMonthFromModels(
       models, components, monthStart, monthEnd,
-      { inflow: config.inflow_amount_mult * trendFactor, outflow: config.outflow_amount_mult },
+      { inflow: config.inflow_amount_mult * decayFactor, outflow: config.outflow_amount_mult },
       i,
     )
 
