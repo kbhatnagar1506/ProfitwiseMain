@@ -2319,25 +2319,47 @@ function simulateMonthFromModels(
 
   // Customer receipts: bottom-up from entity models
   let customerTotal = 0
+  
+  // First, compute total expected from all customers with invoices
+  // This represents the "invoice pipeline" that should convert to cash over time
+  let totalInvoicePipeline = 0
   for (const c of models.customers) {
-    // Compute decay based on actual customer data quality
-    // More payments = slower decay, higher confidence = slower decay
+    if (c.outstanding_invoices.length > 0) {
+      totalInvoicePipeline += c.outstanding_invoices.reduce((sum, inv) => sum + inv.amount_due, 0)
+    }
+  }
+  
+  for (const c of models.customers) {
+    // Compute data quality from payment history
     const dataQuality = Math.min(1, c.payment_count / 6) * (c.confidence === "high" ? 1 : c.confidence === "medium" ? 0.7 : 0.4)
     const monthDecay = 1 / (1 + monthIndex * (0.15 - dataQuality * 0.1))
 
     if (c.next_expected_date && c.next_expected_date >= monthStart && c.next_expected_date < monthEnd) {
+      // Expected payment falls in this month
       customerTotal += c.avg_amount * c.probability_of_next
     } else if (c.payment_interval_days > 0 && c.payment_interval_days <= 60) {
+      // Has regular payment cadence
       const paymentsInMonth = Math.min(4, 30 / c.payment_interval_days)
       customerTotal += c.avg_amount * c.probability_of_next * paymentsInMonth * monthDecay
     } else if (c.outstanding_invoices.length > 0) {
-      // Has invoices: use invoice amounts with decay based on data quality
-      const invoiceDecay = monthIndex === 0 ? 0.6 : Math.max(0.1, 0.4 - monthIndex * 0.08)
+      // Has invoices but no payment history - project based on invoice value
+      // Use a conversion rate that decays over time (invoices get collected eventually)
       const totalOutstanding = c.outstanding_invoices.reduce((sum, inv) => sum + inv.amount_due, 0)
-      customerTotal += totalOutstanding * c.probability_of_next * invoiceDecay * (0.5 + dataQuality * 0.5)
+      // Month 0: expect 40% collection, Month 1: 30%, Month 2: 20%, etc.
+      const collectionRate = Math.max(0.05, 0.4 - monthIndex * 0.1)
+      customerTotal += totalOutstanding * c.probability_of_next * collectionRate
     } else if (c.payment_count >= 2 && c.avg_amount > 0) {
+      // Has some payment history but no invoices
       customerTotal += c.avg_amount * c.probability_of_next * monthDecay * 0.5
     }
+  }
+  
+  // If we have invoice pipeline but no customer total, use pipeline as fallback
+  // This handles the case where all customers are invoice-only
+  if (customerTotal === 0 && totalInvoicePipeline > 0) {
+    // Assume invoices convert to cash over ~3 months with decay
+    const pipelineConversion = Math.max(0.05, 0.35 - monthIndex * 0.08)
+    customerTotal = totalInvoicePipeline * pipelineConversion
   }
 
   // Portfolio floor: use historical data to set a minimum projection
@@ -2841,8 +2863,10 @@ function runScenario(
     let adjInflows = 0
     let adjOutflows = 0
     for (const ca of componentAmounts) {
+      // Determine direction from component_id suffix or lookup in components
       const comp = components.find((c) => c.id === ca.component_id)
-      if (comp?.direction === "in") adjInflows += ca.amount
+      const isInflow = comp?.direction === "in" || ca.component_id.endsWith("_in")
+      if (isInflow) adjInflows += ca.amount
       else adjOutflows += ca.amount
     }
 
