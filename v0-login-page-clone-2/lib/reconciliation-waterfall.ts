@@ -141,6 +141,10 @@ const SCORE_WEIGHTS = {
 const AUTO_RECONCILE_MIN = 0.6
 const ENTITY_CONFLICT_PENALTY = 0.2
 
+function exactAmountMatch(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 0.01
+}
+
 function scoreCandidate(
   movement: MovementResidualRow & { available_cash_num: number },
   event: OpenCashEventRow & { outstanding_num: number; canonical_name: string },
@@ -216,7 +220,14 @@ function scoreCandidate(
     SCORE_WEIGHTS.temporal * temporal +
     SCORE_WEIGHTS.behavioral * behavioral -
     penalties
-  const score = Math.max(0, Math.min(1, raw))
+  let score = Math.max(0, Math.min(1, raw))
+
+  // Wide-net deterministic hook:
+  // if amount is exact and timing is reasonably close, allow entry as a plausible candidate
+  // even when identity signal is weak.
+  if (tier === "amount_date" && exactAmount && temporal >= 0.5) {
+    score = Math.max(score, 0.62)
+  }
 
   let band: DecisionBand = "low_noise"
   if (score >= 0.95) band = "certified"
@@ -331,11 +342,32 @@ export async function runReconciliationWaterfall(userId: string, options: Waterf
     const targetType: "ar" | "ap" = isInflow ? "ar" : "ap"
     const movementEntityId = movement.counterparty_entity_id
 
-    const scoredCandidates: ScoredCandidate[] = openEvents
-      .filter((e) => e.event_type === targetType && e.outstanding_num > 0.01)
+    const targetOpenEvents = openEvents.filter((e) => e.event_type === targetType && e.outstanding_num > 0.01)
+
+    const scoredBase: ScoredCandidate[] = targetOpenEvents
       .map((e) => {
         const { score, tier, breakdown } = scoreCandidate(movement, e, movementEntityId)
         return { event: e, score, tier, breakdown }
+      })
+    const uniqueExactAmountEvents = targetOpenEvents.filter((e) => exactAmountMatch(movement.available_cash_num, e.outstanding_num))
+    const hasStrongIdentityCandidate = scoredBase.some((c) => c.tier === "id" || c.tier === "name")
+
+    const scoredCandidates = scoredBase
+      .map((c) => {
+        if (!hasStrongIdentityCandidate && uniqueExactAmountEvents.length === 1 && c.event.id === uniqueExactAmountEvents[0].id) {
+          return {
+            ...c,
+            score: Math.max(c.score, 0.72),
+            tier: "amount_date" as CandidateTier,
+            breakdown: {
+              ...c.breakdown,
+              amount: 1,
+              final_score: Math.max(c.score, 0.72),
+              band: "suggested" as const,
+            },
+          }
+        }
+        return c
       })
       .filter((c) => c.score >= AUTO_RECONCILE_MIN)
       .sort((a, b) => b.score - a.score || a.event.expected_date.localeCompare(b.event.expected_date))
