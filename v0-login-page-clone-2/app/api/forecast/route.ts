@@ -9,6 +9,7 @@ import { syncCashEventsForUser, fetchCashEventsForUser30d, cashEventRowsToForeca
 import { computeCashflowForecast, seedPrng, resetPrng, setIdentityContext, type IdentityContext } from "@/lib/state/forecast-engine"
 import { generateNarrativeWithLLM } from "@/lib/forecast-llm"
 import { getAccountsWithBalancesByUserId } from "@/lib/plaid-persistence"
+import { getAllEntityProfiles } from "@/lib/entity-profiles"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
 import type { OutstandingInvoice, OutstandingBill, ForecastContext, CashflowForecast } from "@/lib/state/types"
@@ -310,12 +311,14 @@ export async function GET() {
       bills,
       identityCtx,
       startingCashResult,
+      entityProfiles,
     ] = await Promise.all([
       fetchTaggedMovements(user.id),
       fetchInvoicesForReconciliation(user.id),
       fetchBillsForReconciliation(user.id),
       buildIdentityContext(user.id),
       getStartingCash(user.id),
+      getAllEntityProfiles(user.id),
     ])
 
     // Sync cash events bridge (AR/AP to forecast events)
@@ -372,6 +375,7 @@ export async function GET() {
       bills,
       forecastCtx,
       bridgeEvents,
+      entityProfiles,
     )
 
     // Optionally enrich narrative with LLM
