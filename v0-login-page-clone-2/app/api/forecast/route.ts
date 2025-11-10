@@ -177,13 +177,23 @@ async function buildIdentityContext(userId: string): Promise<IdentityContext> {
   return { entityNames, entityTypes, aliasToEntityId, counterpartyByMovement, familyMembers }
 }
 
+function plaidAccountBalance(a: { current_balance: number | null; available_balance: number | null }): number {
+  const c = a.current_balance
+  const av = a.available_balance
+  const best = Math.max(
+    c != null && !Number.isNaN(c) ? c : -Infinity,
+    av != null && !Number.isNaN(av) ? av : -Infinity,
+  )
+  return Number.isFinite(best) ? best : 0
+}
+
 async function getStartingCash(userId: string): Promise<{ cash: number; source: "plaid" | "derived" }> {
   const accounts = await getAccountsWithBalancesByUserId(userId)
   if (accounts.length > 0) {
     const cashAccounts = accounts.filter((a) => 
       a.type === "depository" || a.subtype === "checking" || a.subtype === "savings"
     )
-    const totalCash = cashAccounts.reduce((sum, a) => sum + (a.current_balance ?? 0), 0)
+    const totalCash = cashAccounts.reduce((sum, a) => sum + plaidAccountBalance(a), 0)
     if (totalCash > 0) {
       return { cash: totalCash, source: "plaid" }
     }
