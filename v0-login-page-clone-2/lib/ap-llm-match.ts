@@ -19,6 +19,7 @@ export type PaymentInput = {
   date: string
   raw_description: string | null
   entity_id: string | null
+  /** Prefer `resolveDisplayNames` output (entity > merchant tag > counterparty) for name fallback when entity IDs disagree. */
   counterparty_name?: string | null
 }
 
