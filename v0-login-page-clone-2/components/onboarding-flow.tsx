@@ -3139,20 +3139,6 @@ export function OnboardingFlow({
         }
         const arInvoices = arApData?.ar.invoices ?? []
         const arOverdueFirst = [...arInvoices].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0))
-        const arReconSummary = arOverdueFirst.reduce(
-          (acc, inv) => {
-            const invExt = inv as { amount_collected?: number; amount_remaining?: number }
-            const collected = invExt.amount_collected ?? 0
-            const remaining = invExt.amount_remaining ?? Math.max(0, inv.amount_due - collected)
-            if (remaining <= 0.01) acc.paid_count += 1
-            else if (collected > 0.01) acc.partial_count += 1
-            else acc.open_count += 1
-            acc.collected_total += collected
-            acc.remaining_total += remaining
-            return acc
-          },
-          { paid_count: 0, partial_count: 0, open_count: 0, collected_total: 0, remaining_total: 0 },
-        )
         const apObligations = arApData?.ap.obligations ?? []
         const allReconRows = mappingRecon
           ? [
@@ -3212,33 +3198,6 @@ export function OnboardingFlow({
                   </div>
                 </div>
 
-                {/* ─── Reconciler AR summary ─── */}
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300 mb-2">Reconciler AR</div>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-                    <div className="rounded-lg bg-white/5 px-3 py-2">
-                      <div className="text-[10px] text-gray-500">Paid invoices</div>
-                      <div className="font-semibold text-emerald-300">{arReconSummary.paid_count}</div>
-                    </div>
-                    <div className="rounded-lg bg-white/5 px-3 py-2">
-                      <div className="text-[10px] text-gray-500">Partial invoices</div>
-                      <div className="font-semibold text-amber-300">{arReconSummary.partial_count}</div>
-                    </div>
-                    <div className="rounded-lg bg-white/5 px-3 py-2">
-                      <div className="text-[10px] text-gray-500">Open invoices</div>
-                      <div className="font-semibold text-white">{arReconSummary.open_count}</div>
-                    </div>
-                    <div className="rounded-lg bg-white/5 px-3 py-2">
-                      <div className="text-[10px] text-gray-500">Collected</div>
-                      <div className="font-semibold text-emerald-300">{moneySmall(arReconSummary.collected_total)}</div>
-                    </div>
-                    <div className="rounded-lg bg-white/5 px-3 py-2">
-                      <div className="text-[10px] text-gray-500">Remaining</div>
-                      <div className="font-semibold text-white">{moneySmall(arReconSummary.remaining_total)}</div>
-                    </div>
-                  </div>
-                </div>
-
                 {/* ─── AR (Accounts Receivable) ─── */}
                 <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl overflow-hidden">
                   <div className="p-5 border-b border-emerald-500/10">
@@ -3272,6 +3231,8 @@ export function OnboardingFlow({
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-16">Source</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24">Due date</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-20">Status</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Collected</TableHead>
+                            <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Remaining</TableHead>
                             <TableHead className="text-[10px] uppercase text-gray-500 font-semibold w-24 text-right">Amount due</TableHead>
                           </TableRow>
                         </TableHeader>
@@ -3298,6 +3259,12 @@ export function OnboardingFlow({
                                     )}
                                   </TableCell>
                                   <TableCell className="py-2.5">{statusBadge(inv.status, inv.days_overdue ?? null)}</TableCell>
+                                  <TableCell className="text-right font-mono py-2.5 text-emerald-300">
+                                    {moneySmall(amountCollected)}
+                                  </TableCell>
+                                  <TableCell className="text-right font-mono py-2.5 text-gray-300">
+                                    {moneySmall(amountRemaining)}
+                                  </TableCell>
                                   <TableCell className={`text-right font-mono font-semibold py-2.5 ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>
                                     {moneySmall(inv.amount_due)}
                                     {allocs.length > 0 && <span className="block text-[10px] text-gray-500">collected {moneySmall(amountCollected)}</span>}
@@ -3305,7 +3272,7 @@ export function OnboardingFlow({
                                 </TableRow>
                                 {isExpanded && allocs.length > 0 && (
                                   <TableRow className="border-emerald-500/5 bg-emerald-500/5">
-                                    <TableCell colSpan={5} className="py-3 pl-8">
+                                    <TableCell colSpan={7} className="py-3 pl-8">
                                       <div className="space-y-2 text-xs">
                                         <div className="flex gap-4">
                                           <span>Gross: {moneySmall(inv.amount_due)}</span>
