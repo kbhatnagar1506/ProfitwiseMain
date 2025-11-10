@@ -6,6 +6,7 @@ import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
 import { computeARState, computeAPStateFromBills } from "@/lib/state/ar-ap"
 import { query } from "@/lib/db"
+import { runFinancialBrain } from "@/lib/financial-brain"
 import {
   fetchReconciliationMovementRows,
   type ReconMovementRow,
@@ -35,9 +36,20 @@ export async function GET() {
 
   const invoices = await fetchInvoicesForReconciliation(user.id)
   const bills = await fetchOutstandingBills(user.id)
+  const obligations = computeAPStateFromBills(bills)
+
+  try {
+    await runFinancialBrain(user.id, {
+      outstandingInvoices: invoices,
+      apObligations: obligations,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error("[ar-ap-step] runFinancialBrain failed:", msg)
+    return NextResponse.json({ error: "Reconciliation run failed", detail: msg }, { status: 500 })
+  }
 
   const ar = computeARState(invoices)
-  const obligations = computeAPStateFromBills(bills)
   const ap = {
     total_expected_30d: r2(obligations.reduce((s, o) => s + o.expected_amount, 0)),
     obligation_count: obligations.length,
