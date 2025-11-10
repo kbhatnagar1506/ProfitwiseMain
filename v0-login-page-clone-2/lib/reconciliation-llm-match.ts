@@ -1,6 +1,11 @@
 /**
  * Batch LLM matching: given unmatched transactions and outstanding invoices/bills,
  * suggest mappings. Does NOT auto-apply; user confirms each.
+ *
+ * Stage 4 (Detective): movements tagged with `metadata.reconciliation_waterfall_review` by
+ * `runReconciliationWaterfall` are high-priority review candidates. Load them via
+ * `getMovementsPendingWaterfallReview` from `@/lib/reconciliation-waterfall` and merge into
+ * unmatched inflow/outflow lists when building prompts for this module.
  */
 
 const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"

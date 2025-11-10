@@ -98,27 +98,6 @@ function getPool(): Pool | null {
   return pool
 }
 
-export async function runInTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const p = await getPoolAsync()
-  if (!p) throw new Error("Database is only available in production")
-  const client = await p.connect()
-  try {
-    await client.query("BEGIN")
-    const result = await fn(client)
-    await client.query("COMMIT")
-    return result
-  } catch (e) {
-    try {
-      await client.query("ROLLBACK")
-    } catch {
-      // ignore rollback failure
-    }
-    throw e
-  } finally {
-    client.release()
-  }
-}
-
 const USERS_SQL = `
   CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -853,53 +832,48 @@ export async function ensureMovementsSchema(): Promise<void> {
   `)
   await p.query("CREATE INDEX IF NOT EXISTS idx_cash_events_user_date ON cash_events (user_id, expected_date)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_cash_events_entity ON cash_events (user_id, entity_id)")
+  // AR/AP lifecycle + stable upsert key (reconciliation waterfall)
   await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS outstanding_amount NUMERIC")
-  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS status TEXT")
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'open'")
   await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS last_reconciled_at TIMESTAMPTZ")
-  await p.query("ALTER TABLE cash_events DROP CONSTRAINT IF EXISTS cash_events_status_check")
   await p.query(`
-    ALTER TABLE cash_events ADD CONSTRAINT cash_events_status_check
-    CHECK (status IN ('open', 'partially_paid', 'paid'))
+    UPDATE cash_events SET outstanding_amount = amount WHERE outstanding_amount IS NULL
   `)
-  await p.query("ALTER TABLE cash_events ALTER COLUMN status SET DEFAULT 'open'")
-  await p.query("UPDATE cash_events SET outstanding_amount = amount WHERE outstanding_amount IS NULL")
   await p.query(`
-    UPDATE cash_events
-    SET status = CASE
-      WHEN COALESCE(outstanding_amount::float, 0) <= 0.01 THEN 'paid'
-      WHEN COALESCE(outstanding_amount::float, amount::float) < amount::float THEN 'partially_paid'
+    UPDATE cash_events SET status = CASE
+      WHEN COALESCE(outstanding_amount, amount, 0) <= 0 THEN 'paid'
+      WHEN COALESCE(outstanding_amount, amount) < amount THEN 'partially_paid'
       ELSE 'open'
     END
-    WHERE status IS NULL
+    WHERE status IS NULL OR status = ''
   `)
-  // Dedupe potential pre-constraint collisions; keep most recently updated row.
+  try {
+    await p.query(`
+      ALTER TABLE cash_events ADD CONSTRAINT cash_events_status_check
+      CHECK (status IN ('open', 'partially_paid', 'paid'))
+    `)
+  } catch {
+    /* constraint may already exist */
+  }
+  try {
+    const del = await p.query(`
+      DELETE FROM cash_events ce
+      WHERE EXISTS (
+        SELECT 1 FROM cash_events ce2
+        WHERE ce2.user_id = ce.user_id AND ce2.event_type = ce.event_type AND ce2.entity_id = ce.entity_id
+          AND ce2.id < ce.id
+      )
+    `)
+    if (del.rowCount && del.rowCount > 0) {
+      log("cash_events.deduped", { removed: del.rowCount }, "db")
+    }
+  } catch (e) {
+    log("cash_events.dedupe.error", { err: String(e) }, "db")
+  }
   await p.query(`
-    WITH ranked AS (
-      SELECT id,
-             ROW_NUMBER() OVER (
-               PARTITION BY user_id, event_type, entity_id
-               ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
-             ) AS rn
-      FROM cash_events
-    )
-    DELETE FROM cash_events c
-    USING ranked r
-    WHERE c.id = r.id AND r.rn > 1
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_events_user_event_entity
+    ON cash_events (user_id, event_type, entity_id)
   `)
-  await p.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'cash_events_stable_id_key'
-      ) THEN
-        ALTER TABLE cash_events
-        ADD CONSTRAINT cash_events_stable_id_key UNIQUE (user_id, event_type, entity_id);
-      END IF;
-    END
-    $$;
-  `)
-  await p.query("CREATE INDEX IF NOT EXISTS idx_cash_events_status ON cash_events (user_id, status, event_type)")
   // Extend entity payment profiles (cash graph v1)
   await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS total_inflow NUMERIC NOT NULL DEFAULT 0")
   await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS total_outflow NUMERIC NOT NULL DEFAULT 0")
@@ -1038,23 +1012,6 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_movement_explanations_cache_user ON movement_explanations_cache (user_id, updated_at DESC)",
   )
-  // Unresolved reconciliation leftovers for Stage 4 AI review.
-  await p.query(`
-    CREATE TABLE IF NOT EXISTS reconciliation_review_queue (
-      id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      movement_id           UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
-      remaining_cash        NUMERIC NOT NULL,
-      candidate_event_ids   TEXT[] NOT NULL DEFAULT '{}',
-      candidate_payload     JSONB NOT NULL DEFAULT '[]'::jsonb,
-      status                TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved', 'rejected')),
-      resolution            JSONB NOT NULL DEFAULT '{}'::jsonb,
-      created_at            TIMESTAMPTZ DEFAULT NOW(),
-      updated_at            TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE (user_id, movement_id, status)
-    )
-  `)
-  await p.query("CREATE INDEX IF NOT EXISTS idx_recon_review_queue_user_status ON reconciliation_review_queue (user_id, status, created_at DESC)")
   // Backfill allocation URIs (idempotent)
   try {
     const { migrateAllocationUris } = await import("./allocation-migrate-uris")
@@ -1075,4 +1032,24 @@ export async function query<T = unknown>(
   if (!p) throw new Error("Database is only available in production")
   const result = await p.query(text, params)
   return { rows: (result.rows ?? []) as T[] }
+}
+
+/**
+ * Run work inside a single DB transaction (BEGIN / COMMIT / ROLLBACK).
+ */
+export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const p = await getPoolAsync()
+  if (!p) throw new Error("Database is only available in production")
+  const client = await p.connect()
+  try {
+    await client.query("BEGIN")
+    const result = await fn(client)
+    await client.query("COMMIT")
+    return result
+  } catch (e) {
+    await client.query("ROLLBACK")
+    throw e
+  } finally {
+    client.release()
+  }
 }
