@@ -803,9 +803,29 @@ function buildInvoiceReasoning(
   return parts.join(" · ")
 }
 
-function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], portfolioPriors?: PortfolioPriors): CustomerModel[] {
+function buildCustomerModels(
+  movements: TaggedMovement[],
+  invoices: OutstandingInvoice[] = [],
+  portfolioPriors?: PortfolioPriors,
+  profileByEntityId?: Map<string, EntityPaymentProfile>,
+  profileByNormalizedName?: Map<string, EntityPaymentProfile>,
+): CustomerModel[] {
   const priors = portfolioPriors ?? computePortfolioPriors(movements, invoices)
   const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; isAnomaly: boolean; isOutlier: boolean; isFirstSeen: boolean; confidence: number }[] }>()
+
+  // Helper to find profile for an entity
+  function findProfile(entityId: string, name: string): EntityPaymentProfile | undefined {
+    if (profileByEntityId?.has(entityId)) {
+      const p = profileByEntityId.get(entityId)!
+      if (p.entity_type !== "vendor") return p
+    }
+    const normName = name.toLowerCase().replace(/[^a-z0-9]/g, "")
+    if (normName.length >= 3 && profileByNormalizedName?.has(normName)) {
+      const p = profileByNormalizedName.get(normName)!
+      if (p.entity_type !== "vendor") return p
+    }
+    return undefined
+  }
 
   for (const m of movements) {
     if (m.tag.economic_class !== "customer_receipt") continue
@@ -1011,34 +1031,91 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     const earliest = custInvs.filter((i) => i.due_date).sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
     const overdueCount = custInvs.filter((i) => i.status === "overdue").length
 
-    const features: CustomerFeatures = {
-      payment_count: 0, invoice_count: custInvs.length, paid_vs_unpaid_ratio: 0,
-      avg_days_to_pay: 0, std_days_to_pay: 0, amount_mean: r2(totalDue / custInvs.length),
-      amount_std: 0, interval_cv: 999, recent_trend: "insufficient",
-      last_payment_recency_days: 999, overdue_count: overdueCount, weekday_bias: null,
-    }
-
-    const invoiceForecasts = buildInvoiceForecasts(custInvs, features, "low_data", now, priors)
-
     const invCustomerName = custInvs[0].customer_name
     const canonicalName = extractEntityFromRawDescriptor(invCustomerName)
       ?? (invCustomerName && invCustomerName.length >= 2 ? cleanDescriptor(invCustomerName) : null)
       ?? `Customer (${custInvs.length} invoice${custInvs.length > 1 ? "s" : ""})`
 
+    const entityId = custInvs[0].entity_id ?? `inv_${custInvs[0].invoice_id}`
+
+    // Try to find entity profile for this invoice-only customer
+    const profile = findProfile(entityId, canonicalName)
+
+    // Use profile data if available, otherwise fall back to defaults
+    let archetype: CustomerArchetype = "low_data"
+    let probability = custInvs.some((i) => i.status === "overdue") ? 0.4 : 0.3
+    let confidence: "high" | "medium" | "low" = "low"
+    let paymentIntervalDays = 0
+    let paymentCount = 0
+
+    if (profile && profile.transaction_count > 0) {
+      // Entity has payment history in profile - use it!
+      paymentCount = profile.transaction_count
+
+      // Determine archetype from profile
+      if (profile.archetype) {
+        const archetypeMap: Record<string, CustomerArchetype> = {
+          clockwork: "clockwork", slow_reliable: "slow_reliable", bursty: "bursty",
+          volatile: "volatile", low_data: "low_data", episodic: "episodic",
+        }
+        archetype = archetypeMap[profile.archetype] ?? "low_data"
+      } else if (profile.interval_cv !== null && profile.transaction_count >= 3) {
+        // Infer archetype from interval CV
+        if (profile.interval_cv < 0.25) archetype = "clockwork"
+        else if (profile.interval_cv < 0.5) archetype = "slow_reliable"
+        else if (profile.interval_cv < 0.8) archetype = "bursty"
+        else archetype = "volatile"
+      }
+
+      // Use reliability score for probability
+      if (profile.reliability_score !== null && profile.reliability_score > 0) {
+        probability = 0.3 + profile.reliability_score * 0.5
+        if (profile.on_time_payment_rate !== null && profile.on_time_payment_rate > 0.8) {
+          probability = Math.min(0.95, probability * 1.15)
+        }
+      }
+
+      // Set confidence based on transaction count
+      if (profile.transaction_count >= 10 && profile.reliability_score !== null && profile.reliability_score > 0.7) {
+        confidence = "high"
+      } else if (profile.transaction_count >= 5) {
+        confidence = "medium"
+      } else if (profile.transaction_count >= 3) {
+        confidence = "medium"
+      }
+
+      // Use interval from profile
+      if (profile.avg_interval_days !== null) {
+        paymentIntervalDays = Math.round(profile.avg_interval_days)
+      }
+    }
+
+    const features: CustomerFeatures = {
+      payment_count: paymentCount, invoice_count: custInvs.length, paid_vs_unpaid_ratio: 0,
+      avg_days_to_pay: profile?.avg_days_to_pay ?? 0,
+      std_days_to_pay: profile?.std_days_to_pay ?? 0,
+      amount_mean: r2(totalDue / custInvs.length),
+      amount_std: 0, interval_cv: profile?.interval_cv ?? 999, recent_trend: "insufficient",
+      last_payment_recency_days: profile?.days_since_last_transaction ?? 999,
+      overdue_count: overdueCount, weekday_bias: null,
+    }
+
+    const invoiceForecasts = buildInvoiceForecasts(custInvs, features, archetype, now, priors)
+
     models.push({
-      entity_id: custInvs[0].entity_id ?? `inv_${custInvs[0].invoice_id}`,
+      entity_id: entityId,
       name: canonicalName,
-      archetype: "low_data",
+      archetype,
       inflow_event_class: custInvs.some((i) => i.status === "overdue") ? "overdue_receivable" : "sporadic_receivable",
       features,
       avg_amount: r2(totalDue / custInvs.length),
-      payment_interval_days: 0,
+      payment_interval_days: paymentIntervalDays,
       interval_variance: 0,
-      last_payment_date: now,
-      payment_count: 0,
-      probability_of_next: custInvs.some((i) => i.status === "overdue") ? 0.4 : 0.3,
+      last_payment_date: profile?.last_transaction_date ?? now,
+      payment_count: paymentCount,
+      probability_of_next: r2(Math.max(0.02, Math.min(0.98, probability))),
       next_expected_date: earliest?.due_date ?? addDays(now, 14),
-      confidence: "low",
+      confidence,
       outstanding_invoices: custInvs,
       invoice_forecasts: invoiceForecasts,
     })
@@ -1369,8 +1446,27 @@ function classifyRecurrence(
   }
 }
 
-function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[] = []): VendorModel[] {
+function buildVendorModels(
+  movements: TaggedMovement[],
+  bills: OutstandingBill[] = [],
+  profileByEntityId?: Map<string, EntityPaymentProfile>,
+  profileByNormalizedName?: Map<string, EntityPaymentProfile>,
+): VendorModel[] {
   const byEntity = new Map<string, { name: string; ecCounts: Record<string, number>; payments: { amount: number; date: string; recurring: boolean; isAnomaly: boolean; isOutlier: boolean; confidence: number; familyKey: string | null }[] }>()
+
+  // Helper to find profile for a vendor
+  function findVendorProfile(entityId: string, name: string): EntityPaymentProfile | undefined {
+    if (profileByEntityId?.has(entityId)) {
+      const p = profileByEntityId.get(entityId)!
+      if (p.entity_type !== "customer") return p
+    }
+    const normName = name.toLowerCase().replace(/[^a-z0-9]/g, "")
+    if (normName.length >= 3 && profileByNormalizedName?.has(normName)) {
+      const p = profileByNormalizedName.get(normName)!
+      if (p.entity_type !== "customer") return p
+    }
+    return undefined
+  }
 
   for (const m of movements) {
     const ec = m.tag.economic_class
@@ -1564,21 +1660,64 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
 
     const earliest = vendBills.filter((b) => b.due_date).sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
     const avgAmount = totalDue / vendBills.length
+    const entityId = vendBills[0].entity_id ?? `ap_${vendBills[0].source}_${vendBills[0].bill_id}`
+    const vendorName = vendBills[0].vendor_name.trim() || "Vendor (AP)"
+
+    // Try to find entity profile for this bill-only vendor
+    const profile = findVendorProfile(entityId, vendorName)
+
+    // Use profile data if available
+    let recurrenceType: RecurrenceModel["recurrence_type"] = "unknown"
+    let recurrenceConfidence = 0.12
+    let cadenceIntervalDays = 0
+    let isRecurring = false
+    let paymentCount = 0
+    let confidence: "high" | "medium" | "low" = "medium"
+
+    if (profile && profile.transaction_count > 0) {
+      paymentCount = profile.transaction_count
+
+      // Determine recurrence from profile
+      if (profile.interval_cv !== null && profile.transaction_count >= 3) {
+        const cvBasedConf = Math.max(0, 1 - profile.interval_cv)
+        recurrenceConfidence = Math.max(recurrenceConfidence, cvBasedConf * 0.8)
+
+        if (profile.interval_cv < 0.2) {
+          recurrenceType = "hard"
+          isRecurring = true
+        } else if (profile.interval_cv < 0.5) {
+          recurrenceType = "soft"
+          isRecurring = true
+        }
+      }
+
+      if (profile.avg_interval_days !== null) {
+        cadenceIntervalDays = Math.round(profile.avg_interval_days)
+      }
+
+      // Set confidence based on transaction count
+      if (profile.transaction_count >= 10 && recurrenceConfidence > 0.6) {
+        confidence = "high"
+      } else if (profile.transaction_count >= 5) {
+        confidence = "medium"
+      }
+    }
+
     const bareRecurrence: RecurrenceModel = {
-      recurrence_type: "unknown",
-      recurrence_confidence: 0.12,
-      expected_interval_days: null,
+      recurrence_type: recurrenceType,
+      recurrence_confidence: r2(recurrenceConfidence),
+      expected_interval_days: cadenceIntervalDays > 0 ? cadenceIntervalDays : null,
       interval_std_days: null,
       amount_mean: r2(avgAmount),
       amount_std: null,
-      interval_stability_score: 0,
+      interval_stability_score: profile?.interval_cv != null ? Math.max(0, 1 - profile.interval_cv) : 0,
       amount_stability_score: 0,
       counterparty_consistency: 0.5,
       due_date_consistency: vendBills.some((b) => b.due_date) ? 0.85 : 0.4,
       class_consistency: 0.5,
     }
     const vf: VendorFeatures = {
-      due_date_adherence: 0.65,
+      due_date_adherence: profile?.on_time_payment_rate ?? 0.65,
       payment_batching: 0.4,
       skipped_month_freq: 0,
       amount_volatility: 0.35,
@@ -1594,20 +1733,20 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
     }
 
     models.push({
-      entity_id: vendBills[0].entity_id ?? `ap_${vendBills[0].source}_${vendBills[0].bill_id}`,
-      name: vendBills[0].vendor_name.trim() || "Vendor (AP)",
-      archetype: "one_off_ap",
+      entity_id: entityId,
+      name: vendorName,
+      archetype: isRecurring ? "soft_recurring" : "one_off_ap",
       features: vf,
       avg_amount: r2(avgAmount),
-      cadence: "irregular",
-      cadence_interval_days: 0,
-      is_recurring: false,
+      cadence: cadenceIntervalDays > 0 ? detectCadence(cadenceIntervalDays) : "irregular",
+      cadence_interval_days: cadenceIntervalDays,
+      is_recurring: isRecurring,
       recurrence: bareRecurrence,
       outflow_event_class: "ap_due_driven",
-      last_payment_date: billOnlyNow,
-      payment_count: 0,
+      last_payment_date: profile?.last_transaction_date ?? billOnlyNow,
+      payment_count: paymentCount,
       next_expected_date: nextDate,
-      confidence: "medium",
+      confidence,
       outstanding_bills: vendBills,
     })
   }
@@ -1919,12 +2058,30 @@ function detectSeasonality(movements: TaggedMovement[]): SeasonalityPattern | un
   }
 }
 
-export function buildBehavioralModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], bills: OutstandingBill[] = []): BehavioralModels {
-  const customers = buildCustomerModels(movements, invoices)
+export function buildBehavioralModels(
+  movements: TaggedMovement[],
+  invoices: OutstandingInvoice[] = [],
+  bills: OutstandingBill[] = [],
+  entityProfiles: EntityPaymentProfile[] = [],
+): BehavioralModels {
+  // Build profile lookup maps for use during model creation
+  const profileByEntityId = new Map<string, EntityPaymentProfile>()
+  const profileByNormalizedName = new Map<string, EntityPaymentProfile>()
+  for (const p of entityProfiles) {
+    profileByEntityId.set(p.entity_id, p)
+    // Also index by entity name from context if available
+    const displayName = _ctx.entityNames.get(p.entity_id)
+    if (displayName) {
+      const nk = displayName.toLowerCase().replace(/[^a-z0-9]/g, "")
+      if (nk.length >= 3) profileByNormalizedName.set(nk, p)
+    }
+  }
+
+  const customers = buildCustomerModels(movements, invoices, undefined, profileByEntityId, profileByNormalizedName)
   const seasonality = detectSeasonality(movements)
   return {
     customers,
-    vendors: buildVendorModels(movements, bills),
+    vendors: buildVendorModels(movements, bills, profileByEntityId, profileByNormalizedName),
     settlement: buildSettlementModel(movements),
     transfers: buildTransferModel(movements),
     recurring_fixed: buildRecurringFixed(movements),
@@ -4599,10 +4756,13 @@ export function computeCashflowForecast(
     components = syntheticComponents
   }
 
-  // Entity-level behavioral models (enhanced with invoice + bill data)
-  let behavioral_models = buildBehavioralModels(movements, invoices, bills)
+  // Entity-level behavioral models (enhanced with invoice + bill data + entity profiles)
+  // Pass entity profiles directly to buildBehavioralModels so they can be used during
+  // initial model creation, not just as a post-hoc enhancement
+  let behavioral_models = buildBehavioralModels(movements, invoices, bills, entityProfiles)
   
-  // Enhance models with entity payment profiles (pre-computed behavioral data)
+  // Additional enhancement pass for models that were created from movements
+  // (invoice-only and bill-only models already used profiles during creation)
   if (entityProfiles.length > 0) {
     behavioral_models = enhanceModelsWithProfiles(behavioral_models, entityProfiles)
     behavioral_models = {
