@@ -784,6 +784,8 @@ export type ForecastMetadata = {
   calibration_version: string
   tagging_version: string
   policy_version: string
+  calibration_hash?: string
+  calibration_source?: "default" | "fitted" | "manual"
 }
 
 export type CashflowForecast = {

@@ -1242,6 +1242,21 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_forecast_cache_expires ON forecast_cache (expires_at)",
   )
+  // Forecast calibration overrides (per-user tunable parameters)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS forecast_calibration_overrides (
+      user_id           UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      params            JSONB NOT NULL DEFAULT '{}'::jsonb,
+      source            TEXT NOT NULL DEFAULT 'default' CHECK (source IN ('default', 'fitted', 'manual')),
+      fitted_at         TIMESTAMPTZ,
+      train_loss        REAL,
+      val_loss          REAL,
+      fit_window_days   INTEGER,
+      notes             TEXT,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
   // Backfill allocation URIs (idempotent)
   try {
     const { migrateAllocationUris } = await import("./allocation-migrate-uris")

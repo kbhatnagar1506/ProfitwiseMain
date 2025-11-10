@@ -11,6 +11,7 @@ import { generateNarrativeWithLLM } from "@/lib/forecast-llm"
 import { getAccountsWithBalancesByUserId } from "@/lib/plaid-persistence"
 import { getAllEntityProfiles } from "@/lib/entity-profiles"
 import { toMovementClass, computeStatePolicy, computeStateScope } from "@/lib/movement-types"
+import { getForecastCalibrationForUser } from "@/lib/forecast-calibration-load"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
 import type { OutstandingInvoice, OutstandingBill, ForecastContext, CashflowForecast } from "@/lib/state/types"
 
@@ -322,6 +323,7 @@ export async function GET() {
       identityCtx,
       startingCashResult,
       entityProfiles,
+      calibrationResult,
     ] = await Promise.all([
       fetchTaggedMovements(user.id),
       fetchInvoicesForReconciliation(user.id),
@@ -329,6 +331,7 @@ export async function GET() {
       buildIdentityContext(user.id),
       getStartingCash(user.id),
       getAllEntityProfiles(user.id),
+      getForecastCalibrationForUser(user.id),
     ])
 
     // Sync cash events bridge (AR/AP to forecast events)
@@ -386,7 +389,13 @@ export async function GET() {
       forecastCtx,
       bridgeEvents,
       entityProfiles,
+      calibrationResult.calibration,
     )
+
+    // Update metadata with calibration source
+    if (forecast.metadata) {
+      forecast.metadata.calibration_source = calibrationResult.source
+    }
 
     // Optionally enrich narrative with LLM
     let enrichedNarrative = forecast.narrative.forecast
