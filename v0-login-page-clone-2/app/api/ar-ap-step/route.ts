@@ -11,6 +11,9 @@ import {
   fetchReconciliationMovementRows,
   type ReconMovementRow,
 } from "@/lib/reconciliation-movement-rows"
+import { getMovementsPendingWaterfallReview } from "@/lib/reconciliation-waterfall"
+
+const WATERFALL_REVIEW_PREVIEW = 15
 
 type ReconTotals = {
   total_matched_inflows: number
@@ -58,7 +61,13 @@ export async function GET() {
 
   const recon = await fetchReconTotals(user.id)
 
-  return NextResponse.json({ ar, ap, recon })
+  const pendingReview = await getMovementsPendingWaterfallReview(user.id)
+  const waterfall_review = {
+    count: pendingReview.length,
+    movements: pendingReview.slice(0, WATERFALL_REVIEW_PREVIEW),
+  }
+
+  return NextResponse.json({ ar, ap, recon, waterfall_review })
 }
 
 async function fetchReconTotals(userId: string): Promise<ReconTotals> {

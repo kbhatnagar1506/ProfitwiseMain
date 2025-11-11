@@ -43,7 +43,7 @@ function statusFromOutstanding(outstanding: number, grossAmount: number): "open"
   return "open"
 }
 
-/** Sum of non-fee attribution abs(net) — fee rows do not consume bank cash. */
+/** Sum of abs(net) on all attribution lines for the movement (AR + fee + AP + …) = explained bank cash. */
 export async function fetchMovementsWithAvailableCash(userId: string): Promise<MovementWithAvailableCash[]> {
   await ensureMovementsSchema()
   const { rows } = await query<
@@ -55,7 +55,7 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
      FROM movements m
      LEFT JOIN (
        SELECT movement_id,
-              SUM(CASE WHEN component_type = 'fee' THEN 0 ELSE ABS(net_amount::float) END) AS allocated_sum
+              SUM(ABS(net_amount::float)) AS allocated_sum
        FROM movement_attributions
        WHERE user_id = $1::uuid
        GROUP BY movement_id
