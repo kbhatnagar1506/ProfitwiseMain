@@ -4,7 +4,8 @@ import * as jose from "jose"
 import { log } from "@/lib/logger"
 import { getPlaidClient, getAccounts } from "@/lib/plaid"
 import { mapAndDelete, mapAndUpsert, saveAccounts } from "@/lib/plaid-persistence"
-import { getPlaidItem, updatePlaidItemCursor } from "@/lib/plaid-item-store"
+import { getPlaidItem, getPlaidItemUserId, updatePlaidItemCursor } from "@/lib/plaid-item-store"
+import { classifyMovements } from "@/lib/movement-classify"
 import { updatePlaidWebhookLast } from "@/lib/db"
 
 type PlaidWebhookPayload = {
@@ -95,6 +96,16 @@ async function runTransactionsSync(itemId: string): Promise<void> {
       } catch (balanceErr) {
         log("webhook.balances.failed", { itemId, error: balanceErr instanceof Error ? balanceErr.message : String(balanceErr) }, "plaid")
       }
+    }
+    const userId = await getPlaidItemUserId(itemId)
+    if (userId) {
+      void classifyMovements(userId).catch((err) => {
+        log(
+          "webhook.after_sync.classify_failed",
+          { itemId, userId, error: err instanceof Error ? err.message : String(err) },
+          "plaid",
+        )
+      })
     }
   } catch (err) {
     log("webhook.sync.failed", { itemId, error: err instanceof Error ? err.message : String(err) }, "plaid")

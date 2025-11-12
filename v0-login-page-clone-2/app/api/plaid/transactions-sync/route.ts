@@ -4,6 +4,7 @@ import { log } from "@/lib/logger"
 import { getPlaidClient } from "@/lib/plaid"
 import { mapAndDelete, mapAndUpsert } from "@/lib/plaid-persistence"
 import { getPlaidItem, listPlaidItemIds, updatePlaidItemCursor } from "@/lib/plaid-item-store"
+import { classifyMovements } from "@/lib/movement-classify"
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(getSessionCookieName())?.value
@@ -62,6 +63,14 @@ export async function POST(request: NextRequest) {
       log("transactions.sync.page", { itemId, added: added.length, modified: modified.length, removed: removed.length, hasMore }, "plaid")
     }
     log("transactions.sync.succeeded", { itemId, added: totalAdded, modified: totalModified, removed: totalRemoved }, "plaid")
+    // Rebuild movements + movement_observations from all sources so Plaid rows appear in recon (full classify; CASCADE clears prior movement_attributions).
+    void classifyMovements(user.id).catch((err) => {
+      log(
+        "plaid.transactions_sync.classify_failed",
+        { itemId, userId: user.id, error: err instanceof Error ? err.message : String(err) },
+        "plaid",
+      )
+    })
     return NextResponse.json({
       added: totalAdded,
       modified: totalModified,
