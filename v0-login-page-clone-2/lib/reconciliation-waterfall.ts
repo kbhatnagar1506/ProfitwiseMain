@@ -5,7 +5,7 @@
 
 import type { PoolClient } from "pg"
 import { ensureMovementsSchema, query, withTransaction } from "./db"
-import { resolveDisplayNames } from "./display-name-resolve"
+import { resolveReconciliationBankLabelsForMatch } from "./display-name-resolve"
 import { insertAttributionWithClient, type CreateAttributionOpts } from "./attribution-persist"
 import type { CashEventRow } from "./cash-events-build"
 import { namesMatch } from "./ar-payment-match"
@@ -194,7 +194,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   }
   const movements = await fetchMovementsWithAvailableCash(userId)
 
-  const displayNameByMovement = await resolveDisplayNames(
+  /** Bank-first labels (Plaid merchant_tags) for matching to invoices/bills — not entity-first display names. */
+  const displayNameByMovement = await resolveReconciliationBankLabelsForMatch(
     movements.map((m) => ({
       movement_id: m.id,
       user_id: userId,
