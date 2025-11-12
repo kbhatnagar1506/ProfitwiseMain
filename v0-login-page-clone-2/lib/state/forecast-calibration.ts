@@ -216,9 +216,9 @@ export const DEFAULT_FORECAST_CALIBRATION: ForecastCalibrationParams = {
 
   // Backtest thresholds
   backtest_horizons: [7, 14, 30, 60, 90],
-  backtest_min_training_movements: 20,
-  backtest_min_test_movements: 5,
-  backtest_min_active_days: 3,
+  backtest_min_training_movements: 10,
+  backtest_min_test_movements: 3,
+  backtest_min_active_days: 2,
 
   // Archetype classification thresholds
   archetype_clockwork_interval_cv_max: 0.25,

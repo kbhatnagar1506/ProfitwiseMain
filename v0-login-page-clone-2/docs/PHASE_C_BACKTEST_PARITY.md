@@ -46,10 +46,11 @@ This document captures known gaps between the backtest replay path and the produ
 
 ## Acceptance Criteria for Phase C
 
-1. [ ] Backtest uses the same event pipeline as production (bridge optional flag)
-2. [ ] Entity profiles are threaded into backtest
-3. [ ] Historical AR/AP approximation is implemented or explicitly documented as out-of-scope
-4. [ ] Golden tests verify backtest/production parity on a fixed dataset
+1. [x] Entity profiles are threaded into backtest
+2. [x] Backtest thresholds lowered for sparse data
+3. [ ] Backtest uses the same event pipeline as production (bridge optional flag)
+4. [ ] Historical AR/AP approximation is implemented or explicitly documented as out-of-scope
+5. [ ] Golden tests verify backtest/production parity on a fixed dataset
 
 ## Priority
 

@@ -18,7 +18,7 @@ import {
   invalidateForecastCacheForUser,
 } from "./forecast-calibration-load"
 import { runSingleBacktestWithCalibration } from "./state/forecast-engine"
-import type { TaggedMovement, OutstandingInvoice, OutstandingBill } from "./state/types"
+import type { TaggedMovement, OutstandingInvoice, OutstandingBill, EntityPaymentProfile } from "./state/types"
 
 export interface CalibrationEvalResult {
   mae: number
@@ -60,13 +60,14 @@ export async function evaluateCalibrationOnHistory(
   invoices: OutstandingInvoice[],
   bills: OutstandingBill[],
   params: Partial<ForecastCalibrationParams>,
+  entityProfiles: EntityPaymentProfile[] = [],
 ): Promise<CalibrationEvalResult | null> {
   const cal = mergeCalibration(DEFAULT_FORECAST_CALIBRATION, params)
   const allDates = movements.map((m) => m.occurred_at.slice(0, 10)).filter(Boolean).sort()
   
   if (allDates.length < 30) return null
   
-  const result = runSingleBacktestWithCalibration(movements, invoices, bills, 14, allDates, cal)
+  const result = runSingleBacktestWithCalibration(movements, invoices, bills, 14, allDates, cal, entityProfiles)
   if (!result) return null
   
   return {
@@ -94,6 +95,7 @@ export async function tuneForecastCalibration(
   movements: TaggedMovement[],
   invoices: OutstandingInvoice[],
   bills: OutstandingBill[],
+  entityProfiles: EntityPaymentProfile[] = [],
 ): Promise<TunerResult | null> {
   if (movements.length < 50) {
     log("calibration.tune.insufficient_data", { userId, count: movements.length }, "forecast")
@@ -107,7 +109,7 @@ export async function tuneForecastCalibration(
   const avgDailyFlow = totalFlow / spanDays
 
   // Evaluate baseline (default calibration)
-  const baselineResult = await evaluateCalibrationOnHistory(movements, invoices, bills, {})
+  const baselineResult = await evaluateCalibrationOnHistory(movements, invoices, bills, {}, entityProfiles)
   if (!baselineResult) {
     log("calibration.tune.baseline_failed", { userId }, "forecast")
     return null
@@ -125,11 +127,10 @@ export async function tuneForecastCalibration(
 
     const bounds = CALIBRATION_BOUNDS[knob]
     for (const value of steps) {
-      // Skip if out of bounds
       if (bounds && (value < bounds.min || value > bounds.max)) continue
 
       const testParams = { ...bestParams, [knob]: value }
-      const result = await evaluateCalibrationOnHistory(movements, invoices, bills, testParams)
+      const result = await evaluateCalibrationOnHistory(movements, invoices, bills, testParams, entityProfiles)
       iterations++
 
       if (result) {

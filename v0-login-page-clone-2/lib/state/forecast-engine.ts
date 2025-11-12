@@ -1321,6 +1321,7 @@ function classifyRecurrence(
   familyRecurring: boolean,
   amounts?: number[],
   hasBillsWithDueDates?: boolean,
+  billDueDates?: string[],
 ): RecurrenceModel {
   const n = payments.length
   const intervalStd = std(intervals)
@@ -1343,7 +1344,50 @@ function classifyRecurrence(
     class_consistency * 0.1
   )
 
+  // When payment count is low, try to infer recurrence from bill due date intervals
+  const sortedBillDates = (billDueDates ?? []).filter(Boolean).sort()
+  const billIntervals: number[] = []
+  for (let i = 1; i < sortedBillDates.length; i++) {
+    billIntervals.push(daysBetween(sortedBillDates[i - 1], sortedBillDates[i]))
+  }
+  const billAvgInterval = billIntervals.length > 0 ? billIntervals.reduce((a, b) => a + b, 0) / billIntervals.length : 0
+  const billIntervalStd = billIntervals.length > 1 ? std(billIntervals) : 0
+  const billIntervalCV = billAvgInterval > 0 ? billIntervalStd / billAvgInterval : 999
+
   if (n <= 2 && !taggedRecurring && !familyRecurring) {
+    // Use bill due date intervals to upgrade from unknown/episodic to soft
+    if (billIntervals.length >= 2 && billIntervalCV < 0.5) {
+      const billConf = Math.min(0.55, componentConfidence * 0.8 + 0.15)
+      return {
+        recurrence_type: "soft",
+        recurrence_confidence: r2(billConf),
+        expected_interval_days: Math.round(billAvgInterval),
+        interval_std_days: r2(billIntervalStd),
+        amount_mean: amountMean > 0 ? r2(amountMean) : null,
+        amount_std: amountStd > 0 ? r2(amountStd) : null,
+        interval_stability_score: r2(Math.max(0, 1 - billIntervalCV)),
+        amount_stability_score,
+        counterparty_consistency,
+        due_date_consistency: 0.9,
+        class_consistency,
+      }
+    }
+    if (billIntervals.length >= 1 && billIntervalCV < 0.8) {
+      const billConf = Math.min(0.35, componentConfidence * 0.5 + 0.1)
+      return {
+        recurrence_type: "episodic",
+        recurrence_confidence: r2(billConf),
+        expected_interval_days: Math.round(billAvgInterval),
+        interval_std_days: billIntervals.length > 1 ? r2(billIntervalStd) : null,
+        amount_mean: amountMean > 0 ? r2(amountMean) : null,
+        amount_std: amountStd > 0 ? r2(amountStd) : null,
+        interval_stability_score: r2(Math.max(0, 1 - billIntervalCV)),
+        amount_stability_score,
+        counterparty_consistency,
+        due_date_consistency: 0.8,
+        class_consistency,
+      }
+    }
     return {
       recurrence_type: n === 0 ? "unknown" : "episodic",
       recurrence_confidence: r2(n === 0 ? 0 : Math.min(0.15, componentConfidence * 0.3)),
@@ -1427,6 +1471,24 @@ function classifyRecurrence(
       amount_stability_score,
       counterparty_consistency,
       due_date_consistency,
+      class_consistency,
+    }
+  }
+
+  // Fallback: also try bill due dates for low-data vendors that passed the n>2 check
+  // but failed all other classification criteria
+  if (billIntervals.length >= 2 && billIntervalCV < 0.5 && n < 3) {
+    return {
+      recurrence_type: "soft",
+      recurrence_confidence: r2(Math.min(0.45, componentConfidence * 0.6 + 0.1)),
+      expected_interval_days: Math.round(billAvgInterval),
+      interval_std_days: r2(billIntervalStd),
+      amount_mean: amountMean > 0 ? r2(amountMean) : null,
+      amount_std: amountStd > 0 ? r2(amountStd) : null,
+      interval_stability_score: r2(Math.max(0, 1 - billIntervalCV)),
+      amount_stability_score,
+      counterparty_consistency,
+      due_date_consistency: 0.9,
       class_consistency,
     }
   }
@@ -1551,6 +1613,7 @@ function buildVendorModels(
       intervals, avgInterval, intervalCV, taggedRecurring, familyRecurring,
       usePayments.map((p) => p.amount),
       hasBillsWithDueDates,
+      vendorBills.filter((b) => !!b.due_date).map((b) => b.due_date!),
     )
     recurrence.amount_mean = r2(avgAmount)
     recurrence.amount_std = r2(amountStd)
@@ -1666,6 +1729,16 @@ function buildVendorModels(
     // Try to find entity profile for this bill-only vendor
     const profile = findVendorProfile(entityId, vendorName)
 
+    // Compute bill due date intervals for recurrence inference
+    const billDueDates = vendBills.filter((b) => !!b.due_date).map((b) => b.due_date!).sort()
+    const billDueIntervals: number[] = []
+    for (let i = 1; i < billDueDates.length; i++) {
+      billDueIntervals.push(daysBetween(billDueDates[i - 1], billDueDates[i]))
+    }
+    const billDueAvgInterval = billDueIntervals.length > 0 ? billDueIntervals.reduce((a, b) => a + b, 0) / billDueIntervals.length : 0
+    const billDueStd = billDueIntervals.length > 1 ? std(billDueIntervals) : 0
+    const billDueCV = billDueAvgInterval > 0 ? billDueStd / billDueAvgInterval : 999
+
     // Use profile data if available
     let recurrenceType: RecurrenceModel["recurrence_type"] = "unknown"
     let recurrenceConfidence = 0.12
@@ -1677,7 +1750,6 @@ function buildVendorModels(
     if (profile && profile.transaction_count > 0) {
       paymentCount = profile.transaction_count
 
-      // Determine recurrence from profile
       if (profile.interval_cv !== null && profile.transaction_count >= 3) {
         const cvBasedConf = Math.max(0, 1 - profile.interval_cv)
         recurrenceConfidence = Math.max(recurrenceConfidence, cvBasedConf * 0.8)
@@ -1695,12 +1767,23 @@ function buildVendorModels(
         cadenceIntervalDays = Math.round(profile.avg_interval_days)
       }
 
-      // Set confidence based on transaction count
       if (profile.transaction_count >= 10 && recurrenceConfidence > 0.6) {
         confidence = "high"
       } else if (profile.transaction_count >= 5) {
         confidence = "medium"
       }
+    }
+
+    // If profile didn't classify recurrence, try bill due date intervals
+    if (recurrenceType === "unknown" && billDueIntervals.length >= 2 && billDueCV < 0.5) {
+      recurrenceType = "soft"
+      recurrenceConfidence = Math.max(recurrenceConfidence, Math.min(0.55, (1 - billDueCV) * 0.7))
+      cadenceIntervalDays = Math.round(billDueAvgInterval)
+      isRecurring = true
+    } else if (recurrenceType === "unknown" && billDueIntervals.length >= 1 && billDueCV < 0.8) {
+      recurrenceType = "episodic"
+      recurrenceConfidence = Math.max(recurrenceConfidence, Math.min(0.35, (1 - billDueCV) * 0.5))
+      cadenceIntervalDays = Math.round(billDueAvgInterval)
     }
 
     const bareRecurrence: RecurrenceModel = {
@@ -3700,25 +3783,29 @@ function computeForecastConfidence(
 
   // ── 8. Backtest confidence (weight: 0.10) ──
   // accuracy_score is 0-100, normalize to 0-1 for the composite
-  const backtestScore = backtest ? Math.min(1, backtest.accuracy_score / 100) : 0
+  const hasBacktest = backtest !== null
+  const backtestScore = hasBacktest ? Math.min(1, backtest.accuracy_score / 100) : 0
   by_component.push({
     area: "Backtest accuracy", score: r2(backtestScore),
-    label: backtestScore >= 0.7 ? "high" : backtestScore >= 0.4 ? "medium" : "low",
-    reason: backtest
+    label: hasBacktest ? (backtestScore >= 0.7 ? "high" : backtestScore >= 0.4 ? "medium" : "low") : "low",
+    reason: hasBacktest
       ? `${backtest.days_tested}d tested, direction accuracy ${(backtest.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest.mean_absolute_error.toLocaleString()}`
       : "No backtest data available",
   })
 
   // ── Weighted composite score ──
+  // When backtest is unavailable, redistribute its weight proportionally to other components
+  const backtestWeight = hasBacktest ? cw.backtest : 0
+  const redistributionScale = hasBacktest ? 1 : 1 / (1 - cw.backtest)
   const weightedScore =
-    inflowScore * cw.inflow +
-    outflowScore * cw.outflow +
-    settScore * cw.settlement +
-    identityScore * cw.identity +
-    recurrenceScore * cw.recurrence +
-    dataSpanScore * cw.dataSpan +
-    varianceScore * cw.stability +
-    backtestScore * cw.backtest
+    inflowScore * cw.inflow * redistributionScale +
+    outflowScore * cw.outflow * redistributionScale +
+    settScore * cw.settlement * redistributionScale +
+    identityScore * cw.identity * redistributionScale +
+    recurrenceScore * cw.recurrence * redistributionScale +
+    dataSpanScore * cw.dataSpan * redistributionScale +
+    varianceScore * cw.stability * redistributionScale +
+    backtestScore * backtestWeight
 
   const score = Math.max(0.05, Math.min(hasUnresolvedOrExcluded ? 0.99 : 1, weightedScore))
   const label: ForecastConfidence["label"] = score >= 0.7 ? "high" : score >= 0.45 ? "medium" : "low"
@@ -3756,7 +3843,8 @@ function computeForecastConfidence(
   if (recurrenceScore < 0.4) how_to_improve.push("Track 2 more cycles of vendor payments for recurrence patterns")
   if (inflowScore < 0.5) how_to_improve.push("Add invoice due dates or confirm customer payment cadence")
   if (outflowScore < 0.5) how_to_improve.push("Link AP or confirm vendor payment schedules")
-  if (backtestScore < 0.5) how_to_improve.push("More historical data needed for reliable backtest")
+  if (backtestScore < 0.5 && hasBacktest) how_to_improve.push("Backtest accuracy is low — more stable transaction patterns would help")
+  if (backtestScore < 0.5 && !hasBacktest) how_to_improve.push("Need 10+ training transactions for backtest validation")
   if (how_to_improve.length === 0) how_to_improve.push("Forecast is already well-supported by data")
 
   const what_would_make_wrong = score < 0.6
@@ -4414,6 +4502,7 @@ export function runSingleBacktestWithCalibration(
   testDays: number,
   allDates: string[],
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
+  entityProfiles: EntityPaymentProfile[] = [],
 ): {
   score: number
   mae: number
@@ -4424,7 +4513,7 @@ export function runSingleBacktestWithCalibration(
   events: ForecastEvent[]
   models: BehavioralModels
 } | null {
-  return runSingleBacktest(movements, invoices, bills, testDays, allDates, cal)
+  return runSingleBacktest(movements, invoices, bills, testDays, allDates, cal, entityProfiles)
 }
 
 function runSingleBacktest(
@@ -4434,6 +4523,7 @@ function runSingleBacktest(
   testDays: number,
   allDates: string[],
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
+  entityProfiles: EntityPaymentProfile[] = [],
 ): {
   score: number
   mae: number
@@ -4452,7 +4542,7 @@ function runSingleBacktest(
 
   if (training.length < cal.backtest_min_training_movements || testSet.length < cal.backtest_min_test_movements) return null
 
-  const models = buildBehavioralModels(training, invoices, bills)
+  const models = buildBehavioralModels(training, invoices, bills, entityProfiles)
   const buckets = decomposeMovements(training)
   const dataSpan = daysBetween(allDates[0], cutoffDate)
   const components = buckets.map((b) => buildComponent(b, dataSpan))
@@ -4562,6 +4652,7 @@ function runBacktest(
   invoices: OutstandingInvoice[],
   bills: OutstandingBill[],
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
+  entityProfiles: EntityPaymentProfile[] = [],
 ): BacktestResult | null {
   const allDates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
   if (allDates.length < 30) return null
@@ -4569,13 +4660,13 @@ function runBacktest(
   const totalSpanDays = daysBetween(allDates[0], allDates[allDates.length - 1])
 
   // Primary backtest at 14 days
-  const primary = runSingleBacktest(movements, invoices, bills, 14, allDates, cal)
+  const primary = runSingleBacktest(movements, invoices, bills, 14, allDates, cal, entityProfiles)
   if (!primary) return null
 
   const by_horizon: BacktestByHorizon[] = []
   for (const h of cal.backtest_horizons) {
     if (h > totalSpanDays * 0.4) continue
-    const r = runSingleBacktest(movements, invoices, bills, h, allDates, cal)
+    const r = runSingleBacktest(movements, invoices, bills, h, allDates, cal, entityProfiles)
     if (!r) continue
     by_horizon.push({
       horizon_days: h,
@@ -4839,7 +4930,7 @@ export function computeCashflowForecast(
   }
 
   // Backtest: replay last 14 days to measure forecast accuracy
-  const backtest = runBacktest(movements, invoices, bills, cal)
+  const backtest = runBacktest(movements, invoices, bills, cal, entityProfiles)
 
   // Forecast confidence (8-component weighted, with backtest input)
   const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements, bills, cal)
