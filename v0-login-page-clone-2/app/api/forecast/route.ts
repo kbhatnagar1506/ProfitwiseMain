@@ -146,6 +146,49 @@ async function fetchTaggedMovements(userId: string): Promise<TaggedMovement[]> {
   return tagged
 }
 
+async function enrichMovementsWithAttributionTimestamps(userId: string, movements: TaggedMovement[]): Promise<TaggedMovement[]> {
+  try {
+    await ensureMovementsSchema()
+    
+    // Fetch all attributions for this user's movements
+    const attributions = await query<{ movement_id: string; reconcile_at: string | null; created_at: string }>(
+      `SELECT movement_id, reconcile_at, created_at
+       FROM movement_attributions
+       WHERE user_id = $1 AND component_type IN ('settlement', 'fee')
+       ORDER BY movement_id, created_at DESC`,
+      [userId]
+    ).then((r) => r.rows)
+    
+    // Build a map of movement_id -> earliest reconcile_at or created_at
+    const attrMap = new Map<string, string>()
+    for (const attr of attributions) {
+      if (!attrMap.has(attr.movement_id)) {
+        // Use reconcile_at if available, otherwise created_at
+        const ts = attr.reconcile_at ?? attr.created_at
+        if (ts) attrMap.set(attr.movement_id, ts)
+      }
+    }
+    
+    // Enrich movements with attribution timestamps
+    return movements.map((m) => {
+      const attrTs = attrMap.get(m.id)
+      if (attrTs) {
+        return {
+          ...m,
+          metadata: {
+            ...m.metadata,
+            reconcile_at: attrTs,
+          },
+        }
+      }
+      return m
+    })
+  } catch (err) {
+    log("forecast.enrich_attributions.error", { error: err instanceof Error ? err.message : String(err) }, "forecast")
+    return movements // Return unchanged if enrichment fails
+  }
+}
+
 async function buildIdentityContext(userId: string): Promise<IdentityContext> {
   const entityNames = new Map<string, string>()
   const entityTypes = new Map<string, string>()
@@ -333,6 +376,9 @@ export async function GET() {
       getForecastCalibrationForUser(user.id),
     ])
 
+    // Enrich movements with attribution timestamps for settlement timing
+    const enrichedMovements = await enrichMovementsWithAttributionTimestamps(user.id, taggedMovements)
+
     // Rebuild entity profiles if stale (per route_config) or missing
     const cal = calibrationResult.calibration
     const profileAge = await query<{ newest: string | null }>(
@@ -393,7 +439,7 @@ export async function GET() {
 
     // Compute the forecast
     const forecast = computeCashflowForecast(
-      taggedMovements,
+      enrichedMovements,
       startingCashResult.cash,
       cal.route_config.horizon_months,
       invoices,
