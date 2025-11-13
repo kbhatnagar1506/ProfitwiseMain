@@ -1833,8 +1833,69 @@ function buildVendorModels(
 // Per-processor settlement profiles with weekday effects, fee netting,
 // and aggregated overall cadence.
 
+/**
+ * Extract settlement delays from reconciliation data.
+ * Compares movement date vs. when it was attributed/matched to infer clearing delays.
+ * Returns intervals (in days) between transaction date and settlement/attribution date.
+ */
+function extractSettlementDelaysFromReconciliation(
+  movements: TaggedMovement[],
+): number[] {
+  const delays: number[] = []
+
+  for (const m of movements) {
+    // Only look at processor payouts and settlement adjustments
+    if (m.tag?.economic_class !== "processor_payout" && m.tag?.economic_class !== "settlement_adjustment") {
+      continue
+    }
+
+    // Skip if no metadata or attribution info
+    if (!m.metadata || typeof m.metadata !== "object") continue
+
+    const md = m.metadata as Record<string, unknown>
+    const attributedAt = md.attributed_at
+    const matchedAt = md.matched_at
+
+    // If we have an attribution/match timestamp, calculate delay
+    if (attributedAt && typeof attributedAt === "string") {
+      try {
+        const movementDate = new Date(m.occurred_at).getTime()
+        const attrDate = new Date(attributedAt).getTime()
+        if (!isNaN(movementDate) && !isNaN(attrDate)) {
+          const delayDays = Math.round((attrDate - movementDate) / 86_400_000)
+          if (delayDays >= 0 && delayDays <= 90) {
+            delays.push(delayDays)
+          }
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    if (matchedAt && typeof matchedAt === "string") {
+      try {
+        const movementDate = new Date(m.occurred_at).getTime()
+        const matchDate = new Date(matchedAt).getTime()
+        if (!isNaN(movementDate) && !isNaN(matchDate)) {
+          const delayDays = Math.round((matchDate - movementDate) / 86_400_000)
+          if (delayDays >= 0 && delayDays <= 90) {
+            delays.push(delayDays)
+          }
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  }
+
+  return delays
+}
+
 function buildSettlementModel(movements: TaggedMovement[]): SettlementModel {
   const byProcessor = new Map<string, { timestamps: number[]; amounts: number[]; fees: number[] }>()
+
+  // Extract settlement delays from reconciliation data
+  const reconDelays = extractSettlementDelaysFromReconciliation(movements)
 
   for (const m of movements) {
     const t = m.tag
@@ -1901,9 +1962,13 @@ function buildSettlementModel(movements: TaggedMovement[]): SettlementModel {
     })
   }
 
-  const n = allIntervals.length
-  const avg = n > 0 ? allIntervals.reduce((a, b) => a + b, 0) / n : 0
-  const delayStd = std(allIntervals)
+  // Merge reconciliation delays with processor intervals
+  // Reconciliation delays provide direct evidence of settlement timing
+  const allDelays = [...allIntervals, ...reconDelays]
+
+  const n = allDelays.length
+  const avg = n > 0 ? allDelays.reduce((a, b) => a + b, 0) / n : 0
+  const delayStd = std(allDelays)
   const confidence: SettlementModel["confidence"] =
     n >= 20 ? "high" : n >= 10 ? "medium" : n >= 3 ? "low" : "insufficient"
 
