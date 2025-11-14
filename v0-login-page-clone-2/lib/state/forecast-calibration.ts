@@ -971,7 +971,7 @@ export const DEFAULT_FORECAST_CALIBRATION: ForecastCalibrationParams = {
   },
 
   route_config: {
-    cache_ttl_minutes: 15, profile_stale_ms: 3600000, horizon_months: 6,
+    cache_ttl_minutes: 0, profile_stale_ms: 3600000, horizon_months: 6,
   },
 }
 
