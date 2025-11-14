@@ -21,6 +21,13 @@ const POLICY_VERSION = "1.0"
 import { extractEntityFromRawDescriptor } from "@/lib/alias-normalize"
 import type { CanonicalMovement, MovementTag } from "@/lib/movement-types"
 import type { EntityPaymentProfile } from "./types"
+import { log } from "@/lib/logger"
+import {
+  fetchReconciledARMovements,
+  fetchReconciledAPMovements,
+  buildReconciledCustomerModels,
+  buildReconciledVendorModels,
+} from "@/lib/reconciled-models"
 import {
   DEFAULT_FORECAST_CALIBRATION,
   mergeCalibration,
@@ -1105,84 +1112,6 @@ function buildCustomerModels(
 }
 
 /**
- * Enhance customer models with entity profile data for improved forecasting.
- * Entity profiles provide pre-computed behavioral metrics, seasonality, and reliability scores.
- */
-export function enhanceModelsWithEntityProfiles(
-  customerModels: CustomerModel[],
-  vendorModels: VendorModel[],
-  entityProfiles: Map<string, EntityPaymentProfile>
-): { customers: CustomerModel[]; vendors: VendorModel[]; profilesUsed: number } {
-  let profilesUsed = 0
-
-  // Enhance customer models
-  for (const model of customerModels) {
-    const profile = entityProfiles.get(model.entity_id)
-    if (!profile) continue
-
-    profilesUsed++
-
-    // Use profile's archetype if it has more data
-    if (profile.transaction_count > model.payment_count && profile.archetype) {
-      const archetypeMap: Record<string, CustomerArchetype> = {
-        clockwork: "clockwork",
-        slow_reliable: "slow_reliable",
-        bursty: "bursty",
-        volatile: "volatile",
-        low_data: "low_data",
-      }
-      const mappedArchetype = archetypeMap[profile.archetype]
-      if (mappedArchetype) {
-        model.archetype = mappedArchetype
-      }
-    }
-
-    // Enhance features with profile data
-    if (profile.avg_days_to_pay !== null) {
-      model.features.avg_days_to_pay = profile.avg_days_to_pay
-    }
-    if (profile.std_days_to_pay !== null) {
-      model.features.std_days_to_pay = profile.std_days_to_pay
-    }
-    if (profile.interval_cv !== null) {
-      model.features.interval_cv = profile.interval_cv
-    }
-
-    // Adjust probability based on reliability score
-    if (profile.reliability_score > 0) {
-      const reliabilityBoost = (profile.reliability_score - cal.profile_enhancement.reliability_boost_offset) * cal.profile_enhancement.reliability_boost_scale
-      model.probability_of_next = Math.max(cal.customer_probability.floor, Math.min(cal.customer_probability.ceiling, model.probability_of_next + reliabilityBoost))
-    }
-
-    // Upgrade confidence if profile has good data
-    if (profile.transaction_count >= cal.profile_enhancement.upgrade_txn_count && profile.reliability_score > cal.profile_enhancement.upgrade_base_reliability) {
-      if (model.confidence === "low") model.confidence = "medium"
-      if (model.confidence === "medium" && profile.reliability_score > cal.profile_enhancement.upgrade_high_reliability) model.confidence = "high"
-    }
-  }
-
-  // Enhance vendor models similarly
-  for (const model of vendorModels) {
-    const profile = entityProfiles.get(model.entity_id)
-    if (!profile) continue
-
-    profilesUsed++
-
-    // Adjust recurrence confidence based on profile
-    if (profile.interval_cv !== null && profile.interval_cv < model.recurrence.interval_std_days!) {
-      model.recurrence.recurrence_confidence = Math.min(1, model.recurrence.recurrence_confidence + 0.1)
-    }
-
-    // Upgrade confidence if profile has good data
-    if (profile.transaction_count >= 6 && profile.reliability_score > 0.7) {
-      if (model.confidence === "low") model.confidence = "medium"
-    }
-  }
-
-  return { customers: customerModels, vendors: vendorModels, profilesUsed }
-}
-
-/**
  * Compute entity profile quality score for forecast confidence.
  * Returns a score from 0-1 based on profile completeness and data quality.
  */
@@ -2220,6 +2149,75 @@ export function buildBehavioralModels(
     recurring_fixed: buildRecurringFixed(movements),
     invoice_signal: buildInvoiceSignal(invoices),
     seasonality,
+  }
+}
+
+/**
+ * Blend reconciled AR/AP models with raw behavioral models to improve confidence.
+ * Reconciled models provide high-confidence signals from matched invoices/bills.
+ * Raw models provide broader coverage but lower confidence.
+ */
+export function blendReconciledModels(
+  rawModels: BehavioralModels,
+  reconciledCustomers: Array<{
+    entity_id: string
+    entity_name: string
+    stats: any
+    movements: any[]
+  }>,
+  reconciledVendors: Array<{
+    entity_id: string
+    entity_name: string
+    stats: any
+    movements: any[]
+  }>,
+): BehavioralModels {
+  // Create lookup maps for reconciled models
+  const reconCustomerMap = new Map(reconciledCustomers.map((c) => [c.entity_id, c]))
+  const reconVendorMap = new Map(reconciledVendors.map((v) => [v.entity_id, v]))
+
+  // Enhance customer models with reconciled data
+  const enhancedCustomers = rawModels.customers.map((customer) => {
+    const reconData = reconCustomerMap.get(customer.entity_id)
+    if (!reconData) return customer
+
+    // Boost confidence if we have reconciled data
+    const newConfidence: "high" | "medium" | "low" =
+      customer.confidence === "high" ? "high" :
+      reconData.stats.payment_count >= 3 ? "high" :
+      reconData.stats.payment_count >= 2 ? "medium" :
+      customer.confidence
+
+    return {
+      ...customer,
+      confidence: newConfidence,
+      payment_count: Math.max(customer.payment_count, reconData.stats.payment_count),
+    }
+  })
+
+  // Enhance vendor models with reconciled data
+  const enhancedVendors = rawModels.vendors.map((vendor) => {
+    const reconData = reconVendorMap.get(vendor.entity_id)
+    if (!reconData) return vendor
+
+    // Boost confidence if we have reconciled data
+    const newConfidence: "high" | "medium" | "low" =
+      vendor.confidence === "high" ? "high" :
+      reconData.stats.payment_count >= 3 ? "high" :
+      reconData.stats.payment_count >= 2 ? "medium" :
+      vendor.confidence
+
+    return {
+      ...vendor,
+      confidence: newConfidence,
+      payment_count: Math.max(vendor.payment_count, reconData.stats.payment_count),
+    }
+  })
+
+  return {
+    ...rawModels,
+    customers: enhancedCustomers,
+    vendors: enhancedVendors,
   }
 }
 
@@ -4592,7 +4590,7 @@ function runSingleBacktest(
       min_training: cal.backtest_min_training_movements,
       min_test: cal.backtest_min_test_movements,
       test_days: testDays,
-    }, "forecast")
+    })
     return null
   }
 
@@ -4637,7 +4635,7 @@ function runSingleBacktest(
       min_active: cal.backtest_min_active_days,
       test_days: testDays,
       total_days_checked: testDays,
-    }, "forecast")
+    })
     return null
   }
 
@@ -4722,7 +4720,7 @@ function runBacktest(
     log("backtest.skip.insufficient_total_movements", {
       total_movements: allDates.length,
       min_required: minMovements,
-    }, "forecast")
+    })
     return null
   }
 
@@ -4734,7 +4732,7 @@ function runBacktest(
     log("backtest.skip.primary_14d_failed", {
       total_movements: allDates.length,
       total_span_days: totalSpanDays,
-    }, "forecast")
+    })
     return null
   }
 
@@ -4847,6 +4845,8 @@ export function computeCashflowForecast(
   bridgeEvents30d: ForecastEvent[] | null = null,
   entityProfiles: EntityPaymentProfile[] = [],
   calibrationOverride: Partial<ForecastCalibrationParams> = {},
+  reconciledARMovements: any[] = [],
+  reconciledAPMovements: any[] = [],
 ): CashflowForecast {
   // Merge calibration: defaults + any user/fitted overrides
   const cal = mergeCalibration(DEFAULT_FORECAST_CALIBRATION, calibrationOverride)
@@ -4926,6 +4926,17 @@ export function computeCashflowForecast(
   // Pass entity profiles directly to buildBehavioralModels so they can be used during
   // initial model creation, not just as a post-hoc enhancement
   let behavioral_models = buildBehavioralModels(movements, invoices, bills, entityProfiles)
+  
+  // Blend with reconciled AR/AP models for improved confidence
+  if (reconciledARMovements.length > 0 || reconciledAPMovements.length > 0) {
+    const reconciledCustomers = buildReconciledCustomerModels(reconciledARMovements)
+    const reconciledVendors = buildReconciledVendorModels(reconciledAPMovements)
+    behavioral_models = blendReconciledModels(behavioral_models, reconciledCustomers, reconciledVendors)
+    log("forecast.reconciled_models.blended", {
+      customers_blended: reconciledCustomers.length,
+      vendors_blended: reconciledVendors.length,
+    })
+  }
   
   // Additional enhancement pass for models that were created from movements
   // (invoice-only and bill-only models already used profiles during creation)
