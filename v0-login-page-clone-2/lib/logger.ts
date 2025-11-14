@@ -10,6 +10,7 @@ export type LogChannel =
   | "stripe"
   | "identity"
   | "movements"
+  | "shopify"
 
 /**
  * Emoji for filtering in log viewers (e.g. Heroku):
@@ -48,6 +49,8 @@ function prefix(channel?: LogChannel): string {
       return "[Identity]"
     case "movements":
       return "[Movements]"
+    case "shopify":
+      return "[Shopify]"
     default:
       return "[QBO]"
   }

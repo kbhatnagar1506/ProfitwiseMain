@@ -46,6 +46,12 @@ const integrations: Integration[] = [
     logo: "/stripe-logo.png",
   },
   {
+    name: "Shopify",
+    description: "Orders, payouts, and reconciliation data",
+    category: "Commerce",
+    logo: "/placeholder.svg",
+  },
+  {
     name: "FreshBooks",
     description: "Simple accounting for small businesses",
     category: "Accounting",
@@ -1414,6 +1420,7 @@ export function OnboardingFlow({
               {integrations.map((integration) => {
                 const usePlaid = PLAID_INTEGRATIONS.includes(integration.name)
                 const isStripe = integration.name === "Stripe"
+                const isShopify = integration.name === "Shopify"
                 const plaidDisabled = usePlaid && (accountingStepLinkLoading || !plaidReady)
                 const isConnected = connectedIntegrations.includes(integration.name)
                 return (
@@ -1425,6 +1432,8 @@ export function OnboardingFlow({
                         openPlaidLink()
                       } else if (isStripe) {
                         window.location.href = "/oauth/stripe"
+                      } else if (isShopify) {
+                        window.location.href = "/oauth/shopify"
                       } else {
                         toggleIntegration(integration.name)
                       }
