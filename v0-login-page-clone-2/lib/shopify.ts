@@ -2,11 +2,9 @@ import crypto from "crypto"
 
 export const SHOPIFY_REQUIRED_SCOPES = [
   "read_orders",
-  "read_all_orders",
   "read_customers",
   "read_discounts",
   "read_shopify_payments_payouts",
-  "read_shopify_payments_disputes",
 ]
 
 export const SHOPIFY_CONSENT_TYPE = "shopify_data_storage"
