@@ -2181,12 +2181,22 @@ export function blendReconciledModels(
     const reconData = reconCustomerMap.get(customer.entity_id)
     if (!reconData) return customer
 
-    // Boost confidence if we have reconciled data
-    const newConfidence: "high" | "medium" | "low" =
-      customer.confidence === "high" ? "high" :
-      reconData.stats.payment_count >= 3 ? "high" :
-      reconData.stats.payment_count >= 2 ? "medium" :
-      customer.confidence
+    // Determine confidence boost based on reconciled payment count and reliability
+    let newConfidence: "high" | "medium" | "low" = customer.confidence
+    let confidenceReason = ""
+
+    if (reconData.stats.payment_count >= 5) {
+      newConfidence = "high"
+      confidenceReason = `High confidence: ${reconData.stats.payment_count} reconciled AR payments with ${Math.round(reconData.stats.reliability_score * 100)}% reliability`
+    } else if (reconData.stats.payment_count >= 3) {
+      newConfidence = customer.confidence === "low" ? "medium" : customer.confidence
+      confidenceReason = `Medium confidence: ${reconData.stats.payment_count} reconciled AR payments`
+    } else if (reconData.stats.payment_count >= 2) {
+      if (customer.confidence === "low") {
+        newConfidence = "medium"
+        confidenceReason = `Upgraded to medium: ${reconData.stats.payment_count} reconciled AR payments`
+      }
+    }
 
     return {
       ...customer,
@@ -2200,12 +2210,22 @@ export function blendReconciledModels(
     const reconData = reconVendorMap.get(vendor.entity_id)
     if (!reconData) return vendor
 
-    // Boost confidence if we have reconciled data
-    const newConfidence: "high" | "medium" | "low" =
-      vendor.confidence === "high" ? "high" :
-      reconData.stats.payment_count >= 3 ? "high" :
-      reconData.stats.payment_count >= 2 ? "medium" :
-      vendor.confidence
+    // Determine confidence boost based on reconciled payment count and recurrence
+    let newConfidence: "high" | "medium" | "low" = vendor.confidence
+    let confidenceReason = ""
+
+    if (reconData.stats.payment_count >= 5) {
+      newConfidence = "high"
+      confidenceReason = `High confidence: ${reconData.stats.payment_count} reconciled AP payments with ${Math.round(reconData.stats.recurrence_score * 100)}% recurrence`
+    } else if (reconData.stats.payment_count >= 3) {
+      newConfidence = vendor.confidence === "low" ? "medium" : vendor.confidence
+      confidenceReason = `Medium confidence: ${reconData.stats.payment_count} reconciled AP payments`
+    } else if (reconData.stats.payment_count >= 2) {
+      if (vendor.confidence === "low") {
+        newConfidence = "medium"
+        confidenceReason = `Upgraded to medium: ${reconData.stats.payment_count} reconciled AP payments`
+      }
+    }
 
     return {
       ...vendor,
