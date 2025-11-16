@@ -348,7 +348,8 @@ export async function GET() {
     }
 
     // Check for cached forecast first
-    const cached = await getCachedForecast(user.id)
+    // Temporarily disable cache to debug reconciled models
+    const cached = null // await getCachedForecast(user.id)
     if (cached) {
       log("forecast.cache.hit", { userId: user.id, computedAt: cached.computed_at })
       return NextResponse.json(cached.forecast_data)
@@ -387,7 +388,7 @@ export async function GET() {
     const cal = calibrationResult.calibration
     const profileAge = await query<{ newest: string | null }>(
       `SELECT MAX(last_updated)::text as newest FROM entity_payment_profiles WHERE user_id = $1::uuid`,
-      [user.id]
+        [user.id]
     )
     const newest = profileAge.rows[0]?.newest
     const isStale = !newest || (Date.now() - new Date(newest).getTime()) > cal.route_config.profile_stale_ms

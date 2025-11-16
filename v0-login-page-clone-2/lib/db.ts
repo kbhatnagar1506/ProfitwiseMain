@@ -851,15 +851,23 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("ALTER TABLE movement_allocations ADD COLUMN IF NOT EXISTS synthetic_invoice BOOLEAN NOT NULL DEFAULT false")
   await p.query("ALTER TABLE movement_allocations ADD COLUMN IF NOT EXISTS reconcile_at TIMESTAMPTZ")
   await p.query("ALTER TABLE movement_allocations DROP CONSTRAINT IF EXISTS movement_allocations_match_method_check")
-  await p.query(`
-    ALTER TABLE movement_allocations ADD CONSTRAINT movement_allocations_match_method_check
-    CHECK (match_method IN ('exact', 'tolerance', 'llm_suggested', 'manual', 'stripe_payout_match'))
-  `)
+  try {
+    await p.query(`
+      ALTER TABLE movement_allocations ADD CONSTRAINT movement_allocations_match_method_check
+      CHECK (match_method IN ('exact', 'tolerance', 'llm_suggested', 'manual', 'stripe_payout_match'))
+    `)
+  } catch (err) {
+    // Constraint may already exist, ignore
+  }
   await p.query("ALTER TABLE movement_allocations DROP CONSTRAINT IF EXISTS movement_allocations_entity_type_check")
-  await p.query(`
-    ALTER TABLE movement_allocations ADD CONSTRAINT movement_allocations_entity_type_check
-    CHECK (entity_type IN ('ar', 'ap', 'fee', 'transfer', 'unknown'))
-  `)
+  try {
+    await p.query(`
+      ALTER TABLE movement_allocations ADD CONSTRAINT movement_allocations_entity_type_check
+      CHECK (entity_type IN ('ar', 'ap', 'fee', 'transfer', 'unknown'))
+    `)
+  } catch (err) {
+    // Constraint may already exist, ignore
+  }
   // Entity payment memory: per-entity payment behavior for allocation scoring
   await p.query(`
     CREATE TABLE IF NOT EXISTS entity_payment_profiles (
