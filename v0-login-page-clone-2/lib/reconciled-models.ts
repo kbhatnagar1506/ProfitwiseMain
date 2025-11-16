@@ -10,7 +10,7 @@
  * - Leverages invoice/bill due dates for better timing signals
  */
 
-import { query, ensureMovementsSchema } from "./db"
+import { query } from "./db"
 import { log } from "./logger"
 
 export type ReconciledARMovement = {
@@ -46,8 +46,6 @@ export type ReconciledAPMovement = {
  */
 export async function fetchReconciledARMovements(userId: string): Promise<ReconciledARMovement[]> {
   try {
-    await ensureMovementsSchema()
-
     const { rows } = await query<{
       movement_id: string
       entity_id: string
@@ -109,8 +107,6 @@ export async function fetchReconciledARMovements(userId: string): Promise<Reconc
  */
 export async function fetchReconciledAPMovements(userId: string): Promise<ReconciledAPMovement[]> {
   try {
-    await ensureMovementsSchema()
-
     const { rows } = await query<{
       movement_id: string
       entity_id: string
