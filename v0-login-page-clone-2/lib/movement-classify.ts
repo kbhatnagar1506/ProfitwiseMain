@@ -2617,3 +2617,47 @@ export async function classifyMovements(userId: string): Promise<{
   log("movements.classify.done", { userId, ...stats }, "movements")
   return stats
 }
+
+/**
+ * Non-destructive in-place patch of `counterparty_entity_id` on existing
+ * movements using current identity context. Does NOT delete/recreate rows,
+ * preserving `movement_attributions` foreign keys.
+ */
+export async function refreshMovementEntityIds(userId: string): Promise<number> {
+  const identityCtx = await buildMovementIdentityContext(userId)
+  if (identityCtx.size === 0) return 0
+  const prefixIdx = buildPrefixIndex(identityCtx)
+
+  const { rows } = await query<{
+    id: string
+    counterparty: string | null
+    raw_description: string | null
+    counterparty_entity_id: string | null
+  }>(
+    `SELECT id, counterparty, raw_description, counterparty_entity_id
+     FROM movements WHERE user_id = $1 AND duplicate_of IS NULL`,
+    [userId]
+  )
+
+  let updated = 0
+  for (const row of rows) {
+    const stub = {
+      counterparty: row.counterparty,
+      raw_description: row.raw_description,
+      evidence: [],
+    } as unknown as CanonicalMovement
+
+    const entry = resolveCounterpartyIdentity(stub, identityCtx, prefixIdx)
+    const newId = entry?.entity_id ?? null
+    if (newId && newId !== row.counterparty_entity_id) {
+      await query(
+        `UPDATE movements SET counterparty_entity_id = $1, counterparty_entity_type = $2 WHERE id = $3`,
+        [newId, entry!.role, row.id]
+      )
+      updated++
+    }
+  }
+
+  log("movements.refresh_entity_ids.done", { userId, updated, total: rows.length }, "movements")
+  return updated
+}
