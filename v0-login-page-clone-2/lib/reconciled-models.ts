@@ -66,15 +66,14 @@ export async function fetchReconciledARMovements(userId: string): Promise<Reconc
         m.amount::float,
         m.date::text,
         a.reference_id as invoice_id,
-        i.due_date::text,
-        EXTRACT(DAY FROM (NOW()::date - i.due_date))::int as days_overdue,
+        NULL::text as due_date,
+        NULL::int as days_overdue,
         a.confidence::text,
         a.source,
         a.created_at::text
        FROM movement_attributions a
        JOIN movements m ON a.movement_id = m.id
        LEFT JOIN entities e ON a.entity_id = e.id::text
-       LEFT JOIN outstanding_invoices i ON a.reference_id = i.invoice_id
        WHERE a.user_id = $1::uuid
          AND a.component_type = 'ar'
          AND m.direction = 'inflow'
@@ -127,15 +126,14 @@ export async function fetchReconciledAPMovements(userId: string): Promise<Reconc
         m.amount::float,
         m.date::text,
         a.reference_id as bill_id,
-        b.due_date::text,
-        EXTRACT(DAY FROM (NOW()::date - b.due_date))::int as days_overdue,
+        NULL::text as due_date,
+        NULL::int as days_overdue,
         a.confidence::text,
         a.source,
         a.created_at::text
        FROM movement_attributions a
        JOIN movements m ON a.movement_id = m.id
        LEFT JOIN entities e ON a.entity_id = e.id::text
-       LEFT JOIN outstanding_bills b ON a.reference_id = b.bill_id
        WHERE a.user_id = $1::uuid
          AND a.component_type = 'ap'
          AND m.direction = 'outflow'
