@@ -105,7 +105,7 @@ function parseDate(dateStr: string | null): Date | null {
 }
 
 /** Upsert one message into gmail_synced_messages. */
-async function upsertMessage(msg: GmailMessage): Promise<void> {
+async function upsertMessage(msg: GmailMessage, userId: string | null): Promise<void> {
   await ensureGmailSchema()
   const payload = msg.payload
   const from = getHeader(payload?.headers, "From")
@@ -117,9 +117,10 @@ async function upsertMessage(msg: GmailMessage): Promise<void> {
   const labels = JSON.stringify(msg.labelIds ?? [])
 
   await query(
-    `INSERT INTO gmail_synced_messages (message_id, thread_id, from_email, to_emails, subject, date_sent, snippet, body_plain, labels, synced_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())
+    `INSERT INTO gmail_synced_messages (message_id, user_id, thread_id, from_email, to_emails, subject, date_sent, snippet, body_plain, labels, synced_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW())
      ON CONFLICT (message_id) DO UPDATE SET
+       user_id = COALESCE(EXCLUDED.user_id, gmail_synced_messages.user_id),
        thread_id = EXCLUDED.thread_id,
        from_email = EXCLUDED.from_email,
        to_emails = EXCLUDED.to_emails,
@@ -131,6 +132,7 @@ async function upsertMessage(msg: GmailMessage): Promise<void> {
        synced_at = NOW()`,
     [
       msg.id,
+      userId,
       msg.threadId ?? null,
       from ?? null,
       to ?? null,
@@ -150,6 +152,12 @@ export async function runGmailSync(options: { q?: string; maxMessages?: number }
   let errors = 0
 
   const accessToken = await getValidGmailAccessToken("inbox")
+
+  const { rows: connRows } = await query<{ user_id: string | null }>(
+    "SELECT user_id FROM gmail_connections WHERE id = 'inbox' LIMIT 1"
+  )
+  const userId = connRows[0]?.user_id ?? null
+
   let pageToken: string | undefined
   const seenIds = new Set<string>()
 
@@ -167,7 +175,7 @@ export async function runGmailSync(options: { q?: string; maxMessages?: number }
       seenIds.add(m.id)
       try {
         const full = await getMessage(accessToken, m.id)
-        await upsertMessage(full)
+        await upsertMessage(full, userId)
         synced++
       } catch (err) {
         log("gmail.sync.message_error", { messageId: m.id, error: err instanceof Error ? err.message : String(err) }, "gmail")

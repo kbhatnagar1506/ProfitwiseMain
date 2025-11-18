@@ -30,10 +30,12 @@ export async function GET(request: NextRequest) {
   cookieStore.delete(STATE_COOKIE)
 
   let stateMatch = false
+  let userId: string | null = null
   if (stateCookie) {
     try {
-      const parsed = JSON.parse(stateCookie) as { state?: string }
+      const parsed = JSON.parse(stateCookie) as { state?: string; userId?: string }
       stateMatch = parsed.state != null && state === parsed.state
+      userId = parsed.userId ?? null
     } catch {
       // ignore
     }
@@ -75,7 +77,8 @@ export async function GET(request: NextRequest) {
     refreshToken,
     tokens.access_token,
     tokens.expires_in ?? undefined,
-    email
+    email,
+    userId
   )
 
   return NextResponse.redirect(successRedirect, 302)

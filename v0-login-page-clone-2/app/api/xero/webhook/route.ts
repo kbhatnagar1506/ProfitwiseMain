@@ -1,18 +1,27 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createHmac } from "crypto"
+import { createHmac, timingSafeEqual } from "crypto"
 import { log } from "@/lib/logger"
 import { getValidAccessToken, fetchXeroList } from "@/lib/xero"
-import { upsertEntities } from "@/lib/xero-entity-store"
+import { upsertEntities, getUserIdByTenantId } from "@/lib/xero-entity-store"
+import { refreshMovementEntityIds } from "@/lib/movement-classify"
+import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
+
+function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a)
+  const bufB = Buffer.from(b)
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
+}
 
 function verifySignature(bodyRaw: Buffer, signatureHeader: string, key: string): boolean {
   const sig = signatureHeader.trim()
   const expectedStringKey = createHmac("sha256", key).update(bodyRaw).digest("base64")
-  if (expectedStringKey === sig) return true
+  if (safeCompare(expectedStringKey, sig)) return true
   try {
     const keyDecoded = Buffer.from(key, "base64")
     if (keyDecoded.length > 0) {
       const expectedDecodedKey = createHmac("sha256", keyDecoded).update(bodyRaw).digest("base64")
-      if (expectedDecodedKey === sig) return true
+      if (safeCompare(expectedDecodedKey, sig)) return true
     }
   } catch {
     // key not valid base64
@@ -82,6 +91,7 @@ export async function POST(request: NextRequest) {
 
   if (events.length > 0) {
     void (async () => {
+      const tenantsTouched = new Set<string>()
       for (const ev of events) {
         const tenantId = ev.tenantId != null ? String(ev.tenantId) : undefined
         const resourceUrl = ev.resourceUrl != null ? String(ev.resourceUrl) : undefined
@@ -106,9 +116,24 @@ export async function POST(request: NextRequest) {
           if (items.length > 0) {
             const count = await upsertEntities(tenantId, entityType, items)
             log("webhook.entity.upserted", { tenantId, entityType, count, resourceId: ev.resourceId }, "xero")
+            tenantsTouched.add(tenantId)
           }
         } catch (err) {
           log("webhook.entity_update.failed", { tenantId, entityType, resourceId: ev.resourceId, error: String(err) }, "xero")
+        }
+      }
+
+      // G2: Refresh entity aliases and movement entity IDs for each touched tenant
+      for (const tenantId of tenantsTouched) {
+        const userId = await getUserIdByTenantId(tenantId)
+        if (userId) {
+          try {
+            await refreshEntityAliasesFromAccounting(userId)
+            const updated = await refreshMovementEntityIds(userId)
+            log("webhook.refresh.succeeded", { tenantId, userId, movementsUpdated: updated }, "xero")
+          } catch (refreshErr) {
+            log("webhook.refresh.failed", { tenantId, userId, error: String(refreshErr) }, "xero")
+          }
         }
       }
     })()

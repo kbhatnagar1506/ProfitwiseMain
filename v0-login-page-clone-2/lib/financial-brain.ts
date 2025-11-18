@@ -22,6 +22,8 @@ export type FinancialBrainResult = {
   entity_profiles_refreshed: boolean
   /** Present when cash_events were synced; deterministic waterfall + Stage 4 flags. */
   waterfall?: Awaited<ReturnType<typeof runReconciliationWaterfall>>
+  /** Present if the waterfall threw; attribution and profiles still ran. */
+  waterfallError?: string
 }
 
 /**
@@ -34,11 +36,17 @@ export async function runFinancialBrain(userId: string, options: FinancialBrainO
   const { outstandingInvoices, apObligations, ...engineOpts } = options
   let cash_events_synced = false
   let waterfall: Awaited<ReturnType<typeof runReconciliationWaterfall>> | undefined
+  let waterfallError: string | undefined
 
   if (outstandingInvoices !== undefined && apObligations !== undefined) {
     await syncCashEventsForUser(userId, outstandingInvoices ?? [], apObligations ?? [])
     cash_events_synced = true
-    waterfall = await runReconciliationWaterfall(userId)
+    try {
+      waterfall = await runReconciliationWaterfall(userId)
+    } catch (err) {
+      waterfallError = err instanceof Error ? err.message : String(err)
+      console.error("[financial-brain] waterfall failed, continuing with attribution:", waterfallError)
+    }
   }
 
   const attribution = await runAttributionEngine(userId, engineOpts)
@@ -46,5 +54,5 @@ export async function runFinancialBrain(userId: string, options: FinancialBrainO
   await refreshEntityCashProfilesFromAttributions(userId)
   const entity_profiles_refreshed = true
 
-  return { attribution, cash_events_synced, entity_profiles_refreshed, waterfall }
+  return { attribution, cash_events_synced, entity_profiles_refreshed, waterfall, waterfallError }
 }

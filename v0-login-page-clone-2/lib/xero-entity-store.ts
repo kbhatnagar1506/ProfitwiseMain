@@ -10,7 +10,7 @@ import {
   gcpGetEntities,
 } from "./entity-store-gcp"
 
-async function getUserIdByTenantId(tenantId: string): Promise<string | undefined> {
+export async function getUserIdByTenantId(tenantId: string): Promise<string | undefined> {
   try {
     await ensureXeroSchema()
     const { rows } = await query<{ user_id: string }>("SELECT user_id FROM xero_connections WHERE tenant_id = $1", [tenantId])

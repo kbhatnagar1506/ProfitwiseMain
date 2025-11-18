@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
+import { createHmac, timingSafeEqual } from "crypto"
 import { log } from "@/lib/logger"
 import { getEntityById, getAllForEntity, type QBOEntityType } from "@/lib/quickbooks"
-import { upsertEntities, deleteEntity } from "@/lib/qbo-entity-store"
+import { upsertEntities, deleteEntity, getUserIdByRealmId } from "@/lib/qbo-entity-store"
+import { refreshMovementEntityIds } from "@/lib/movement-classify"
+import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 
 export async function GET(request: NextRequest) {
   log("webhook.verify.challenge.received")
@@ -47,8 +50,12 @@ export async function POST(request: NextRequest) {
   log("webhook.received", { payloadSize, eventCount })
 
   const signatureHeader = request.headers.get("intuit-signature") ?? request.headers.get("Intuit-Signature")
-  if (signatureHeader) {
-    const crypto = await import("crypto")
+  if (!signatureHeader) {
+    log("webhook.verify.failed", { reason: "missing_signature" })
+    return NextResponse.json({ error: "Missing signature" }, { status: 401 })
+  }
+
+  {
     const clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET
     const verifierToken = process.env.QUICKBOOKS_WEBHOOK_VERIFIER
     const signature = signatureHeader.replace(/^sha256=/i, "").trim()
@@ -63,11 +70,14 @@ export async function POST(request: NextRequest) {
 
     const verify = (key: string): boolean => {
       for (const payload of payloadsToTry) {
-        const h = crypto.createHmac("sha256", key)
-        h.update(payload, "utf8")
-        const base64 = h.digest("base64")
-        const hex = h.digest("hex")
-        if (base64 === signature || hex === signature) return true
+        const base64 = createHmac("sha256", key).update(payload, "utf8").digest("base64")
+        const hex = createHmac("sha256", key).update(payload, "utf8").digest("hex")
+        try {
+          if (timingSafeEqual(Buffer.from(base64), Buffer.from(signature))) return true
+        } catch { /* length mismatch */ }
+        try {
+          if (timingSafeEqual(Buffer.from(hex), Buffer.from(signature))) return true
+        } catch { /* length mismatch */ }
       }
       return false
     }
@@ -197,6 +207,18 @@ export async function POST(request: NextRequest) {
           const items = await getAllForEntity(realmId, invoiceType)
           const count = await upsertEntities(realmId, invoiceType, items)
           log("webhook.invoice_resync.succeeded", { realmId, count }, "qbo")
+
+          // G2: Refresh entity aliases and movement entity IDs for this user
+          const userId = await getUserIdByRealmId(realmId)
+          if (userId) {
+            try {
+              await refreshEntityAliasesFromAccounting(userId)
+              const updated = await refreshMovementEntityIds(userId)
+              log("webhook.refresh.succeeded", { realmId, userId, movementsUpdated: updated }, "qbo")
+            } catch (refreshErr) {
+              log("webhook.refresh.failed", { realmId, userId, error: String(refreshErr) }, "qbo")
+            }
+          }
         } catch (err) {
           log(
             "webhook.invoice_resync.failed",

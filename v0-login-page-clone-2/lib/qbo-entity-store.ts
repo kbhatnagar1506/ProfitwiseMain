@@ -38,7 +38,7 @@ function isProduction(): boolean {
   return process.env.NODE_ENV === "production"
 }
 
-async function getUserIdByRealmId(realmId: string): Promise<string | undefined> {
+export async function getUserIdByRealmId(realmId: string): Promise<string | undefined> {
   try {
     await ensureQBOSchema()
     const { rows } = await query<{ user_id: string }>("SELECT user_id FROM qbo_connections WHERE realm_id = $1", [realmId])

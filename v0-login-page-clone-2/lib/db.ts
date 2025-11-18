@@ -358,6 +358,7 @@ const SHOPIFY_SYNC_STATE_SQL = `
 const GMAIL_CONNECTIONS_SQL = `
   CREATE TABLE IF NOT EXISTS gmail_connections (
     id              TEXT PRIMARY KEY DEFAULT 'inbox',
+    user_id         UUID,
     email           TEXT,
     refresh_token   TEXT NOT NULL,
     access_token    TEXT,
@@ -370,6 +371,7 @@ const GMAIL_CONNECTIONS_SQL = `
 const GMAIL_SYNCED_MESSAGES_SQL = `
   CREATE TABLE IF NOT EXISTS gmail_synced_messages (
     message_id      TEXT PRIMARY KEY,
+    user_id         UUID,
     thread_id       TEXT,
     from_email      TEXT,
     to_emails       TEXT,
@@ -470,7 +472,10 @@ export async function ensureGmailSchema(): Promise<void> {
   await p.query(GMAIL_SYNCED_MESSAGES_SQL)
   await p.query("ALTER TABLE gmail_synced_messages ADD COLUMN IF NOT EXISTS processed_for_ap_ar BOOLEAN DEFAULT FALSE")
   await p.query("ALTER TABLE gmail_synced_messages ADD COLUMN IF NOT EXISTS extracted_invoice JSONB")
+  await p.query("ALTER TABLE gmail_synced_messages ADD COLUMN IF NOT EXISTS user_id UUID")
+  await p.query("ALTER TABLE gmail_connections ADD COLUMN IF NOT EXISTS user_id UUID")
   await p.query("CREATE INDEX IF NOT EXISTS idx_gmail_synced_unprocessed ON gmail_synced_messages (processed_for_ap_ar) WHERE processed_for_ap_ar = FALSE")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_gmail_synced_user ON gmail_synced_messages (user_id)")
   gmailSchemaEnsured = true
   log("db.gmail.schema.ensured", undefined, "db")
 }

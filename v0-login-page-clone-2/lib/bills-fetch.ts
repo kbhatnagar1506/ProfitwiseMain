@@ -13,15 +13,19 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
 
   // Build entity alias lookup: QBO source_id → entity_id
   const sourceIdToEntity = new Map<string, string>()
+  // Build Xero contact ID → entity_id lookup
+  const xeroContactToEntity = new Map<string, string>()
   try {
-    const aliasRows = await query<{ entity_id: string; source_id: string }>(
-      `SELECT ea.entity_id, ea.source_id FROM entity_aliases ea
+    const aliasRows = await query<{ entity_id: string; source_id: string; source: string }>(
+      `SELECT ea.entity_id, ea.source_id, ea.source FROM entity_aliases ea
        JOIN entities e ON e.id = ea.entity_id
-       WHERE e.user_id = $1 AND ea.source = 'qbo' AND ea.source_id IS NOT NULL`,
+       WHERE e.user_id = $1 AND ea.source IN ('qbo', 'xero') AND ea.source_id IS NOT NULL`,
       [userId]
     ).then((r) => r.rows)
     for (const a of aliasRows) {
-      if (a.source_id) sourceIdToEntity.set(a.source_id, a.entity_id)
+      if (!a.source_id) continue
+      if (a.source === "qbo") sourceIdToEntity.set(a.source_id, a.entity_id)
+      else if (a.source === "xero") xeroContactToEntity.set(a.source_id, a.entity_id)
     }
   } catch { /* entity_aliases may not exist yet */ }
 
@@ -52,7 +56,7 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (balance < totalAmt && balance > 0) status = "partially_paid"
+      if (balance < totalAmt && balance > 0 && status !== "overdue") status = "partially_paid"
       const entityId = vendSourceId ? (sourceIdToEntity.get(vendSourceId) ?? null) : null
       outstandingBills.push({
         bill_id: row.entity_id, source: "qbo",
@@ -81,6 +85,8 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
       const total = parseFloat(String(d.Total ?? amountDue))
       const contact = d.Contact as Record<string, unknown> | undefined
       const vendName = String(contact?.Name ?? "Unknown")
+      const contactId = contact?.ContactID != null ? String(contact.ContactID) : null
+      const entityId = contactId ? (xeroContactToEntity.get(contactId) ?? null) : null
       const dueDate = (d.DueDateString as string) ?? (d.DueDate as string) ?? null
       let daysToDue: number | null = null
       let daysOverdue: number | null = null
@@ -91,11 +97,11 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (amountDue < total && amountDue > 0) status = "partially_paid"
+      if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
       outstandingBills.push({
         bill_id: row.entity_id, source: "xero",
-        vendor_name: vendName, vendor_source_id: null,
-        entity_id: null, entity_uri: toEntityUriApBill("xero", row.entity_id),
+        vendor_name: vendName, vendor_source_id: contactId,
+        entity_id: entityId, entity_uri: toEntityUriApBill("xero", row.entity_id),
         amount: total, amount_due: amountDue,
         due_date: dueDate?.slice(0, 10) ?? null, days_until_due: daysToDue,
         days_overdue: daysOverdue, status,
@@ -103,15 +109,16 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
     }
   } catch { /* Xero Bills may not be available */ }
 
-  // Gmail AP bills (gmail_synced_messages may not have user_id; query all if so)
+  // Gmail AP bills
   try {
     type GmailApRow = { message_id: string; extracted_invoice: Record<string, unknown> }
     const gmailApRows = await query<GmailApRow>(
       `SELECT message_id, extracted_invoice FROM gmail_synced_messages
-       WHERE extracted_invoice IS NOT NULL
+       WHERE (user_id = $1 OR user_id IS NULL)
+       AND extracted_invoice IS NOT NULL
        AND extracted_invoice->>'side' = 'AP'
        AND extracted_invoice->>'status' IN ('open', 'partially_paid')`,
-      []
+      [userId]
     ).then((r) => r.rows)
     for (const row of gmailApRows) {
       const d = row.extracted_invoice
