@@ -311,7 +311,9 @@ export async function syncCashEventsForUser(
   const arExpectedByInvoice = buildArExpectedCollectionMap(invoices, arObservations, today)
   const apMedianDelayByVendorName = await fetchApMedianDelayByVendorName(userId, 120)
 
-  const stableEntityIds: string[] = []
+  /** Stable upsert keys from current sync — AR and AP must not share one exclusion list or a pure-AR sync marks all AP rows stale (and vice versa). */
+  const arStableIds: string[] = []
+  const apStableIds: string[] = []
 
   const upsertArSql = `INSERT INTO cash_events (
       user_id, entity_id, event_type, amount, outstanding_amount, status, probability, expected_date, source, metadata
@@ -355,7 +357,7 @@ export async function syncCashEventsForUser(
     const prob =
       inv.status === "overdue" ? 0.85 : inv.status === "partially_paid" ? 0.7 : 0.55
     const entityLabel = inv.entity_uri ?? `${inv.source}:${inv.invoice_id}`
-    stableEntityIds.push(entityLabel)
+    arStableIds.push(entityLabel)
     const statusInit: "open" | "partially_paid" | "paid" = "open"
     await query(upsertArSql, [
       userId,
@@ -383,7 +385,7 @@ export async function syncCashEventsForUser(
     const vendorDelay = apMedianDelayByVendorName.get(normalizeVendorKey(ob.vendor_name))
     const delayedExpected = ob.due_date && vendorDelay != null ? addDays(ob.due_date, vendorDelay) : fallbackExpected
     const expected = delayedExpected < addDays(today, 1) ? addDays(today, 1) : delayedExpected
-    stableEntityIds.push(ob.obligation_id)
+    apStableIds.push(ob.obligation_id)
     const statusInit: "open" | "partially_paid" | "paid" = "open"
     await query(upsertApSql, [
       userId,
@@ -402,17 +404,27 @@ export async function syncCashEventsForUser(
     ])
   }
 
-  await query(
-    `UPDATE cash_events
-     SET status = 'paid',
+  const staleSet = `SET status = 'paid',
          outstanding_amount = 0,
          metadata = COALESCE(metadata, '{}'::jsonb) || '{"stale_reason":"removed_from_source"}'::jsonb,
-         updated_at = NOW()
-     WHERE user_id = $1
-       AND source IN ('invoice', 'inferred')
-       AND event_type IN ('ar', 'ap')
+         updated_at = NOW()`
+  await query(
+    `UPDATE cash_events
+     ${staleSet}
+     WHERE user_id = $1::uuid
+       AND source = 'invoice'
+       AND event_type = 'ar'
        AND NOT (entity_id = ANY($2::text[]))`,
-    [userId, stableEntityIds],
+    [userId, arStableIds],
+  )
+  await query(
+    `UPDATE cash_events
+     ${staleSet}
+     WHERE user_id = $1::uuid
+       AND source = 'inferred'
+       AND event_type = 'ap'
+       AND NOT (entity_id = ANY($2::text[]))`,
+    [userId, apStableIds],
   )
 }
 

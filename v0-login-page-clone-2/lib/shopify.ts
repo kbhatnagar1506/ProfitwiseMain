@@ -1,101 +1,130 @@
 import crypto from "crypto"
 
-export const SHOPIFY_REQUIRED_SCOPES = [
+export interface ShopifyTokenExchangeResponse {
+  access_token: string
+  scope?: string
+}
+
+const DEFAULT_REQUIRED_SCOPES = [
   "read_orders",
+  "read_all_orders",
   "read_customers",
-  "read_discounts",
-  "read_shopify_payments_payouts",
+  "read_products",
+  "read_inventory",
 ]
 
-export const SHOPIFY_CONSENT_TYPE = "shopify_data_storage"
-export const SHOPIFY_POLICY_VERSION = "v1"
-
-export type ShopifyRetentionMode = "default" | "12m" | "24m" | "indefinite"
-
 export function normalizeShopDomain(input: string): string {
-  const trimmed = input.trim().toLowerCase()
-  const noScheme = trimmed.replace(/^https?:\/\//, "")
-  const hostOnly = noScheme.split("/")[0] ?? ""
-  return hostOnly
+  const raw = (input || "").trim().toLowerCase()
+  const withoutProtocol = raw.replace(/^https?:\/\//, "")
+  const host = withoutProtocol.split("/")[0] ?? ""
+  const clean = host.replace(/\.$/, "")
+  if (!clean || !clean.endsWith(".myshopify.com")) {
+    throw new Error("Invalid Shopify shop domain")
+  }
+  return clean
 }
 
-export function isValidShopDomain(input: string): boolean {
-  const domain = normalizeShopDomain(input)
-  return /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(domain)
+export function getRequiredShopifyScopes(): string[] {
+  const configured = process.env.SHOPIFY_REQUIRED_SCOPES
+  if (!configured) return DEFAULT_REQUIRED_SCOPES
+  return configured
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
-export function buildShopifyAuthorizeUrl(params: {
+function getClientId(): string {
+  const value = process.env.SHOPIFY_CLIENT_ID
+  if (!value) throw new Error("SHOPIFY_CLIENT_ID is not configured")
+  return value
+}
+
+function getClientSecret(): string {
+  const value = process.env.SHOPIFY_CLIENT_SECRET
+  if (!value) throw new Error("SHOPIFY_CLIENT_SECRET is not configured")
+  return value
+}
+
+export function getShopifyRedirectUri(origin: string): string {
+  const configured = process.env.SHOPIFY_REDIRECT_URI
+  if (configured) return configured
+  const base = (process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? origin).replace(/\/$/, "")
+  return `${base}/api/shopify/oauth/callback`
+}
+
+export function getShopifyAuthorizeUrl(params: {
   shopDomain: string
-  clientId: string
-  redirectUri: string
   state: string
   scopes?: string[]
+  origin: string
 }): string {
   const shop = normalizeShopDomain(params.shopDomain)
-  const scope = (params.scopes ?? SHOPIFY_REQUIRED_SCOPES).join(",")
-  const query = new URLSearchParams({
-    client_id: params.clientId,
-    scope,
-    redirect_uri: params.redirectUri,
-    state: params.state,
+  const clientId = getClientId()
+  const redirectUri = getShopifyRedirectUri(params.origin)
+  const scopes = (params.scopes?.length ? params.scopes : getRequiredShopifyScopes()).join(",")
+  const url = new URL(`https://${shop}/admin/oauth/authorize`)
+  url.searchParams.set("client_id", clientId)
+  url.searchParams.set("scope", scopes)
+  url.searchParams.set("redirect_uri", redirectUri)
+  url.searchParams.set("state", params.state)
+  return url.toString()
+}
+
+export async function exchangeCodeForAccessToken(shopDomain: string, code: string): Promise<ShopifyTokenExchangeResponse> {
+  const shop = normalizeShopDomain(shopDomain)
+  const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: getClientId(),
+      client_secret: getClientSecret(),
+      code,
+    }),
   })
-  return `https://${shop}/admin/oauth/authorize?${query.toString()}`
+  if (!response.ok) {
+    const text = await response.text().catch(() => "")
+    throw new Error(`Shopify token exchange failed (${response.status}): ${text || "unknown error"}`)
+  }
+  const data = (await response.json()) as ShopifyTokenExchangeResponse
+  if (!data.access_token) throw new Error("Shopify token exchange returned no access token")
+  return data
 }
 
-export function parseGrantedScopes(scopes: string | null | undefined): string[] {
-  if (!scopes) return []
-  return Array.from(
-    new Set(
-      scopes
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    )
-  ).sort()
+export function parseScopeString(scope?: string): string[] {
+  if (!scope) return []
+  return scope
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
-export function diffScopes(required: string[], granted: string[]): string[] {
-  const grantedSet = new Set(granted)
-  return required.filter((s) => !grantedSet.has(s))
+export function getMissingScopes(grantedScopes: string[], requiredScopes: string[] = getRequiredShopifyScopes()): string[] {
+  const granted = new Set(grantedScopes)
+  return requiredScopes.filter((scope) => !granted.has(scope))
 }
 
-export function generateOAuthState(): string {
-  return crypto.randomBytes(24).toString("hex")
-}
-
-export function resolveAppBase(originFromRequest?: string): string {
-  const appUrl = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? originFromRequest ?? ""
-  return appUrl.replace(/\/$/, "")
-}
-
-export function getShopifyCallbackUrl(originFromRequest?: string): string {
-  return `${resolveAppBase(originFromRequest)}/api/shopify/oauth/callback`
-}
-
-export function isValidHmacFromSearchParams(url: URL, clientSecret: string): boolean {
-  const hmac = url.searchParams.get("hmac")
+export function verifyShopifyCallbackHmac(queryParams: URLSearchParams): boolean {
+  const hmac = queryParams.get("hmac")
   if (!hmac) return false
-  const pairs: string[] = []
-  for (const [key, value] of url.searchParams.entries()) {
-    if (key === "hmac" || key === "signature") continue
-    pairs.push(`${key}=${value}`)
-  }
-  pairs.sort()
-  const message = pairs.join("&")
-  const digest = crypto.createHmac("sha256", clientSecret).update(message).digest("hex")
-  try {
-    return crypto.timingSafeEqual(Buffer.from(digest, "utf8"), Buffer.from(hmac, "utf8"))
-  } catch {
-    return false
-  }
-}
+  const secret = process.env.SHOPIFY_CLIENT_SECRET
+  if (!secret) return false
 
-export function isValidWebhookHmac(rawBody: string, receivedHmac: string | null, clientSecret: string): boolean {
-  if (!receivedHmac) return false
-  const digest = crypto.createHmac("sha256", clientSecret).update(rawBody, "utf8").digest("base64")
-  try {
-    return crypto.timingSafeEqual(Buffer.from(digest, "utf8"), Buffer.from(receivedHmac, "utf8"))
-  } catch {
-    return false
+  const grouped = new Map<string, string[]>()
+  for (const [key, value] of queryParams.entries()) {
+    if (key === "hmac" || key === "signature") continue
+    const arr = grouped.get(key) ?? []
+    arr.push(value)
+    grouped.set(key, arr)
   }
+
+  const message = Array.from(grouped.keys())
+    .sort()
+    .map((key) => `${key}=${(grouped.get(key) ?? []).join(",")}`)
+    .join("&")
+
+  const digest = crypto.createHmac("sha256", secret).update(message).digest("hex")
+  const digestBuf = Buffer.from(digest, "utf8")
+  const hmacBuf = Buffer.from(hmac, "utf8")
+  if (digestBuf.length !== hmacBuf.length) return false
+  return crypto.timingSafeEqual(digestBuf, hmacBuf)
 }

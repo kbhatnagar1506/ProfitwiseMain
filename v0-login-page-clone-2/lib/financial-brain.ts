@@ -11,7 +11,7 @@ import type { OutstandingInvoice } from "./state/types"
 import type { APObligation } from "./state/ar-ap"
 
 export type FinancialBrainOptions = AttributionEngineOptions & {
-  /** When set, rebuild cash_events from these documents (skip if both empty). */
+  /** When both are defined, rebuild cash_events from these lists (empty arrays OK). Omitted = skip sync. */
   outstandingInvoices?: OutstandingInvoice[]
   apObligations?: APObligation[]
 }
@@ -25,7 +25,7 @@ export type FinancialBrainResult = {
 }
 
 /**
- * When invoices + AP obligations are provided: sync cash_events → waterfall → attribution → profiles.
+ * When both `outstandingInvoices` and `apObligations` are defined: sync cash_events → waterfall → attribution → profiles.
  * Otherwise: attribution only (then profiles).
  */
 export async function runFinancialBrain(userId: string, options: FinancialBrainOptions = {}): Promise<FinancialBrainResult> {
@@ -35,8 +35,8 @@ export async function runFinancialBrain(userId: string, options: FinancialBrainO
   let cash_events_synced = false
   let waterfall: Awaited<ReturnType<typeof runReconciliationWaterfall>> | undefined
 
-  if (outstandingInvoices && apObligations) {
-    await syncCashEventsForUser(userId, outstandingInvoices, apObligations)
+  if (outstandingInvoices !== undefined && apObligations !== undefined) {
+    await syncCashEventsForUser(userId, outstandingInvoices ?? [], apObligations ?? [])
     cash_events_synced = true
     waterfall = await runReconciliationWaterfall(userId)
   }

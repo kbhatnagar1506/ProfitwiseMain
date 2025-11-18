@@ -6,7 +6,37 @@ import { query, ensureQBOSchema } from "@/lib/db"
 import { toEntityUriAr } from "@/lib/entity-uri"
 import type { OutstandingInvoice } from "./state/types"
 
-export async function fetchOutstandingInvoices(userId: string): Promise<OutstandingInvoice[]> {
+/** Xero invoice Contact → graph entity when `entity_aliases.source = 'xero'` (seed via graph/identity). */
+async function loadXeroContactIdToEntityMap(userId: string): Promise<Map<string, string>> {
+  const m = new Map<string, string>()
+  try {
+    const aliasRows = await query<{ entity_id: string; source_id: string }>(
+      `SELECT ea.entity_id, ea.source_id FROM entity_aliases ea
+       JOIN entities e ON e.id = ea.entity_id
+       WHERE e.user_id = $1 AND ea.source = 'xero' AND ea.source_id IS NOT NULL`,
+      [userId],
+    ).then((r) => r.rows)
+    for (const a of aliasRows) {
+      if (a.source_id) m.set(a.source_id, a.entity_id)
+    }
+  } catch {
+    /* entity_aliases may not exist */
+  }
+  return m
+}
+
+function xeroContactIdFromInvoiceContact(contact: Record<string, unknown> | undefined): string | null {
+  if (!contact) return null
+  const raw = contact.ContactID ?? contact.contactID
+  if (raw == null) return null
+  const s = String(raw).trim()
+  return s.length > 0 ? s : null
+}
+
+export async function fetchOutstandingInvoices(
+  userId: string,
+  preloadedXeroContactIdToEntity?: Map<string, string>,
+): Promise<OutstandingInvoice[]> {
   const today = new Date().toISOString().slice(0, 10)
   const outstandingInvoices: OutstandingInvoice[] = []
 
@@ -22,6 +52,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
       if (a.source_id) sourceIdToEntity.set(a.source_id, a.entity_id)
     }
   } catch { /* entity_aliases may not exist */ }
+
+  const xeroContactIdToEntity = preloadedXeroContactIdToEntity ?? (await loadXeroContactIdToEntityMap(userId))
 
   try {
     await ensureQBOSchema()
@@ -74,6 +106,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
       const total = parseFloat(String(d.Total ?? amountDue))
       const contact = d.Contact as Record<string, unknown> | undefined
       const custName = String(contact?.Name ?? "Unknown")
+      const contactId = xeroContactIdFromInvoiceContact(contact)
+      const entityId = contactId ? (xeroContactIdToEntity.get(contactId) ?? null) : null
       const dueDate = (d.DueDateString as string) ?? (d.DueDate as string) ?? null
       let daysToDue: number | null = null
       let daysOverdue: number | null = null
@@ -87,8 +121,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
       if (amountDue < total && amountDue > 0) status = "partially_paid"
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "xero",
-        customer_name: custName, customer_source_id: null,
-        entity_id: null, entity_uri: toEntityUriAr("xero", row.entity_id),
+        customer_name: custName, customer_source_id: contactId,
+        entity_id: entityId, entity_uri: toEntityUriAr("xero", row.entity_id),
         amount: total, amount_due: amountDue,
         due_date: dueDate?.slice(0, 10) ?? null, days_until_due: daysToDue,
         days_overdue: daysOverdue, status,
@@ -170,7 +204,8 @@ export async function fetchOutstandingInvoices(userId: string): Promise<Outstand
 const RECENTLY_PAID_DAYS = 180
 
 export async function fetchInvoicesForReconciliation(userId: string): Promise<OutstandingInvoice[]> {
-  const outstanding = await fetchOutstandingInvoices(userId)
+  const xeroContactIdToEntity = await loadXeroContactIdToEntityMap(userId)
+  const outstanding = await fetchOutstandingInvoices(userId, xeroContactIdToEntity)
   const today = new Date().toISOString().slice(0, 10)
   const cutoff = new Date()
   cutoff.setDate(cutoff.getDate() - RECENTLY_PAID_DAYS)
@@ -243,6 +278,8 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
       if (total <= 0) continue
       const contact = d.Contact as Record<string, unknown> | undefined
       const custName = String(contact?.Name ?? "Unknown")
+      const contactId = xeroContactIdFromInvoiceContact(contact)
+      const entityId = contactId ? (xeroContactIdToEntity.get(contactId) ?? null) : null
       const dueDate = (d.DueDateString as string) ?? (d.DateString as string) ?? null
       const dateStr = dueDate?.slice(0, 10) ?? ""
       if (dateStr && dateStr < cutoffStr) continue
@@ -252,8 +289,8 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         invoice_id: row.entity_id,
         source: "xero",
         customer_name: custName,
-        customer_source_id: null,
-        entity_id: null,
+        customer_source_id: contactId,
+        entity_id: entityId,
         entity_uri: toEntityUriAr("xero", row.entity_id),
         amount: total,
         amount_due: total,

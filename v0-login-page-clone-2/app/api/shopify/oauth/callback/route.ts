@@ -1,75 +1,100 @@
 import { NextRequest, NextResponse } from "next/server"
-import { diffScopes, isValidHmacFromSearchParams, parseGrantedScopes, resolveAppBase, SHOPIFY_REQUIRED_SCOPES } from "@/lib/shopify"
-import { getLatestConsent, consumeOAuthState, upsertConnectionFromOAuth } from "@/lib/shopify-token-store"
-import { error as logError, log } from "@/lib/logger"
-import { queueInitialBackfill, registerWebhookSubscriptions } from "@/lib/shopify-sync"
+import { cookies } from "next/headers"
+import { log, error as logError } from "@/lib/logger"
+import {
+  exchangeCodeForAccessToken,
+  getMissingScopes,
+  normalizeShopDomain,
+  parseScopeString,
+  verifyShopifyCallbackHmac,
+} from "@/lib/shopify"
+import { setShopifyConnection } from "@/lib/shopify-token-store"
+
+const STATE_COOKIE = "shopify_oauth_state"
+
+type StateCookie = {
+  state?: string
+  userId?: string
+  shopDomain?: string
+}
+
+function redirectBase(request: NextRequest): string {
+  const appUrl = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL
+  if (appUrl) return appUrl.replace(/\/$/, "")
+  return request.nextUrl.origin
+}
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url)
-  const state = searchParams.get("state") ?? ""
-  const code = searchParams.get("code") ?? ""
-  const errorParam = searchParams.get("error")
-  const appBase = resolveAppBase(request.nextUrl.origin)
+  const base = redirectBase(request)
+  const query = request.nextUrl.searchParams
+  const code = query.get("code")
+  const state = query.get("state")
+  const shop = query.get("shop")
+  const oauthError = query.get("error")
 
-  if (errorParam) {
-    return NextResponse.redirect(new URL(`/onboarding?error=shopify_${encodeURIComponent(errorParam)}`, appBase), 302)
+  if (oauthError) {
+    logError("shopify.oauth.callback.failed", new Error(oauthError), "shopify")
+    return NextResponse.redirect(new URL(`/onboarding?error=shopify_${encodeURIComponent(oauthError)}`, base), 302)
   }
-  if (!state || !code) {
-    return NextResponse.redirect(new URL("/onboarding?error=shopify_missing_params", appBase), 302)
-  }
-
-  const oauthState = await consumeOAuthState(state)
-  if (!oauthState) {
-    return NextResponse.redirect(new URL("/onboarding?error=shopify_state_invalid", appBase), 302)
+  if (!code || !state || !shop) {
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_missing_params", base), 302)
   }
 
-  if (!isValidHmacFromSearchParams(new URL(request.url), oauthState.clientSecret)) {
-    logError("shopify.oauth.callback.failed", new Error("hmac_mismatch"), "shopify")
-    return NextResponse.redirect(new URL("/onboarding?error=shopify_hmac_mismatch", appBase), 302)
+  if (!verifyShopifyCallbackHmac(query)) {
+    logError("shopify.oauth.callback.failed", new Error("invalid_hmac"), "shopify")
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_invalid_hmac", base), 302)
+  }
+
+  const cookieStore = await cookies()
+  const stateCookie = cookieStore.get(STATE_COOKIE)?.value
+  cookieStore.delete(STATE_COOKIE)
+  if (!stateCookie) {
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_state_missing", base), 302)
+  }
+
+  let cookieState: StateCookie = {}
+  try {
+    cookieState = JSON.parse(stateCookie) as StateCookie
+  } catch {
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_state_invalid", base), 302)
+  }
+
+  if (!cookieState.userId || !cookieState.state || cookieState.state !== state) {
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_state_mismatch", base), 302)
+  }
+
+  let shopDomain = ""
+  try {
+    shopDomain = normalizeShopDomain(shop)
+  } catch {
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_invalid_shop", base), 302)
+  }
+
+  if (cookieState.shopDomain && cookieState.shopDomain !== shopDomain) {
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_state_shop_mismatch", base), 302)
   }
 
   try {
-    const tokenResponse = await fetch(`https://${oauthState.shopDomain}/admin/oauth/access_token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: oauthState.clientId,
-        client_secret: oauthState.clientSecret,
-        code,
-      }),
-    })
-    if (!tokenResponse.ok) {
-      throw new Error(`token_exchange_failed_${tokenResponse.status}`)
-    }
-    const tokenData = (await tokenResponse.json()) as { access_token?: string; scope?: string }
-    const accessToken = tokenData.access_token ?? ""
-    if (!accessToken) throw new Error("missing_access_token")
+    const tokenResponse = await exchangeCodeForAccessToken(shopDomain, code)
+    const grantedScopes = parseScopeString(tokenResponse.scope)
+    const missingScopes = getMissingScopes(grantedScopes)
 
-    const grantedScopes = parseGrantedScopes(tokenData.scope)
-    const missingScopes = diffScopes(SHOPIFY_REQUIRED_SCOPES, grantedScopes)
-    const consent = await getLatestConsent(oauthState.userId, oauthState.shopDomain)
-    if (!consent) {
-      return NextResponse.redirect(new URL("/onboarding?error=shopify_consent_missing", appBase), 302)
-    }
-
-    await upsertConnectionFromOAuth({
-      userId: oauthState.userId,
-      shopDomain: oauthState.shopDomain,
-      clientId: oauthState.clientId,
-      accessToken,
+    await setShopifyConnection(cookieState.userId, shopDomain, {
+      accessToken: tokenResponse.access_token,
+      scope: tokenResponse.scope,
       grantedScopes,
       missingScopes,
-      retentionMode: consent.retention_mode,
-      status: missingScopes.length ? "scope_missing" : "connected",
     })
 
-    await registerWebhookSubscriptions(oauthState.userId, oauthState.shopDomain)
-    await queueInitialBackfill(oauthState.userId, oauthState.shopDomain)
-
-    log("shopify.oauth.callback.succeeded", { shopDomain: oauthState.shopDomain, missingScopes: missingScopes.length }, "shopify")
-    return NextResponse.redirect(new URL(`/onboarding?shopify_connected=1&shop=${encodeURIComponent(oauthState.shopDomain)}`, appBase), 302)
+    log("shopify.oauth.callback.succeeded", { userId: cookieState.userId, shopDomain, missingScopes: missingScopes.length }, "shopify")
+    const qp = new URLSearchParams({
+      connected: "shopify",
+      shop: shopDomain,
+      status: missingScopes.length ? "scope_missing" : "connected",
+    })
+    return NextResponse.redirect(new URL(`/onboarding?${qp.toString()}`, base), 302)
   } catch (err) {
     logError("shopify.oauth.callback.failed", err, "shopify")
-    return NextResponse.redirect(new URL("/onboarding?error=shopify_token_exchange", appBase), 302)
+    return NextResponse.redirect(new URL("/onboarding?error=shopify_token_exchange", base), 302)
   }
 }
