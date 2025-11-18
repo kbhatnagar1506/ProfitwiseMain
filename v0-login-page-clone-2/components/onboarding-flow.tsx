@@ -3569,9 +3569,9 @@ export function OnboardingFlow({
           if (status === "partially_paid") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">Partial</span>
           return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">Open</span>
         }
-        const arInvoices = arApData?.ar.invoices ?? []
+        const arInvoices = arApData?.ar?.invoices ?? []
         const arOverdueFirst = [...arInvoices].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0))
-        const apObligations = arApData?.ap.obligations ?? []
+        const apObligations = arApData?.ap?.obligations ?? []
         const allReconRowsRaw = mappingRecon
           ? [
               ...(mappingRecon.matched_inflows ?? []).map((m: { movement_id: string; amount: number; date: string; counterparty: string | null; display_name?: string | null; allocations?: { gross: number; fee: number; net: number }[] }) => ({
