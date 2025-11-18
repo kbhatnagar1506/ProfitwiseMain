@@ -4080,7 +4080,6 @@ export function OnboardingFlow({
                     <div className="p-8 text-center text-gray-500 text-sm">No outstanding bills.</div>
                   )}
                 </div>
-                </>
                 )}
 
                 {/* ─── Reconciliation Summary Dashboard ─── */}
