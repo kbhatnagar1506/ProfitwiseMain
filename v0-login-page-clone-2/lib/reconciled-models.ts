@@ -62,7 +62,7 @@ export async function fetchReconciledARMovements(userId: string): Promise<Reconc
       `SELECT 
         m.id as movement_id,
         a.entity_id,
-        COALESCE(e.name, a.entity_id::text) as entity_name,
+        COALESCE(e.name, a.entity_id) as entity_name,
         m.amount::float,
         m.date::text,
         a.reference_id as invoice_id,
@@ -73,7 +73,7 @@ export async function fetchReconciledARMovements(userId: string): Promise<Reconc
         a.created_at::text
        FROM movement_attributions a
        JOIN movements m ON a.movement_id = m.id
-       LEFT JOIN entities e ON a.entity_id = e.id
+       LEFT JOIN entities e ON a.entity_id = e.id::text
        LEFT JOIN outstanding_invoices i ON a.reference_id = i.invoice_id
        WHERE a.user_id = $1::uuid
          AND a.component_type = 'ar'
@@ -123,7 +123,7 @@ export async function fetchReconciledAPMovements(userId: string): Promise<Reconc
       `SELECT 
         m.id as movement_id,
         a.entity_id,
-        COALESCE(e.name, a.entity_id::text) as entity_name,
+        COALESCE(e.name, a.entity_id) as entity_name,
         m.amount::float,
         m.date::text,
         a.reference_id as bill_id,
@@ -134,7 +134,7 @@ export async function fetchReconciledAPMovements(userId: string): Promise<Reconc
         a.created_at::text
        FROM movement_attributions a
        JOIN movements m ON a.movement_id = m.id
-       LEFT JOIN entities e ON a.entity_id = e.id
+       LEFT JOIN entities e ON a.entity_id = e.id::text
        LEFT JOIN outstanding_bills b ON a.reference_id = b.bill_id
        WHERE a.user_id = $1::uuid
          AND a.component_type = 'ap'
