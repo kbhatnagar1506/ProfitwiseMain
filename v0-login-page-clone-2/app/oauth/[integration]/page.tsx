@@ -80,6 +80,7 @@ export default function OAuthConnectorPage() {
   const [shopConsent, setShopConsent] = useState(false)
   const [shopConnectLoading, setShopConnectLoading] = useState(false)
   const [shopConnectError, setShopConnectError] = useState<string | null>(null)
+  const [shopScopesCopied, setShopScopesCopied] = useState(false)
   const [shopConnections, setShopConnections] = useState<Array<{
     shop_domain: string
     status: string
@@ -177,6 +178,8 @@ export default function OAuthConnectorPage() {
     const appConfigLink = hasShop ? `${adminBase}/settings/apps/development` : "https://help.shopify.com/en/manual/apps/app-types/custom-apps"
     const scopesGuideLink = "https://shopify.dev/docs/api/usage/access-scopes"
     const webhookGuideLink = "https://shopify.dev/docs/apps/build/webhooks/subscribe/https"
+    const shopifyDashboardLink = "https://dev.shopify.com/dashboard"
+    const scopeCsv = "read_orders,read_customers,read_discounts,read_shopify_payments_payouts"
 
     return (
       <div className="min-h-screen bg-black flex items-center justify-center px-6 py-10">
@@ -195,6 +198,9 @@ export default function OAuthConnectorPage() {
               <li>Click <span className="text-white">Connect Shopify</span> and approve OAuth on Shopify.</li>
             </ol>
             <div className="mt-3 flex flex-wrap gap-2">
+              <a href={shopifyDashboardLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
+                Open Shopify Dashboard
+              </a>
               <a href={appSetupLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
                 Open Shopify Apps
               </a>
@@ -207,6 +213,24 @@ export default function OAuthConnectorPage() {
               <a href={webhookGuideLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">
                 Webhook Docs
               </a>
+            </div>
+            <div className="mt-3 rounded-md border border-white/10 bg-black/20 p-3">
+              <p className="text-xs text-gray-300 mb-2">Scopes CSV (copy and paste in Shopify app scopes)</p>
+              <div className="flex items-center gap-2">
+                <code className="text-[11px] text-emerald-300 break-all">{scopeCsv}</code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(scopeCsv).then(() => {
+                      setShopScopesCopied(true)
+                      setTimeout(() => setShopScopesCopied(false), 2000)
+                    })
+                  }}
+                  className="shrink-0 rounded-md border border-white/20 px-2 py-1 text-xs text-white hover:bg-white/10"
+                >
+                  {shopScopesCopied ? "Copied" : "Copy CSV"}
+                </button>
+              </div>
             </div>
           </div>
           <div className="space-y-4">
