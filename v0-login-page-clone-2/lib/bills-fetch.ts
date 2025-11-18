@@ -3,7 +3,7 @@
  * Used by ar-ap route and forecast route.
  */
 
-import { query, ensureQBOSchema } from "@/lib/db"
+import { query, ensureQBOSchema, ensureGmailSchema } from "@/lib/db"
 import { toEntityUriApBill } from "@/lib/entity-uri"
 import type { OutstandingBill } from "./state/types"
 
@@ -111,6 +111,7 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
 
   // Gmail AP bills
   try {
+    await ensureGmailSchema()
     type GmailApRow = { message_id: string; extracted_invoice: Record<string, unknown> }
     const gmailApRows = await query<GmailApRow>(
       `SELECT message_id, extracted_invoice FROM gmail_synced_messages
