@@ -13,6 +13,38 @@ import { namesMatch } from "./ar-payment-match"
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
 
+// Economic class filtering for reconciliation
+// AR-eligible: movements that can match to invoices (customer receipts)
+const AR_ELIGIBLE_CLASSES = new Set<string | null>([
+  "customer_receipt",
+  "refund",
+  "settlement_in",
+  // Note: processor_payout is handled separately as a settlement type
+  null, // Allow untagged movements to still attempt matching
+])
+
+// AP-eligible: movements that can match to bills (vendor payments)
+const AP_ELIGIBLE_CLASSES = new Set<string | null>([
+  "vendor_payment",
+  "payroll",
+  "tax",
+  "debt_payment",
+  null, // Allow untagged movements to still attempt matching
+])
+
+// Excluded from AR/AP reconciliation entirely
+const EXCLUDED_FROM_RECON = new Set<string>([
+  "transfer",
+  "owner_contribution",
+  "owner_draw",
+  "bank_fee",
+  "bank_fee_refund",
+  "interest",
+  "opening_balance",
+  "account_verification",
+  "system_adjustment",
+])
+
 export function normalizeEntityName(name: string | null | undefined): string {
   if (!name) return ""
   return name.toLowerCase().replace(/[^a-z0-9]/g, "").trim()
@@ -30,6 +62,9 @@ export type MovementWithAvailableCash = {
   raw_description: string | null
   metadata: Record<string, unknown>
   available_cash: number
+  // From movement_tags JOIN
+  economic_class: string | null
+  tag_data: Record<string, unknown> | null
 }
 
 type MutableCashEvent = CashEventRow & {
@@ -48,12 +83,14 @@ function statusFromOutstanding(outstanding: number, grossAmount: number): "open"
 export async function fetchMovementsWithAvailableCash(userId: string): Promise<MovementWithAvailableCash[]> {
   await ensureMovementsSchema()
   const { rows } = await query<
-    MovementWithAvailableCash & { amount: string; available_cash: string; metadata: unknown }
+    MovementWithAvailableCash & { amount: string; available_cash: string; metadata: unknown; tag_data: unknown }
   >(
     `SELECT m.id, m.user_id, m.direction, m.amount::float, m.date::text, m.movement_type,
             m.counterparty, m.counterparty_entity_id::text AS counterparty_entity_id, m.raw_description, m.metadata,
+            mt.economic_class, mt.tag_data,
             (ABS(m.amount::float) - COALESCE(allocated.allocated_sum, 0))::float AS available_cash
      FROM movements m
+     LEFT JOIN movement_tags mt ON mt.movement_id = m.id
      LEFT JOIN (
        SELECT movement_id,
               SUM(ABS(net_amount::float)) AS allocated_sum
@@ -78,6 +115,8 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
     raw_description: r.raw_description,
     metadata: (r.metadata && typeof r.metadata === "object" ? r.metadata : {}) as Record<string, unknown>,
     available_cash: parseFloat(String(r.available_cash)),
+    economic_class: r.economic_class ?? null,
+    tag_data: (r.tag_data && typeof r.tag_data === "object" ? r.tag_data : null) as Record<string, unknown> | null,
   }))
 }
 
@@ -247,6 +286,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     evAp: 0,
     mInflow: 0,
     mOutflow: 0,
+    hitS0: 0, // Stage 0: direct link matches
     hitS1: 0,
     hitS2: 0,
     hitS3: 0,
@@ -257,6 +297,10 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     zeroByEntityOnly: 0,
     /** H-D: among zeroByEntityOnly, bank label used for match was empty */
     zeroCandNullBankLabel: 0,
+    /** Movements excluded by economic_class filter */
+    excludedByEconClass: 0,
+    /** Movements skipped due to wrong economic_class for direction */
+    skippedWrongEconClass: 0,
     stage4NoCand: 0,
     stage4HadCand: 0,
     samples: [] as Array<{
@@ -266,6 +310,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       nCand: number
       s1MinGap: number | null
       outcome: string
+      econClass: string | null
     }>,
   }
   for (const e of eventById.values()) {
@@ -279,7 +324,23 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   // #endregion
 
   const filterForMovement = (m: MovementWithAvailableCash): MutableCashEvent[] => {
+    const econ = m.economic_class
+
+    // Skip movements that should never match AR/AP (transfers, owner activity, fees, etc.)
+    if (econ && EXCLUDED_FROM_RECON.has(econ)) {
+      return []
+    }
+
     const target: "ar" | "ap" = m.direction === "inflow" ? "ar" : "ap"
+
+    // Validate economic class matches direction
+    if (target === "ar" && econ && !AR_ELIGIBLE_CLASSES.has(econ)) {
+      return []
+    }
+    if (target === "ap" && econ && !AP_ELIGIBLE_CLASSES.has(econ)) {
+      return []
+    }
+
     const resolvedBank = displayNameByMovement.get(m.id)?.display_name ?? null
     return [...eventById.values()].filter(
       (e) =>
@@ -293,10 +354,29 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     let remainingCash = movement.available_cash
     if (remainingCash <= EPS) continue
 
+    const econ = movement.economic_class
+
+    // Track movements excluded by economic class
+    if (econ && EXCLUDED_FROM_RECON.has(econ)) {
+      debugWf.excludedByEconClass++
+      continue
+    }
+
     const resolvedBankForMove =
       displayNameByMovement.get(movement.id)?.display_name ?? null
     const isInflow = movement.direction === "inflow"
     const targetType = isInflow ? "ar" : "ap"
+
+    // Track movements with wrong economic class for their direction
+    if (targetType === "ar" && econ && !AR_ELIGIBLE_CLASSES.has(econ)) {
+      debugWf.skippedWrongEconClass++
+      continue
+    }
+    if (targetType === "ap" && econ && !AP_ELIGIBLE_CLASSES.has(econ)) {
+      debugWf.skippedWrongEconClass++
+      continue
+    }
+
     let entityEvents = filterForMovement(movement).sort(
       (a, b) => a.expected_date.localeCompare(b.expected_date),
     )
@@ -328,6 +408,113 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
 
     const pushAttr = (opts: CreateAttributionOpts) => {
       pendingAttributions.push(opts)
+    }
+
+    // --- Handle processor_payout as settlement (skip AR/AP matching) ---
+    // Processor payouts aggregate multiple charges minus fees, so they shouldn't match to single invoices
+    if (econ === "processor_payout") {
+      pushAttr({
+        userId,
+        movementId: movement.id,
+        component_type: "settlement",
+        entity_id: `settlement://processor/${movement.counterparty ?? "unknown"}`,
+        reference_id: null,
+        gross_amount: remainingCash,
+        net_amount: remainingCash,
+        confidence: 0.85,
+        source: "rule",
+        metadata: {
+          waterfall_stage: "processor_settlement",
+          match_method: "settlement_classification",
+          requires_decomposition: true,
+          economic_class: econ,
+        },
+      })
+      wfOutcome = "settlement"
+      continue
+    }
+
+    // --- Stage 0: Direct link from tag_data (invoice_id or bill_id) ---
+    // Highest confidence match when movement has pre-linked document ID
+    const tagData = movement.tag_data as { invoice_id?: string; bill_id?: string; customer_id?: string; vendor_id?: string } | null
+    let directLinkMatch: MutableCashEvent | undefined
+
+    if (tagData) {
+      if (isInflow && tagData.invoice_id) {
+        // Find cash_event with matching invoice_id in metadata
+        directLinkMatch = [...eventById.values()].find(
+          (e) =>
+            e.event_type === "ar" &&
+            (e.outstanding_amount > EPS || e.status === "paid") &&
+            e.metadata?.invoice_id === tagData.invoice_id,
+        )
+      } else if (!isInflow && tagData.bill_id) {
+        // Find cash_event with matching bill_id in metadata
+        directLinkMatch = [...eventById.values()].find(
+          (e) =>
+            e.event_type === "ap" &&
+            (e.outstanding_amount > EPS || e.status === "paid") &&
+            e.metadata?.bill_id === tagData.bill_id,
+        )
+      }
+    }
+
+    if (directLinkMatch) {
+      const isHistoricalDirectLink = directLinkMatch.status === "paid"
+      const matchAmount = isHistoricalDirectLink ? directLinkMatch.amount : directLinkMatch.outstanding_amount
+      // #region agent log
+      debugWf.hitS0++
+      wfOutcome = "s0"
+      // #endregion
+      pushAttr({
+        userId,
+        movementId: movement.id,
+        component_type: targetType,
+        entity_id: directLinkMatch.entity_id,
+        reference_id:
+          targetType === "ar"
+            ? (directLinkMatch.metadata?.invoice_id as string) ?? null
+            : (directLinkMatch.metadata?.bill_id as string) ?? null,
+        gross_amount: matchAmount,
+        net_amount: remainingCash,
+        confidence: 0.98, // Highest confidence for direct link
+        source: "rule",
+        metadata: {
+          fee_amount: Math.max(0, matchAmount - remainingCash),
+          match_method: "direct_link",
+          waterfall_stage: isHistoricalDirectLink ? "direct_link_historical" : "direct_link",
+          is_historical_reconciliation: isHistoricalDirectLink,
+          linked_via: tagData?.invoice_id ? "invoice_id" : "bill_id",
+        },
+      })
+      // Handle fee if there's a difference (processor fee)
+      const feeAmount = Math.max(0, matchAmount - remainingCash)
+      if (feeAmount > EPS && targetType === "ar") {
+        const processor = isProcessorLikeMovement(movement) ? "stripe" : "processor"
+        pushAttr({
+          userId,
+          movementId: movement.id,
+          component_type: "fee",
+          entity_id: `fee://${processor}`,
+          reference_id: null,
+          gross_amount: 0,
+          net_amount: -feeAmount,
+          confidence: 0.98,
+          source: "rule",
+          metadata: {
+            fee_amount: feeAmount,
+            match_method: "direct_link",
+            waterfall_stage: isHistoricalDirectLink ? "direct_link_fee_historical" : "direct_link_fee",
+            is_historical_reconciliation: isHistoricalDirectLink,
+          },
+        })
+      }
+      if (!isHistoricalDirectLink) {
+        directLinkMatch.outstanding_amount = 0
+        directLinkMatch.status = "paid"
+      }
+      touchedEventIds.add(directLinkMatch.id)
+      continue
     }
 
     // --- Stage 1: exact match (including processor fee-aware match for inflows) ---
@@ -614,6 +801,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           nCand,
           s1MinGap: s1MinGap == null ? null : Math.round(s1MinGap * 100) / 100,
           outcome: wfOutcome,
+          econClass: movement.economic_class,
         })
       }
       // #endregion

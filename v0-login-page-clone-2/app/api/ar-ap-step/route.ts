@@ -110,6 +110,8 @@ export async function GET(request: Request) {
   }
 
   const recon = await fetchReconTotals(user.id)
+  const excludedCategories = await fetchExcludedCategories(user.id)
+  const transferPairs = await fetchTransferPairs(user.id)
 
   const pendingReview = await getMovementsPendingWaterfallReview(user.id)
   const waterfall_review = {
@@ -128,6 +130,8 @@ export async function GET(request: Request) {
     },
     ap,
     recon,
+    excluded_categories: excludedCategories,
+    transfer_pairs: transferPairs,
     waterfall_review,
     is_reconciling: isReconciling,
   })
@@ -149,6 +153,32 @@ function computeReconciliationSummary(invoices: OutstandingInvoice[]) {
     .filter((i) => i.reconciliation_status === "partial")
     .reduce((sum, i) => sum + (i.matched_amount ?? 0), 0)
 
+  // Bank-verified outstanding calculation
+  // Accounting outstanding = sum of open/partially_paid invoices
+  const accountingOutstanding = invoices
+    .filter((i) => i.status !== "paid")
+    .reduce((sum, i) => sum + i.amount_due, 0)
+
+  // Bank-verified matched = sum of matched amounts from bank
+  const bankVerifiedMatched = invoices
+    .filter((i) => i.reconciliation_status === "matched" || i.reconciliation_status === "partial")
+    .reduce((sum, i) => sum + (i.matched_amount ?? 0), 0)
+
+  // Bank-verified outstanding = accounting outstanding - bank verified matched (for open invoices)
+  const openInvoicesMatched = invoices
+    .filter((i) => i.status !== "paid" && (i.reconciliation_status === "matched" || i.reconciliation_status === "partial"))
+    .reduce((sum, i) => sum + (i.matched_amount ?? 0), 0)
+  const bankVerifiedOutstanding = accountingOutstanding - openInvoicesMatched
+
+  // Suspicious: paid in accounting but no bank match
+  const suspicious = invoices.filter(
+    (i) => i.status === "paid" && (i.reconciliation_status === "unmatched" || !i.reconciliation_status)
+  )
+  const suspiciousAmount = suspicious.reduce((sum, i) => sum + i.amount, 0)
+
+  // Discrepancy: difference between accounting and bank-verified
+  const discrepancy = accountingOutstanding - bankVerifiedOutstanding
+
   return {
     total_invoices: total,
     matched_count: matched,
@@ -158,6 +188,13 @@ function computeReconciliationSummary(invoices: OutstandingInvoice[]) {
     partial_matched_amount: r2(partialAmount),
     unmatched_amount: r2(unmatchedAmount),
     match_rate: total > 0 ? r2((matched + partial) / total * 100) : 0,
+    // New bank-verified fields
+    accounting_outstanding: r2(accountingOutstanding),
+    bank_verified_outstanding: r2(bankVerifiedOutstanding),
+    bank_verified_matched: r2(bankVerifiedMatched),
+    discrepancy: r2(discrepancy),
+    suspicious_count: suspicious.length,
+    suspicious_amount: r2(suspiciousAmount),
   }
 }
 
@@ -177,6 +214,28 @@ function computeApReconciliationSummary(bills: OutstandingBill[]) {
     .filter((b) => b.reconciliation_status === "partial")
     .reduce((sum, b) => sum + (b.matched_amount ?? 0), 0)
 
+  // Bank-verified outstanding calculation for AP
+  const accountingOutstanding = bills
+    .filter((b) => b.status !== "paid")
+    .reduce((sum, b) => sum + b.amount_due, 0)
+
+  const bankVerifiedMatched = bills
+    .filter((b) => b.reconciliation_status === "matched" || b.reconciliation_status === "partial")
+    .reduce((sum, b) => sum + (b.matched_amount ?? 0), 0)
+
+  const openBillsMatched = bills
+    .filter((b) => b.status !== "paid" && (b.reconciliation_status === "matched" || b.reconciliation_status === "partial"))
+    .reduce((sum, b) => sum + (b.matched_amount ?? 0), 0)
+  const bankVerifiedOutstanding = accountingOutstanding - openBillsMatched
+
+  // Suspicious: paid in accounting but no bank match
+  const suspicious = bills.filter(
+    (b) => b.status === "paid" && (b.reconciliation_status === "unmatched" || !b.reconciliation_status)
+  )
+  const suspiciousAmount = suspicious.reduce((sum, b) => sum + b.amount, 0)
+
+  const discrepancy = accountingOutstanding - bankVerifiedOutstanding
+
   return {
     total_bills: total,
     matched_count: matched,
@@ -186,6 +245,13 @@ function computeApReconciliationSummary(bills: OutstandingBill[]) {
     partial_matched_amount: r2(partialAmount),
     unmatched_amount: r2(unmatchedAmount),
     match_rate: total > 0 ? r2((matched + partial) / total * 100) : 0,
+    // New bank-verified fields
+    accounting_outstanding: r2(accountingOutstanding),
+    bank_verified_outstanding: r2(bankVerifiedOutstanding),
+    bank_verified_matched: r2(bankVerifiedMatched),
+    discrepancy: r2(discrepancy),
+    suspicious_count: suspicious.length,
+    suspicious_amount: r2(suspiciousAmount),
   }
 }
 
@@ -228,5 +294,216 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     matched_outflows: lists.matched_outflows,
     unmatched_inflows: lists.unmatched_inflows,
     unmatched_outflows: lists.unmatched_outflows,
+  }
+}
+
+type ExcludedMovement = {
+  id: string
+  amount: number
+  date: string
+  counterparty: string | null
+  direction: "inflow" | "outflow"
+  economic_class: string
+  cashflow_bucket: string | null
+}
+
+type ExcludedCategories = {
+  transfers: ExcludedMovement[]
+  owner_activity: ExcludedMovement[]
+  fees_and_interest: ExcludedMovement[]
+  processor_settlements: ExcludedMovement[]
+  totals: {
+    transfers_count: number
+    transfers_amount: number
+    owner_activity_count: number
+    owner_activity_amount: number
+    fees_and_interest_count: number
+    fees_and_interest_amount: number
+    processor_settlements_count: number
+    processor_settlements_amount: number
+  }
+}
+
+async function fetchExcludedCategories(userId: string): Promise<ExcludedCategories> {
+  const { rows } = await query<{
+    id: string
+    amount: string
+    date: string
+    counterparty: string | null
+    direction: string
+    economic_class: string
+    cashflow_bucket: string | null
+  }>(
+    `SELECT m.id, ABS(m.amount::float)::text AS amount, m.date::text, m.counterparty, m.direction,
+            mt.economic_class, mt.cashflow_bucket
+     FROM movements m
+     JOIN movement_tags mt ON mt.movement_id = m.id
+     WHERE m.user_id = $1
+       AND m.duplicate_of IS NULL
+       AND mt.economic_class IN (
+         'transfer', 'owner_draw', 'owner_contribution', 
+         'bank_fee', 'bank_fee_refund', 'interest', 
+         'processor_fee', 'processor_payout'
+       )
+     ORDER BY m.date DESC
+     LIMIT 200`,
+    [userId],
+  )
+
+  const movements: ExcludedMovement[] = rows.map((r) => ({
+    id: r.id,
+    amount: parseFloat(r.amount),
+    date: r.date,
+    counterparty: r.counterparty,
+    direction: r.direction as "inflow" | "outflow",
+    economic_class: r.economic_class,
+    cashflow_bucket: r.cashflow_bucket,
+  }))
+
+  const transfers = movements.filter((m) => m.economic_class === "transfer")
+  const ownerActivity = movements.filter((m) => 
+    m.economic_class === "owner_draw" || m.economic_class === "owner_contribution"
+  )
+  const feesAndInterest = movements.filter((m) => 
+    m.economic_class === "bank_fee" || 
+    m.economic_class === "bank_fee_refund" || 
+    m.economic_class === "interest"
+  )
+  const processorSettlements = movements.filter((m) => 
+    m.economic_class === "processor_fee" || m.economic_class === "processor_payout"
+  )
+
+  return {
+    transfers: transfers.slice(0, 50),
+    owner_activity: ownerActivity.slice(0, 50),
+    fees_and_interest: feesAndInterest.slice(0, 50),
+    processor_settlements: processorSettlements.slice(0, 50),
+    totals: {
+      transfers_count: transfers.length,
+      transfers_amount: r2(transfers.reduce((sum, m) => sum + m.amount, 0)),
+      owner_activity_count: ownerActivity.length,
+      owner_activity_amount: r2(ownerActivity.reduce((sum, m) => sum + m.amount, 0)),
+      fees_and_interest_count: feesAndInterest.length,
+      fees_and_interest_amount: r2(feesAndInterest.reduce((sum, m) => sum + m.amount, 0)),
+      processor_settlements_count: processorSettlements.length,
+      processor_settlements_amount: r2(processorSettlements.reduce((sum, m) => sum + m.amount, 0)),
+    },
+  }
+}
+
+type TransferPair = {
+  outflow_id: string
+  inflow_id: string
+  amount: number
+  date: string
+  counterparty: string | null
+  days_apart: number
+}
+
+type TransferPairsResult = {
+  pairs: TransferPair[]
+  unpaired_transfers: ExcludedMovement[]
+  total_paired_amount: number
+  total_unpaired_amount: number
+}
+
+async function fetchTransferPairs(userId: string): Promise<TransferPairsResult> {
+  // Find transfer pairs: same amount, opposite direction, within 3 days
+  const { rows: pairRows } = await query<{
+    outflow_id: string
+    inflow_id: string
+    amount: string
+    outflow_date: string
+    inflow_date: string
+    counterparty: string | null
+    days_apart: string
+  }>(
+    `WITH transfer_movements AS (
+      SELECT m.id, m.amount, m.date, m.counterparty, m.direction
+      FROM movements m
+      JOIN movement_tags mt ON mt.movement_id = m.id
+      WHERE m.user_id = $1
+        AND m.duplicate_of IS NULL
+        AND mt.economic_class = 'transfer'
+    )
+    SELECT 
+      m1.id as outflow_id, 
+      m2.id as inflow_id,
+      ABS(m1.amount::float)::text AS amount, 
+      m1.date::text as outflow_date,
+      m2.date::text as inflow_date,
+      COALESCE(m1.counterparty, m2.counterparty) as counterparty,
+      ABS(m2.date - m1.date)::text as days_apart
+    FROM transfer_movements m1
+    JOIN transfer_movements m2 ON 
+      ABS(m1.amount::float) = ABS(m2.amount::float)
+      AND m1.direction = 'outflow' 
+      AND m2.direction = 'inflow'
+      AND ABS(m2.date - m1.date) <= 3
+      AND m1.id < m2.id
+    ORDER BY m1.date DESC
+    LIMIT 50`,
+    [userId],
+  )
+
+  const pairs: TransferPair[] = pairRows.map((r) => ({
+    outflow_id: r.outflow_id,
+    inflow_id: r.inflow_id,
+    amount: parseFloat(r.amount),
+    date: r.outflow_date,
+    counterparty: r.counterparty,
+    days_apart: parseInt(r.days_apart, 10),
+  }))
+
+  // Find paired movement IDs
+  const pairedIds = new Set<string>()
+  for (const p of pairs) {
+    pairedIds.add(p.outflow_id)
+    pairedIds.add(p.inflow_id)
+  }
+
+  // Get unpaired transfers
+  const { rows: unpairedRows } = await query<{
+    id: string
+    amount: string
+    date: string
+    counterparty: string | null
+    direction: string
+    economic_class: string
+    cashflow_bucket: string | null
+  }>(
+    `SELECT m.id, ABS(m.amount::float)::text AS amount, m.date::text, m.counterparty, m.direction,
+            mt.economic_class, mt.cashflow_bucket
+     FROM movements m
+     JOIN movement_tags mt ON mt.movement_id = m.id
+     WHERE m.user_id = $1
+       AND m.duplicate_of IS NULL
+       AND mt.economic_class = 'transfer'
+     ORDER BY m.date DESC
+     LIMIT 100`,
+    [userId],
+  )
+
+  const unpairedTransfers: ExcludedMovement[] = unpairedRows
+    .filter((r) => !pairedIds.has(r.id))
+    .map((r) => ({
+      id: r.id,
+      amount: parseFloat(r.amount),
+      date: r.date,
+      counterparty: r.counterparty,
+      direction: r.direction as "inflow" | "outflow",
+      economic_class: r.economic_class,
+      cashflow_bucket: r.cashflow_bucket,
+    }))
+    .slice(0, 50)
+
+  const totalPairedAmount = pairs.reduce((sum, p) => sum + p.amount, 0)
+  const totalUnpairedAmount = unpairedTransfers.reduce((sum, t) => sum + t.amount, 0)
+
+  return {
+    pairs,
+    unpaired_transfers: unpairedTransfers,
+    total_paired_amount: r2(totalPairedAmount),
+    total_unpaired_amount: r2(totalUnpairedAmount),
   }
 }
