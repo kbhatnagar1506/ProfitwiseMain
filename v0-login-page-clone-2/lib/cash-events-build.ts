@@ -349,30 +349,57 @@ export async function syncCashEventsForUser(
         ELSE 'open'
       END`
 
+  const upsertArPaidSql = `INSERT INTO cash_events (
+      user_id, entity_id, event_type, amount, outstanding_amount, status, probability, expected_date, source, metadata
+    ) VALUES ($1, $2, 'ar', $3, 0, 'paid', $4, $5::date, 'invoice', $6::jsonb)
+    ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
+      amount = EXCLUDED.amount,
+      probability = EXCLUDED.probability,
+      expected_date = EXCLUDED.expected_date,
+      source = EXCLUDED.source,
+      metadata = EXCLUDED.metadata,
+      updated_at = NOW()`
+
   for (const inv of invoices) {
-    if (inv.amount_due <= 0) continue
-    const expectedFromArLayer2 = arExpectedByInvoice.get(inv.invoice_id)
-    const fallbackExpected = inv.due_date && inv.due_date >= today ? inv.due_date : addDays(today, Math.min(14, inv.days_until_due ?? 7))
-    const expected = expectedFromArLayer2 ?? fallbackExpected
-    const prob =
-      inv.status === "overdue" ? 0.55 : inv.status === "partially_paid" ? 0.75 : 0.85
     const entityLabel = inv.entity_uri ?? `${inv.source}:${inv.invoice_id}`
     arStableIds.push(entityLabel)
-    const statusInit: "open" | "partially_paid" | "paid" = "open"
-    await query(upsertArSql, [
-      userId,
-      entityLabel,
-      inv.amount_due,
-      statusInit,
-      prob,
-      expected,
-      JSON.stringify({
-        invoice_id: inv.invoice_id,
-        customer_name: inv.customer_name,
-        canonical_name: inv.customer_name,
-        ...(inv.entity_id ? { graph_entity_id: inv.entity_id } : {}),
-      }),
-    ])
+
+    const metadata = JSON.stringify({
+      invoice_id: inv.invoice_id,
+      customer_name: inv.customer_name,
+      canonical_name: inv.customer_name,
+      ...(inv.entity_id ? { graph_entity_id: inv.entity_id } : {}),
+    })
+
+    if (inv.status === "paid" || inv.amount_due <= 0) {
+      const expectedFromArLayer2 = arExpectedByInvoice.get(inv.invoice_id)
+      const fallbackExpected = inv.due_date ?? addDays(today, 0)
+      const expected = expectedFromArLayer2 ?? fallbackExpected
+      await query(upsertArPaidSql, [
+        userId,
+        entityLabel,
+        inv.amount,
+        1.0,
+        expected,
+        metadata,
+      ])
+    } else {
+      const expectedFromArLayer2 = arExpectedByInvoice.get(inv.invoice_id)
+      const fallbackExpected = inv.due_date && inv.due_date >= today ? inv.due_date : addDays(today, Math.min(14, inv.days_until_due ?? 7))
+      const expected = expectedFromArLayer2 ?? fallbackExpected
+      const prob =
+        inv.status === "overdue" ? 0.55 : inv.status === "partially_paid" ? 0.75 : 0.85
+      const statusInit: "open" | "partially_paid" | "paid" = "open"
+      await query(upsertArSql, [
+        userId,
+        entityLabel,
+        inv.amount_due,
+        statusInit,
+        prob,
+        expected,
+        metadata,
+      ])
+    }
   }
 
   for (const ob of billObligations) {

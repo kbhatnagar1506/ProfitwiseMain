@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema } from "@/lib/db"
-import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
+import { fetchInvoicesForReconciliation, enrichInvoicesWithReconciliationStatus } from "@/lib/invoices-fetch"
 import { fetchOutstandingBills } from "@/lib/bills-fetch"
 import { computeARState, computeAPStateFromBills } from "@/lib/state/ar-ap"
 import { query } from "@/lib/db"
@@ -14,6 +14,7 @@ import {
 import { getMovementsPendingWaterfallReview } from "@/lib/reconciliation-waterfall"
 import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
+import type { OutstandingInvoice } from "@/lib/state/types"
 
 const WATERFALL_REVIEW_PREVIEW = 15
 
@@ -57,7 +58,15 @@ export async function GET() {
     return NextResponse.json({ error: "Reconciliation run failed", detail: msg }, { status: 500 })
   }
 
-  const ar = computeARState(invoices)
+  const enrichedInvoices = await enrichInvoicesWithReconciliationStatus(user.id, invoices)
+
+  const openInvoices = enrichedInvoices.filter((i) => i.status !== "paid")
+  const paidInvoices = enrichedInvoices.filter((i) => i.status === "paid")
+
+  const ar = computeARState(openInvoices)
+
+  const reconciliationSummary = computeReconciliationSummary(enrichedInvoices)
+
   const ap = {
     total_expected_30d: r2(obligations.reduce((s, o) => s + o.expected_amount, 0)),
     obligation_count: obligations.length,
@@ -72,7 +81,45 @@ export async function GET() {
     movements: pendingReview.slice(0, WATERFALL_REVIEW_PREVIEW),
   }
 
-  return NextResponse.json({ ar, ap, recon, waterfall_review })
+  return NextResponse.json({
+    ar: {
+      ...ar,
+      invoices: openInvoices,
+      paid_invoices: paidInvoices,
+      reconciliation_summary: reconciliationSummary,
+    },
+    ap,
+    recon,
+    waterfall_review,
+  })
+}
+
+function computeReconciliationSummary(invoices: OutstandingInvoice[]) {
+  const total = invoices.length
+  const matched = invoices.filter((i) => i.reconciliation_status === "matched").length
+  const partial = invoices.filter((i) => i.reconciliation_status === "partial").length
+  const unmatched = invoices.filter((i) => i.reconciliation_status === "unmatched" || !i.reconciliation_status).length
+
+  const matchedAmount = invoices
+    .filter((i) => i.reconciliation_status === "matched")
+    .reduce((sum, i) => sum + i.amount, 0)
+  const unmatchedAmount = invoices
+    .filter((i) => i.reconciliation_status === "unmatched" || !i.reconciliation_status)
+    .reduce((sum, i) => sum + i.amount, 0)
+  const partialAmount = invoices
+    .filter((i) => i.reconciliation_status === "partial")
+    .reduce((sum, i) => sum + (i.matched_amount ?? 0), 0)
+
+  return {
+    total_invoices: total,
+    matched_count: matched,
+    partial_count: partial,
+    unmatched_count: unmatched,
+    matched_amount: r2(matchedAmount),
+    partial_matched_amount: r2(partialAmount),
+    unmatched_amount: r2(unmatchedAmount),
+    match_rate: total > 0 ? r2((matched + partial) / total * 100) : 0,
+  }
 }
 
 async function fetchReconTotals(userId: string): Promise<ReconTotals> {

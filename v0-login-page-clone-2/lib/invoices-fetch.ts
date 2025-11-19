@@ -346,3 +346,85 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
   }
   return [...seen.values()]
 }
+
+/**
+ * Enrich invoices with reconciliation status from movement_attributions.
+ * Queries the attributions table to find which invoices have been matched to bank movements.
+ */
+export async function enrichInvoicesWithReconciliationStatus(
+  userId: string,
+  invoices: OutstandingInvoice[]
+): Promise<OutstandingInvoice[]> {
+  if (invoices.length === 0) return invoices
+
+  type AttrRow = {
+    entity_id: string
+    reference_id: string | null
+    movement_id: string
+    gross_amount: string
+    metadata: Record<string, unknown>
+  }
+
+  const { rows: attrRows } = await query<AttrRow>(
+    `SELECT entity_id, reference_id, movement_id, gross_amount::text, metadata
+     FROM movement_attributions
+     WHERE user_id = $1
+       AND component_type = 'ar'
+       AND source = 'rule'`,
+    [userId]
+  )
+
+  const matchesByInvoiceId = new Map<string, { movementIds: string[]; totalMatched: number }>()
+  const matchesByEntityUri = new Map<string, { movementIds: string[]; totalMatched: number }>()
+
+  for (const attr of attrRows) {
+    const gross = parseFloat(attr.gross_amount) || 0
+    if (attr.reference_id) {
+      const existing = matchesByInvoiceId.get(attr.reference_id) ?? { movementIds: [], totalMatched: 0 }
+      existing.movementIds.push(attr.movement_id)
+      existing.totalMatched += gross
+      matchesByInvoiceId.set(attr.reference_id, existing)
+    }
+    if (attr.entity_id) {
+      const existing = matchesByEntityUri.get(attr.entity_id) ?? { movementIds: [], totalMatched: 0 }
+      existing.movementIds.push(attr.movement_id)
+      existing.totalMatched += gross
+      matchesByEntityUri.set(attr.entity_id, existing)
+    }
+  }
+
+  return invoices.map((inv) => {
+    const byId = matchesByInvoiceId.get(inv.invoice_id)
+    const byUri = inv.entity_uri ? matchesByEntityUri.get(inv.entity_uri) : undefined
+    const match = byId ?? byUri
+
+    if (!match || match.movementIds.length === 0) {
+      return {
+        ...inv,
+        reconciliation_status: "unmatched" as const,
+        matched_movement_ids: [],
+        matched_amount: 0,
+      }
+    }
+
+    const matchedAmount = match.totalMatched
+    const invoiceAmount = inv.amount
+    const tolerance = 0.01
+
+    let reconciliationStatus: "matched" | "unmatched" | "partial"
+    if (Math.abs(matchedAmount - invoiceAmount) < tolerance || matchedAmount >= invoiceAmount - tolerance) {
+      reconciliationStatus = "matched"
+    } else if (matchedAmount > 0) {
+      reconciliationStatus = "partial"
+    } else {
+      reconciliationStatus = "unmatched"
+    }
+
+    return {
+      ...inv,
+      reconciliation_status: reconciliationStatus,
+      matched_movement_ids: [...new Set(match.movementIds)],
+      matched_amount: matchedAmount,
+    }
+  })
+}
