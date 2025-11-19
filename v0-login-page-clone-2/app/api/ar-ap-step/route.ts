@@ -32,7 +32,40 @@ type ReconTotals = {
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 
-export async function GET() {
+const reconInProgress = new Map<string, boolean>()
+
+async function runReconciliationInBackground(userId: string) {
+  if (reconInProgress.get(userId)) {
+    console.log("[ar-ap-step] Reconciliation already in progress for user:", userId)
+    return
+  }
+  
+  reconInProgress.set(userId, true)
+  console.log("[ar-ap-step] Starting background reconciliation for user:", userId)
+  
+  try {
+    const invoices = await fetchInvoicesForReconciliation(userId)
+    const bills = await fetchOutstandingBills(userId)
+    const obligations = computeAPStateFromBills(bills)
+    
+    await refreshEntityAliasesFromAccounting(userId)
+    await refreshMovementEntityIds(userId)
+    
+    await runFinancialBrain(userId, {
+      outstandingInvoices: invoices,
+      apObligations: obligations,
+    })
+    
+    console.log("[ar-ap-step] Background reconciliation completed for user:", userId)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error("[ar-ap-step] Background reconciliation failed:", msg)
+  } finally {
+    reconInProgress.delete(userId)
+  }
+}
+
+export async function GET(request: Request) {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
@@ -40,23 +73,18 @@ export async function GET() {
 
   await ensureMovementsSchema()
 
+  const url = new URL(request.url)
+  const runRecon = url.searchParams.get("run") === "true"
+
+  if (runRecon) {
+    runReconciliationInBackground(user.id).catch((e) => {
+      console.error("[ar-ap-step] Background task error:", e)
+    })
+  }
+
   const invoices = await fetchInvoicesForReconciliation(user.id)
   const bills = await fetchOutstandingBills(user.id)
   const obligations = computeAPStateFromBills(bills)
-
-  try {
-    await refreshEntityAliasesFromAccounting(user.id)
-    await refreshMovementEntityIds(user.id)
-
-    await runFinancialBrain(user.id, {
-      outstandingInvoices: invoices,
-      apObligations: obligations,
-    })
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    console.error("[ar-ap-step] runFinancialBrain failed:", msg)
-    return NextResponse.json({ error: "Reconciliation run failed", detail: msg }, { status: 500 })
-  }
 
   const enrichedInvoices = await enrichInvoicesWithReconciliationStatus(user.id, invoices)
 
@@ -81,6 +109,8 @@ export async function GET() {
     movements: pendingReview.slice(0, WATERFALL_REVIEW_PREVIEW),
   }
 
+  const isReconciling = reconInProgress.get(user.id) ?? false
+
   return NextResponse.json({
     ar: {
       ...ar,
@@ -91,6 +121,7 @@ export async function GET() {
     ap,
     recon,
     waterfall_review,
+    is_reconciling: isReconciling,
   })
 }
 
