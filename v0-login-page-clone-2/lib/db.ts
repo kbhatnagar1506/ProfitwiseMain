@@ -793,7 +793,6 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_tags_movement ON movement_tags (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_tags_eclass ON movement_tags (economic_class)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_tags_bucket ON movement_tags (cashflow_bucket)")
-  await p.query("CREATE INDEX IF NOT EXISTS idx_tags_user ON movement_tags (user_id)")
   // Add user_id column if it doesn't exist (migration for existing tables)
   await p.query(`
     DO $$ BEGIN
@@ -801,6 +800,8 @@ export async function ensureMovementsSchema(): Promise<void> {
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `)
+  // Create index on user_id AFTER ensuring the column exists
+  await p.query("CREATE INDEX IF NOT EXISTS idx_tags_user ON movement_tags (user_id)")
   // Backfill user_id from movements table for existing rows
   await p.query(`
     UPDATE movement_tags mt
