@@ -5070,11 +5070,12 @@ export async function computeCashflowForecast(
     let clustering: ClusteringResult | undefined
     
     try {
-      if (userId) {
-        entityGraph = await buildCompleteEntityGraph(userId)
-      }
+      // Temporarily disabled entity graph to debug userId error
+      // if (userId) {
+      //   entityGraph = await buildCompleteEntityGraph(userId)
+      // }
       
-      if (entityGraph && entityGraph.businessEntities.size > 0) {
+      if (false && entityGraph && entityGraph.businessEntities.size > 0) {
         // Build payment count maps for clustering
         const customerPaymentCounts = new Map<string, number>()
         const vendorPaymentCounts = new Map<string, number>()
