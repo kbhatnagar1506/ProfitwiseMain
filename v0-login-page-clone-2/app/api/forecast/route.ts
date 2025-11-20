@@ -459,7 +459,7 @@ export async function GET() {
     })
 
     // Compute the forecast
-    const forecast = computeCashflowForecast(
+    const forecast = await computeCashflowForecast(
       enrichedMovements,
       startingCashResult.cash,
       cal.route_config.horizon_months,
@@ -475,6 +475,7 @@ export async function GET() {
       arSettlementTiming,
       apSettlementTiming,
       settlementTimingConfidence,
+      userId,
     )
 
     // Update metadata with calibration source
