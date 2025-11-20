@@ -170,6 +170,43 @@ function matchesEntity(
       if (orgName && rawDesc && orgName.length >= 3 && (rawDesc.includes(orgName) || orgName.includes(rawDesc.slice(0, 20)))) {
         return true
       }
+      // Check if bank label or raw description contains the org name (handles "Pivot Culinary" matching "Pivot")
+      if (orgName && orgName.length >= 4) {
+        const bankLabelNorm = normalizeEntityName(bankLabel)
+        if (bankLabelNorm && bankLabelNorm.includes(orgName)) {
+          return true
+        }
+      }
+      // Handle abbreviations like "KC Royals" matching "Kansas City Roya"
+      // Extract significant words from org name and check if they appear in bank label
+      const orgWords = (orgMatch[1] || "").toLowerCase().split(/\s+/).filter(w => w.length >= 4)
+      const bankLabelLower = (bankLabel || "").toLowerCase()
+      const rawDescLower = (movement.raw_description || "").toLowerCase()
+      for (const word of orgWords) {
+        if (bankLabelLower.includes(word) || rawDescLower.includes(word)) {
+          return true
+        }
+      }
+    }
+  }
+  
+  // Also try matching raw description against customer name's org
+  // This catches cases where counterparty is null but raw_description has the org name
+  const rawDescNorm = normalizeEntityName(movement.raw_description)
+  if (customerName && rawDescNorm) {
+    const orgMatch = customerName.match(/\(([^)]+)\)/)
+    if (orgMatch) {
+      const orgName = normalizeEntityName(orgMatch[1])
+      if (orgName && orgName.length >= 4 && rawDescNorm.includes(orgName)) {
+        return true
+      }
+      // Also check significant words from org name
+      const orgWords = (orgMatch[1] || "").toLowerCase().split(/\s+/).filter(w => w.length >= 4)
+      for (const word of orgWords) {
+        if (rawDescNorm.includes(word.replace(/[^a-z0-9]/g, ""))) {
+          return true
+        }
+      }
     }
   }
   
