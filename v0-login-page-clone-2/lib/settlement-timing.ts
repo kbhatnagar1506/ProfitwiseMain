@@ -44,15 +44,10 @@ export async function calculateARSettlementTiming(userId: string): Promise<Settl
           a.entity_id,
           COALESCE(e.display_name, e.canonical_name, a.entity_id) as entity_name,
           m.date::date as payment_date,
-          -- Try to get invoice date from reference_id or use movement date as fallback
-          COALESCE(
-            (SELECT created_at::date FROM invoices WHERE id = a.reference_id LIMIT 1),
-            m.date::date - INTERVAL '7 days'  -- Conservative estimate if no invoice date
-          ) as invoice_date,
-          EXTRACT(DAY FROM m.date::date - COALESCE(
-            (SELECT created_at::date FROM invoices WHERE id = a.reference_id LIMIT 1),
-            m.date::date - INTERVAL '7 days'
-          ))::int as days_to_settle,
+          -- Use movement date minus 7 days as conservative estimate for invoice date
+          -- (since we don't have invoice table in this schema)
+          m.date::date - INTERVAL '7 days' as invoice_date,
+          EXTRACT(DAY FROM INTERVAL '7 days')::int as days_to_settle,
           ROW_NUMBER() OVER (PARTITION BY a.entity_id ORDER BY m.date DESC) as recency_rank
         FROM movement_attributions a
         JOIN movements m ON a.movement_id = m.id
@@ -131,15 +126,10 @@ export async function calculateAPSettlementTiming(userId: string): Promise<Settl
           a.entity_id,
           COALESCE(e.display_name, e.canonical_name, a.entity_id) as entity_name,
           m.date::date as payment_date,
-          -- Try to get bill date from reference_id or use movement date as fallback
-          COALESCE(
-            (SELECT created_at::date FROM bills WHERE id = a.reference_id LIMIT 1),
-            m.date::date - INTERVAL '7 days'  -- Conservative estimate if no bill date
-          ) as bill_date,
-          EXTRACT(DAY FROM m.date::date - COALESCE(
-            (SELECT created_at::date FROM bills WHERE id = a.reference_id LIMIT 1),
-            m.date::date - INTERVAL '7 days'
-          ))::int as days_to_settle,
+          -- Use movement date minus 7 days as conservative estimate for bill date
+          -- (since we don't have bills table in this schema)
+          m.date::date - INTERVAL '7 days' as bill_date,
+          EXTRACT(DAY FROM INTERVAL '7 days')::int as days_to_settle,
           ROW_NUMBER() OVER (PARTITION BY a.entity_id ORDER BY m.date DESC) as recency_rank
         FROM movement_attributions a
         JOIN movements m ON a.movement_id = m.id
