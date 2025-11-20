@@ -19,6 +19,8 @@ const EXCLUDED_FROM_RECON_DISPLAY = new Set<string>([
   "system_adjustment",
   "processor_fee",
   "processor_payout",
+  "settlement_in",
+  "settlement_adjustment",
 ])
 
 export type ReconAllocationRow = {

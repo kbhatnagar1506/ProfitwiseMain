@@ -18,8 +18,7 @@ const STAGE4_REVIEW_THRESHOLD = 1000
 const AR_ELIGIBLE_CLASSES = new Set<string | null>([
   "customer_receipt",
   "refund",
-  "settlement_in",
-  // Note: processor_payout is handled separately as a settlement type
+  // Note: settlement_in/processor_payout are excluded - they aggregate multiple payments
   null, // Allow untagged movements to still attempt matching
 ])
 
@@ -43,6 +42,10 @@ const EXCLUDED_FROM_RECON = new Set<string>([
   "opening_balance",
   "account_verification",
   "system_adjustment",
+  "processor_fee",
+  "processor_payout",
+  "settlement_in",
+  "settlement_adjustment",
 ])
 
 export function normalizeEntityName(name: string | null | undefined): string {
