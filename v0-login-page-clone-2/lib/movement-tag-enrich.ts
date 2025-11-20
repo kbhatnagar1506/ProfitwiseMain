@@ -480,7 +480,7 @@ export async function tagMovements(userId: string): Promise<{
   }))
   const displayNames = await resolveDisplayNames(displayInputs)
 
-  // Phase 3.1 + Phase 8: First-seen on canonical entity ID (avoid overcount: Jack/JACK/jack test -> one first-seen)
+  // Phase 3.1 + Phase 8: First-seen on canonical entity ID (avoid overcount: variations of same entity -> one first-seen)
   const byDateAsc = [...movements].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime())
   const earliestDate = byDateAsc.length > 0 ? byDateAsc[0].occurred_at : ""
   const firstSeenKeys = new Set<string>()

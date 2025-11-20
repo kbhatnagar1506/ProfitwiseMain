@@ -58,8 +58,7 @@ export function isInvoiceSludge(s: string | null | undefined): boolean {
 
 /**
  * Extract human-readable entity from raw bank/processor descriptors.
- * "MARLINS TEAM5618/Payment 30280 PERFORMAN" → "Marlins Team (Invoice 30280)"
- * "Payment 30280 PERFORMAN" → "Invoice 30280"
+ * Handles patterns like "COMPANY TEAM1234/Payment 30280 SUFFIX" → "Company (Invoice 30280)"
  */
 export function extractEntityFromRawDescriptor(raw: string | null | undefined): string | null {
   if (!raw || typeof raw !== "string") return null
@@ -76,7 +75,7 @@ export function extractEntityFromRawDescriptor(raw: string | null | undefined): 
     entityPart = s.slice(0, payMatch.index).trim()
   }
 
-  // Strip TEAM1234 suffix: "MARLINS TEAM5618" → "Marlins"
+  // Strip TEAM1234 suffix from entity names
   const teamMatch = entityPart.match(TEAM_ID_PATTERN)
   if (teamMatch) {
     entityPart = teamMatch[1].trim()

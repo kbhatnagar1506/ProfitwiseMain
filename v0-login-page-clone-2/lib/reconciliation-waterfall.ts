@@ -156,8 +156,8 @@ function matchesEntity(
   if (cn && cp && cn === cp) return true
   if (cn.length >= 4 && cp.length >= 4 && (cn.includes(cp) || cp.includes(cn))) return true
   
-  // Extract organization name from parentheses in customer name (e.g., "Rosalyn Huckaby (Pivot)" -> "Pivot")
-  // This handles cases where bank shows org name but invoice is under contact name
+  // Extract organization name from parentheses in customer name
+  // Handles cases where bank shows org name but invoice is under contact name
   if (customerName) {
     const orgMatch = customerName.match(/\(([^)]+)\)/)
     if (orgMatch) {
@@ -170,14 +170,14 @@ function matchesEntity(
       if (orgName && rawDesc && orgName.length >= 3 && (rawDesc.includes(orgName) || orgName.includes(rawDesc.slice(0, 20)))) {
         return true
       }
-      // Check if bank label or raw description contains the org name (handles "Pivot Culinary" matching "Pivot")
+      // Check if bank label or raw description contains the org name
       if (orgName && orgName.length >= 4) {
         const bankLabelNorm = normalizeEntityName(bankLabel)
         if (bankLabelNorm && bankLabelNorm.includes(orgName)) {
           return true
         }
       }
-      // Handle abbreviations like "KC Royals" matching "Kansas City Roya"
+      // Handle abbreviations (e.g., abbreviated state/city names matching full names)
       // Extract significant words from org name and check if they appear in bank label
       const orgWords = (orgMatch[1] || "").toLowerCase().split(/\s+/).filter(w => w.length >= 4)
       const bankLabelLower = (bankLabel || "").toLowerCase()

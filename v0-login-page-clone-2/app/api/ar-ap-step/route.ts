@@ -15,6 +15,8 @@ import { getMovementsPendingWaterfallReview } from "@/lib/reconciliation-waterfa
 import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
 import { tagMovements } from "@/lib/movement-tag-enrich"
+import { runLLMStage4, type InvoiceForMatch, type BillForMatch } from "@/lib/reconciliation-llm-match"
+import { toEntityUriApBill } from "@/lib/entity-uri"
 import type { OutstandingInvoice, OutstandingBill } from "@/lib/state/types"
 
 const WATERFALL_REVIEW_PREVIEW = 15
@@ -57,14 +59,56 @@ async function runReconciliationInBackground(userId: string) {
     await refreshMovementEntityIds(userId)
     
     // Ensure movement tags are up-to-date before reconciliation
-    // This populates economic_class which is used for filtering transfers, fees, etc.
     console.log("[ar-ap-step] Running tagMovements for user:", userId)
     await tagMovements(userId)
     
+    // Run rule-based waterfall (Stages 0-3)
     await runFinancialBrain(userId, {
       outstandingInvoices: invoices,
       apObligations: obligations,
     })
+    
+    // Run LLM Stage 4 on remaining unmatched movements
+    console.log("[ar-ap-step] Running LLM Stage 4 for user:", userId)
+    const pendingMovements = await getMovementsPendingWaterfallReview(userId)
+    
+    if (pendingMovements.length > 0) {
+      // Prepare invoice/bill data for LLM matching
+      const invoicesForLLM: InvoiceForMatch[] = invoices.map((i) => ({
+        invoice_id: i.invoice_id,
+        customer_name: i.customer_name,
+        amount_due: i.amount_due,
+        due_date: i.due_date,
+        entity_id: i.entity_uri,
+      }))
+      
+      const billsForLLM: BillForMatch[] = bills.map((b) => ({
+        bill_id: b.bill_id,
+        obligation_id: b.entity_uri ?? toEntityUriApBill(b.source, b.bill_id),
+        vendor_name: b.vendor_name,
+        amount_due: b.amount_due,
+        due_date: b.due_date,
+        entity_id: b.entity_uri,
+      }))
+      
+      const llmResult = await runLLMStage4(
+        userId,
+        pendingMovements,
+        invoicesForLLM,
+        billsForLLM,
+        "high" // Only auto-apply high-confidence matches
+      )
+      
+      console.log("[ar-ap-step] LLM Stage 4 result:", {
+        arMatches: llmResult.matches.ar.length,
+        apMatches: llmResult.matches.ap.length,
+        applied: llmResult.applied.applied,
+        skipped: llmResult.applied.skipped,
+        errors: llmResult.applied.errors.length,
+      })
+    } else {
+      console.log("[ar-ap-step] No pending movements for LLM Stage 4")
+    }
     
     console.log("[ar-ap-step] Background reconciliation completed for user:", userId)
   } catch (e) {

@@ -44,7 +44,8 @@ function counterpartyForResolution(m: MovementRow): string | null {
 function isTestEntityName(name: string): boolean {
   const cn = (name ?? "").trim().toLowerCase()
   if (!cn) return true
-  if (/\b(test|jruby|jack\s*test)\b/.test(cn)) return true
+  // Filter out test accounts and email-only entries
+  if (/\b(test)\b/.test(cn)) return true
   if (/^[^\s]+@[^\s]+\.[^\s]+$/.test(cn)) return true
   return false
 }
