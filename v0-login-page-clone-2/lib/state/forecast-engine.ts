@@ -4843,12 +4843,32 @@ function runBacktest(
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
   entityProfiles: EntityPaymentProfile[] = [],
 ): BacktestResult | null {
+  // Debug logging
+  log("backtest.debug.input", {
+    movements_count: movements.length,
+    movements_sample: movements.slice(0, 3).map((m) => ({
+      id: m.id,
+      occurred_at: m.occurred_at,
+      direction: m.direction,
+      amount: m.amount,
+    })),
+  })
+
   const allDates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
+  
+  log("backtest.debug.dates", {
+    total_movements: movements.length,
+    dates_extracted: allDates.length,
+    date_sample: allDates.slice(0, 5),
+    date_range: allDates.length > 0 ? `${allDates[0]} to ${allDates[allDates.length - 1]}` : "none",
+  })
+
   const minMovements = cal.backtest_min_training_movements + cal.backtest_min_test_movements
   if (allDates.length < minMovements) {
     log("backtest.skip.insufficient_total_movements", {
       total_movements: allDates.length,
       min_required: minMovements,
+      movements_array_length: movements.length,
     })
     return null
   }
