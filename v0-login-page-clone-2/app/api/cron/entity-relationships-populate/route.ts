@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // Get all users
-    const { rows: users } = await query<{ id: string }>("SELECT id FROM users WHERE deleted_at IS NULL")
+    const { rows: users } = await query<{ id: string }>("SELECT id FROM users LIMIT 100")
 
     const results: Record<string, unknown> = {}
     let totalProcessed = 0
