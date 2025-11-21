@@ -946,6 +946,17 @@ export function OnboardingFlow({
           typeof data.detail === "string" ? data.detail : data.error ?? "Reconciliation failed"
         throw new Error(msg)
       }
+      
+      // If reconciliation is in progress, don't update UI yet - wait for polling to complete
+      // Keep loading state active during polling
+      if (data.is_reconciling) {
+        setTimeout(() => {
+          void pollReconciliationStatus()
+        }, 2000)
+        return // Don't clear loading - polling will clear it when done
+      }
+      
+      // Only update UI when reconciliation is complete
       if (data.ar && data.ap) {
         setArApData({ ar: data.ar, ap: data.ap })
         setMappingArAp({ ar: data.ar, ap: data.ap })
@@ -954,17 +965,11 @@ export function OnboardingFlow({
       setWaterfallReview(data.waterfall_review ?? null)
       setExcludedCategories(data.excluded_categories ?? null)
       setTransferPairs(data.transfer_pairs ?? null)
-      
-      if (data.is_reconciling) {
-        setTimeout(() => {
-          void pollReconciliationStatus()
-        }, 3000)
-      }
+      setReconRefreshLoading(false)
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to reconcile"
       setMappingError(msg)
       setArApError(msg)
-    } finally {
       setReconRefreshLoading(false)
     }
   }, [])
@@ -982,6 +987,15 @@ export function OnboardingFlow({
         is_reconciling?: boolean
       }
       if (r.ok) {
+        // If still reconciling, keep polling
+        if (data.is_reconciling) {
+          setTimeout(() => {
+            void pollReconciliationStatus()
+          }, 2000)
+          return
+        }
+        
+        // Reconciliation complete - update UI with fresh data
         if (data.ar && data.ap) {
           setArApData({ ar: data.ar, ap: data.ap })
           setMappingArAp({ ar: data.ar, ap: data.ap })
@@ -990,15 +1004,10 @@ export function OnboardingFlow({
         setWaterfallReview(data.waterfall_review ?? null)
         setExcludedCategories(data.excluded_categories ?? null)
         setTransferPairs(data.transfer_pairs ?? null)
-
-        if (data.is_reconciling) {
-          setTimeout(() => {
-            void pollReconciliationStatus()
-          }, 3000)
-        }
+        setReconRefreshLoading(false)
       }
     } catch {
-      // Ignore polling errors
+      setReconRefreshLoading(false)
     }
   }, [])
 
