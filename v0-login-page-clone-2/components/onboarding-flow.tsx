@@ -950,9 +950,8 @@ export function OnboardingFlow({
       // If reconciliation is in progress, don't update UI yet - wait for polling to complete
       // Keep loading state active during polling
       if (data.is_reconciling) {
-        setTimeout(() => {
-          void pollReconciliationStatus()
-        }, 2000)
+        // Start polling immediately (no delay) to catch completion faster
+        void pollReconciliationStatus()
         return // Don't clear loading - polling will clear it when done
       }
       
@@ -991,7 +990,7 @@ export function OnboardingFlow({
         if (data.is_reconciling) {
           setTimeout(() => {
             void pollReconciliationStatus()
-          }, 2000)
+          }, 1500) // Poll every 1.5 seconds for faster feedback
           return
         }
         
