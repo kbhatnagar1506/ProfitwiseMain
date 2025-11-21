@@ -408,12 +408,13 @@ export async function getAllUnreconciledMovements(
   direction: "inflow" | "outflow"
   economic_class: string | null
 }>> {
-  const AR_ELIGIBLE = new Set(["customer_receipt", "customer_cash_in", "revenue"])
-  const AP_ELIGIBLE = new Set(["vendor_payment", "vendor_cash_out", "opex", "cogs"])
+  // Must match the waterfall's AR_ELIGIBLE_CLASSES and AP_ELIGIBLE_CLASSES
+  const AR_ELIGIBLE = new Set<string | null>(["customer_receipt", "refund", null])
+  const AP_ELIGIBLE = new Set<string | null>(["vendor_payment", "payroll", "tax", "debt_payment", null])
   const EXCLUDED = new Set([
-    "transfer", "internal_transfer", "owner_draw", "owner_contribution",
-    "processor_payout", "processor_fee", "settlement_in", "settlement_adjustment",
-    "bank_fee", "interest", "loan_payment", "loan_disbursement"
+    "transfer", "owner_contribution", "owner_draw", "bank_fee", "bank_fee_refund",
+    "interest", "opening_balance", "account_verification", "system_adjustment",
+    "processor_fee", "processor_payout", "settlement_in", "settlement_adjustment"
   ])
 
   const { rows } = await query<{
@@ -440,10 +441,10 @@ export async function getAllUnreconciledMovements(
 
   return rows
     .filter((r) => {
-      const ec = r.economic_class ?? "unknown"
-      if (EXCLUDED.has(ec)) return false
-      if (r.direction === "inflow") return AR_ELIGIBLE.has(ec) || ec === "unknown"
-      if (r.direction === "outflow") return AP_ELIGIBLE.has(ec) || ec === "unknown"
+      const ec = r.economic_class
+      if (ec && EXCLUDED.has(ec)) return false
+      if (r.direction === "inflow") return AR_ELIGIBLE.has(ec)
+      if (r.direction === "outflow") return AP_ELIGIBLE.has(ec)
       return false
     })
     .map((r) => ({

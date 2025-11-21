@@ -351,7 +351,7 @@ export async function enrichBillsWithReconciliationStatus(
      FROM movement_attributions
      WHERE user_id = $1
        AND component_type = 'ap'
-       AND source = 'rule'`,
+       AND source IN ('rule', 'llm')`,
     [userId]
   )
 
