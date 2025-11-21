@@ -15,7 +15,7 @@ import { getMovementsPendingWaterfallReview } from "@/lib/reconciliation-waterfa
 import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
 import { tagMovements } from "@/lib/movement-tag-enrich"
-import { runLLMStage4, type InvoiceForMatch, type BillForMatch } from "@/lib/reconciliation-llm-match"
+import { runLLMStage4, getAllUnreconciledMovements, type InvoiceForMatch, type BillForMatch } from "@/lib/reconciliation-llm-match"
 import { toEntityUriApBill } from "@/lib/entity-uri"
 import type { OutstandingInvoice, OutstandingBill } from "@/lib/state/types"
 
@@ -68,11 +68,13 @@ async function runReconciliationInBackground(userId: string) {
       apObligations: obligations,
     })
     
-    // Run LLM Stage 4 on remaining unmatched movements
+    // Run LLM Stage 4 on ALL unreconciled movements (not just flagged ones)
     console.log("[ar-ap-step] Running LLM Stage 4 for user:", userId)
-    const pendingMovements = await getMovementsPendingWaterfallReview(userId)
+    const unreconciledMovements = await getAllUnreconciledMovements(userId)
     
-    if (pendingMovements.length > 0) {
+    if (unreconciledMovements.length > 0) {
+      console.log("[ar-ap-step] Found", unreconciledMovements.length, "unreconciled movements for LLM matching")
+      
       // Prepare invoice/bill data for LLM matching
       const invoicesForLLM: InvoiceForMatch[] = invoices.map((i) => ({
         invoice_id: i.invoice_id,
@@ -93,13 +95,14 @@ async function runReconciliationInBackground(userId: string) {
       
       const llmResult = await runLLMStage4(
         userId,
-        pendingMovements,
+        unreconciledMovements,
         invoicesForLLM,
         billsForLLM,
         "high" // Only auto-apply high-confidence matches
       )
       
       console.log("[ar-ap-step] LLM Stage 4 result:", {
+        unreconciledCount: unreconciledMovements.length,
         arMatches: llmResult.matches.ar.length,
         apMatches: llmResult.matches.ap.length,
         applied: llmResult.applied.applied,
@@ -107,7 +110,7 @@ async function runReconciliationInBackground(userId: string) {
         errors: llmResult.applied.errors.length,
       })
     } else {
-      console.log("[ar-ap-step] No pending movements for LLM Stage 4")
+      console.log("[ar-ap-step] No unreconciled movements for LLM Stage 4")
     }
     
     console.log("[ar-ap-step] Background reconciliation completed for user:", userId)
