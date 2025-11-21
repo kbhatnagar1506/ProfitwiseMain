@@ -151,8 +151,8 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
         const dueTime = new Date(dueDate).getTime()
         if (!Number.isNaN(dueTime)) {
           const diff = Math.round((dueTime - new Date(today).getTime()) / 86_400_000)
-          if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
-          else daysToDue = diff
+        if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
+        else daysToDue = diff
         }
       }
       const billId = `gmail_ap_${row.message_id}`
