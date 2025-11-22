@@ -4843,6 +4843,14 @@ function runBacktest(
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
   entityProfiles: EntityPaymentProfile[] = [],
 ): BacktestResult | null {
+  // If no movements, skip backtest
+  if (movements.length === 0) {
+    log("backtest.skip.no_movements", {
+      reason: "movements array is empty",
+    })
+    return null
+  }
+
   // Debug logging
   log("backtest.debug.input", {
     movements_count: movements.length,
