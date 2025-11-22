@@ -3779,12 +3779,18 @@ function computeForecastConfidence(
       let weightedConf = 0
       for (const c of models.customers) {
         const weight = (c.avg_amount * c.payment_count) / totalRevenue
-        const archetypeBonus = cs.archetype_bonus[c.archetype] ?? 0.15
-        const confMult = cs.confidence_mult[c.confidence] ?? 0.25
+        let archetypeBonus = cs.archetype_bonus[c.archetype] ?? 0.15
+        let confMult = cs.confidence_mult[c.confidence] ?? 0.25
+        
         // Apply entity graph score boost if available
         const entityGraphBoost = (c as any)._entity_graph_score_boost || 0
-        const boostedConfMult = Math.min(1, confMult + entityGraphBoost)
-        weightedConf += weight * archetypeBonus * boostedConfMult
+        if (entityGraphBoost > 0) {
+          // Boost both archetype and confidence multiplier
+          archetypeBonus = Math.min(1, archetypeBonus + entityGraphBoost * 0.5)
+          confMult = Math.min(1, confMult + entityGraphBoost)
+        }
+        
+        weightedConf += weight * archetypeBonus * confMult
       }
       inflowScore = weightedConf
     } else {
@@ -3816,12 +3822,18 @@ function computeForecastConfidence(
       let weightedConf = 0
       for (const v of models.vendors) {
         const weight = (v.avg_amount * Math.max(1, v.payment_count)) / totalSpend
-        const recBonus = v.recurrence.recurrence_confidence
-        const confMult = cs.vendor_conf_mult[v.confidence] ?? 0.25
+        let recBonus = v.recurrence.recurrence_confidence
+        let confMult = cs.vendor_conf_mult[v.confidence] ?? 0.25
+        
         // Apply entity graph score boost if available
         const entityGraphBoost = (v as any)._entity_graph_score_boost || 0
-        const boostedConfMult = Math.min(1, confMult + entityGraphBoost)
-        weightedConf += weight * recBonus * boostedConfMult
+        if (entityGraphBoost > 0) {
+          // Boost both recurrence and confidence multiplier
+          recBonus = Math.min(1, recBonus + entityGraphBoost * 0.5)
+          confMult = Math.min(1, confMult + entityGraphBoost)
+        }
+        
+        weightedConf += weight * recBonus * confMult
       }
       outflowScore = weightedConf
     } else {

@@ -76,8 +76,8 @@ export function boostCustomerConfidenceFromGraph(
     if (anchorModel.confidence === "high" || anchorModel.confidence === "medium") {
       result.boosted_confidence = "medium"
       result.boost_amount = 0.2
-      // Direct score boost: inherit 40% of anchor's confidence advantage
-      result.confidence_score_boost = relConfidence * 0.4
+      // Direct score boost: inherit 60% of anchor's confidence advantage (increased from 40%)
+      result.confidence_score_boost = relConfidence * 0.6
       result.boost_reason = `Related to anchor entity with ${anchorModel.payment_count} payments (${anchorModel.confidence} confidence)`
       result.anchor_entity_id = anchorId
       result.relationship_confidence = relConfidence
@@ -88,8 +88,8 @@ export function boostCustomerConfidenceFromGraph(
   if (originalConfidence === "medium" && anchorModel.confidence === "high") {
     result.boosted_confidence = "high"
     result.boost_amount = 0.15
-    // Direct score boost: inherit 30% of anchor's confidence advantage
-    result.confidence_score_boost = relConfidence * 0.3
+    // Direct score boost: inherit 50% of anchor's confidence advantage (increased from 30%)
+    result.confidence_score_boost = relConfidence * 0.5
     result.boost_reason = `Related to high-confidence anchor entity with ${anchorModel.payment_count} payments`
     result.anchor_entity_id = anchorId
     result.relationship_confidence = relConfidence
@@ -145,8 +145,8 @@ export function boostVendorConfidenceFromGraph(
     if (originalConfidence === "low") {
       result.boosted_confidence = "medium"
       result.boost_amount = 0.2
-      // Direct score boost: inherit 40% of anchor's confidence advantage
-      result.confidence_score_boost = relConfidence * 0.4
+      // Direct score boost: inherit 60% of anchor's confidence advantage (increased from 40%)
+      result.confidence_score_boost = relConfidence * 0.6
       result.boost_reason = `Related to ${anchorModel.archetype} vendor with ${anchorModel.payment_count} payments`
       result.anchor_entity_id = anchorId
       result.relationship_confidence = relConfidence
@@ -158,8 +158,8 @@ export function boostVendorConfidenceFromGraph(
     if (anchorModel.confidence === "high" || anchorModel.confidence === "medium") {
       result.boosted_confidence = "medium"
       result.boost_amount = 0.2
-      // Direct score boost: inherit 40% of anchor's confidence advantage
-      result.confidence_score_boost = relConfidence * 0.4
+      // Direct score boost: inherit 60% of anchor's confidence advantage (increased from 40%)
+      result.confidence_score_boost = relConfidence * 0.6
       result.boost_reason = `Related to anchor entity with ${anchorModel.payment_count} payments (${anchorModel.confidence} confidence)`
       result.anchor_entity_id = anchorId
       result.relationship_confidence = relConfidence
@@ -170,8 +170,8 @@ export function boostVendorConfidenceFromGraph(
   if (originalConfidence === "medium" && anchorModel.confidence === "high") {
     result.boosted_confidence = "high"
     result.boost_amount = 0.15
-    // Direct score boost: inherit 30% of anchor's confidence advantage
-    result.confidence_score_boost = relConfidence * 0.3
+    // Direct score boost: inherit 50% of anchor's confidence advantage (increased from 30%)
+    result.confidence_score_boost = relConfidence * 0.5
     result.boost_reason = `Related to high-confidence anchor entity with ${anchorModel.payment_count} payments`
     result.anchor_entity_id = anchorId
     result.relationship_confidence = relConfidence
