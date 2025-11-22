@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { query } from "../../../lib/db"
-import { log } from "../../../lib/log"
+import { query } from "@/lib/db"
+import { log } from "@/lib/logger"
 
 /**
  * POST /api/cron/forecast-cache-clear
