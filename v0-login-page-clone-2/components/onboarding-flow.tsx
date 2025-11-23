@@ -947,15 +947,8 @@ export function OnboardingFlow({
         throw new Error(msg)
       }
       
-      // If reconciliation is in progress, don't update UI yet - wait for polling to complete
-      // Keep loading state active during polling
-      if (data.is_reconciling) {
-        // Start polling immediately (no delay) to catch completion faster
-        void pollReconciliationStatus()
-        return // Don't clear loading - polling will clear it when done
-      }
-      
-      // Only update UI when reconciliation is complete
+      // Always update UI immediately with current data (even if reconciliation is running)
+      // This prevents the screen from blocking while reconciliation runs in background
       if (data.ar && data.ap) {
         setArApData({ ar: data.ar, ap: data.ap })
         setMappingArAp({ ar: data.ar, ap: data.ap })
@@ -964,6 +957,16 @@ export function OnboardingFlow({
       setWaterfallReview(data.waterfall_review ?? null)
       setExcludedCategories(data.excluded_categories ?? null)
       setTransferPairs(data.transfer_pairs ?? null)
+      
+      // If reconciliation is in progress, start polling for updates
+      // but don't block the UI - user can see current data while it runs
+      if (data.is_reconciling) {
+        // Start polling to update data when reconciliation completes
+        void pollReconciliationStatus()
+        // Keep a subtle loading indicator but don't block the UI
+        return // Keep reconRefreshLoading true to show indicator
+      }
+      
       setReconRefreshLoading(false)
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to reconcile"

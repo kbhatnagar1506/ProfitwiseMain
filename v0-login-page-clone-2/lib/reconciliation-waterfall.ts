@@ -9,6 +9,7 @@ import { resolveReconciliationBankLabelsForMatch } from "./display-name-resolve"
 import { insertAttributionWithClient, type CreateAttributionOpts } from "./attribution-persist"
 import type { CashEventRow } from "./cash-events-build"
 import { namesMatch } from "./ar-payment-match"
+import { safeParseFloat } from "./utils"
 
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
@@ -96,7 +97,7 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
      LEFT JOIN movement_tags mt ON mt.movement_id = m.id
      LEFT JOIN (
        SELECT movement_id,
-              SUM(ABS(net_amount::float)) AS allocated_sum
+              SUM(ABS(net_amount::float)) FILTER (WHERE component_type != 'fee') AS allocated_sum
        FROM movement_attributions
        WHERE user_id = $1::uuid
        GROUP BY movement_id
@@ -110,14 +111,14 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
     id: r.id,
     user_id: r.user_id,
     direction: r.direction as "inflow" | "outflow",
-    amount: parseFloat(String(r.amount)),
+    amount: safeParseFloat(r.amount),
     date: r.date,
     movement_type: r.movement_type,
     counterparty: r.counterparty,
     counterparty_entity_id: r.counterparty_entity_id,
     raw_description: r.raw_description,
     metadata: (r.metadata && typeof r.metadata === "object" ? r.metadata : {}) as Record<string, unknown>,
-    available_cash: parseFloat(String(r.available_cash)),
+    available_cash: safeParseFloat(r.available_cash),
     economic_class: r.economic_class ?? null,
     tag_data: (r.tag_data && typeof r.tag_data === "object" ? r.tag_data : null) as Record<string, unknown> | null,
   }))
@@ -336,6 +337,9 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   const stage4Reviews: { movementId: string; remainingCash: number }[] = []
   let stage4Queued = 0
 
+  // Track paid events that have been matched in this run to prevent re-matching
+  const usedPaidEventIds = new Set<string>()
+
   // #region agent log
   const debugWf = {
     openEvents: eventById.size,
@@ -403,7 +407,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     return [...eventById.values()].filter(
       (e) =>
         e.event_type === target &&
-        (e.outstanding_amount > EPS || e.status === "paid") &&
+        (e.outstanding_amount > EPS || (e.status === "paid" && !usedPaidEventIds.has(e.id))) &&
         matchesEntity(e, m, entityNormByUuid, resolvedBank, movementEntityCanonicalRaw),
     )
   }
@@ -570,6 +574,9 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       if (!isHistoricalDirectLink) {
         directLinkMatch.outstanding_amount = 0
         directLinkMatch.status = "paid"
+      } else {
+        // Mark this paid event as used so it won't be matched again in this run
+        usedPaidEventIds.add(directLinkMatch.id)
       }
       touchedEventIds.add(directLinkMatch.id)
       continue
@@ -645,6 +652,9 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       if (!isHistoricalMatch) {
         exactMatch.outstanding_amount = 0
         exactMatch.status = "paid"
+      } else {
+        // Mark this paid event as used so it won't be matched again in this run
+        usedPaidEventIds.add(exactMatch.id)
       }
       touchedEventIds.add(exactMatch.id)
       continue
@@ -707,6 +717,9 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         if (!isHistoricalFeeMatch) {
           feeMatch.outstanding_amount = 0
           feeMatch.status = "paid"
+        } else {
+          // Mark this paid event as used so it won't be matched again in this run
+          usedPaidEventIds.add(feeMatch.id)
         }
         touchedEventIds.add(feeMatch.id)
         continue
@@ -778,6 +791,9 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         if (!isHistoricalFifo) {
           event.outstanding_amount = 0
           event.status = "paid"
+        } else {
+          // Mark this paid event as used so it won't be matched again in this run
+          usedPaidEventIds.add(event.id)
         }
         touchedEventIds.add(event.id)
         fifoTouched = true
@@ -830,6 +846,9 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         if (!isHistoricalFifo) {
           event.outstanding_amount -= grossApplied
           event.status = statusFromOutstanding(event.outstanding_amount, event.amount)
+        } else {
+          // Mark this paid event as used so it won't be matched again in this run
+          usedPaidEventIds.add(event.id)
         }
         touchedEventIds.add(event.id)
         remainingCash = 0
@@ -931,6 +950,18 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     eventById.clear()
     for (const e of await loadOpenCashEvents(userId)) {
       eventById.set(e.id, e)
+    }
+
+    // D7: Replay pending attributions against fresh cash events to compute correct outstanding amounts.
+    // The in-memory mutations from Stages 0-3 were against stale data; we need to re-apply them.
+    for (const opts of pendingAttributions) {
+      if (opts.component_type !== 'ar' && opts.component_type !== 'ap') continue
+      const matchedEvents = [...eventById.values()].filter(e => e.entity_id === opts.entity_id)
+      for (const ev of matchedEvents) {
+        ev.outstanding_amount = Math.max(0, ev.outstanding_amount - opts.gross_amount)
+        ev.status = statusFromOutstanding(ev.outstanding_amount, ev.amount)
+        touchedEventIds.add(ev.id)
+      }
     }
 
     for (const opts of pendingAttributions) {

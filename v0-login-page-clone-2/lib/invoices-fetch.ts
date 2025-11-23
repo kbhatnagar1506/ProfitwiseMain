@@ -4,6 +4,7 @@
 
 import { query, ensureQBOSchema, ensureGmailSchema } from "@/lib/db"
 import { toEntityUriAr } from "@/lib/entity-uri"
+import { safeParseFloat } from "@/lib/utils"
 import type { OutstandingInvoice } from "./state/types"
 
 /** Xero invoice Contact → graph entity when `entity_aliases.source = 'xero'` (seed via graph/identity). */
@@ -19,8 +20,8 @@ async function loadXeroContactIdToEntityMap(userId: string): Promise<Map<string,
     for (const a of aliasRows) {
       if (a.source_id) m.set(a.source_id, a.entity_id)
     }
-  } catch {
-    /* entity_aliases may not exist */
+  } catch (e) {
+    console.warn("[invoices-fetch] entity_aliases query failed:", e instanceof Error ? e.message : String(e))
   }
   return m
 }
@@ -51,7 +52,9 @@ export async function fetchOutstandingInvoices(
     for (const a of aliasRows) {
       if (a.source_id) sourceIdToEntity.set(a.source_id, a.entity_id)
     }
-  } catch { /* entity_aliases may not exist */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] QBO entity_aliases query failed:", e instanceof Error ? e.message : String(e))
+  }
 
   const xeroContactIdToEntity = preloadedXeroContactIdToEntity ?? (await loadXeroContactIdToEntityMap(userId))
 
@@ -65,9 +68,9 @@ export async function fetchOutstandingInvoices(
     ).then((r) => r.rows)
     for (const row of invRows) {
       const d = row.data
-      const balance = parseFloat(String(d.Balance ?? 0))
+      const balance = safeParseFloat(d.Balance)
       if (balance <= 0) continue
-      const totalAmt = parseFloat(String(d.TotalAmt ?? balance))
+      const totalAmt = safeParseFloat(d.TotalAmt, balance)
       const custRef = d.CustomerRef as Record<string, unknown> | undefined
       const custName = String(custRef?.name ?? custRef?.value ?? "Unknown")
       const custSourceId = custRef?.value != null ? String(custRef.value) : null
@@ -90,7 +93,9 @@ export async function fetchOutstandingInvoices(
         due_date: dueDate, days_until_due: daysToDue, days_overdue: daysOverdue, status,
       })
     }
-  } catch { /* QBO invoices may not be available */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] QBO invoices fetch failed:", e instanceof Error ? e.message : String(e))
+  }
 
   try {
     const xeroRows = await query<{ entity_id: string; data: Record<string, unknown> }>(
@@ -101,9 +106,9 @@ export async function fetchOutstandingInvoices(
     ).then((r) => r.rows)
     for (const row of xeroRows) {
       const d = row.data
-      const amountDue = parseFloat(String(d.AmountDue ?? 0))
+      const amountDue = safeParseFloat(d.AmountDue)
       if (amountDue <= 0) continue
-      const total = parseFloat(String(d.Total ?? amountDue))
+      const total = safeParseFloat(d.Total, amountDue)
       const contact = d.Contact as Record<string, unknown> | undefined
       const custName = String(contact?.Name ?? "Unknown")
       const contactId = xeroContactIdFromInvoiceContact(contact)
@@ -128,7 +133,9 @@ export async function fetchOutstandingInvoices(
         days_overdue: daysOverdue, status,
       })
     }
-  } catch { /* Xero invoices may not be available */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] Xero invoices fetch failed:", e instanceof Error ? e.message : String(e))
+  }
 
   try {
     await ensureGmailSchema()
@@ -142,9 +149,9 @@ export async function fetchOutstandingInvoices(
     ).then((r) => r.rows)
     for (const row of gmailRows) {
       const d = row.extracted_invoice
-      const amountDue = parseFloat(String(d.amount_outstanding ?? d.total ?? 0))
+      const amountDue = safeParseFloat(d.amount_outstanding ?? d.total)
       if (amountDue <= 0) continue
-      const total = parseFloat(String(d.total ?? amountDue))
+      const total = safeParseFloat(d.total, amountDue)
       const custName = String(d.counterparty_name ?? "Unknown")
       const dueDate = (d.due_date as string) ?? null
       let daysToDue: number | null = null
@@ -164,7 +171,9 @@ export async function fetchOutstandingInvoices(
         due_date: dueDate, days_until_due: daysToDue, days_overdue: daysOverdue, status,
       })
     }
-  } catch { /* Gmail invoices may not be available */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] Gmail invoices fetch failed:", e instanceof Error ? e.message : String(e))
+  }
 
   try {
     const stripeRows = await query<{ entity_id: string; data: Record<string, unknown> }>(
@@ -173,9 +182,9 @@ export async function fetchOutstandingInvoices(
     ).then((r) => r.rows)
     for (const row of stripeRows) {
       const d = row.data
-      const amountDue = parseFloat(String(d.amount_due ?? 0)) / 100
+      const amountDue = safeParseFloat(d.amount_due) / 100
       if (amountDue <= 0) continue
-      const total = parseFloat(String(d.total ?? d.amount_due ?? 0)) / 100
+      const total = safeParseFloat(d.total ?? d.amount_due) / 100
       const custName = String(d.customer_name ?? d.customer_email ?? "Unknown")
       const dueTimestamp = d.due_date as number | null
       const dueDate = dueTimestamp ? new Date(dueTimestamp * 1000).toISOString().slice(0, 10) : null
@@ -197,7 +206,9 @@ export async function fetchOutstandingInvoices(
         days_overdue: daysOverdue, status,
       })
     }
-  } catch { /* Stripe invoices may not be available */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] Stripe invoices fetch failed:", e instanceof Error ? e.message : String(e))
+  }
 
   return outstandingInvoices
 }
@@ -224,7 +235,9 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
     for (const a of aliasRows) {
       if (a.source_id) sourceIdToEntity.set(a.source_id, a.entity_id)
     }
-  } catch { /* */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] QBO entity_aliases for reconciliation failed:", e instanceof Error ? e.message : String(e))
+  }
 
   try {
     await ensureQBOSchema()
@@ -236,8 +249,8 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
     ).then((r) => r.rows)
     for (const row of invRows) {
       const d = row.data
-      const balance = parseFloat(String(d.Balance ?? 0))
-      const totalAmt = parseFloat(String(d.TotalAmt ?? balance))
+      const balance = safeParseFloat(d.Balance)
+      const totalAmt = safeParseFloat(d.TotalAmt, balance)
       const txnDate = (d.TxnDate as string) ?? ""
       if (balance > 0) continue
       if (txnDate < cutoffStr) continue
@@ -263,7 +276,9 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         status: "paid",
       })
     }
-  } catch { /* */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] QBO paid invoices fetch failed:", e instanceof Error ? e.message : String(e))
+  }
 
   try {
     const xeroRows = await query<{ entity_id: string; data: Record<string, unknown> }>(
@@ -274,9 +289,9 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
     ).then((r) => r.rows)
     for (const row of xeroRows) {
       const d = row.data
-      const amountDue = parseFloat(String(d.AmountDue ?? 0))
+      const amountDue = safeParseFloat(d.AmountDue)
       if (amountDue > 0) continue
-      const total = parseFloat(String(d.Total ?? 0))
+      const total = safeParseFloat(d.Total)
       if (total <= 0) continue
       const contact = d.Contact as Record<string, unknown> | undefined
       const custName = String(contact?.Name ?? "Unknown")
@@ -302,7 +317,9 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         status: "paid",
       })
     }
-  } catch { /* */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] Xero paid invoices fetch failed:", e instanceof Error ? e.message : String(e))
+  }
 
   try {
     const stripeRows = await query<{ entity_id: string; data: Record<string, unknown> }>(
@@ -311,9 +328,9 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
     ).then((r) => r.rows)
     for (const row of stripeRows) {
       const d = row.data
-      const amountDue = parseFloat(String(d.amount_due ?? 0)) / 100
+      const amountDue = safeParseFloat(d.amount_due) / 100
       if (amountDue > 0) continue
-      const total = parseFloat(String(d.total ?? d.amount_due ?? 0)) / 100
+      const total = safeParseFloat(d.total ?? d.amount_due) / 100
       if (total <= 0) continue
       const dueTimestamp = d.due_date as number | null
       const dueDate = dueTimestamp ? new Date(dueTimestamp * 1000).toISOString().slice(0, 10) : null
@@ -336,7 +353,9 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         status: "paid",
       })
     }
-  } catch { /* */ }
+  } catch (e) {
+    console.warn("[invoices-fetch] Stripe paid invoices fetch failed:", e instanceof Error ? e.message : String(e))
+  }
 
   // Dedupe by (entity_id ?? customer_name, amount_due, due_date) — keep first occurrence
   const seen = new Map<string, OutstandingInvoice>()
@@ -378,24 +397,19 @@ export async function enrichInvoicesWithReconciliationStatus(
   const matchesByInvoiceId = new Map<string, { movementIds: string[]; totalMatched: number }>()
   // Track matches by entity_uri for fallback (entity-level matching)
   const matchesByEntityUri = new Map<string, { movementIds: string[]; totalMatched: number }>()
-  // Track which attributions have a specific reference_id (to avoid double-counting)
-  const attributionsWithReferenceId = new Set<string>()
 
   for (const attr of attrRows) {
-    const gross = parseFloat(attr.gross_amount) || 0
-    const attrKey = `${attr.movement_id}:${attr.entity_id}:${gross}`
+    const gross = safeParseFloat(attr.gross_amount)
     
     if (attr.reference_id) {
-      // This attribution is linked to a specific invoice
-      attributionsWithReferenceId.add(attrKey)
+      // This attribution is linked to a specific invoice - only add to invoice-level map
       const existing = matchesByInvoiceId.get(attr.reference_id) ?? { movementIds: [], totalMatched: 0 }
       existing.movementIds.push(attr.movement_id)
       existing.totalMatched += gross
       matchesByInvoiceId.set(attr.reference_id, existing)
-    }
-    
-    // Also track by entity_uri for fallback matching
-    if (attr.entity_id) {
+    } else if (attr.entity_id) {
+      // Only add to entity-level map when there's no specific reference
+      // This prevents double-counting when an attribution has both reference_id and entity_id
       const existing = matchesByEntityUri.get(attr.entity_id) ?? { movementIds: [], totalMatched: 0 }
       existing.movementIds.push(attr.movement_id)
       existing.totalMatched += gross
@@ -404,20 +418,22 @@ export async function enrichInvoicesWithReconciliationStatus(
   }
 
   return invoices.map((inv) => {
+    // Use amount_due if available, otherwise fall back to amount
+    // A $1000 invoice with $300 outstanding, matched for $300, should be "matched" not "partial"
+    const targetAmount = (inv.amount_due != null && inv.amount_due > 0) ? inv.amount_due : inv.amount
+    
     // First, try to match by specific invoice_id (reference_id)
     const byId = matchesByInvoiceId.get(inv.invoice_id)
     
     if (byId && byId.movementIds.length > 0) {
       // We have a specific invoice-level match
-      // Cap the matched amount at the invoice amount for display purposes
-      // (multiple payments to the same invoice shouldn't show more than the invoice total)
+      // Cap the matched amount at the target amount for display purposes
       const rawMatchedAmount = byId.totalMatched
-      const matchedAmount = Math.min(rawMatchedAmount, inv.amount)
-      const invoiceAmount = inv.amount
+      const matchedAmount = Math.min(rawMatchedAmount, targetAmount)
       const tolerance = 0.01
 
       let reconciliationStatus: "matched" | "unmatched" | "partial"
-      if (Math.abs(matchedAmount - invoiceAmount) < tolerance || matchedAmount >= invoiceAmount - tolerance) {
+      if (Math.abs(matchedAmount - targetAmount) < tolerance || matchedAmount >= targetAmount - tolerance) {
         reconciliationStatus = "matched"
       } else if (matchedAmount > 0) {
         reconciliationStatus = "partial"
@@ -445,15 +461,14 @@ export async function enrichInvoicesWithReconciliationStatus(
       }
     }
 
-    // For entity-level matching, cap the matched amount at the invoice amount
+    // For entity-level matching, cap the matched amount at the target amount
     // This prevents showing inflated "matched" amounts when multiple invoices share an entity
     const entityMatchedAmount = byUri.totalMatched
-    const cappedMatchedAmount = Math.min(entityMatchedAmount, inv.amount)
-    const invoiceAmount = inv.amount
+    const cappedMatchedAmount = Math.min(entityMatchedAmount, targetAmount)
     const tolerance = 0.01
 
     let reconciliationStatus: "matched" | "unmatched" | "partial"
-    if (Math.abs(cappedMatchedAmount - invoiceAmount) < tolerance || cappedMatchedAmount >= invoiceAmount - tolerance) {
+    if (Math.abs(cappedMatchedAmount - targetAmount) < tolerance || cappedMatchedAmount >= targetAmount - tolerance) {
       reconciliationStatus = "matched"
     } else if (cappedMatchedAmount > 0) {
       reconciliationStatus = "partial"
