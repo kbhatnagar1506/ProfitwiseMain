@@ -374,17 +374,27 @@ export async function enrichInvoicesWithReconciliationStatus(
     [userId]
   )
 
+  // Track matches by specific invoice reference_id
   const matchesByInvoiceId = new Map<string, { movementIds: string[]; totalMatched: number }>()
+  // Track matches by entity_uri for fallback (entity-level matching)
   const matchesByEntityUri = new Map<string, { movementIds: string[]; totalMatched: number }>()
+  // Track which attributions have a specific reference_id (to avoid double-counting)
+  const attributionsWithReferenceId = new Set<string>()
 
   for (const attr of attrRows) {
     const gross = parseFloat(attr.gross_amount) || 0
+    const attrKey = `${attr.movement_id}:${attr.entity_id}:${gross}`
+    
     if (attr.reference_id) {
+      // This attribution is linked to a specific invoice
+      attributionsWithReferenceId.add(attrKey)
       const existing = matchesByInvoiceId.get(attr.reference_id) ?? { movementIds: [], totalMatched: 0 }
       existing.movementIds.push(attr.movement_id)
       existing.totalMatched += gross
       matchesByInvoiceId.set(attr.reference_id, existing)
     }
+    
+    // Also track by entity_uri for fallback matching
     if (attr.entity_id) {
       const existing = matchesByEntityUri.get(attr.entity_id) ?? { movementIds: [], totalMatched: 0 }
       existing.movementIds.push(attr.movement_id)
@@ -394,11 +404,36 @@ export async function enrichInvoicesWithReconciliationStatus(
   }
 
   return invoices.map((inv) => {
+    // First, try to match by specific invoice_id (reference_id)
     const byId = matchesByInvoiceId.get(inv.invoice_id)
-    const byUri = inv.entity_uri ? matchesByEntityUri.get(inv.entity_uri) : undefined
-    const match = byId ?? byUri
+    
+    if (byId && byId.movementIds.length > 0) {
+      // We have a specific invoice-level match
+      const matchedAmount = byId.totalMatched
+      const invoiceAmount = inv.amount
+      const tolerance = 0.01
 
-    if (!match || match.movementIds.length === 0) {
+      let reconciliationStatus: "matched" | "unmatched" | "partial"
+      if (Math.abs(matchedAmount - invoiceAmount) < tolerance || matchedAmount >= invoiceAmount - tolerance) {
+        reconciliationStatus = "matched"
+      } else if (matchedAmount > 0) {
+        reconciliationStatus = "partial"
+      } else {
+        reconciliationStatus = "unmatched"
+      }
+
+      return {
+        ...inv,
+        reconciliation_status: reconciliationStatus,
+        matched_movement_ids: [...new Set(byId.movementIds)],
+        matched_amount: matchedAmount,
+      }
+    }
+
+    // Fallback: try entity-level matching
+    const byUri = inv.entity_uri ? matchesByEntityUri.get(inv.entity_uri) : undefined
+
+    if (!byUri || byUri.movementIds.length === 0) {
       return {
         ...inv,
         reconciliation_status: "unmatched" as const,
@@ -407,14 +442,17 @@ export async function enrichInvoicesWithReconciliationStatus(
       }
     }
 
-    const matchedAmount = match.totalMatched
+    // For entity-level matching, cap the matched amount at the invoice amount
+    // This prevents showing inflated "matched" amounts when multiple invoices share an entity
+    const entityMatchedAmount = byUri.totalMatched
+    const cappedMatchedAmount = Math.min(entityMatchedAmount, inv.amount)
     const invoiceAmount = inv.amount
     const tolerance = 0.01
 
     let reconciliationStatus: "matched" | "unmatched" | "partial"
-    if (Math.abs(matchedAmount - invoiceAmount) < tolerance || matchedAmount >= invoiceAmount - tolerance) {
+    if (Math.abs(cappedMatchedAmount - invoiceAmount) < tolerance || cappedMatchedAmount >= invoiceAmount - tolerance) {
       reconciliationStatus = "matched"
-    } else if (matchedAmount > 0) {
+    } else if (cappedMatchedAmount > 0) {
       reconciliationStatus = "partial"
     } else {
       reconciliationStatus = "unmatched"
@@ -423,8 +461,8 @@ export async function enrichInvoicesWithReconciliationStatus(
     return {
       ...inv,
       reconciliation_status: reconciliationStatus,
-      matched_movement_ids: [...new Set(match.movementIds)],
-      matched_amount: matchedAmount,
+      matched_movement_ids: [...new Set(byUri.movementIds)],
+      matched_amount: cappedMatchedAmount,
     }
   })
 }
