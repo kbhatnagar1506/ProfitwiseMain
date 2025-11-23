@@ -409,7 +409,10 @@ export async function enrichInvoicesWithReconciliationStatus(
     
     if (byId && byId.movementIds.length > 0) {
       // We have a specific invoice-level match
-      const matchedAmount = byId.totalMatched
+      // Cap the matched amount at the invoice amount for display purposes
+      // (multiple payments to the same invoice shouldn't show more than the invoice total)
+      const rawMatchedAmount = byId.totalMatched
+      const matchedAmount = Math.min(rawMatchedAmount, inv.amount)
       const invoiceAmount = inv.amount
       const tolerance = 0.01
 

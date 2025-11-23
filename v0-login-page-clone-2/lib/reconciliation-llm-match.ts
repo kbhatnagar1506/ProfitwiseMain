@@ -349,6 +349,17 @@ export async function runLLMStage4(
   bills: BillForMatch[],
   autoApplyMinConfidence: "high" | "medium" | "low" = "high",
 ): Promise<{ matches: BatchMatchResult; applied: LLMMatchApplyResult }> {
+  // Delete existing LLM attributions to ensure idempotency on re-run
+  // This prevents duplicate attributions from accumulating across multiple reconciliation runs
+  await query(
+    `DELETE FROM movement_attributions
+     WHERE user_id = $1::uuid
+       AND source = 'llm'
+       AND component_type IN ('ar', 'ap', 'fee')`,
+    [userId]
+  )
+  console.log("[LLM-Stage4] Cleared previous LLM attributions for user:", userId)
+
   const inflows = pendingMovements
     .filter((m) => m.direction === "inflow")
     .map((m) => ({

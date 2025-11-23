@@ -386,7 +386,10 @@ export async function enrichBillsWithReconciliationStatus(
     
     if (byId && byId.movementIds.length > 0) {
       // We have a specific bill-level match
-      const matchedAmount = byId.totalMatched
+      // Cap the matched amount at the bill amount for display purposes
+      // (multiple payments to the same bill shouldn't show more than the bill total)
+      const rawMatchedAmount = byId.totalMatched
+      const matchedAmount = Math.min(rawMatchedAmount, bill.amount)
       const billAmount = bill.amount
       const tolerance = 0.01
 
