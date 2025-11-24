@@ -47,7 +47,7 @@ async function callLLM(messages: { role: string; content: string }[], maxTokens 
         model: MODEL,
         messages,
         max_tokens: maxTokens,
-        temperature: 0.1,
+        temperature: 0,
       }),
     })
     if (!res.ok) {
@@ -222,11 +222,40 @@ export async function applyLLMMatches(
   movementAmounts: Map<string, number>,
   minConfidence: "high" | "medium" | "low" = "high",
 ): Promise<LLMMatchApplyResult> {
+  return applyLLMMatchesWithClear(userId, matches, invoiceMap, billMap, movementAmounts, minConfidence, false)
+}
+
+/**
+ * Apply LLM matches with optional clearing of previous LLM attributions.
+ * When clearPrevious=true, deletes old LLM attributions in the same transaction
+ * to prevent race conditions where readers see zero attributions.
+ */
+async function applyLLMMatchesWithClear(
+  userId: string,
+  matches: BatchMatchResult,
+  invoiceMap: Map<string, InvoiceForMatch>,
+  billMap: Map<string, BillForMatch>,
+  movementAmounts: Map<string, number>,
+  minConfidence: "high" | "medium" | "low" = "high",
+  clearPrevious: boolean = true,
+): Promise<LLMMatchApplyResult> {
   const confidenceOrder = { high: 3, medium: 2, low: 1 }
   const minLevel = confidenceOrder[minConfidence]
 
   return withTransaction(async (client: PoolClient) => {
     const result: LLMMatchApplyResult = { applied: 0, skipped: 0, errors: [] }
+
+    // Clear previous LLM attributions inside the transaction to prevent race conditions
+    if (clearPrevious) {
+      await client.query(
+        `DELETE FROM movement_attributions
+         WHERE user_id = $1::uuid
+           AND source = 'llm'
+           AND component_type IN ('ar', 'ap', 'fee')`,
+        [userId]
+      )
+      console.log("[LLM-Stage4] Cleared previous LLM attributions for user:", userId)
+    }
 
     for (const ar of matches.ar) {
       if (confidenceOrder[ar.confidence] < minLevel) {
@@ -388,17 +417,8 @@ export async function runLLMStage4(
   bills: BillForMatch[],
   autoApplyMinConfidence: "high" | "medium" | "low" = "high",
 ): Promise<{ matches: BatchMatchResult; applied: LLMMatchApplyResult }> {
-  // Delete existing LLM attributions to ensure idempotency on re-run
-  // This prevents duplicate attributions from accumulating across multiple reconciliation runs
-  await query(
-    `DELETE FROM movement_attributions
-     WHERE user_id = $1::uuid
-       AND source = 'llm'
-       AND component_type IN ('ar', 'ap', 'fee')`,
-    [userId]
-  )
-  console.log("[LLM-Stage4] Cleared previous LLM attributions for user:", userId)
-
+  // Delete existing LLM attributions inside the same transaction as applying new ones
+  // to prevent race conditions where reads see zero attributions mid-operation
   const inflows = pendingMovements
     .filter((m) => m.direction === "inflow")
     .map((m) => ({
@@ -427,7 +447,9 @@ export async function runLLMStage4(
   const billMap = new Map(bills.map((b) => [b.obligation_id, b]))
   const movementAmounts = new Map(pendingMovements.map((m) => [m.movement_id, m.amount]))
 
-  const applied = await applyLLMMatches(userId, matches, invoiceMap, billMap, movementAmounts, autoApplyMinConfidence)
+  // Apply matches inside a transaction that also clears old LLM attributions
+  // This ensures atomicity - readers never see a state with zero LLM attributions
+  const applied = await applyLLMMatchesWithClear(userId, matches, invoiceMap, billMap, movementAmounts, autoApplyMinConfidence)
 
   if (applied.applied > 0) {
     await query(

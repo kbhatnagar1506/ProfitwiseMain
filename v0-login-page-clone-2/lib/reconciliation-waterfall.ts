@@ -102,9 +102,9 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
        WHERE user_id = $1::uuid
        GROUP BY movement_id
      ) allocated ON allocated.movement_id = m.id
-     WHERE m.user_id = $1::uuid AND m.duplicate_of IS NULL
-       AND (ABS(m.amount::float) - COALESCE(allocated.allocated_sum, 0)) > $2
-     ORDER BY m.date ASC`,
+    WHERE m.user_id = $1::uuid AND m.duplicate_of IS NULL
+      AND (ABS(m.amount::float) - COALESCE(allocated.allocated_sum, 0)) > $2
+    ORDER BY m.date ASC, m.id ASC`,
     [userId, EPS],
   )
   return rows.map((r) => ({
@@ -276,7 +276,7 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
      FROM cash_events
      WHERE user_id = $1::uuid
        AND event_type IN ('ar', 'ap')
-     ORDER BY expected_date ASC`,
+     ORDER BY expected_date ASC, id ASC`,
     [userId],
   )
   return rows.map((r) => {
@@ -440,7 +440,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     }
 
     let entityEvents = filterForMovement(movement).sort(
-      (a, b) => a.expected_date.localeCompare(b.expected_date),
+      (a, b) => a.expected_date.localeCompare(b.expected_date) || a.id.localeCompare(b.id),
     )
 
     // #region agent log

@@ -940,6 +940,7 @@ export function OnboardingFlow({
         is_reconciling?: boolean
         error?: string
         detail?: string
+        message?: string
       }
       if (!r.ok) {
         const msg =
@@ -947,25 +948,24 @@ export function OnboardingFlow({
         throw new Error(msg)
       }
       
-      // Always update UI immediately with current data (even if reconciliation is running)
-      // This prevents the screen from blocking while reconciliation runs in background
+      // If reconciliation just started or is in progress, start polling
+      // Don't try to update UI with data that may not be present
+      if (data.is_reconciling) {
+        // Start polling to update data when reconciliation completes
+        void pollReconciliationStatus()
+        // Keep reconRefreshLoading true to show indicator
+        return
+      }
+      
+      // Reconciliation not running - update UI with current data
       if (data.ar && data.ap) {
         setArApData({ ar: data.ar, ap: data.ap })
         setMappingArAp({ ar: data.ar, ap: data.ap })
       }
-      setMappingRecon(data.recon ?? null)
-      setWaterfallReview(data.waterfall_review ?? null)
-      setExcludedCategories(data.excluded_categories ?? null)
-      setTransferPairs(data.transfer_pairs ?? null)
-      
-      // If reconciliation is in progress, start polling for updates
-      // but don't block the UI - user can see current data while it runs
-      if (data.is_reconciling) {
-        // Start polling to update data when reconciliation completes
-        void pollReconciliationStatus()
-        // Keep a subtle loading indicator but don't block the UI
-        return // Keep reconRefreshLoading true to show indicator
-      }
+      if (data.recon !== undefined) setMappingRecon(data.recon)
+      if (data.waterfall_review !== undefined) setWaterfallReview(data.waterfall_review)
+      if (data.excluded_categories !== undefined) setExcludedCategories(data.excluded_categories)
+      if (data.transfer_pairs !== undefined) setTransferPairs(data.transfer_pairs)
       
       setReconRefreshLoading(false)
     } catch (e) {
@@ -987,13 +987,14 @@ export function OnboardingFlow({
         excluded_categories?: ExcludedCategories
         transfer_pairs?: TransferPairsResult
         is_reconciling?: boolean
+        message?: string
       }
       if (r.ok) {
-        // If still reconciling, keep polling
+        // If still reconciling (no data returned), keep polling
         if (data.is_reconciling) {
           setTimeout(() => {
             void pollReconciliationStatus()
-          }, 1500) // Poll every 1.5 seconds for faster feedback
+          }, 2000) // Poll every 2 seconds
           return
         }
         
@@ -1002,10 +1003,10 @@ export function OnboardingFlow({
           setArApData({ ar: data.ar, ap: data.ap })
           setMappingArAp({ ar: data.ar, ap: data.ap })
         }
-        setMappingRecon(data.recon ?? null)
-        setWaterfallReview(data.waterfall_review ?? null)
-        setExcludedCategories(data.excluded_categories ?? null)
-        setTransferPairs(data.transfer_pairs ?? null)
+        if (data.recon !== undefined) setMappingRecon(data.recon)
+        if (data.waterfall_review !== undefined) setWaterfallReview(data.waterfall_review)
+        if (data.excluded_categories !== undefined) setExcludedCategories(data.excluded_categories)
+        if (data.transfer_pairs !== undefined) setTransferPairs(data.transfer_pairs)
         setReconRefreshLoading(false)
       }
     } catch {
