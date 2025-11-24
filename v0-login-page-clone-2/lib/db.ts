@@ -1018,6 +1018,64 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS total_outflow NUMERIC NOT NULL DEFAULT 0")
   await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS avg_payment_amount NUMERIC NOT NULL DEFAULT 0")
   await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS reliability_score REAL NOT NULL DEFAULT 0.5")
+
+  // Extended entity profile columns for forecasting (Phase 1 of Entity Profiling)
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS entity_type TEXT")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS archetype TEXT")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS first_transaction_date DATE")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS last_transaction_date DATE")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS days_since_last_transaction INT")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS transaction_count INT DEFAULT 0")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS avg_days_to_pay REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS std_days_to_pay REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS on_time_payment_rate REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS early_payment_rate REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS avg_days_early_late REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS std_transaction_amount NUMERIC")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS largest_transaction NUMERIC")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS smallest_transaction NUMERIC")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS amount_trend TEXT")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS avg_interval_days REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS interval_cv REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS transactions_per_month REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS peak_months INT[]")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS low_months INT[]")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS month_weights REAL[]")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS lifetime_value NUMERIC")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS outstanding_amount NUMERIC")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS overdue_amount NUMERIC")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS credit_utilization REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS risk_score REAL")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS risk_factors TEXT[]")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS recent_trend TEXT")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS ai_summary TEXT")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS ai_forecast_notes TEXT")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS ai_risk_explanation TEXT")
+  await p.query("ALTER TABLE entity_payment_profiles ADD COLUMN IF NOT EXISTS ai_updated_at TIMESTAMPTZ")
+
+  // Entity transactions table for detailed history tracking
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS entity_transactions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      transaction_type TEXT NOT NULL CHECK (transaction_type IN ('payment', 'invoice', 'bill', 'refund')),
+      direction TEXT CHECK (direction IN ('inflow', 'outflow')),
+      reference_type TEXT CHECK (reference_type IN ('movement', 'invoice', 'bill')),
+      reference_id TEXT,
+      amount NUMERIC NOT NULL,
+      transaction_date DATE NOT NULL,
+      due_date DATE,
+      days_to_pay INT,
+      was_on_time BOOLEAN,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_entity_transactions_user_entity ON entity_transactions (user_id, entity_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_entity_transactions_user_date ON entity_transactions (user_id, transaction_date DESC)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_entity_transactions_entity_date ON entity_transactions (entity_id, transaction_date DESC)")
+
   // One-time backfill: allocations → attributions (idempotent)
   try {
     await p.query(`

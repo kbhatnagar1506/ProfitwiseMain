@@ -808,3 +808,170 @@ export type BusinessState = {
   insight_block: string
   computed_at: string
 }
+
+// Entity Profile Types for Forecasting
+export type EntityArchetype = "clockwork" | "slow_reliable" | "bursty" | "volatile" | "low_data"
+export type EntityType = "customer" | "vendor"
+export type AmountTrend = "increasing" | "decreasing" | "stable"
+export type RecentTrend = "improving" | "stable" | "deteriorating"
+
+export type EntityTransaction = {
+  id: string
+  user_id: string
+  entity_id: string
+  transaction_type: "payment" | "invoice" | "bill" | "refund"
+  direction: "inflow" | "outflow" | null
+  reference_type: "movement" | "invoice" | "bill" | null
+  reference_id: string | null
+  amount: number
+  transaction_date: string
+  due_date: string | null
+  days_to_pay: number | null
+  was_on_time: boolean | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export type BehavioralMetrics = {
+  transaction_count: number
+  avg_days_to_pay: number | null
+  std_days_to_pay: number | null
+  on_time_payment_rate: number | null
+  early_payment_rate: number | null
+  avg_days_early_late: number | null
+  avg_transaction_amount: number
+  std_transaction_amount: number | null
+  largest_transaction: number
+  smallest_transaction: number
+  amount_trend: AmountTrend
+  avg_interval_days: number | null
+  interval_cv: number | null
+  transactions_per_month: number
+}
+
+export type SeasonalityPattern = {
+  peak_months: number[]
+  low_months: number[]
+  month_weights: number[]
+}
+
+export type RiskAssessment = {
+  risk_score: number
+  risk_factors: string[]
+  recent_trend: RecentTrend
+}
+
+export type EntityNarratives = {
+  ai_summary: string
+  ai_forecast_notes: string
+  ai_risk_explanation: string
+}
+
+export type EntityPaymentProfile = {
+  user_id: string
+  entity_id: string
+  entity_type: EntityType | null
+  archetype: EntityArchetype | null
+  
+  // Legacy fields
+  avg_payment_ratio: number
+  avg_delay_days: number
+  payment_count: number
+  variance: number
+  total_inflow: number
+  total_outflow: number
+  avg_payment_amount: number
+  reliability_score: number
+  
+  // Timeline
+  first_transaction_date: string | null
+  last_transaction_date: string | null
+  days_since_last_transaction: number | null
+  
+  // Payment behavior
+  transaction_count: number
+  avg_days_to_pay: number | null
+  std_days_to_pay: number | null
+  on_time_payment_rate: number | null
+  early_payment_rate: number | null
+  avg_days_early_late: number | null
+  
+  // Amount patterns
+  std_transaction_amount: number | null
+  largest_transaction: number | null
+  smallest_transaction: number | null
+  amount_trend: AmountTrend | null
+  
+  // Frequency patterns
+  avg_interval_days: number | null
+  interval_cv: number | null
+  transactions_per_month: number | null
+  
+  // Seasonality
+  peak_months: number[] | null
+  low_months: number[] | null
+  month_weights: number[] | null
+  
+  // Financial summary
+  lifetime_value: number | null
+  outstanding_amount: number | null
+  overdue_amount: number | null
+  credit_utilization: number | null
+  
+  // Risk signals
+  risk_score: number | null
+  risk_factors: string[] | null
+  recent_trend: RecentTrend | null
+  
+  // AI-generated content
+  ai_summary: string | null
+  ai_forecast_notes: string | null
+  ai_risk_explanation: string | null
+  ai_updated_at: string | null
+  
+  last_updated: string
+}
+
+export type ForecastFeatures = {
+  archetype: EntityArchetype
+  avg_days_to_pay: number
+  std_days_to_pay: number
+  interval_cv: number
+  recent_trend: "accelerating" | "decelerating" | "stable"
+  reliability_score: number
+  on_time_rate: number
+  amount_mean: number
+  amount_std: number
+  amount_trend: AmountTrend
+  month_weights: number[]
+  peak_months: number[]
+}
+
+export type EntityProfileSummary = {
+  id: string
+  canonical_name: string
+  display_name: string | null
+  entity_type: EntityType | null
+  archetype: EntityArchetype | null
+  lifetime_value: number | null
+  outstanding_amount: number | null
+  overdue_amount: number | null
+  reliability_score: number
+  risk_score: number | null
+  last_transaction_date: string | null
+  ai_summary: string | null
+}
+
+export type EntityProfileDetail = {
+  profile: EntityPaymentProfile
+  entity: {
+    id: string
+    canonical_name: string
+    display_name: string | null
+    entity_type: string
+    domain: string | null
+  }
+  narratives: EntityNarratives | null
+  transactions: EntityTransaction[]
+  forecast_features: ForecastFeatures | null
+}

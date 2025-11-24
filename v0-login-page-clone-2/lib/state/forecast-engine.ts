@@ -21,6 +21,7 @@ const POLICY_VERSION = "1.0"
 
 import { extractEntityFromRawDescriptor } from "@/lib/alias-normalize"
 import type { CanonicalMovement, MovementTag } from "@/lib/movement-types"
+import type { EntityPaymentProfile } from "./types"
 import type {
   BacktestByHorizon,
   BacktestBySegment,
@@ -803,6 +804,141 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
   }
 
   return models.sort((a, b) => b.avg_amount * b.payment_count - a.avg_amount * a.payment_count)
+}
+
+/**
+ * Enhance customer models with entity profile data for improved forecasting.
+ * Entity profiles provide pre-computed behavioral metrics, seasonality, and reliability scores.
+ */
+export function enhanceModelsWithEntityProfiles(
+  customerModels: CustomerModel[],
+  vendorModels: VendorModel[],
+  entityProfiles: Map<string, EntityPaymentProfile>
+): { customers: CustomerModel[]; vendors: VendorModel[]; profilesUsed: number } {
+  let profilesUsed = 0
+
+  // Enhance customer models
+  for (const model of customerModels) {
+    const profile = entityProfiles.get(model.entity_id)
+    if (!profile) continue
+
+    profilesUsed++
+
+    // Use profile's archetype if it has more data
+    if (profile.transaction_count > model.payment_count && profile.archetype) {
+      const archetypeMap: Record<string, CustomerArchetype> = {
+        clockwork: "clockwork",
+        slow_reliable: "slow_reliable",
+        bursty: "bursty",
+        volatile: "volatile",
+        low_data: "low_data",
+      }
+      const mappedArchetype = archetypeMap[profile.archetype]
+      if (mappedArchetype) {
+        model.archetype = mappedArchetype
+      }
+    }
+
+    // Enhance features with profile data
+    if (profile.avg_days_to_pay !== null) {
+      model.features.avg_days_to_pay = profile.avg_days_to_pay
+    }
+    if (profile.std_days_to_pay !== null) {
+      model.features.std_days_to_pay = profile.std_days_to_pay
+    }
+    if (profile.interval_cv !== null) {
+      model.features.interval_cv = profile.interval_cv
+    }
+
+    // Adjust probability based on reliability score
+    if (profile.reliability_score > 0) {
+      const reliabilityBoost = (profile.reliability_score - 0.5) * 0.2
+      model.probability_of_next = Math.max(0.02, Math.min(0.98, model.probability_of_next + reliabilityBoost))
+    }
+
+    // Upgrade confidence if profile has good data
+    if (profile.transaction_count >= 6 && profile.reliability_score > 0.7) {
+      if (model.confidence === "low") model.confidence = "medium"
+      if (model.confidence === "medium" && profile.reliability_score > 0.85) model.confidence = "high"
+    }
+  }
+
+  // Enhance vendor models similarly
+  for (const model of vendorModels) {
+    const profile = entityProfiles.get(model.entity_id)
+    if (!profile) continue
+
+    profilesUsed++
+
+    // Adjust recurrence confidence based on profile
+    if (profile.interval_cv !== null && profile.interval_cv < model.recurrence.interval_std_days!) {
+      model.recurrence.recurrence_confidence = Math.min(1, model.recurrence.recurrence_confidence + 0.1)
+    }
+
+    // Upgrade confidence if profile has good data
+    if (profile.transaction_count >= 6 && profile.reliability_score > 0.7) {
+      if (model.confidence === "low") model.confidence = "medium"
+    }
+  }
+
+  return { customers: customerModels, vendors: vendorModels, profilesUsed }
+}
+
+/**
+ * Compute entity profile quality score for forecast confidence.
+ * Returns a score from 0-1 based on profile completeness and data quality.
+ */
+export function computeEntityProfileQuality(
+  entityProfiles: Map<string, EntityPaymentProfile>,
+  customerModels: CustomerModel[],
+  vendorModels: VendorModel[]
+): { score: number; reason: string } {
+  if (entityProfiles.size === 0) {
+    return { score: 0.5, reason: "No entity profiles available" }
+  }
+
+  let totalWeight = 0
+  let weightedQuality = 0
+
+  // Check customer profile coverage and quality
+  for (const customer of customerModels) {
+    const profile = entityProfiles.get(customer.entity_id)
+    const weight = customer.avg_amount * customer.payment_count
+
+    if (profile) {
+      const dataQuality = Math.min(1, profile.transaction_count / 10)
+      const archetypeQuality = profile.archetype && profile.archetype !== "low_data" ? 1 : 0.5
+      const reliabilityQuality = profile.reliability_score
+      const quality = (dataQuality * 0.4 + archetypeQuality * 0.3 + reliabilityQuality * 0.3)
+      weightedQuality += weight * quality
+    } else {
+      weightedQuality += weight * 0.3 // Penalty for missing profile
+    }
+    totalWeight += weight
+  }
+
+  // Check vendor profile coverage
+  for (const vendor of vendorModels) {
+    const profile = entityProfiles.get(vendor.entity_id)
+    const weight = vendor.avg_amount * vendor.payment_count
+
+    if (profile) {
+      const dataQuality = Math.min(1, profile.transaction_count / 10)
+      weightedQuality += weight * dataQuality
+    } else {
+      weightedQuality += weight * 0.3
+    }
+    totalWeight += weight
+  }
+
+  const score = totalWeight > 0 ? weightedQuality / totalWeight : 0.5
+  const coverage = entityProfiles.size / Math.max(1, customerModels.length + vendorModels.length)
+  const coveragePct = Math.round(coverage * 100)
+
+  return {
+    score: r2(score),
+    reason: `${entityProfiles.size} profiles (${coveragePct}% coverage)`,
+  }
 }
 
 // ─── Step 2b: Vendor Behavioral Models ──────────────────────────────
