@@ -896,17 +896,61 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user ON movement_attributions (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_component_entity ON movement_attributions (component_type, entity_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user_component ON movement_attributions (user_id, component_type)")
+  // Clean up duplicate attributions before creating unique indexes
+  // Keep only the most recent attribution for each (movement_id, component_type, entity_id, source) combination
+  try {
+    const delResult = await p.query(`
+      DELETE FROM movement_attributions a
+      USING movement_attributions b
+      WHERE a.movement_id = b.movement_id
+        AND a.component_type = b.component_type
+        AND a.entity_id = b.entity_id
+        AND a.source = b.source
+        AND (a.reference_id IS NULL AND b.reference_id IS NULL)
+        AND a.created_at < b.created_at
+    `)
+    if (delResult.rowCount && delResult.rowCount > 0) {
+      log("attributions.duplicates.cleaned", { removed: delResult.rowCount }, "db")
+    }
+  } catch (e) {
+    log("attributions.duplicates.cleanup.error", { err: String(e) }, "db")
+  }
+  try {
+    const delResult2 = await p.query(`
+      DELETE FROM movement_attributions a
+      USING movement_attributions b
+      WHERE a.movement_id = b.movement_id
+        AND a.component_type = b.component_type
+        AND a.reference_id = b.reference_id
+        AND a.source = b.source
+        AND a.reference_id IS NOT NULL
+        AND a.created_at < b.created_at
+    `)
+    if (delResult2.rowCount && delResult2.rowCount > 0) {
+      log("attributions.ref.duplicates.cleaned", { removed: delResult2.rowCount }, "db")
+    }
+  } catch (e) {
+    log("attributions.ref.duplicates.cleanup.error", { err: String(e) }, "db")
+  }
   // Unique indexes to prevent duplicate attributions
-  await p.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_movement_entity_unique 
-    ON movement_attributions (movement_id, component_type, entity_id, source) 
-    WHERE reference_id IS NULL
-  `)
-  await p.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_movement_ref_unique 
-    ON movement_attributions (movement_id, component_type, reference_id, source) 
-    WHERE reference_id IS NOT NULL
-  `)
+  try {
+    await p.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_movement_entity_unique 
+      ON movement_attributions (movement_id, component_type, entity_id, source) 
+      WHERE reference_id IS NULL
+    `)
+  } catch (e) {
+    log("attributions.unique.index.error", { err: String(e) }, "db")
+  }
+  try {
+    await p.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_attributions_movement_ref_unique 
+      ON movement_attributions (movement_id, component_type, reference_id, source) 
+      WHERE reference_id IS NOT NULL
+    `)
+  } catch (e) {
+    log("attributions.ref.unique.index.error", { err: String(e) }, "db")
+  }
   // Cash events bridge (forecast / decisions)
   await p.query(`
     CREATE TABLE IF NOT EXISTS cash_events (
