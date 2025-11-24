@@ -331,7 +331,7 @@ export async function GET(request: Request) {
     movements: pendingReview.slice(0, WATERFALL_REVIEW_PREVIEW),
   }
 
-  const reconciliationStatus = await getReconciliationLockStatus(user.id)
+  // reconciliationStatus already fetched above and we know is_running is false here
 
   return NextResponse.json({
     ar: {
