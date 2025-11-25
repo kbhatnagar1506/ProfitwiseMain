@@ -64,9 +64,11 @@ function formatCurrency(amount: number | null): string {
   }).format(amount)
 }
 
-function formatPercent(value: number | null): string {
-  if (value === null) return "—"
-  return `${(value * 100).toFixed(0)}%`
+function formatPercent(value: number | string | null): string {
+  if (value === null || value === undefined) return "—"
+  const num = typeof value === "string" ? parseFloat(value) : value
+  if (isNaN(num)) return "—"
+  return `${(num * 100).toFixed(0)}%`
 }
 
 function getRiskColor(riskScore: number | null): string {
@@ -272,8 +274,8 @@ export function EntityDetailPanel({
                   <Clock className="w-3 h-3" /> Avg days to pay
                 </span>
                 <span className="text-sm text-white">
-                  {profile.avg_days_to_pay?.toFixed(0) ?? "—"}
-                  {profile.std_days_to_pay && <span className="text-gray-500 text-xs"> ±{profile.std_days_to_pay.toFixed(0)}</span>}
+                  {profile.avg_days_to_pay != null ? Number(profile.avg_days_to_pay).toFixed(0) : "—"}
+                  {profile.std_days_to_pay != null && <span className="text-gray-500 text-xs"> ±{Number(profile.std_days_to_pay).toFixed(0)}</span>}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -303,7 +305,7 @@ export function EntityDetailPanel({
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-gray-400">Reliability</span>
-                <span className="text-sm text-white">{profile.reliability_score.toFixed(2)}</span>
+                <span className="text-sm text-white">{(Number(profile.reliability_score) || 0).toFixed(2)}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-gray-400">Avg amount</span>
