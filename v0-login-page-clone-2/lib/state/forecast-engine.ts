@@ -2250,6 +2250,20 @@ export function blendReconciledModels(
     }
   })
 
+  // Apply AI-powered enhancements (entity inference, pattern learning)
+  if (enhancedCustomers.length > 0 || enhancedVendors.length > 0) {
+    try {
+      const { enhanceModelsWithAI } = await import("./ai-forecast-enhancement")
+      const aiResult = await enhanceModelsWithAI(enhancedCustomers, enhancedVendors, reconciledARMovements)
+      enhancedCustomers = aiResult.enhanced_customers
+      enhancedVendors = aiResult.enhanced_vendors
+      log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log("forecast.ai_enhancement.error", { error: message })
+    }
+  }
+
   // Apply entity graph boosting if available
   if (entityGraph && clustering) {
     const customerModelMap = new Map(enhancedCustomers.map((c) => [c.entity_id, c]))
@@ -3790,6 +3804,13 @@ function computeForecastConfidence(
           confMult = Math.min(1, confMult + entityGraphBoost)
         }
         
+        // Apply AI confidence boost if available
+        const aiBoost = (c as any)._ai_confidence_boost || 0
+        if (aiBoost > 0) {
+          archetypeBonus = Math.min(1, archetypeBonus + aiBoost * 0.3)
+          confMult = Math.min(1, confMult + aiBoost * 0.5)
+        }
+        
         weightedConf += weight * archetypeBonus * confMult
       }
       inflowScore = weightedConf
@@ -3831,6 +3852,13 @@ function computeForecastConfidence(
           // Boost both recurrence and confidence multiplier
           recBonus = Math.min(1, recBonus + entityGraphBoost * 0.5)
           confMult = Math.min(1, confMult + entityGraphBoost)
+        }
+        
+        // Apply AI confidence boost if available
+        const aiBoost = (v as any)._ai_confidence_boost || 0
+        if (aiBoost > 0) {
+          recBonus = Math.min(1, recBonus + aiBoost * 0.3)
+          confMult = Math.min(1, confMult + aiBoost * 0.5)
         }
         
         weightedConf += weight * recBonus * confMult
