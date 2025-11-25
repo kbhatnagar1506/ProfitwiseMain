@@ -333,11 +333,21 @@ export function OnboardingFlow({
     total_matched_outflows: number
     total_unmatched_inflows: number
     total_unmatched_outflows: number
+    total_excluded_inflows: number
+    total_excluded_outflows: number
     total_fees_paid: number
+    count_matched_inflows: number
+    count_matched_outflows: number
+    count_unmatched_inflows: number
+    count_unmatched_outflows: number
+    count_excluded_inflows: number
+    count_excluded_outflows: number
     matched_inflows?: MappingReconRow[]
     matched_outflows?: MappingReconRow[]
     unmatched_inflows?: MappingReconRow[]
     unmatched_outflows?: MappingReconRow[]
+    excluded_inflows?: MappingReconRow[]
+    excluded_outflows?: MappingReconRow[]
   }
   type WaterfallReviewPreviewRow = {
     movement_id: string
@@ -535,7 +545,9 @@ export function OnboardingFlow({
   const lastAccountingSyncRef = useRef<number>(0)
   const lastRealmCountRef = useRef<number>(0)
   const lastTenantCountRef = useRef<number>(0)
+  const pollRetryCountRef = useRef<number>(0)
   const SYNC_COOLDOWN_MS = 60_000 // 1 minute: avoid duplicate syncs and QBO 429
+  const MAX_POLL_RETRIES = 90 // 90 retries * 2s = 3 minutes max polling
 
   const triggerAccountingSyncIfNeeded = useCallback(
     (realmIds: string[], tenantIds: string[], forceIfNewConnections: boolean) => {
@@ -901,8 +913,14 @@ export function OnboardingFlow({
 
     fetch("/api/ar-ap-step")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("AR/AP step failed"))))
-      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData; waterfall_review?: WaterfallReviewData; excluded_categories?: ExcludedCategories; transfer_pairs?: TransferPairsResult }) => {
+      .then((data: { ar: ARState; ap: APState; recon?: MappingReconData; waterfall_review?: WaterfallReviewData; excluded_categories?: ExcludedCategories; transfer_pairs?: TransferPairsResult; is_reconciling?: boolean }) => {
         if (cancelled) return
+        if (data.is_reconciling) {
+          setArApLoading(false)
+          setMappingLoading(false)
+          void pollReconciliationStatus()
+          return
+        }
         setArApData({ ar: data.ar, ap: data.ap })
         setMappingArAp({ ar: data.ar, ap: data.ap })
         setMappingRecon(data.recon ?? null)
@@ -990,15 +1008,23 @@ export function OnboardingFlow({
         message?: string
       }
       if (r.ok) {
-        // If still reconciling (no data returned), keep polling
+        // If still reconciling (no data returned), keep polling with retry limit
         if (data.is_reconciling) {
+          pollRetryCountRef.current++
+          if (pollRetryCountRef.current >= MAX_POLL_RETRIES) {
+            setMappingError("Reconciliation is taking too long. Please refresh the page to check status.")
+            setReconRefreshLoading(false)
+            pollRetryCountRef.current = 0
+            return
+          }
           setTimeout(() => {
             void pollReconciliationStatus()
           }, 2000) // Poll every 2 seconds
           return
         }
         
-        // Reconciliation complete - update UI with fresh data
+        // Reconciliation complete - reset retry counter and update UI
+        pollRetryCountRef.current = 0
         if (data.ar && data.ap) {
           setArApData({ ar: data.ar, ap: data.ap })
           setMappingArAp({ ar: data.ar, ap: data.ap })
@@ -1010,6 +1036,7 @@ export function OnboardingFlow({
         setReconRefreshLoading(false)
       }
     } catch {
+      pollRetryCountRef.current = 0
       setReconRefreshLoading(false)
     }
   }, [])
@@ -3729,14 +3756,14 @@ export function OnboardingFlow({
                         <div className="text-xs text-gray-400 mb-2">Bank Inflows (AR)</div>
                         <div className="flex justify-between text-sm">
                           <span className="text-cyan-300">Matched: {money(mappingRecon.total_matched_inflows)}</span>
-                          <span className="text-gray-400">Unmatched: {mappingRecon.total_unmatched_inflows} txns</span>
+                          <span className="text-gray-400">Unmatched: {money(mappingRecon.total_unmatched_inflows)}</span>
                         </div>
                       </div>
                       <div className="bg-white/5 rounded-lg p-3">
                         <div className="text-xs text-gray-400 mb-2">Bank Outflows (AP)</div>
                         <div className="flex justify-between text-sm">
                           <span className="text-cyan-300">Matched: {money(mappingRecon.total_matched_outflows)}</span>
-                          <span className="text-gray-400">Unmatched: {mappingRecon.total_unmatched_outflows} txns</span>
+                          <span className="text-gray-400">Unmatched: {money(mappingRecon.total_unmatched_outflows)}</span>
                         </div>
                       </div>
                     </div>

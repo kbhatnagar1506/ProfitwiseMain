@@ -8,6 +8,15 @@ import { toEntityUriApBill } from "@/lib/entity-uri"
 import { safeParseFloat } from "@/lib/utils"
 import type { OutstandingBill } from "./state/types"
 
+/** Parse extracted amount, stripping currency symbols and commas */
+function parseExtractedAmount(value: unknown, fallback = 0): number {
+  if (value == null) return fallback
+  if (typeof value === "number") return value
+  const cleaned = String(value).replace(/[^0-9.-]/g, "")
+  const parsed = parseFloat(cleaned)
+  return Number.isNaN(parsed) ? fallback : parsed
+}
+
 export async function fetchOutstandingBills(userId: string): Promise<OutstandingBill[]> {
   const today = new Date().toISOString().slice(0, 10)
   const outstandingBills: OutstandingBill[] = []
@@ -130,20 +139,23 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
     ).then((r) => r.rows)
     for (const row of gmailApRows) {
       const d = row.extracted_invoice
-      const amountDue = safeParseFloat(d.amount_outstanding ?? d.total)
+      const amountDue = parseExtractedAmount(d.amount_outstanding ?? d.total)
       if (amountDue <= 0) continue
-      const total = safeParseFloat(d.total, amountDue)
+      const total = parseExtractedAmount(d.total, amountDue)
       const vendName = String(d.counterparty_name ?? "Unknown")
       const dueDate = (d.due_date as string) ?? null
       let daysToDue: number | null = null
       let daysOverdue: number | null = null
       let status: OutstandingBill["status"] = "open"
       if (dueDate) {
-        const diff = Math.round((new Date(dueDate).getTime() - new Date(today).getTime()) / 86_400_000)
-        if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
-        else daysToDue = diff
+        const dueTime = new Date(dueDate).getTime()
+        if (!Number.isNaN(dueTime)) {
+          const diff = Math.round((dueTime - new Date(today).getTime()) / 86_400_000)
+          if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
+          else daysToDue = diff
+        }
       }
-      const billId = `gmail_ap_${row.message_id ?? d.invoice_number ?? crypto.randomUUID()}`
+      const billId = `gmail_ap_${row.message_id}`
       outstandingBills.push({
         bill_id: billId, source: "gmail",
         vendor_name: vendName, vendor_source_id: null,
@@ -157,13 +169,38 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
     console.warn("[bills-fetch] Gmail AP bills fetch failed:", e instanceof Error ? e.message : String(e))
   }
 
-  // Dedupe by (entity_id ?? vendor_name, amount_due, due_date) — keep first occurrence
+  // Dedupe by source:bill_id first (same-source duplicates)
   const seen = new Map<string, OutstandingBill>()
   for (const b of outstandingBills) {
-    const key = `${b.entity_id ?? b.vendor_name}|${b.amount_due}|${b.due_date ?? ""}`
+    const key = `${b.source}:${b.bill_id}`
     if (!seen.has(key)) seen.set(key, b)
   }
-  return [...seen.values()]
+  
+  // Cross-source deduplication: if same (vendor_name, amount, due_date) exists from multiple sources,
+  // prefer QBO > Xero > Gmail (accounting systems over email extraction)
+  const SOURCE_PRIORITY: Record<string, number> = { qbo: 1, xero: 2, gmail: 3 }
+  const crossSourceSeen = new Map<string, OutstandingBill>()
+  for (const bill of seen.values()) {
+    // Normalize vendor name for comparison
+    const vendNorm = (bill.vendor_name || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+    // Round amount to avoid floating point comparison issues
+    const amtRounded = Math.round(bill.amount * 100)
+    const crossKey = `${vendNorm}|${amtRounded}|${bill.due_date ?? "null"}`
+    
+    const existing = crossSourceSeen.get(crossKey)
+    if (!existing) {
+      crossSourceSeen.set(crossKey, bill)
+    } else {
+      // Keep the one from higher priority source (lower number = higher priority)
+      const existingPriority = SOURCE_PRIORITY[existing.source] ?? 99
+      const newPriority = SOURCE_PRIORITY[bill.source] ?? 99
+      if (newPriority < existingPriority) {
+        crossSourceSeen.set(crossKey, bill)
+      }
+    }
+  }
+  
+  return [...crossSourceSeen.values()]
 }
 
 /**
@@ -323,7 +360,7 @@ export async function fetchBillsForReconciliation(userId: string): Promise<Outst
       }
       if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
       
-      const billId = `gmail_ap_${row.message_id ?? d.invoice_number ?? crypto.randomUUID()}`
+      const billId = `gmail_ap_${row.message_id}`
       bills.push({
         bill_id: billId, source: "gmail",
         vendor_name: vendName, vendor_source_id: null,
@@ -337,13 +374,34 @@ export async function fetchBillsForReconciliation(userId: string): Promise<Outst
     console.warn("[bills-fetch] Gmail AP bills for reconciliation failed:", e instanceof Error ? e.message : String(e))
   }
 
-  // Dedupe
+  // Dedupe by source:bill_id first
   const seen = new Map<string, OutstandingBill>()
   for (const b of bills) {
     const key = `${b.source}:${b.bill_id}`
     if (!seen.has(key)) seen.set(key, b)
   }
-  return [...seen.values()]
+  
+  // Cross-source deduplication
+  const SOURCE_PRIORITY: Record<string, number> = { qbo: 1, xero: 2, gmail: 3 }
+  const crossSourceSeen = new Map<string, OutstandingBill>()
+  for (const bill of seen.values()) {
+    const vendNorm = (bill.vendor_name || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+    const amtRounded = Math.round(bill.amount * 100)
+    const crossKey = `${vendNorm}|${amtRounded}|${bill.due_date ?? "null"}`
+    
+    const existing = crossSourceSeen.get(crossKey)
+    if (!existing) {
+      crossSourceSeen.set(crossKey, bill)
+    } else {
+      const existingPriority = SOURCE_PRIORITY[existing.source] ?? 99
+      const newPriority = SOURCE_PRIORITY[bill.source] ?? 99
+      if (newPriority < existingPriority) {
+        crossSourceSeen.set(crossKey, bill)
+      }
+    }
+  }
+  
+  return [...crossSourceSeen.values()]
 }
 
 /**

@@ -53,17 +53,34 @@ function normalizeName(s: string | null | undefined): string {
   return s.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim()
 }
 
+/** Stopwords to exclude from token matching - common words that cause false positives */
+const NAME_STOPWORDS = new Set([
+  "inc", "llc", "ltd", "corp", "co", "company", "the", "and", "of", "for",
+  "services", "service", "solutions", "group", "international", "global",
+  "consulting", "management", "enterprises", "holdings", "partners",
+  "city", "team", "west", "east", "north", "south", "tech", "data",
+  "home", "care", "blue", "state", "food", "foods", "sports", "sport",
+])
+
 /** Check if two names are similar enough (one contains the other, or they share key tokens). */
 export function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   const na = normalizeName(a)
   const nb = normalizeName(b)
   if (!na || !nb) return false
   if (na === nb) return true
-  if (na.includes(nb) || nb.includes(na)) return true
-  const tokensA = new Set(na.split(/\s+/).filter((t) => t.length > 1))
-  const tokensB = new Set(nb.split(/\s+/).filter((t) => t.length > 1))
+  // Require minimum length for substring matching to avoid false positives
+  if (na.length >= 8 && nb.length >= 8) {
+    if (na.includes(nb) || nb.includes(na)) return true
+  }
+  // Token-based matching with stopword filtering
+  const tokensA = new Set(na.split(/\s+/).filter((t) => t.length > 2 && !NAME_STOPWORDS.has(t)))
+  const tokensB = new Set(nb.split(/\s+/).filter((t) => t.length > 2 && !NAME_STOPWORDS.has(t)))
+  // Require at least 2 significant tokens on each side for token matching
+  if (tokensA.size < 2 || tokensB.size < 2) return false
   const overlap = [...tokensA].filter((t) => tokensB.has(t)).length
-  return overlap >= Math.min(tokensA.size, tokensB.size, 2)
+  const minTokens = Math.min(tokensA.size, tokensB.size)
+  // Require overlap to be at least 50% of the smaller token set AND at least 2 tokens
+  return overlap >= 2 && overlap >= minTokens * 0.5
 }
 
 const PROFILE_RATIO_TOLERANCE = 0.02

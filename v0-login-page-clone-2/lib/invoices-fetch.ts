@@ -7,6 +7,15 @@ import { toEntityUriAr } from "@/lib/entity-uri"
 import { safeParseFloat } from "@/lib/utils"
 import type { OutstandingInvoice } from "./state/types"
 
+/** Parse extracted amount, stripping currency symbols and commas */
+function parseExtractedAmount(value: unknown, fallback = 0): number {
+  if (value == null) return fallback
+  if (typeof value === "number") return value
+  const cleaned = String(value).replace(/[^0-9.-]/g, "")
+  const parsed = parseFloat(cleaned)
+  return Number.isNaN(parsed) ? fallback : parsed
+}
+
 /** Xero invoice Contact → graph entity when `entity_aliases.source = 'xero'` (seed via graph/identity). */
 async function loadXeroContactIdToEntityMap(userId: string): Promise<Map<string, string>> {
   const m = new Map<string, string>()
@@ -41,6 +50,7 @@ export async function fetchOutstandingInvoices(
   const today = new Date().toISOString().slice(0, 10)
   const outstandingInvoices: OutstandingInvoice[] = []
 
+  // QBO entity alias lookup
   const sourceIdToEntity = new Map<string, string>()
   try {
     const aliasRows = await query<{ entity_id: string; source_id: string }>(
@@ -54,6 +64,22 @@ export async function fetchOutstandingInvoices(
     }
   } catch (e) {
     console.warn("[invoices-fetch] QBO entity_aliases query failed:", e instanceof Error ? e.message : String(e))
+  }
+
+  // Stripe customer entity alias lookup
+  const stripeCustomerToEntity = new Map<string, string>()
+  try {
+    const stripeAliasRows = await query<{ entity_id: string; source_id: string }>(
+      `SELECT ea.entity_id, ea.source_id FROM entity_aliases ea
+       JOIN entities e ON e.id = ea.entity_id
+       WHERE e.user_id = $1 AND ea.source = 'stripe' AND ea.source_id IS NOT NULL`,
+      [userId]
+    ).then((r) => r.rows)
+    for (const a of stripeAliasRows) {
+      if (a.source_id) stripeCustomerToEntity.set(a.source_id, a.entity_id)
+    }
+  } catch (e) {
+    console.warn("[invoices-fetch] Stripe entity_aliases query failed:", e instanceof Error ? e.message : String(e))
   }
 
   const xeroContactIdToEntity = preloadedXeroContactIdToEntity ?? (await loadXeroContactIdToEntityMap(userId))
@@ -149,20 +175,23 @@ export async function fetchOutstandingInvoices(
     ).then((r) => r.rows)
     for (const row of gmailRows) {
       const d = row.extracted_invoice
-      const amountDue = safeParseFloat(d.amount_outstanding ?? d.total)
+      const amountDue = parseExtractedAmount(d.amount_outstanding ?? d.total)
       if (amountDue <= 0) continue
-      const total = safeParseFloat(d.total, amountDue)
+      const total = parseExtractedAmount(d.total, amountDue)
       const custName = String(d.counterparty_name ?? "Unknown")
       const dueDate = (d.due_date as string) ?? null
       let daysToDue: number | null = null
       let daysOverdue: number | null = null
       let status: OutstandingInvoice["status"] = "open"
       if (dueDate) {
-        const diff = Math.round((new Date(dueDate).getTime() - new Date(today).getTime()) / 86_400_000)
-        if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
-        else daysToDue = diff
+        const dueTime = new Date(dueDate).getTime()
+        if (!Number.isNaN(dueTime)) {
+          const diff = Math.round((dueTime - new Date(today).getTime()) / 86_400_000)
+          if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
+          else daysToDue = diff
+        }
       }
-      const invoiceId = `gmail_${row.message_id ?? d.invoice_number ?? crypto.randomUUID()}`
+      const invoiceId = `gmail_${row.message_id}`
       outstandingInvoices.push({
         invoice_id: invoiceId, source: "gmail",
         customer_name: custName, customer_source_id: null,
@@ -186,6 +215,7 @@ export async function fetchOutstandingInvoices(
       if (amountDue <= 0) continue
       const total = safeParseFloat(d.total ?? d.amount_due) / 100
       const custName = String(d.customer_name ?? d.customer_email ?? "Unknown")
+      const custSourceId = d.customer != null ? String(d.customer) : null
       const dueTimestamp = d.due_date as number | null
       const dueDate = dueTimestamp ? new Date(dueTimestamp * 1000).toISOString().slice(0, 10) : null
       let daysToDue: number | null = null
@@ -197,10 +227,11 @@ export async function fetchOutstandingInvoices(
         else daysToDue = diff
       }
       if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
+      const entityId = custSourceId ? (stripeCustomerToEntity.get(custSourceId) ?? null) : null
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "stripe",
-        customer_name: custName, customer_source_id: String(d.customer ?? ""),
-        entity_id: null, entity_uri: toEntityUriAr("stripe", row.entity_id),
+        customer_name: custName, customer_source_id: custSourceId,
+        entity_id: entityId, entity_uri: toEntityUriAr("stripe", row.entity_id),
         amount: total, amount_due: amountDue,
         due_date: dueDate, days_until_due: daysToDue,
         days_overdue: daysOverdue, status,
@@ -210,7 +241,34 @@ export async function fetchOutstandingInvoices(
     console.warn("[invoices-fetch] Stripe invoices fetch failed:", e instanceof Error ? e.message : String(e))
   }
 
-  return outstandingInvoices
+  // Dedupe by source:invoice_id first (same-source duplicates)
+  const seen = new Map<string, OutstandingInvoice>()
+  for (const i of outstandingInvoices) {
+    const key = `${i.source}:${i.invoice_id}`
+    if (!seen.has(key)) seen.set(key, i)
+  }
+  
+  // Cross-source deduplication: prefer QBO > Xero > Stripe > Gmail
+  const SOURCE_PRIORITY: Record<string, number> = { qbo: 1, xero: 2, stripe: 3, gmail: 4 }
+  const crossSourceSeen = new Map<string, OutstandingInvoice>()
+  for (const inv of seen.values()) {
+    const custNorm = (inv.customer_name || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+    const amtRounded = Math.round(inv.amount * 100)
+    const crossKey = `${custNorm}|${amtRounded}|${inv.due_date ?? "null"}`
+    
+    const existing = crossSourceSeen.get(crossKey)
+    if (!existing) {
+      crossSourceSeen.set(crossKey, inv)
+    } else {
+      const existingPriority = SOURCE_PRIORITY[existing.source] ?? 99
+      const newPriority = SOURCE_PRIORITY[inv.source] ?? 99
+      if (newPriority < existingPriority) {
+        crossSourceSeen.set(crossKey, inv)
+      }
+    }
+  }
+
+  return [...crossSourceSeen.values()]
 }
 
 /** Invoices for bank-led reconciliation: outstanding + recently paid (so we can match bank payments to invoices QBO already marked paid). */
@@ -224,6 +282,7 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
   cutoff.setDate(cutoff.getDate() - RECENTLY_PAID_DAYS)
   const cutoffStr = cutoff.toISOString().slice(0, 10)
 
+  // QBO entity alias lookup
   const sourceIdToEntity = new Map<string, string>()
   try {
     const aliasRows = await query<{ entity_id: string; source_id: string }>(
@@ -237,6 +296,22 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
     }
   } catch (e) {
     console.warn("[invoices-fetch] QBO entity_aliases for reconciliation failed:", e instanceof Error ? e.message : String(e))
+  }
+
+  // Stripe customer entity alias lookup
+  const stripeCustomerToEntity = new Map<string, string>()
+  try {
+    const stripeAliasRows = await query<{ entity_id: string; source_id: string }>(
+      `SELECT ea.entity_id, ea.source_id FROM entity_aliases ea
+       JOIN entities e ON e.id = ea.entity_id
+       WHERE e.user_id = $1 AND ea.source = 'stripe' AND ea.source_id IS NOT NULL`,
+      [userId]
+    ).then((r) => r.rows)
+    for (const a of stripeAliasRows) {
+      if (a.source_id) stripeCustomerToEntity.set(a.source_id, a.entity_id)
+    }
+  } catch (e) {
+    console.warn("[invoices-fetch] Stripe entity_aliases for reconciliation failed:", e instanceof Error ? e.message : String(e))
   }
 
   try {
@@ -336,14 +411,16 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
       const dueDate = dueTimestamp ? new Date(dueTimestamp * 1000).toISOString().slice(0, 10) : null
       if (dueDate && dueDate < cutoffStr) continue
       const custName = String(d.customer_name ?? d.customer_email ?? "Unknown")
+      const custSourceId = d.customer != null ? String(d.customer) : null
       const existing = outstanding.find((i) => i.invoice_id === row.entity_id)
       if (existing) continue
+      const entityId = custSourceId ? (stripeCustomerToEntity.get(custSourceId) ?? null) : null
       outstanding.push({
         invoice_id: row.entity_id,
         source: "stripe",
         customer_name: custName,
-        customer_source_id: String(d.customer ?? ""),
-        entity_id: null,
+        customer_source_id: custSourceId,
+        entity_id: entityId,
         entity_uri: toEntityUriAr("stripe", row.entity_id),
         amount: total,
         amount_due: 0,
@@ -357,13 +434,38 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
     console.warn("[invoices-fetch] Stripe paid invoices fetch failed:", e instanceof Error ? e.message : String(e))
   }
 
-  // Dedupe by (entity_id ?? customer_name, amount_due, due_date) — keep first occurrence
+  // Dedupe by source:invoice_id first (same-source duplicates)
   const seen = new Map<string, OutstandingInvoice>()
   for (const i of outstanding) {
-    const key = `${i.entity_id ?? i.customer_name}|${i.amount_due}|${i.due_date ?? ""}`
+    const key = `${i.source}:${i.invoice_id}`
     if (!seen.has(key)) seen.set(key, i)
   }
-  return [...seen.values()]
+  
+  // Cross-source deduplication: if same (customer_name, amount, due_date) exists from multiple sources,
+  // prefer QBO > Xero > Stripe > Gmail (accounting systems over email extraction)
+  const SOURCE_PRIORITY: Record<string, number> = { qbo: 1, xero: 2, stripe: 3, gmail: 4 }
+  const crossSourceSeen = new Map<string, OutstandingInvoice>()
+  for (const inv of seen.values()) {
+    // Normalize customer name for comparison
+    const custNorm = (inv.customer_name || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+    // Round amount to avoid floating point comparison issues
+    const amtRounded = Math.round(inv.amount * 100)
+    const crossKey = `${custNorm}|${amtRounded}|${inv.due_date ?? "null"}`
+    
+    const existing = crossSourceSeen.get(crossKey)
+    if (!existing) {
+      crossSourceSeen.set(crossKey, inv)
+    } else {
+      // Keep the one from higher priority source (lower number = higher priority)
+      const existingPriority = SOURCE_PRIORITY[existing.source] ?? 99
+      const newPriority = SOURCE_PRIORITY[inv.source] ?? 99
+      if (newPriority < existingPriority) {
+        crossSourceSeen.set(crossKey, inv)
+      }
+    }
+  }
+  
+  return [...crossSourceSeen.values()]
 }
 
 /**
