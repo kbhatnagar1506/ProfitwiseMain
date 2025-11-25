@@ -119,6 +119,49 @@ export async function createAttribution(opts: CreateAttributionOpts): Promise<Mo
       ? serializeConfidenceEnvelope(confidenceFromScore(opts.confidence))
       : null
 
+  // Use upsert pattern to handle both partial unique indexes
+  // First try to find existing attribution
+  const existingQuery = opts.reference_id
+    ? `SELECT id FROM movement_attributions 
+       WHERE movement_id = $1 AND component_type = $2 AND reference_id = $3 AND source = $4`
+    : `SELECT id FROM movement_attributions 
+       WHERE movement_id = $1 AND component_type = $2 AND entity_id = $3 AND source = $4 AND reference_id IS NULL`
+  
+  const existingParams = opts.reference_id
+    ? [opts.movementId, opts.component_type, opts.reference_id, opts.source]
+    : [opts.movementId, opts.component_type, opts.entity_id, opts.source]
+  
+  const existing = await query<{ id: string }>(existingQuery, existingParams)
+  
+  if (existing.rows.length > 0) {
+    // Update existing attribution
+    const { rows } = await query<
+      MovementAttributionRow & { gross_amount: string; net_amount: string }
+    >(
+      `UPDATE movement_attributions SET
+        gross_amount = $2,
+        net_amount = $3,
+        confidence = $4,
+        metadata = $5::jsonb,
+        confidence_detail = $6::jsonb
+      WHERE id = $1
+      RETURNING id, user_id, movement_id, component_type, entity_id, reference_id,
+        gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id, created_at`,
+      [
+        existing.rows[0].id,
+        opts.gross_amount,
+        opts.net_amount,
+        opts.confidence,
+        JSON.stringify(metadata),
+        confDetail ? JSON.stringify(confDetail) : null,
+      ],
+    )
+    const row = rows[0]
+    if (!row) throw new Error("Failed to update attribution")
+    return normalizeAttributionRow(row as MovementAttributionRow)
+  }
+
+  // Insert new attribution
   const { rows } = await query<
     MovementAttributionRow & { gross_amount: string; net_amount: string }
   >(
@@ -178,6 +221,49 @@ export async function insertAttributionWithClient(
       ? serializeConfidenceEnvelope(confidenceFromScore(opts.confidence))
       : null
 
+  // Use upsert pattern to handle both partial unique indexes
+  // First try to find existing attribution
+  const existingQuery = opts.reference_id
+    ? `SELECT id FROM movement_attributions 
+       WHERE movement_id = $1 AND component_type = $2 AND reference_id = $3 AND source = $4`
+    : `SELECT id FROM movement_attributions 
+       WHERE movement_id = $1 AND component_type = $2 AND entity_id = $3 AND source = $4 AND reference_id IS NULL`
+  
+  const existingParams = opts.reference_id
+    ? [opts.movementId, opts.component_type, opts.reference_id, opts.source]
+    : [opts.movementId, opts.component_type, opts.entity_id, opts.source]
+  
+  const existing = await client.query<{ id: string }>(existingQuery, existingParams)
+  
+  if (existing.rows.length > 0) {
+    // Update existing attribution
+    const result = await client.query<
+      MovementAttributionRow & { gross_amount: string; net_amount: string }
+    >(
+      `UPDATE movement_attributions SET
+        gross_amount = $2,
+        net_amount = $3,
+        confidence = $4,
+        metadata = $5::jsonb,
+        confidence_detail = $6::jsonb
+      WHERE id = $1
+      RETURNING id, user_id, movement_id, component_type, entity_id, reference_id,
+        gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id, created_at`,
+      [
+        existing.rows[0].id,
+        opts.gross_amount,
+        opts.net_amount,
+        opts.confidence,
+        JSON.stringify(metadata),
+        confDetail ? JSON.stringify(confDetail) : null,
+      ],
+    )
+    const row = result.rows[0]
+    if (!row) throw new Error("Failed to update attribution")
+    return normalizeAttributionRow(row as MovementAttributionRow)
+  }
+
+  // Insert new attribution
   const result = await client.query<
     MovementAttributionRow & { gross_amount: string; net_amount: string }
   >(
