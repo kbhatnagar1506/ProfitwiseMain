@@ -2171,7 +2171,7 @@ export function buildBehavioralModels(
  * Reconciled models provide high-confidence signals from matched invoices/bills.
  * Raw models provide broader coverage but lower confidence.
  */
-export function blendReconciledModels(
+export async function blendReconciledModels(
   rawModels: BehavioralModels,
   reconciledCustomers: Array<{
     entity_id: string
@@ -2187,7 +2187,7 @@ export function blendReconciledModels(
   }>,
   entityGraph?: EntityGraphMap,
   clustering?: ClusteringResult,
-): BehavioralModels {
+): Promise<BehavioralModels> {
   // Create lookup maps for reconciled models
   const reconCustomerMap = new Map(reconciledCustomers.map((c) => [c.entity_id, c]))
   const reconVendorMap = new Map(reconciledVendors.map((v) => [v.entity_id, v]))
@@ -2251,18 +2251,19 @@ export function blendReconciledModels(
   })
 
   // Apply AI-powered enhancements (entity inference, pattern learning)
-  if (enhancedCustomers.length > 0 || enhancedVendors.length > 0) {
-    try {
-      const { enhanceModelsWithAI } = await import("./ai-forecast-enhancement")
-      const aiResult = await enhanceModelsWithAI(enhancedCustomers, enhancedVendors, reconciledARMovements)
-      enhancedCustomers = aiResult.enhanced_customers
-      enhancedVendors = aiResult.enhanced_vendors
-      log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      log("forecast.ai_enhancement.error", { error: message })
-    }
-  }
+  // TODO: Integrate AI enhancements in a separate async step
+  // if (enhancedCustomers.length > 0 || enhancedVendors.length > 0) {
+  //   try {
+  //     const { enhanceModelsWithAI } = await import("./ai-forecast-enhancement")
+  //     const aiResult = await enhanceModelsWithAI(enhancedCustomers, enhancedVendors)
+  //     enhancedCustomers = aiResult.enhanced_customers
+  //     enhancedVendors = aiResult.enhanced_vendors
+  //     log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
+  //   } catch (err) {
+  //     const message = err instanceof Error ? err.message : String(err)
+  //     log("forecast.ai_enhancement.error", { error: message })
+  //   }
+  // }
 
   // Apply entity graph boosting if available
   if (entityGraph && clustering) {
@@ -5215,7 +5216,7 @@ export async function computeCashflowForecast(
       })
     }
     
-    behavioral_models = blendReconciledModels(
+    behavioral_models = await blendReconciledModels(
       behavioral_models,
       reconciledCustomers,
       reconciledVendors,
