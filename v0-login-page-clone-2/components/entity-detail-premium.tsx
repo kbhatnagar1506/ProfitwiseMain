@@ -246,7 +246,7 @@ export function EntityDetailPremium({ entityId, onClose }: { entityId: string; o
               <div className="space-y-3">
                 {[
                   { label: "Archetype", value: archetype.label, color: archetype.color },
-                  { label: "Reliability", value: `${(profile.reliability_score * 100).toFixed(0)}%`, color: profile.reliability_score > 0.7 ? "text-emerald-400" : profile.reliability_score > 0.4 ? "text-amber-400" : "text-red-400" },
+                  { label: "Reliability", value: `${((profile.reliability_score ?? 0) * 100).toFixed(0)}%`, color: (profile.reliability_score ?? 0) > 0.7 ? "text-emerald-400" : (profile.reliability_score ?? 0) > 0.4 ? "text-amber-400" : "text-red-400" },
                   { label: "Avg amount", value: fmtCompact(profile.avg_payment_amount), color: "text-white" },
                   { label: "Trend", value: profile.amount_trend || "stable", color: profile.amount_trend === "increasing" ? "text-emerald-400" : profile.amount_trend === "decreasing" ? "text-red-400" : "text-gray-300" },
                 ].map((r) => (
@@ -263,14 +263,14 @@ export function EntityDetailPremium({ entityId, onClose }: { entityId: string; o
           <div className="rounded-xl bg-gray-800/40 border border-gray-700/30 p-4">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-gray-400">Reliability Score</span>
-              <span className={`text-sm font-bold ${profile.reliability_score > 0.7 ? "text-emerald-400" : profile.reliability_score > 0.4 ? "text-amber-400" : "text-red-400"}`}>
-                {(profile.reliability_score * 100).toFixed(0)}%
+              <span className={`text-sm font-bold ${(profile.reliability_score ?? 0) > 0.7 ? "text-emerald-400" : (profile.reliability_score ?? 0) > 0.4 ? "text-amber-400" : "text-red-400"}`}>
+                {((profile.reliability_score ?? 0) * 100).toFixed(0)}%
               </span>
             </div>
             <div className="h-2 bg-gray-700/50 rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all duration-700 ${profile.reliability_score > 0.7 ? "bg-gradient-to-r from-emerald-500 to-teal-400" : profile.reliability_score > 0.4 ? "bg-gradient-to-r from-amber-500 to-yellow-400" : "bg-gradient-to-r from-red-500 to-orange-400"}`}
-                style={{ width: `${profile.reliability_score * 100}%` }}
+                className={`h-full rounded-full transition-all duration-700 ${(profile.reliability_score ?? 0) > 0.7 ? "bg-gradient-to-r from-emerald-500 to-teal-400" : (profile.reliability_score ?? 0) > 0.4 ? "bg-gradient-to-r from-amber-500 to-yellow-400" : "bg-gradient-to-r from-red-500 to-orange-400"}`}
+                style={{ width: `${(profile.reliability_score ?? 0) * 100}%` }}
               />
             </div>
             <p className="text-[10px] text-gray-500 mt-1.5">{archetype.desc}</p>
