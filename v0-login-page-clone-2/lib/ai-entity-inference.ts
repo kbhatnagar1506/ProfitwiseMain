@@ -1,13 +1,12 @@
 /**
  * AI-Powered Entity Inference
- * Uses Claude to analyze entity names and descriptions to infer:
+ * Uses OpenAI to analyze entity names and descriptions to infer:
  * - Payment patterns (recurring vs episodic)
  * - Entity relationships and clusters
  * - Risk profiles
  * - Archetype classification
  */
 
-import Anthropic from "@anthropic-ai/sdk"
 import { log } from "./logger"
 
 export type EntityInferenceResult = {
@@ -28,7 +27,8 @@ export type BatchInferenceResult = {
   avg_confidence_boost: number
 }
 
-const client = new Anthropic()
+const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
+const API_KEY = process.env.OPENAI_API_KEY
 
 /**
  * Analyze entity names and descriptions to infer payment patterns
@@ -37,8 +37,12 @@ export async function inferEntityPatterns(
   entities: Array<{ id: string; name: string; description?: string; type: "customer" | "vendor" }>
 ): Promise<EntityInferenceResult[]> {
   if (entities.length === 0) return []
+  if (!API_KEY) {
+    log("ai_entity_inference.error", { error: "OPENAI_API_KEY not configured" })
+    return []
+  }
 
-  // Batch entities for efficiency (Claude can handle multiple at once)
+  // Batch entities for efficiency
   const entityDescriptions = entities
     .map((e) => `- ${e.name}${e.description ? ` (${e.description})` : ""}`)
     .join("\n")
@@ -74,25 +78,41 @@ Focus on:
 - Relationship patterns (e.g., similar names → related entities)`
 
   try {
-    const response = await client.messages.create({
-      model: "claude-3-5-sonnet-20241022",
-      max_tokens: 2000,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 2000,
+      }),
     })
 
-    const content = response.content[0]
-    if (content.type !== "text") {
-      log("ai_entity_inference.error", { error: "Unexpected response type" })
+    if (!response.ok) {
+      const error = await response.text()
+      log("ai_entity_inference.error", { error, status: response.status })
+      return []
+    }
+
+    const data = (await response.json()) as any
+    const content = data.choices?.[0]?.message?.content
+
+    if (!content) {
+      log("ai_entity_inference.error", { error: "No content in response" })
       return []
     }
 
     // Parse JSON from response
-    const jsonMatch = content.text.match(/\{[\s\S]*\}/)
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
       log("ai_entity_inference.error", { error: "Could not parse JSON response" })
       return []
@@ -137,6 +157,7 @@ export async function inferEntityRelationships(
   entities: Array<{ id: string; name: string; description?: string }>
 ): Promise<Array<{ entity_id_1: string; entity_id_2: string; relationship_type: string; confidence: number }>> {
   if (entities.length < 2) return []
+  if (!API_KEY) return []
 
   const entityList = entities.map((e) => `${e.id}: ${e.name}${e.description ? ` (${e.description})` : ""}`).join("\n")
 
@@ -168,21 +189,33 @@ Respond in JSON format:
 Only include relationships with confidence > 0.7`
 
   try {
-    const response = await client.messages.create({
-      model: "claude-3-5-sonnet-20241022",
-      max_tokens: 2000,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 2000,
+      }),
     })
 
-    const content = response.content[0]
-    if (content.type !== "text") return []
+    if (!response.ok) return []
 
-    const jsonMatch = content.text.match(/\{[\s\S]*\}/)
+    const data = (await response.json()) as any
+    const content = data.choices?.[0]?.message?.content
+
+    if (!content) return []
+
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return []
 
     const parsed = JSON.parse(jsonMatch[0])
@@ -216,6 +249,7 @@ export async function inferPaymentTerms(
   }>
 > {
   if (descriptions.length === 0) return []
+  if (!API_KEY) return []
 
   const descList = descriptions.map((d) => `- ${d.description} ($${d.amount}, ${d.date})`).join("\n")
 
@@ -243,21 +277,33 @@ Respond in JSON format:
 }`
 
   try {
-    const response = await client.messages.create({
-      model: "claude-3-5-sonnet-20241022",
-      max_tokens: 2000,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 2000,
+      }),
     })
 
-    const content = response.content[0]
-    if (content.type !== "text") return []
+    if (!response.ok) return []
 
-    const jsonMatch = content.text.match(/\{[\s\S]*\}/)
+    const data = (await response.json()) as any
+    const content = data.choices?.[0]?.message?.content
+
+    if (!content) return []
+
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return []
 
     const parsed = JSON.parse(jsonMatch[0])
