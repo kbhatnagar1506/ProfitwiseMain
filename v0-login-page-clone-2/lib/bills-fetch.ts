@@ -378,6 +378,7 @@ export async function enrichBillsWithReconciliationStatus(
 
   // Track matches by specific bill reference_id ONLY
   // We no longer use entity-level fallback as it caused incorrect aggregation
+  // Handle both old format (qbo/214) and new format (214) for reference_id
   const matchesByBillId = new Map<string, { movementIds: string[]; totalMatched: number }>()
 
   for (const attr of attrRows) {
@@ -385,10 +386,15 @@ export async function enrichBillsWithReconciliationStatus(
     
     // Only count attributions that have a specific reference_id (bill_id)
     if (attr.reference_id) {
-      const existing = matchesByBillId.get(attr.reference_id) ?? { movementIds: [], totalMatched: 0 }
+      // Normalize reference_id: strip source prefix if present (e.g., "qbo/214" -> "214")
+      const normalizedRefId = attr.reference_id.includes('/') 
+        ? attr.reference_id.split('/').pop() ?? attr.reference_id
+        : attr.reference_id
+      
+      const existing = matchesByBillId.get(normalizedRefId) ?? { movementIds: [], totalMatched: 0 }
       existing.movementIds.push(attr.movement_id)
       existing.totalMatched += gross
-      matchesByBillId.set(attr.reference_id, existing)
+      matchesByBillId.set(normalizedRefId, existing)
     }
     // Note: Attributions without reference_id are NOT counted toward any specific bill
     // This prevents the bug where ALL vendor payments were aggregated together
