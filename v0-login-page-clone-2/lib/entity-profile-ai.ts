@@ -220,19 +220,19 @@ function generateFallbackSummary(data: EntityProfileData): string {
   const typeLabel = entityType === "customer" ? "customer" : "vendor"
 
   const archetypeDescriptions: Record<EntityArchetype, string> = {
-    clockwork: "highly consistent",
-    slow_reliable: "reliable but slower-paying",
-    bursty: "irregular but active",
-    volatile: "unpredictable",
-    low_data: "new or infrequent",
+    clockwork: "a highly consistent",
+    slow_reliable: "a reliable but slower-paying",
+    bursty: "an irregular but active",
+    volatile: "an unpredictable",
+    low_data: "a new or infrequent",
   }
 
-  const desc = archetypeDescriptions[archetype] || "typical"
+  const desc = archetypeDescriptions[archetype] || "a typical"
   const avgDays = metrics.avg_days_to_pay != null && typeof metrics.avg_days_to_pay === "number"
-    ? `typically pays in ${metrics.avg_days_to_pay.toFixed(0)} days`
+    ? `Typically pays in ${metrics.avg_days_to_pay.toFixed(0)} days`
     : `${metrics.transaction_count} transactions recorded`
 
-  return `${name} is a ${desc} ${typeLabel} with ${formatCurrency(lifetimeValue)} lifetime value. ${avgDays.charAt(0).toUpperCase() + avgDays.slice(1)}.`
+  return `${name} is ${desc} ${typeLabel} with ${formatCurrency(lifetimeValue)} lifetime value. ${avgDays}.`
 }
 
 function generateFallbackForecastNotes(data: EntityProfileData): string {
