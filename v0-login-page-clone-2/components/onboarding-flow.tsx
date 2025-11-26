@@ -121,11 +121,16 @@ const steps = [
   },
   {
     id: 13,
+    title: "Business state",
+    description: "Real-time financial health: revenue, spend, liquidity, and risk signals all in one view.",
+  },
+  {
+    id: 14,
     title: "Cashflow forecast",
     description: "Simulate future cash based on behavioral component models, not simple time-series prediction.",
   },
   {
-    id: 14,
+    id: 15,
     title: "Decisions & actions",
     description: "Top actions ranked by impact, combined strategies, and execution steps.",
   },
@@ -1097,9 +1102,33 @@ export function OnboardingFlow({
     return () => { cancelled = true }
   }, [currentStep])
 
-  // Step 13 & 14: Cashflow forecast + Decisions (share forecast data)
+  // Step 13: Business State (financial health overview)
   useEffect(() => {
-    if (currentStep !== 13 && currentStep !== 14) return
+    if (currentStep !== 13) return
+    let cancelled = false
+
+    setStateLoading(true)
+    setStateError(null)
+
+    fetch("/api/state/compute", { method: "POST" })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+      .then((data: BusinessState) => {
+        if (cancelled) return
+        setStateData(data)
+        setStateLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setStateError(err instanceof Error ? err.message : "Failed to compute business state")
+        setStateLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [currentStep])
+
+  // Step 14 & 15: Cashflow forecast + Decisions (share forecast data)
+  useEffect(() => {
+    if (currentStep !== 14 && currentStep !== 15) return
     if (DISABLE_ADVANCED_STEPS_FROM_ONBOARDING) {
       setForecastLoading(false)
       setForecastError(null)
@@ -1269,7 +1298,7 @@ export function OnboardingFlow({
   }
 
   const renderStepContent = () => {
-    if ([13, 14].includes(currentStep)) {
+    if ([14, 15].includes(currentStep)) {
       const s = steps[currentStep - 1]
       return (
         <div className="space-y-6">
@@ -1278,8 +1307,7 @@ export function OnboardingFlow({
             <p className="text-gray-400 text-lg mb-5">{s.description}</p>
             <div className="bg-white/5 border border-white/10 rounded-xl p-8 max-w-2xl mx-auto">
               <p className="text-sm text-gray-300">
-                AR/AP reconciliation + state objects + cashflow forecast are temporarily disabled in onboarding.
-                You’ll see this placeholder until the new step implementation is wired in.
+                Cashflow forecast and decisions are coming soon.
               </p>
             </div>
           </div>
@@ -4133,6 +4161,306 @@ export function OnboardingFlow({
       }
 
       case 13: {
+        const money = (n: number | string | null | undefined) => {
+          const num = typeof n === "string" ? parseFloat(n) : n
+          if (num == null || isNaN(num)) return "$0"
+          if (Math.abs(num) >= 1000000) return `$${(num / 1000000).toFixed(1)}M`
+          if (Math.abs(num) >= 1000) return `$${(num / 1000).toFixed(1)}K`
+          return `$${num.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        }
+        const signedMoney = (n: number | string | null | undefined) => {
+          const num = typeof n === "string" ? parseFloat(n) : n
+          if (num == null || isNaN(num)) return "$0"
+          const prefix = num >= 0 ? "+" : ""
+          if (Math.abs(num) >= 1000000) return `${prefix}$${(Math.abs(num) / 1000000).toFixed(1)}M`
+          if (Math.abs(num) >= 1000) return `${prefix}$${(Math.abs(num) / 1000).toFixed(1)}K`
+          return `${prefix}$${Math.abs(num).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        }
+        const pct = (n: number | null | undefined) => n != null ? `${Math.round(n)}%` : "—"
+        const riskColor = (level: string) => level === "high" ? "text-red-400" : level === "medium" ? "text-amber-400" : "text-emerald-400"
+        const riskBg = (level: string) => level === "high" ? "bg-red-500/10 border-red-500/20" : level === "medium" ? "bg-amber-500/10 border-amber-500/20" : "bg-emerald-500/10 border-emerald-500/20"
+        const riskBarColor = (level: string) => level === "high" ? "bg-red-400" : level === "medium" ? "bg-amber-400" : "bg-emerald-400"
+        const confColor = (c: number) => c >= 90 ? "text-emerald-400" : c >= 70 ? "text-amber-400" : "text-red-400"
+        const regimeColor = (r: string) => r === "strong" ? "text-emerald-400" : r === "stable" ? "text-blue-400" : "text-amber-400"
+        const regimeBg = (r: string) => r === "strong" ? "bg-emerald-500/10" : r === "stable" ? "bg-blue-500/10" : "bg-amber-500/10"
+
+        return (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
+
+              {stateLoading && (
+                <div className="flex items-center justify-center gap-2 py-8 text-gray-400">
+                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  Computing business state…
+                </div>
+              )}
+
+              {stateError && !stateLoading && (
+                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 max-w-md mx-auto">
+                  <p className="text-red-300 text-sm">{stateError}</p>
+                </div>
+              )}
+            </div>
+
+            {!stateLoading && stateData && (
+              <div className="space-y-6">
+                {/* ─── AI Summary Block ─── */}
+                {stateData.insight_block && (
+                  <div className="bg-gradient-to-br from-emerald-500/10 via-blue-500/5 to-purple-500/10 border border-white/10 rounded-2xl p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="text-xs uppercase tracking-wider text-emerald-400/80 font-medium">AI Summary</span>
+                    </div>
+                    <p className="text-sm text-gray-200 leading-relaxed">{stateData.insight_block}</p>
+                  </div>
+                )}
+
+                {/* ─── Key Metrics Overview ─── */}
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-center hover:bg-white/[0.07] transition-colors">
+                    <div className="text-2xl font-bold text-emerald-400">{money(stateData.revenue.net_revenue)}</div>
+                    <div className="text-xs text-gray-400 mt-1">Net Revenue</div>
+                  </div>
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-center hover:bg-white/[0.07] transition-colors">
+                    <div className="text-2xl font-bold text-amber-400">{money(stateData.spend.total_spend)}</div>
+                    <div className="text-xs text-gray-400 mt-1">Total Spend</div>
+                  </div>
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-center hover:bg-white/[0.07] transition-colors">
+                    <div className="text-2xl font-bold text-blue-400">{money(stateData.liquidity.ending_cash)}</div>
+                    <div className="text-xs text-gray-400 mt-1">Cash Position</div>
+                  </div>
+                  <div className={`border rounded-xl p-4 text-center hover:opacity-90 transition-opacity ${riskBg(stateData.risk.overall)}`}>
+                    <div className={`text-2xl font-bold ${riskColor(stateData.risk.overall)}`}>{stateData.risk.overall.toUpperCase()}</div>
+                    <div className="text-xs text-gray-400 mt-1">Risk Level</div>
+                  </div>
+                </div>
+
+                {/* ─── Confidence Indicators ─── */}
+                <div className="flex items-center justify-center gap-8 py-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${stateData.state_confidence.revenue_confidence >= 90 ? "bg-emerald-400" : stateData.state_confidence.revenue_confidence >= 70 ? "bg-amber-400" : "bg-red-400"}`} />
+                    <span className="text-xs text-gray-500">Revenue</span>
+                    <span className={`text-xs font-semibold ${confColor(stateData.state_confidence.revenue_confidence)}`}>{pct(stateData.state_confidence.revenue_confidence)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${stateData.state_confidence.spend_confidence >= 90 ? "bg-emerald-400" : stateData.state_confidence.spend_confidence >= 70 ? "bg-amber-400" : "bg-red-400"}`} />
+                    <span className="text-xs text-gray-500">Spend</span>
+                    <span className={`text-xs font-semibold ${confColor(stateData.state_confidence.spend_confidence)}`}>{pct(stateData.state_confidence.spend_confidence)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${stateData.state_confidence.liquidity_confidence >= 90 ? "bg-emerald-400" : stateData.state_confidence.liquidity_confidence >= 70 ? "bg-amber-400" : "bg-red-400"}`} />
+                    <span className="text-xs text-gray-500">Liquidity</span>
+                    <span className={`text-xs font-semibold ${confColor(stateData.state_confidence.liquidity_confidence)}`}>{pct(stateData.state_confidence.liquidity_confidence)}</span>
+                  </div>
+                </div>
+
+                {/* ─── Risk Breakdown ─── */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Risk Analysis</h3>
+                    <div className={`text-xs font-bold px-3 py-1 rounded-full border ${riskBg(stateData.risk.overall)} ${riskColor(stateData.risk.overall)}`}>
+                      Score: {stateData.risk.overall_score}/100
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-5 gap-3">
+                    {(["liquidity_risk", "concentration_risk", "dependency_risk", "anomaly_risk", "uncertainty_risk"] as const).map((key) => {
+                      const dim = stateData.risk[key]
+                      const label = key.replace(/_risk$/, "").charAt(0).toUpperCase() + key.replace(/_risk$/, "").slice(1)
+                      return (
+                        <div key={key} className="text-center">
+                          <div className="relative w-full h-1.5 bg-white/10 rounded-full overflow-hidden mb-2">
+                            <div className={`absolute left-0 top-0 h-full rounded-full transition-all ${riskBarColor(dim.level)}`} style={{ width: `${Math.min(dim.score, 100)}%` }} />
+                          </div>
+                          <div className={`text-xs font-semibold ${riskColor(dim.level)}`}>{dim.level.toUpperCase()}</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">{label}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* ─── Revenue & Spend Side by Side ─── */}
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Revenue Card */}
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider">Revenue</h3>
+                      <span className="text-xs text-gray-500">{stateData.revenue.customer_count} customers</span>
+                    </div>
+                    <div className="text-3xl font-bold text-white mb-3">{money(stateData.revenue.net_revenue)}</div>
+                    <div className="text-xs text-gray-500 mb-4">
+                      Gross {money(stateData.revenue.gross_revenue)} − Contra {money(stateData.revenue.contra_revenue)}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="bg-white/5 rounded-lg p-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.revenue.avg_receipt)}</div>
+                        <div className="text-[10px] text-gray-500">Avg Receipt</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-2">
+                        <div className="text-sm font-semibold text-white">{pct(stateData.revenue.top_customer_pct)}</div>
+                        <div className="text-[10px] text-gray-500">Top Customer</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-2">
+                        <div className="text-sm font-semibold text-white">{pct(stateData.revenue.repeat_revenue_ratio * 100)}</div>
+                        <div className="text-[10px] text-gray-500">Repeat Rev</div>
+                      </div>
+                    </div>
+                    {stateData.revenue.revenue_by_customer.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-white/5">
+                        <div className="text-[10px] uppercase text-gray-500 mb-2">Top Customers</div>
+                        <div className="space-y-1">
+                          {stateData.revenue.revenue_by_customer.slice(0, 3).map((c, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs">
+                              <span className="text-gray-300 truncate max-w-[60%]">{c.name}</span>
+                              <span className="text-emerald-400 font-mono">{money(c.total)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Spend Card */}
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-semibold text-amber-400 uppercase tracking-wider">Spend</h3>
+                      <span className="text-xs text-gray-500">{stateData.spend.vendor_count} vendors</span>
+                    </div>
+                    <div className="text-3xl font-bold text-white mb-3">{money(stateData.spend.total_spend)}</div>
+                    <div className="text-xs text-gray-500 mb-4">
+                      OpEx {money(stateData.spend.total_opex)} + COGS {money(stateData.spend.total_cogs)}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="bg-white/5 rounded-lg p-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.spend.payroll)}</div>
+                        <div className="text-[10px] text-gray-500">Payroll</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-2">
+                        <div className="text-sm font-semibold text-white">{money(stateData.spend.recurring_obligations)}</div>
+                        <div className="text-[10px] text-gray-500">Recurring</div>
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-2">
+                        <div className="text-sm font-semibold text-white">{pct(stateData.spend.top_vendor_pct)}</div>
+                        <div className="text-[10px] text-gray-500">Top Vendor</div>
+                      </div>
+                    </div>
+                    {stateData.spend.spend_by_vendor.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-white/5">
+                        <div className="text-[10px] uppercase text-gray-500 mb-2">Top Vendors</div>
+                        <div className="space-y-1">
+                          {stateData.spend.spend_by_vendor.slice(0, 3).map((v, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs">
+                              <span className="text-gray-300 truncate max-w-[60%]">{v.name}</span>
+                              <span className="text-amber-400 font-mono">{money(v.total)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* ─── Liquidity State ─── */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-blue-400 uppercase tracking-wider">Liquidity</h3>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${regimeBg(stateData.liquidity.liquidity_regime)} ${regimeColor(stateData.liquidity.liquidity_regime)}`}>
+                      {stateData.liquidity.liquidity_regime.charAt(0).toUpperCase() + stateData.liquidity.liquidity_regime.slice(1)} Regime
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-4 mb-4">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-blue-400">{money(stateData.liquidity.ending_cash)}</div>
+                      <div className="text-xs text-gray-500 mt-1">Ending Cash</div>
+                    </div>
+                    <div className="text-center">
+                      <div className={`text-2xl font-bold ${stateData.liquidity.period_net_cash_flow >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        {signedMoney(stateData.liquidity.period_net_cash_flow)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">Net Cash Flow</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-white">{stateData.liquidity.runway_days ?? "∞"}</div>
+                      <div className="text-xs text-gray-500 mt-1">Runway (days)</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-white">{money(stateData.liquidity.burn_rate)}</div>
+                      <div className="text-xs text-gray-500 mt-1">Burn Rate/mo</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 text-xs">
+                    <div className="bg-white/5 rounded-lg p-3">
+                      <div className="flex justify-between mb-1">
+                        <span className="text-gray-400">Operating</span>
+                        <span className={stateData.liquidity.net_operating >= 0 ? "text-emerald-400" : "text-red-400"}>{signedMoney(stateData.liquidity.net_operating)}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-600">In {money(stateData.liquidity.operating_inflows)} / Out {money(stateData.liquidity.operating_outflows)}</div>
+                    </div>
+                    <div className="bg-white/5 rounded-lg p-3">
+                      <div className="flex justify-between mb-1">
+                        <span className="text-gray-400">Financing</span>
+                        <span className={stateData.liquidity.net_financing >= 0 ? "text-emerald-400" : "text-red-400"}>{signedMoney(stateData.liquidity.net_financing)}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-600">In {money(stateData.liquidity.financing_inflows)} / Out {money(stateData.liquidity.financing_outflows)}</div>
+                    </div>
+                    <div className="bg-white/5 rounded-lg p-3">
+                      <div className="flex justify-between mb-1">
+                        <span className="text-gray-400">Owner</span>
+                        <span className={stateData.liquidity.net_owner >= 0 ? "text-emerald-400" : "text-red-400"}>{signedMoney(stateData.liquidity.net_owner)}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-600">In {money(stateData.liquidity.owner_inflows)} / Out {money(stateData.liquidity.owner_outflows)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ─── Insights ─── */}
+                {stateData.insights.length > 0 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Key Insights</div>
+                    <div className="space-y-2">
+                      {stateData.insights.slice(0, 5).map((ins) => (
+                        <div key={ins.id} className="flex items-start gap-2.5">
+                          <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${ins.severity === "high" ? "bg-red-400" : ins.severity === "medium" ? "bg-amber-400" : "bg-blue-400"}`} />
+                          <span className="text-sm text-gray-200">{ins.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Refresh Button ─── */}
+                <div className="flex justify-center pt-2">
+                  <button
+                    onClick={async () => {
+                      setStateLoading(true)
+                      setStateError(null)
+                      try {
+                        const res = await fetch("/api/state/compute", { method: "POST" })
+                        if (!res.ok) throw new Error(await res.text())
+                        const data = await res.json()
+                        setStateData(data)
+                      } catch (err) {
+                        setStateError(err instanceof Error ? err.message : "Unknown error")
+                      } finally {
+                        setStateLoading(false)
+                      }
+                    }}
+                    disabled={stateLoading}
+                    className="rounded-lg border border-white/20 bg-white/5 px-5 py-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="text-sm font-medium text-white">{stateLoading ? "Computing…" : "Refresh State"}</div>
+                    <div className="text-xs text-gray-400">Recompute from latest data</div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
+      case 14: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const behaviorLabel = (b: ComponentBehavior) => b === "recurring" ? "Recurring" : b === "episodic" ? "Episodic" : b === "seasonal" ? "Seasonal" : "One-time"
@@ -4144,8 +4472,8 @@ export function OnboardingFlow({
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[12].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[12].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
 
               {forecastLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
@@ -5336,13 +5664,13 @@ export function OnboardingFlow({
         )
       }
 
-      case 14: {
+      case 15: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
+              <h2 className="text-2xl font-semibold text-white mb-1">{steps[14].title}</h2>
+              <p className="text-gray-400 text-lg mb-5">{steps[14].description}</p>
               {forecastLoading && (
                 <div className="flex justify-center gap-2 py-6 text-gray-400">
                   <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
