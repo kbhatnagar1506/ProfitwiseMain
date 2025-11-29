@@ -1,18 +1,25 @@
 import { NextResponse } from "next/server"
-import { getSession } from "@/lib/auth"
+import { cookies } from "next/headers"
+import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { computeBusinessState } from "@/lib/state"
 import { log } from "@/lib/logger"
 
+async function getUser() {
+  const cookieStore = await cookies()
+  const sessionToken = cookieStore.get(getSessionCookieName())?.value
+  return getUserBySessionToken(sessionToken ?? "")
+}
+
 export async function POST() {
   try {
-    const session = await getSession()
-    if (!session?.userId) {
+    const user = await getUser()
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    log("state.compute.start", { userId: session.userId })
-    const state = await computeBusinessState(session.userId)
-    log("state.compute.complete", { userId: session.userId })
+    log("state.compute.start", { userId: user.id })
+    const state = await computeBusinessState(user.id)
+    log("state.compute.complete", { userId: user.id })
 
     return NextResponse.json(state)
   } catch (err) {
