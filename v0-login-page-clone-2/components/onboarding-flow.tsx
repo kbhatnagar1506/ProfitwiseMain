@@ -408,6 +408,21 @@ export function OnboardingFlow({
   /** Step 11 bank tx table: show all, reconciled (AR/AP linked), or not reconciled */
   const [reconTxFilter, setReconTxFilter] = useState<"all" | "reconciled" | "unreconciled">("all")
 
+  // Step 13 Enhanced: Additional data for comprehensive Business State view
+  type MovementStats = {
+    total_count: number
+    tagged_count: number
+    unresolved_count: number
+    anomaly_count: number
+    coalesced_count: number
+    excluded_for_review: number
+    class_counts: Record<string, { count: number; total_amount: number }>
+  }
+  const [step13ArAp, setStep13ArAp] = useState<{ ar: ARState; ap: APState } | null>(null)
+  const [step13Movements, setStep13Movements] = useState<{ movements: unknown[]; summary: unknown[]; summaryFromTags?: MovementStats } | null>(null)
+  const [step13Entities, setStep13Entities] = useState<{ profiles: EntitySummary[]; summary: EntityProfilesSummary } | null>(null)
+  const [step13DataLoading, setStep13DataLoading] = useState(false)
+
   const openMovementDetail = useCallback(async (movementId: string) => {
     setMovementDetail({ movementId, loading: true, error: null, detail: null })
     setMovementDetailRecatIntent("")
@@ -1109,18 +1124,41 @@ export function OnboardingFlow({
 
     setStateLoading(true)
     setStateError(null)
+    setStep13DataLoading(true)
 
-    fetch("/api/state/compute", { method: "POST" })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-      .then((data: BusinessState) => {
+    // Fetch all data in parallel for comprehensive dashboard
+    Promise.all([
+      fetch("/api/state/compute", { method: "POST" }).then((res) => res.ok ? res.json() : Promise.reject(new Error(res.statusText))),
+      fetch("/api/ar-ap-step").then((res) => res.ok ? res.json() : null).catch(() => null),
+      fetch("/api/movements").then((res) => res.ok ? res.json() : null).catch(() => null),
+      fetch("/api/entities?sort=reliability_score&min_transactions=1").then((res) => res.ok ? res.json() : null).catch(() => null),
+    ])
+      .then(([stateResult, arApResult, movementsResult, entitiesResult]) => {
         if (cancelled) return
-        setStateData(data)
+        setStateData(stateResult as BusinessState)
+        if (arApResult) setStep13ArAp(arApResult as { ar: ARState; ap: APState })
+        if (movementsResult) setStep13Movements(movementsResult as { movements: unknown[]; summary: unknown[]; summaryFromTags?: MovementStats })
+        if (entitiesResult) {
+          const profiles = (entitiesResult as { profiles?: EntitySummary[] }).profiles ?? []
+          const summary = (entitiesResult as { summary?: EntityProfilesSummary }).summary ?? {
+            total_entities: profiles.length,
+            total_customers: profiles.filter((p: EntitySummary) => p.entity_type === "customer").length,
+            total_vendors: profiles.filter((p: EntitySummary) => p.entity_type === "vendor").length,
+            total_ar_outstanding: profiles.reduce((sum: number, p: EntitySummary) => sum + (p.entity_type === "customer" ? (p.outstanding_amount ?? 0) : 0), 0),
+            total_ap_outstanding: profiles.reduce((sum: number, p: EntitySummary) => sum + (p.entity_type === "vendor" ? (p.outstanding_amount ?? 0) : 0), 0),
+            total_lifetime_value: profiles.reduce((sum: number, p: EntitySummary) => sum + (p.lifetime_value ?? 0), 0),
+            at_risk_count: profiles.filter((p: EntitySummary) => p.reliability_score < 50).length,
+          }
+          setStep13Entities({ profiles, summary })
+        }
         setStateLoading(false)
+        setStep13DataLoading(false)
       })
       .catch((err) => {
         if (cancelled) return
         setStateError(err instanceof Error ? err.message : "Failed to compute business state")
         setStateLoading(false)
+        setStep13DataLoading(false)
       })
 
     return () => { cancelled = true }
@@ -4206,6 +4244,21 @@ export function OnboardingFlow({
 
             {!stateLoading && stateData && (
               <div className="space-y-6">
+                {/* ─── NEW: Period Context ─── */}
+                <div className="flex items-center justify-center gap-4 text-xs text-gray-500 flex-wrap">
+                  {stateData.revenue.period_start && stateData.revenue.period_end && (
+                    <span>
+                      Period: {new Date(stateData.revenue.period_start).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – {new Date(stateData.revenue.period_end).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      {stateData.liquidity.period_days > 0 && <span className="text-gray-600"> ({stateData.liquidity.period_days} days)</span>}
+                    </span>
+                  )}
+                  {stateData.computed_at && (
+                    <span className="text-gray-600">
+                      Updated: {new Date(stateData.computed_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </span>
+                  )}
+                </div>
+
                 {/* ─── AI Summary Block ─── */}
                 {stateData.insight_block && (
                   <div className="bg-gradient-to-br from-emerald-500/10 via-blue-500/5 to-purple-500/10 border border-white/10 rounded-2xl p-5">
@@ -4236,6 +4289,59 @@ export function OnboardingFlow({
                     <div className="text-xs text-gray-400 mt-1">Risk Level</div>
                   </div>
                 </div>
+
+                {/* ─── NEW: Data Health Bar ─── */}
+                {(() => {
+                  const arMatchRate = step13ArAp?.ar?.reconciliation_summary?.match_rate ?? 0
+                  const apMatchRate = step13ArAp?.ap?.reconciliation_summary?.match_rate ?? 0
+                  const reconHealth = step13ArAp ? Math.round((arMatchRate + apMatchRate) / 2) : null
+                  
+                  const movementStats = step13Movements?.summaryFromTags
+                  const totalMovements = movementStats ? (movementStats.tagged_count + movementStats.unresolved_count) : (step13Movements?.movements?.length ?? 0)
+                  const taggedPct = movementStats && totalMovements > 0 ? Math.round((movementStats.tagged_count / totalMovements) * 100) : null
+                  const anomalyPct = movementStats && totalMovements > 0 ? Math.round(((totalMovements - (movementStats.anomaly_count ?? 0)) / totalMovements) * 100) : 100
+                  const movementHealth = taggedPct !== null ? Math.round((taggedPct + anomalyPct) / 2) : null
+                  
+                  const entityCount = step13Entities?.summary?.total_entities ?? 0
+                  const atRiskCount = step13Entities?.summary?.at_risk_count ?? 0
+                  const entityHealth = entityCount > 0 ? Math.round(((entityCount - atRiskCount) / entityCount) * 100) : null
+                  
+                  const healthColor = (h: number | null) => h === null ? "text-gray-500" : h >= 80 ? "text-emerald-400" : h >= 60 ? "text-amber-400" : "text-red-400"
+                  const healthBg = (h: number | null) => h === null ? "bg-gray-500/20" : h >= 80 ? "bg-emerald-500/20" : h >= 60 ? "bg-amber-500/20" : "bg-red-500/20"
+                  const healthBarColor = (h: number | null) => h === null ? "bg-gray-500" : h >= 80 ? "bg-emerald-400" : h >= 60 ? "bg-amber-400" : "bg-red-400"
+                  
+                  return (
+                    <div className="bg-gradient-to-r from-white/[0.03] to-white/[0.06] border border-white/10 rounded-xl p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs uppercase tracking-wider text-gray-400 font-medium">Data Health</span>
+                        {step13DataLoading && <div className="h-3 w-3 rounded-full border border-white/30 border-t-white animate-spin" />}
+                      </div>
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="text-center">
+                          <div className="relative w-full h-2 bg-white/10 rounded-full overflow-hidden mb-2">
+                            <div className={`absolute left-0 top-0 h-full rounded-full transition-all ${healthBarColor(reconHealth)}`} style={{ width: `${reconHealth ?? 0}%` }} />
+                          </div>
+                          <div className={`text-lg font-bold ${healthColor(reconHealth)}`}>{reconHealth !== null ? `${reconHealth}%` : "—"}</div>
+                          <div className="text-[10px] text-gray-500">Reconciliation</div>
+                        </div>
+                        <div className="text-center">
+                          <div className="relative w-full h-2 bg-white/10 rounded-full overflow-hidden mb-2">
+                            <div className={`absolute left-0 top-0 h-full rounded-full transition-all ${healthBarColor(movementHealth)}`} style={{ width: `${movementHealth ?? 0}%` }} />
+                          </div>
+                          <div className={`text-lg font-bold ${healthColor(movementHealth)}`}>{movementHealth !== null ? `${movementHealth}%` : "—"}</div>
+                          <div className="text-[10px] text-gray-500">Movements</div>
+                        </div>
+                        <div className="text-center">
+                          <div className="relative w-full h-2 bg-white/10 rounded-full overflow-hidden mb-2">
+                            <div className={`absolute left-0 top-0 h-full rounded-full transition-all ${healthBarColor(entityHealth)}`} style={{ width: `${entityHealth ?? 0}%` }} />
+                          </div>
+                          <div className={`text-lg font-bold ${healthColor(entityHealth)}`}>{entityHealth !== null ? `${entityHealth}%` : "—"}</div>
+                          <div className="text-[10px] text-gray-500">Entities</div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* ─── Confidence Indicators ─── */}
                 <div className="flex items-center justify-center gap-8 py-2">
@@ -4362,6 +4468,98 @@ export function OnboardingFlow({
                   </div>
                 </div>
 
+                {/* ─── NEW: Reconciliation Status ─── */}
+                {step13ArAp && (
+                  <div className="bg-gradient-to-r from-cyan-500/5 via-transparent to-purple-500/5 border border-white/10 rounded-xl p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wider">Reconciliation Status</h3>
+                      <button
+                        onClick={() => setCurrentStep(11)}
+                        className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+                      >
+                        View Details →
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-6">
+                      {/* AR Reconciliation */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-400">Accounts Receivable</span>
+                          <span className="text-xs font-semibold text-emerald-400">
+                            {step13ArAp.ar.reconciliation_summary?.match_rate?.toFixed(0) ?? 0}% matched
+                          </span>
+                        </div>
+                        <div className="relative w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                          <div 
+                            className="absolute left-0 top-0 h-full bg-emerald-400 rounded-full transition-all" 
+                            style={{ width: `${step13ArAp.ar.reconciliation_summary?.match_rate ?? 0}%` }} 
+                          />
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="bg-white/5 rounded-lg p-2">
+                            <div className="text-sm font-semibold text-emerald-400">{step13ArAp.ar.reconciliation_summary?.matched_count ?? 0}</div>
+                            <div className="text-[9px] text-gray-500">Matched</div>
+                          </div>
+                          <div className="bg-white/5 rounded-lg p-2">
+                            <div className="text-sm font-semibold text-amber-400">{step13ArAp.ar.reconciliation_summary?.partial_count ?? 0}</div>
+                            <div className="text-[9px] text-gray-500">Partial</div>
+                          </div>
+                          <div className="bg-white/5 rounded-lg p-2">
+                            <div className="text-sm font-semibold text-red-400">{step13ArAp.ar.reconciliation_summary?.unmatched_count ?? 0}</div>
+                            <div className="text-[9px] text-gray-500">Unmatched</div>
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-gray-500">
+                          {money(step13ArAp.ar.reconciliation_summary?.matched_amount ?? 0)} verified · {money(step13ArAp.ar.reconciliation_summary?.unmatched_amount ?? 0)} pending
+                        </div>
+                      </div>
+                      
+                      {/* AP Reconciliation */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-400">Accounts Payable</span>
+                          <span className="text-xs font-semibold text-purple-400">
+                            {step13ArAp.ap.reconciliation_summary?.match_rate?.toFixed(0) ?? 0}% matched
+                          </span>
+                        </div>
+                        <div className="relative w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                          <div 
+                            className="absolute left-0 top-0 h-full bg-purple-400 rounded-full transition-all" 
+                            style={{ width: `${step13ArAp.ap.reconciliation_summary?.match_rate ?? 0}%` }} 
+                          />
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="bg-white/5 rounded-lg p-2">
+                            <div className="text-sm font-semibold text-emerald-400">{step13ArAp.ap.reconciliation_summary?.matched_count ?? 0}</div>
+                            <div className="text-[9px] text-gray-500">Matched</div>
+                          </div>
+                          <div className="bg-white/5 rounded-lg p-2">
+                            <div className="text-sm font-semibold text-amber-400">{step13ArAp.ap.reconciliation_summary?.partial_count ?? 0}</div>
+                            <div className="text-[9px] text-gray-500">Partial</div>
+                          </div>
+                          <div className="bg-white/5 rounded-lg p-2">
+                            <div className="text-sm font-semibold text-red-400">{step13ArAp.ap.reconciliation_summary?.unmatched_count ?? 0}</div>
+                            <div className="text-[9px] text-gray-500">Unmatched</div>
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-gray-500">
+                          {money(step13ArAp.ap.reconciliation_summary?.matched_amount ?? 0)} verified · {money(step13ArAp.ap.reconciliation_summary?.unmatched_amount ?? 0)} pending
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Discrepancy Alert */}
+                    {((step13ArAp.ar.reconciliation_summary?.discrepancy ?? 0) > 100 || (step13ArAp.ap.reconciliation_summary?.discrepancy ?? 0) > 100) && (
+                      <div className="mt-4 pt-3 border-t border-white/5">
+                        <div className="flex items-center gap-2 text-xs text-amber-400">
+                          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                          Discrepancy detected: Accounting records differ from bank-verified amounts
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* ─── Liquidity State ─── */}
                 <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                   <div className="flex items-center justify-between mb-4">
@@ -4417,6 +4615,92 @@ export function OnboardingFlow({
                   </div>
                 </div>
 
+                {/* ─── NEW: Movement & Entity Health ─── */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs uppercase tracking-wider text-gray-400 font-medium">Data Quality</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Movement Stats */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                        <span className="text-xs font-medium text-gray-300">Movements</span>
+                      </div>
+                      {(() => {
+                        const stats = step13Movements?.summaryFromTags
+                        const totalCount = stats ? (stats.tagged_count + stats.unresolved_count) : (step13Movements?.movements?.length ?? 0)
+                        const taggedPct = stats && totalCount > 0 ? Math.round((stats.tagged_count / totalCount) * 100) : null
+                        return (
+                          <div className="grid grid-cols-4 gap-2 text-center">
+                            <div className="bg-white/5 rounded-lg p-2">
+                              <div className="text-sm font-semibold text-white">{totalCount.toLocaleString()}</div>
+                              <div className="text-[9px] text-gray-500">Total</div>
+                            </div>
+                            <div className="bg-white/5 rounded-lg p-2">
+                              <div className={`text-sm font-semibold ${taggedPct !== null && taggedPct >= 90 ? "text-emerald-400" : taggedPct !== null && taggedPct >= 70 ? "text-amber-400" : "text-red-400"}`}>
+                                {taggedPct !== null ? `${taggedPct}%` : "—"}
+                              </div>
+                              <div className="text-[9px] text-gray-500">Tagged</div>
+                            </div>
+                            <div className="bg-white/5 rounded-lg p-2">
+                              <div className={`text-sm font-semibold ${(stats?.anomaly_count ?? 0) === 0 ? "text-emerald-400" : "text-amber-400"}`}>
+                                {stats?.anomaly_count ?? 0}
+                              </div>
+                              <div className="text-[9px] text-gray-500">Anomalies</div>
+                            </div>
+                            <div className="bg-white/5 rounded-lg p-2">
+                              <div className={`text-sm font-semibold ${(stats?.excluded_for_review ?? 0) === 0 ? "text-emerald-400" : "text-amber-400"}`}>
+                                {stats?.excluded_for_review ?? 0}
+                              </div>
+                              <div className="text-[9px] text-gray-500">Review</div>
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                    
+                    {/* Entity Stats */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                        <span className="text-xs font-medium text-gray-300">Entities</span>
+                        <button
+                          onClick={() => setCurrentStep(12)}
+                          className="ml-auto text-[10px] text-gray-500 hover:text-white transition-colors"
+                        >
+                          View All →
+                        </button>
+                      </div>
+                      {(() => {
+                        const summary = step13Entities?.summary
+                        return (
+                          <div className="grid grid-cols-4 gap-2 text-center">
+                            <div className="bg-white/5 rounded-lg p-2">
+                              <div className="text-sm font-semibold text-white">{summary?.total_entities ?? 0}</div>
+                              <div className="text-[9px] text-gray-500">Total</div>
+                            </div>
+                            <div className="bg-white/5 rounded-lg p-2">
+                              <div className="text-sm font-semibold text-emerald-400">{summary?.total_customers ?? 0}</div>
+                              <div className="text-[9px] text-gray-500">Customers</div>
+                            </div>
+                            <div className="bg-white/5 rounded-lg p-2">
+                              <div className="text-sm font-semibold text-amber-400">{summary?.total_vendors ?? 0}</div>
+                              <div className="text-[9px] text-gray-500">Vendors</div>
+                            </div>
+                            <div className="bg-white/5 rounded-lg p-2">
+                              <div className={`text-sm font-semibold ${(summary?.at_risk_count ?? 0) === 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                {summary?.at_risk_count ?? 0}
+                              </div>
+                              <div className="text-[9px] text-gray-500">At Risk</div>
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  </div>
+                </div>
+
                 {/* ─── Insights ─── */}
                 {stateData.insights.length > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
@@ -4426,6 +4710,28 @@ export function OnboardingFlow({
                         <div key={ins.id} className="flex items-start gap-2.5">
                           <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${ins.severity === "high" ? "bg-red-400" : ins.severity === "medium" ? "bg-amber-400" : "bg-blue-400"}`} />
                           <span className="text-sm text-gray-200">{ins.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── NEW: Transitions (Regime Changes) ─── */}
+                {stateData.transitions && stateData.transitions.length > 0 && (
+                  <div className="bg-gradient-to-r from-amber-500/5 via-transparent to-red-500/5 border border-white/10 rounded-xl p-4">
+                    <div className="text-xs uppercase tracking-wider text-amber-400 mb-3">Regime Changes Detected</div>
+                    <div className="space-y-2">
+                      {stateData.transitions.slice(0, 4).map((t, i) => (
+                        <div key={i} className="flex items-start gap-2.5">
+                          <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${t.severity === "critical" ? "bg-red-400 animate-pulse" : t.severity === "warning" ? "bg-amber-400" : "bg-blue-400"}`} />
+                          <div className="flex-1">
+                            <span className="text-sm text-gray-200">{t.description}</span>
+                            {t.previous_state && (
+                              <div className="text-[10px] text-gray-500 mt-0.5">
+                                {t.previous_state} → {t.current_state}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
