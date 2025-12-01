@@ -101,7 +101,7 @@ export function LoginForm() {
       if (isSignUp) {
         router.push("/onboarding")
       } else {
-        router.push("/dashboard")
+        router.push("/onboarding")
       }
     } catch {
       setError("Something went wrong. Please try again.")
