@@ -100,3 +100,40 @@ export async function listStripeAccountIdsByUserId(userId: string): Promise<stri
   return Array.from(memoryStore.keys())
 }
 
+export interface StripeConnectionInfo {
+  stripeAccountId: string
+  accessToken?: string
+  scope?: string
+  updatedAt?: string
+}
+
+export async function listStripeConnectionsByUserId(userId: string): Promise<StripeConnectionInfo[]> {
+  if (isProduction()) {
+    try {
+      await ensureStripeSchema()
+      const { rows } = await query<{
+        stripe_user_id: string
+        access_token: string | null
+        scope: string | null
+        updated_at: string | null
+      }>(
+        "SELECT stripe_user_id, access_token, scope, updated_at::text FROM stripe_connections WHERE user_id = $1",
+        [userId]
+      )
+      return rows.map((r) => ({
+        stripeAccountId: r.stripe_user_id,
+        accessToken: r.access_token ?? undefined,
+        scope: r.scope ?? undefined,
+        updatedAt: r.updated_at ?? undefined,
+      }))
+    } catch {
+      return []
+    }
+  }
+  return Array.from(memoryStore.entries()).map(([id, payload]) => ({
+    stripeAccountId: id,
+    accessToken: payload.accessToken,
+    scope: payload.scope,
+  }))
+}
+

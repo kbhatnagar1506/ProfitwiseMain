@@ -97,3 +97,39 @@ export async function listTenantIdsByUserId(userId: string): Promise<string[]> {
   }
   return Array.from(memoryStore.keys())
 }
+
+export interface XeroConnectionInfo {
+  tenantId: string
+  tenantName?: string
+  accessToken?: string
+  updatedAt?: string
+}
+
+export async function listXeroConnectionsByUserId(userId: string): Promise<XeroConnectionInfo[]> {
+  if (isProduction()) {
+    try {
+      await ensureXeroSchema()
+      const { rows } = await query<{
+        tenant_id: string
+        tenant_name: string | null
+        access_token: string | null
+        updated_at: string | null
+      }>(
+        "SELECT tenant_id, tenant_name, access_token, updated_at::text FROM xero_connections WHERE user_id = $1",
+        [userId]
+      )
+      return rows.map((r) => ({
+        tenantId: r.tenant_id,
+        tenantName: r.tenant_name ?? undefined,
+        accessToken: r.access_token ?? undefined,
+        updatedAt: r.updated_at ?? undefined,
+      }))
+    } catch {
+      return []
+    }
+  }
+  return Array.from(memoryStore.entries()).map(([id, payload]) => ({
+    tenantId: id,
+    accessToken: payload.accessToken,
+  }))
+}

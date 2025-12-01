@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { log } from "@/lib/logger"
 import { runStripeSyncForUser, type StripeEntityType } from "@/lib/stripe-sync"
+import { convertAllStripeToMovements, convertStripeToMovements } from "@/lib/stripe-movements"
+import { autoResolveDuplicates } from "@/lib/cross-source-dedup"
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const token = request.cookies.get(getSessionCookieName())?.value
@@ -55,5 +57,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     )
   }
 
-  return NextResponse.json({ ok: true, results })
+  // Convert Stripe entities to movements
+  let movementStats
+  if (requestedAccountId) {
+    movementStats = await convertStripeToMovements(user.id, requestedAccountId)
+  } else {
+    movementStats = await convertAllStripeToMovements(user.id)
+  }
+
+  // Auto-resolve duplicates between Stripe and other sources
+  let dedupStats = { resolved: 0, candidates: 0 }
+  try {
+    dedupStats = await autoResolveDuplicates(user.id)
+    log("stripe.sync.dedup", { userId: user.id, ...dedupStats }, "stripe")
+  } catch (dedupErr) {
+    log("stripe.sync.dedup.error", { userId: user.id, error: String(dedupErr) }, "stripe")
+  }
+
+  return NextResponse.json({ ok: true, results, movements: movementStats, deduplication: dedupStats })
 }

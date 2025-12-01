@@ -1665,6 +1665,7 @@ export function OnboardingFlow({
                 const usePlaid = PLAID_INTEGRATIONS.includes(integration.name)
                 const isStripe = integration.name === "Stripe"
                 const isShopify = integration.name === "Shopify"
+                const isXero = integration.name === "Xero"
                 const plaidDisabled = usePlaid && (accountingStepLinkLoading || !plaidReady)
                 const isConnected = connectedIntegrations.includes(integration.name)
                 return (
@@ -1675,7 +1676,9 @@ export function OnboardingFlow({
                       if (usePlaid) {
                         openPlaidLink()
                       } else if (isStripe) {
-                        window.location.href = "/oauth/stripe"
+                        window.location.href = "/api/stripe/oauth/authorize"
+                      } else if (isXero) {
+                        window.location.href = "/api/xero/oauth/authorize"
                       } else if (isShopify) {
                         setShopifyModalOpen(true)
                       } else {

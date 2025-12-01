@@ -4,6 +4,8 @@ import { log, error as logError } from "@/lib/logger"
 import { exchangeCodeForTokens } from "@/lib/stripe"
 import { setToken } from "@/lib/stripe-token-store"
 import { runStripeSyncForUser } from "@/lib/stripe-sync"
+import { convertAllStripeToMovements } from "@/lib/stripe-movements"
+import { autoResolveDuplicates } from "@/lib/cross-source-dedup"
 
 const STATE_COOKIE = "stripe_oauth_state"
 
@@ -66,9 +68,18 @@ export async function GET(request: NextRequest) {
     log("stripe.oauth.callback.succeeded", { stripeUserId, hasScope: !!scope }, "stripe")
 
     // Run full Stripe sync in background so invoices/customers/etc. are pulled without user action
-    void runStripeSyncForUser(userId).catch((e) => {
-      logError("stripe.oauth.callback.sync_failed", e, "stripe")
-    })
+    void (async () => {
+      try {
+        await runStripeSyncForUser(userId)
+        // Convert to movements after sync
+        await convertAllStripeToMovements(userId)
+        // Auto-resolve duplicates
+        await autoResolveDuplicates(userId)
+        log("stripe.oauth.callback.sync_complete", { userId }, "stripe")
+      } catch (e) {
+        logError("stripe.oauth.callback.sync_failed", e, "stripe")
+      }
+    })()
   } catch (err) {
     logError("stripe.oauth.callback.failed", err, "stripe")
     return NextResponse.redirect(new URL("/onboarding?error=stripe_token_exchange", base), 302)
