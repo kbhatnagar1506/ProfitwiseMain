@@ -42,6 +42,7 @@ import {
   calculateEntityGraphCoverage,
   logEntityGraphBoosting,
 } from "@/lib/entity-graph-integration"
+import { enhanceModelsWithAI } from "@/lib/ai-forecast-enhancement"
 import {
   DEFAULT_FORECAST_CALIBRATION,
   mergeCalibration,
@@ -5248,7 +5249,6 @@ export async function computeCashflowForecast(
   // Apply AI-powered enhancements (entity inference, pattern learning)
   if (behavioral_models.customers.length > 0 || behavioral_models.vendors.length > 0) {
     try {
-      const { enhanceModelsWithAI } = await import("./ai-forecast-enhancement")
       const aiResult = await enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
       behavioral_models = {
         ...behavioral_models,
