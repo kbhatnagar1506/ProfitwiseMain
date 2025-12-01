@@ -1,13 +1,12 @@
 /**
  * AI-Powered Reconciliation Pattern Learning
- * Uses Claude to analyze reconciled AR/AP movements to extract:
+ * Uses reconciled AR/AP movements to extract:
  * - Actual payment delays
  * - Amount variance patterns
  * - Seasonal/cyclical patterns
  * - Payment reliability
  */
 
-import Anthropic from "@anthropic-ai/sdk"
 import { log } from "./logger"
 
 export type PaymentPattern = {
@@ -21,8 +20,6 @@ export type PaymentPattern = {
   confidence_boost: number
   reasoning: string
 }
-
-const client = new Anthropic()
 
 /**
  * Analyze reconciled payment history to extract patterns
