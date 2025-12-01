@@ -1,28 +1,69 @@
 import { NextRequest, NextResponse } from "next/server"
 import { runShopifySyncForAllConnections } from "@/lib/shopify-sync"
+import { convertShopifyOrdersToMovements } from "@/lib/shopify-movements"
+import { listAllShopifyConnectionsWithToken } from "@/lib/shopify-token-store"
 import { log } from "@/lib/logger"
 
-/**
- * POST /api/cron/shopify-sync
- * Pull-based incremental sync for all connected Shopify shops (no webhooks required).
- * Auth: x-clean-db-secret header. Production only.
- */
-export async function POST(req: NextRequest) {
-  if (process.env.NODE_ENV !== "production") {
-    return NextResponse.json({ error: "Only available in production" }, { status: 403 })
-  }
-  const secret = req.headers.get("x-clean-db-secret") ?? ""
-  const expected = process.env.CLEAN_DB_SECRET
-  if (!expected || secret !== expected) {
+export const dynamic = "force-dynamic"
+export const maxDuration = 300
+
+export async function GET(request: NextRequest) {
+  // Verify cron secret for security
+  const authHeader = request.headers.get("authorization")
+  const cronSecret = process.env.CRON_SECRET
+  
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   try {
+    log("shopify.cron.start", undefined, "shopify")
+    
+    // First sync from Shopify API
     const result = await runShopifySyncForAllConnections()
-    return NextResponse.json({ ok: true, ...result })
+    
+    // Then convert orders to movements for each connection
+    const connections = await listAllShopifyConnectionsWithToken()
+    const movementResults: Array<{ userId: string; shopDomain: string; stats: { processed: number; created: number; updated: number; errors: number } }> = []
+    
+    for (const conn of connections) {
+      try {
+        const stats = await convertShopifyOrdersToMovements(conn.userId, conn.shopDomain)
+        movementResults.push({ userId: conn.userId, shopDomain: conn.shopDomain, stats })
+      } catch (e) {
+        log("shopify.cron.movements_error", { userId: conn.userId, shopDomain: conn.shopDomain, error: String(e) }, "shopify")
+      }
+    }
+    
+    log("shopify.cron.complete", { total: result.total, shops: result.shops.length, movements: movementResults.length }, "shopify")
+    
+    return NextResponse.json({
+      ok: true,
+      total_connections: result.total,
+      synced: result.shops.map((s) => ({
+        shop: s.shopDomain,
+        resources: s.resources.map((r) => ({
+          resource: r.resource,
+          fetched: r.fetched,
+          upserted: r.upserted,
+          error: r.error ?? null,
+        })),
+      })),
+      movements: movementResults.map((m) => ({
+        shop: m.shopDomain,
+        processed: m.stats.processed,
+        created: m.stats.created,
+        updated: m.stats.updated,
+        errors: m.stats.errors,
+      })),
+    })
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
-    log("cron.shopify-sync.failed", { error: message }, "shopify")
-    return NextResponse.json({ error: "Sync failed", detail: message }, { status: 500 })
+    log("shopify.cron.failed", { error: message }, "shopify")
+    return NextResponse.json({ error: "Shopify cron sync failed", detail: message }, { status: 500 })
   }
+}
+
+export async function POST(request: NextRequest) {
+  return GET(request)
 }
