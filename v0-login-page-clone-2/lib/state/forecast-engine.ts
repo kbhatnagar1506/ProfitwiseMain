@@ -2255,7 +2255,7 @@ export async function blendReconciledModels(
   // if (enhancedCustomers.length > 0 || enhancedVendors.length > 0) {
   //   try {
   //     const { enhanceModelsWithAI } = await import("./ai-forecast-enhancement")
-  //     const aiResult = await enhanceModelsWithAI(enhancedCustomers, enhancedVendors)
+  //     const aiResult = await enhanceModelsWithAI(enhancedCustomers, enhancedVendors, reconciledARMovements)
   //     enhancedCustomers = aiResult.enhanced_customers
   //     enhancedVendors = aiResult.enhanced_vendors
   //     log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
@@ -5242,6 +5242,23 @@ export async function computeCashflowForecast(
         ...c,
         invoice_forecasts: refreshInvoiceForecastsAfterProfileEnhance(c),
       })),
+    }
+  }
+
+  // Apply AI-powered enhancements (entity inference, pattern learning)
+  if (behavioral_models.customers.length > 0 || behavioral_models.vendors.length > 0) {
+    try {
+      const { enhanceModelsWithAI } = await import("./ai-forecast-enhancement")
+      const aiResult = await enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
+      behavioral_models = {
+        ...behavioral_models,
+        customers: aiResult.enhanced_customers,
+        vendors: aiResult.enhanced_vendors,
+      }
+      log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log("forecast.ai_enhancement.error", { error: message })
     }
   }
 
