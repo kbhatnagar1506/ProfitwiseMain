@@ -137,7 +137,7 @@ const steps = [
 ]
 
 // Keep Step 12–14 placeholdered while Step 11 (AP/AR) is re-enabled.
-const DISABLE_ADVANCED_STEPS_FROM_ONBOARDING = true
+const DISABLE_ADVANCED_STEPS_FROM_ONBOARDING = false
 
 const PLAID_INTEGRATIONS = ["Ramp", "Brex", "Mercury"]
 

@@ -325,10 +325,22 @@ export async function syncCashEventsForUser(
       source = EXCLUDED.source,
       metadata = EXCLUDED.metadata,
       updated_at = NOW(),
-      outstanding_amount = LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount),
+      outstanding_amount = CASE
+        WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
+        THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
+        ELSE EXCLUDED.amount
+      END,
       status = CASE
-        WHEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount) <= 0 THEN 'paid'
-        WHEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount) < EXCLUDED.amount THEN 'partially_paid'
+        WHEN (CASE
+          WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
+          THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
+          ELSE EXCLUDED.amount
+        END) <= 0 THEN 'paid'
+        WHEN (CASE
+          WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
+          THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
+          ELSE EXCLUDED.amount
+        END) < EXCLUDED.amount THEN 'partially_paid'
         ELSE 'open'
       END`
 
@@ -342,10 +354,22 @@ export async function syncCashEventsForUser(
       source = EXCLUDED.source,
       metadata = EXCLUDED.metadata,
       updated_at = NOW(),
-      outstanding_amount = LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount),
+      outstanding_amount = CASE
+        WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
+        THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
+        ELSE EXCLUDED.amount
+      END,
       status = CASE
-        WHEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount) <= 0 THEN 'paid'
-        WHEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount) < EXCLUDED.amount THEN 'partially_paid'
+        WHEN (CASE
+          WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
+          THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
+          ELSE EXCLUDED.amount
+        END) <= 0 THEN 'paid'
+        WHEN (CASE
+          WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
+          THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
+          ELSE EXCLUDED.amount
+        END) < EXCLUDED.amount THEN 'partially_paid'
         ELSE 'open'
       END`
 

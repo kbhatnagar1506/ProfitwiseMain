@@ -1226,6 +1226,22 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_movement_explanations_cache_user ON movement_explanations_cache (user_id, updated_at DESC)",
   )
+  // Forecast cache for expensive Monte Carlo computations
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS forecast_cache (
+      user_id           UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      forecast_data     JSONB NOT NULL,
+      computed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at        TIMESTAMPTZ NOT NULL,
+      movement_count    INTEGER NOT NULL DEFAULT 0,
+      invoice_count     INTEGER NOT NULL DEFAULT 0,
+      bill_count        INTEGER NOT NULL DEFAULT 0,
+      starting_cash     NUMERIC(15,2) NOT NULL DEFAULT 0
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_forecast_cache_expires ON forecast_cache (expires_at)",
+  )
   // Backfill allocation URIs (idempotent)
   try {
     const { migrateAllocationUris } = await import("./allocation-migrate-uris")

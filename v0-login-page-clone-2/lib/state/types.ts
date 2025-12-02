@@ -381,6 +381,7 @@ export type BehavioralModels = {
   transfers: TransferBehaviorModel
   recurring_fixed: { label: string; monthly_amount: number; last_date: string }[]
   invoice_signal: InvoiceSignal
+  seasonality?: SeasonalityPattern
 }
 
 export type InflowEventClass =
@@ -415,6 +416,7 @@ export type EventReasoning = {
   evidence_supports?: string[]
   could_invalidate?: string[]
   model_derived_vs_rule?: boolean
+  seasonality_info?: string
 }
 
 export type ForecastEvent = {

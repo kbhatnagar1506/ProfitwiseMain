@@ -77,7 +77,7 @@ function classifyCustomerArchetype(
   if (intervalCv > 0.5 && intervalCv <= 0.8) return "bursty"
   if (paymentCount >= 3 && paymentCount <= 6 && intervalCv > 0.4) return "episodic"
   if (intervalCv < 0.5) return "clockwork"
-  return recentTrend === "decelerating" ? "bursty" : "bursty"
+  return recentTrend === "decelerating" ? "bursty" : "episodic"
 }
 
 function computeCustomerFeatures(

@@ -1,8 +1,8 @@
 /**
- * Shared invoice fetch for AR. QBO, Xero, Gmail, Stripe.
+ * Shared invoice fetch for AR. QBO, Xero, Gmail, Stripe, Shopify.
  */
 
-import { query, ensureQBOSchema, ensureGmailSchema } from "@/lib/db"
+import { query, ensureQBOSchema, ensureGmailSchema, ensureShopifySchema } from "@/lib/db"
 import { toEntityUriAr } from "@/lib/entity-uri"
 import { safeParseFloat } from "@/lib/utils"
 import type { OutstandingInvoice } from "./state/types"
@@ -241,6 +241,86 @@ export async function fetchOutstandingInvoices(
     console.warn("[invoices-fetch] Stripe invoices fetch failed:", e instanceof Error ? e.message : String(e))
   }
 
+  // Shopify orders with pending/partially_paid financial_status as AR
+  try {
+    await ensureShopifySchema()
+    type ShopifyOrderRow = {
+      entity_id: string
+      shop_domain: string
+      data: {
+        id: number | string
+        name?: string
+        order_number?: number
+        created_at?: string
+        financial_status?: string
+        total_price?: string | number
+        customer?: {
+          id?: number | string
+          email?: string
+          first_name?: string
+          last_name?: string
+          default_address?: { company?: string }
+        }
+        billing_address?: { company?: string; name?: string }
+      }
+    }
+    const shopifyRows = await query<ShopifyOrderRow>(
+      `SELECT entity_id, shop_domain, data FROM shopify_entities 
+       WHERE user_id = $1 AND entity_type = 'orders'
+       AND (data->>'financial_status' IN ('pending', 'partially_paid', 'authorized'))`,
+      [userId]
+    ).then((r) => r.rows)
+    
+    for (const row of shopifyRows) {
+      const d = row.data
+      const totalPrice = safeParseFloat(d.total_price)
+      if (totalPrice <= 0) continue
+      
+      // Determine customer name
+      let custName = "Unknown"
+      const customer = d.customer
+      if (customer) {
+        const company = customer.default_address?.company || d.billing_address?.company
+        if (company) custName = company
+        else {
+          const name = [customer.first_name, customer.last_name].filter(Boolean).join(" ")
+          if (name) custName = name
+          else if (customer.email) custName = customer.email
+        }
+      } else if (d.billing_address?.name) {
+        custName = d.billing_address.name
+      }
+      
+      // Shopify orders don't have due dates, use created_at as reference
+      const createdAt = d.created_at ? d.created_at.slice(0, 10) : null
+      const financialStatus = d.financial_status ?? "pending"
+      
+      // For partially_paid, estimate amount_due as half (Shopify doesn't provide exact partial amount)
+      const amountDue = financialStatus === "partially_paid" ? totalPrice * 0.5 : totalPrice
+      
+      const status: OutstandingInvoice["status"] = financialStatus === "partially_paid" ? "partially_paid" : "open"
+      const invoiceId = `shopify_${row.shop_domain}_${row.entity_id}`
+      const custSourceId = customer?.id != null ? String(customer.id) : null
+      
+      outstandingInvoices.push({
+        invoice_id: invoiceId,
+        source: "shopify",
+        customer_name: custName,
+        customer_source_id: custSourceId,
+        entity_id: null, // Shopify customers not yet linked to entity graph
+        entity_uri: toEntityUriAr("shopify", invoiceId),
+        amount: totalPrice,
+        amount_due: amountDue,
+        due_date: createdAt, // Use created_at as proxy for due date
+        days_until_due: null,
+        days_overdue: null,
+        status,
+      })
+    }
+  } catch (e) {
+    console.warn("[invoices-fetch] Shopify orders fetch failed:", e instanceof Error ? e.message : String(e))
+  }
+
   // Dedupe by source:invoice_id first (same-source duplicates)
   const seen = new Map<string, OutstandingInvoice>()
   for (const i of outstandingInvoices) {
@@ -248,8 +328,8 @@ export async function fetchOutstandingInvoices(
     if (!seen.has(key)) seen.set(key, i)
   }
   
-  // Cross-source deduplication: prefer QBO > Xero > Stripe > Gmail
-  const SOURCE_PRIORITY: Record<string, number> = { qbo: 1, xero: 2, stripe: 3, gmail: 4 }
+  // Cross-source deduplication: prefer QBO > Xero > Stripe > Shopify > Gmail
+  const SOURCE_PRIORITY: Record<string, number> = { qbo: 1, xero: 2, stripe: 3, shopify: 4, gmail: 5 }
   const crossSourceSeen = new Map<string, OutstandingInvoice>()
   for (const inv of seen.values()) {
     const custNorm = (inv.customer_name || "").toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -434,6 +514,84 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
     console.warn("[invoices-fetch] Stripe paid invoices fetch failed:", e instanceof Error ? e.message : String(e))
   }
 
+  // Shopify paid orders (financial_status = 'paid')
+  try {
+    await ensureShopifySchema()
+    type ShopifyOrderRow = {
+      entity_id: string
+      shop_domain: string
+      data: {
+        id: number | string
+        name?: string
+        order_number?: number
+        created_at?: string
+        financial_status?: string
+        total_price?: string | number
+        customer?: {
+          id?: number | string
+          email?: string
+          first_name?: string
+          last_name?: string
+          default_address?: { company?: string }
+        }
+        billing_address?: { company?: string; name?: string }
+      }
+    }
+    const shopifyRows = await query<ShopifyOrderRow>(
+      `SELECT entity_id, shop_domain, data FROM shopify_entities 
+       WHERE user_id = $1 AND entity_type = 'orders'
+       AND data->>'financial_status' = 'paid'`,
+      [userId]
+    ).then((r) => r.rows)
+    
+    for (const row of shopifyRows) {
+      const d = row.data
+      const totalPrice = safeParseFloat(d.total_price)
+      if (totalPrice <= 0) continue
+      
+      const createdAt = d.created_at ? d.created_at.slice(0, 10) : null
+      if (createdAt && createdAt < cutoffStr) continue
+      
+      // Determine customer name
+      let custName = "Unknown"
+      const customer = d.customer
+      if (customer) {
+        const company = customer.default_address?.company || d.billing_address?.company
+        if (company) custName = company
+        else {
+          const name = [customer.first_name, customer.last_name].filter(Boolean).join(" ")
+          if (name) custName = name
+          else if (customer.email) custName = customer.email
+        }
+      } else if (d.billing_address?.name) {
+        custName = d.billing_address.name
+      }
+      
+      const invoiceId = `shopify_${row.shop_domain}_${row.entity_id}`
+      const custSourceId = customer?.id != null ? String(customer.id) : null
+      
+      const existing = outstanding.find((i) => i.invoice_id === invoiceId)
+      if (existing) continue
+      
+      outstanding.push({
+        invoice_id: invoiceId,
+        source: "shopify",
+        customer_name: custName,
+        customer_source_id: custSourceId,
+        entity_id: null,
+        entity_uri: toEntityUriAr("shopify", invoiceId),
+        amount: totalPrice,
+        amount_due: 0,
+        due_date: createdAt,
+        days_until_due: null,
+        days_overdue: null,
+        status: "paid",
+      })
+    }
+  } catch (e) {
+    console.warn("[invoices-fetch] Shopify paid orders fetch failed:", e instanceof Error ? e.message : String(e))
+  }
+
   // Dedupe by source:invoice_id first (same-source duplicates)
   const seen = new Map<string, OutstandingInvoice>()
   for (const i of outstanding) {
@@ -442,8 +600,8 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
   }
   
   // Cross-source deduplication: if same (customer_name, amount, due_date) exists from multiple sources,
-  // prefer QBO > Xero > Stripe > Gmail (accounting systems over email extraction)
-  const SOURCE_PRIORITY: Record<string, number> = { qbo: 1, xero: 2, stripe: 3, gmail: 4 }
+  // prefer QBO > Xero > Stripe > Shopify > Gmail (accounting systems over email extraction)
+  const SOURCE_PRIORITY: Record<string, number> = { qbo: 1, xero: 2, stripe: 3, shopify: 4, gmail: 5 }
   const crossSourceSeen = new Map<string, OutstandingInvoice>()
   for (const inv of seen.values()) {
     // Normalize customer name for comparison

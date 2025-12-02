@@ -74,22 +74,23 @@ import type {
   BacktestResult,
   CalibrationResult,
   CombinedStrategy,
+  SeasonalityPattern,
 } from "./types"
 
 type TaggedMovement = CanonicalMovement & { tag: MovementTag }
 type ComponentCategory = CashflowComponent["category"]
 
 function isInflow(m: TaggedMovement): boolean {
-  return m.direction === "inflow" || m.direction === ("in" as string)
+  return m.direction === "inflow"
 }
 function isOutflow(m: TaggedMovement): boolean {
-  return m.direction === "outflow" || m.direction === ("out" as string)
+  return m.direction === "outflow"
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────
 
 function daysBetween(a: string, b: string): number {
-  return Math.max(1, Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000))
+  return Math.max(0, Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000))
 }
 
 function monthKey(date: string): string {
@@ -116,6 +117,44 @@ function std(values: number[]): number {
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
+
+// ─── Seeded PRNG (mulberry32) for reproducible Monte Carlo ──────────
+// Seed is derived from date + userId so results are stable within a day
+
+function mulberry32(seed: number): () => number {
+  return function() {
+    let t = seed += 0x6D2B79F5
+    t = Math.imul(t ^ t >>> 15, t | 1)
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61)
+    return ((t ^ t >>> 14) >>> 0) / 4294967296
+  }
+}
+
+function hashString(str: string): number {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash
+  }
+  return Math.abs(hash)
+}
+
+let _prng: () => number = Math.random
+
+export function seedPrng(userId: string, date?: string): void {
+  const dateStr = date ?? new Date().toISOString().slice(0, 10)
+  const seed = hashString(`${userId}-${dateStr}`)
+  _prng = mulberry32(seed)
+}
+
+export function resetPrng(): void {
+  _prng = Math.random
+}
+
+function seededRandom(): number {
+  return _prng()
+}
 
 function toDateStr(d: unknown): string {
   if (d instanceof Date) return d.toISOString().slice(0, 10)
@@ -280,7 +319,7 @@ export function classifyEventBehavior(
             if (cust.archetype === "episodic" || cust.archetype === "volatile") return "sporadic_receivable"
           }
         }
-        const td = (m.tag.tag_data ?? {}) as { invoice_status?: string }
+        const td = (m.tag as unknown as { tag_data?: { invoice_status?: string } }).tag_data ?? {}
         if (td.invoice_status === "overdue") return "overdue_receivable"
         return "likely_receivable"
       }
@@ -302,8 +341,7 @@ export function classifyEventBehavior(
         return "owner_draw"
       case "transfer":
         return "treasury_transfer"
-      case "vendor_payment":
-      case "ap_payment": {
+      case "vendor_payment": {
         if (models) {
           const entityId = resolveEntityId(m)
           const vend = models.vendors.find((v) => v.entity_id === entityId)
@@ -314,7 +352,7 @@ export function classifyEventBehavior(
             return "discretionary_vendor"
           }
         }
-        const td = (m.tag.tag_data ?? {}) as { recurrence_type?: string; has_bill?: boolean }
+        const td = (m.tag as unknown as { tag_data?: { recurrence_type?: string; has_bill?: boolean } }).tag_data ?? {}
         if (td.has_bill || td.recurrence_type === "invoice_triggered") return "ap_due_driven"
         if (td.recurrence_type === "hard" || td.recurrence_type === "soft") return "contractual_recurring"
         return "discretionary_vendor"
@@ -1530,8 +1568,77 @@ function buildInvoiceSignal(invoices: OutstandingInvoice[]): InvoiceSignal {
   }
 }
 
+// ─── Seasonality Detection ───────────────────────────────────────────
+//
+// Detect month-over-month revenue patterns from historical movements.
+// Returns peak/low months and monthly weights for forecast adjustment.
+
+function detectSeasonality(movements: TaggedMovement[]): SeasonalityPattern | undefined {
+  // Need at least 6 months of data for meaningful seasonality detection
+  const inflowMovements = movements.filter((m) => isInflow(m) && m.tag?.state_inclusion_policy !== "exclude_and_review")
+  if (inflowMovements.length < 20) return undefined
+
+  // Group inflows by month
+  const monthlyTotals = new Map<string, number>()
+  for (const m of inflowMovements) {
+    const key = monthKey(m.occurred_at)
+    monthlyTotals.set(key, (monthlyTotals.get(key) ?? 0) + m.amount)
+  }
+
+  // Need at least 6 distinct months
+  if (monthlyTotals.size < 6) return undefined
+
+  // Calculate average monthly revenue
+  const monthValues = [...monthlyTotals.values()]
+  const avgMonthly = monthValues.reduce((a, b) => a + b, 0) / monthValues.length
+
+  // Group by calendar month (1-12) to detect seasonal patterns
+  const byCalendarMonth = new Map<number, number[]>()
+  for (const [key, total] of monthlyTotals) {
+    const month = parseInt(key.split("-")[1], 10)
+    const existing = byCalendarMonth.get(month) ?? []
+    existing.push(total)
+    byCalendarMonth.set(month, existing)
+  }
+
+  // Calculate average for each calendar month
+  const monthWeights: number[] = new Array(12).fill(1)
+  const monthAverages: number[] = new Array(12).fill(0)
+  
+  for (let m = 1; m <= 12; m++) {
+    const values = byCalendarMonth.get(m)
+    if (values && values.length > 0) {
+      const avg = values.reduce((a, b) => a + b, 0) / values.length
+      monthAverages[m - 1] = avg
+      // Weight is ratio to overall average (capped between 0.5 and 2.0)
+      monthWeights[m - 1] = avgMonthly > 0 ? Math.max(0.5, Math.min(2.0, avg / avgMonthly)) : 1
+    }
+  }
+
+  // Identify peak and low months (>20% above/below average)
+  const peakMonths: number[] = []
+  const lowMonths: number[] = []
+  
+  for (let m = 1; m <= 12; m++) {
+    const weight = monthWeights[m - 1]
+    if (weight > 1.2) peakMonths.push(m)
+    else if (weight < 0.8) lowMonths.push(m)
+  }
+
+  // Only return seasonality if there's meaningful variation
+  const hasSeasonality = peakMonths.length > 0 || lowMonths.length > 0
+  if (!hasSeasonality) return undefined
+
+  return {
+    peak_months: peakMonths,
+    low_months: lowMonths,
+    month_weights: monthWeights.map((w) => r2(w)),
+  }
+}
+
 export function buildBehavioralModels(movements: TaggedMovement[], invoices: OutstandingInvoice[] = [], bills: OutstandingBill[] = []): BehavioralModels {
   const customers = buildCustomerModels(movements, invoices)
+  const seasonality = detectSeasonality(movements)
   return {
     customers,
     vendors: buildVendorModels(movements, bills),
@@ -1539,6 +1646,7 @@ export function buildBehavioralModels(movements: TaggedMovement[], invoices: Out
     transfers: buildTransferModel(movements),
     recurring_fixed: buildRecurringFixed(movements),
     invoice_signal: buildInvoiceSignal(invoices),
+    seasonality,
   }
 }
 
@@ -1547,11 +1655,18 @@ export function buildBehavioralModels(movements: TaggedMovement[], invoices: Out
 // Generate discrete future cash events from behavioral models.
 // Each event has a date, type, entity, amount, probability, and confidence.
 
+function getSeasonalWeight(date: string, seasonality: SeasonalityPattern | undefined): number {
+  if (!seasonality) return 1
+  const month = new Date(date).getMonth() // 0-indexed
+  return seasonality.month_weights[month] ?? 1
+}
+
 function generateEvents30d(models: BehavioralModels, components: CashflowComponent[]): ForecastEvent[] {
   const events: ForecastEvent[] = []
   const now = new Date()
   const today = now.toISOString().slice(0, 10)
   const horizon = addDays(today, 30)
+  const seasonality = models.seasonality
 
   function generateRepeating(
     lastDate: string,
@@ -1634,12 +1749,16 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
       }
     } else {
       generateRepeating(c.last_payment_date, c.payment_interval_days, 5, (date, offset) => {
+        const seasonalWeight = getSeasonalWeight(date, seasonality)
         events.push({
           date, day_offset: offset, type: "customer_payment",
-          entity: c.name, amount: r2(c.avg_amount),
+          entity: c.name, amount: r2(c.avg_amount * seasonalWeight),
           direction: "in", probability: c.probability_of_next,
           confidence: c.confidence, source_model: "customer",
-          reasoning: baseReasoning,
+          reasoning: {
+            ...baseReasoning,
+            seasonality_info: seasonalWeight !== 1 ? `Seasonal adjustment: ${(seasonalWeight * 100).toFixed(0)}%` : undefined,
+          },
         })
       })
     }
@@ -2277,10 +2396,10 @@ function computeSeparatedForecast(events: ForecastEvent[], today: string): Separ
 // Output: percentile bands + probability queries
 
 function gaussianRandom(): number {
-  // Box-Muller transform for normal distribution
+  // Box-Muller transform for normal distribution (using seeded PRNG)
   let u = 0, v = 0
-  while (u === 0) u = Math.random()
-  while (v === 0) v = Math.random()
+  while (u === 0) u = seededRandom()
+  while (v === 0) v = seededRandom()
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v)
 }
 
@@ -2321,7 +2440,7 @@ function runSingleMonteCarlo(events: ForecastEvent[], startingCash: number, bias
     const probMult = isIn ? bias.inflow_prob_mult : bias.outflow_prob_mult
     const effectiveProb = Math.min(1, e.probability * probMult)
 
-    if (Math.random() > effectiveProb) continue
+    if (seededRandom() > effectiveProb) continue
 
     const amountMult = isIn ? bias.inflow_amount_mult : bias.outflow_amount_mult
     const noiseFactor = e.confidence === "high" ? 0.08 : e.confidence === "medium" ? 0.15 : 0.25
@@ -3872,8 +3991,14 @@ export function computeCashflowForecast(
   let events_30d = generateEvents30d(behavioral_models, components)
   const mergeBridge = process.env.FORECAST_USE_CASH_EVENTS !== "0"
   if (mergeBridge && bridgeEvents30d && bridgeEvents30d.length > 0) {
-    // cash_events is the AP/AR source of truth; drop native AP/AR emissions to avoid double counting.
-    events_30d = events_30d.filter((e) => e.type !== "customer_payment" && e.type !== "vendor_payment")
+    // cash_events is the AP/AR source of truth for entities it covers.
+    // Only drop native events for entities that have bridge events to avoid double counting.
+    const bridgeEntities = new Set(bridgeEvents30d.map((e) => e.entity).filter(Boolean))
+    events_30d = events_30d.filter((e) => {
+      if (e.type !== "customer_payment" && e.type !== "vendor_payment") return true
+      // Keep native events for entities not covered by the bridge
+      return !e.entity || !bridgeEntities.has(e.entity)
+    })
     events_30d = [...events_30d, ...bridgeEvents30d]
   }
 
@@ -3966,36 +4091,4 @@ export function computeCashflowForecast(
     backtest,
     separated_forecast,
   }
-}
-
-// ─── LLM Integration (optional, gated) ───────────────────────────────
-//
-// Use env FORECAST_LLM_ENABLED or feature flag to enable.
-// When disabled, system remains deterministic.
-
-export async function generateNarrativeWithLLM(
-  narrative: import("./types").ForecastNarrative,
-  _context: ForecastContext,
-): Promise<string> {
-  if (!process.env.FORECAST_LLM_ENABLED) return narrative.forecast
-  // Placeholder: call external LLM to enrich narrative
-  return narrative.forecast
-}
-
-export async function disambiguateEntity(
-  counterparty: string,
-  candidates: string[],
-): Promise<string> {
-  if (!process.env.FORECAST_LLM_ENABLED || candidates.length <= 1) return counterparty
-  // Placeholder: call LLM to pick best match from candidates
-  return candidates[0] ?? counterparty
-}
-
-export async function explainAnomaly(
-  _movement: TaggedMovement,
-  _context: string,
-): Promise<string> {
-  if (!process.env.FORECAST_LLM_ENABLED) return "Anomaly detected — review recommended."
-  // Placeholder: call LLM to explain why vendor payment spiked
-  return "Anomaly detected — review recommended."
 }
