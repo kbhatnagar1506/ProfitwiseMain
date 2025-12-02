@@ -5250,37 +5250,39 @@ export async function computeCashflowForecast(
   }
 
   // Apply AI-powered enhancements (entity inference, pattern learning)
-  // Wait for AI processing to complete before returning forecast
+  // Run asynchronously in background to not block forecast computation
   if (behavioral_models.customers.length > 0 || behavioral_models.vendors.length > 0) {
-    try {
-      // Await AI enhancement to complete
-      const aiResult = await enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
-      log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      log("forecast.ai_enhancement.error", { error: message })
-    }
+    // Fire and forget - don't await, let it run in background
+    enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
+      .then((aiResult) => {
+        log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err)
+        log("forecast.ai_enhancement.error", { error: message })
+      })
 
-    // Apply comprehensive confidence boosts (also wait for completion)
+    // Apply comprehensive confidence boosts (also in background)
     // Use optional chaining to safely access entityGraph which may not be defined
     const graphRelationships = (entityGraph as any)?.relationships?.length || 0
     const graphBusinessEntities = (entityGraph as any)?.business_entities?.length || 0
     
-    try {
-      const boostResult = await applyComprehensiveConfidenceBoosts(
-        behavioral_models.customers,
-        behavioral_models.vendors,
-        movements,
-        graphRelationships,
-        graphBusinessEntities,
-        behavioral_models.customers.length + behavioral_models.vendors.length,
-        dataSpanDays
-      )
-      log("forecast.confidence_boost.applied", boostResult)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      log("forecast.confidence_boost.error", { error: message })
-    }
+    applyComprehensiveConfidenceBoosts(
+      behavioral_models.customers,
+      behavioral_models.vendors,
+      movements,
+      graphRelationships,
+      graphBusinessEntities,
+      behavioral_models.customers.length + behavioral_models.vendors.length,
+      dataSpanDays
+    )
+      .then((boostResult) => {
+        log("forecast.confidence_boost.applied", boostResult)
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err)
+        log("forecast.confidence_boost.error", { error: message })
+      })
   }
 
   // Event generation: discrete 30-day forecast (+ optional cash_events bridge)

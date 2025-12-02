@@ -554,8 +554,8 @@ export async function GET() {
       cached: true,
     }, "forecast")
 
-    // Update status to complete with LLM processing done
-    await query(
+    // Update status to complete with LLM processing done (fire and forget)
+    query(
       `INSERT INTO forecast_computation_status (user_id, status, llm_processing_complete, updated_at)
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (user_id) DO UPDATE SET 
@@ -571,13 +571,13 @@ export async function GET() {
   } catch (err) {
     log("forecast.compute.error", { error: String(err) }, "error")
     
-    // Update status to error
+    // Update status to error (fire and forget)
     try {
       const cookieStore = await cookies()
       const sessionToken = cookieStore.get(getSessionCookieName())?.value
       const user = await getUserBySessionToken(sessionToken ?? "")
       if (user) {
-        await query(
+        query(
           `INSERT INTO forecast_computation_status (user_id, status, llm_processing_complete, updated_at)
            VALUES ($1, $2, $3, NOW())
            ON CONFLICT (user_id) DO UPDATE SET 
