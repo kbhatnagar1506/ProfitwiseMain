@@ -102,14 +102,15 @@ async function fetchTaggedMovements(userId: string): Promise<TaggedMovement[]> {
     const tagged: TaggedMovement[] = []
     for (const m of movementRows) {
       const tr = tagMap.get(m.id)
-      if (!tr) continue
-
-      const td = tr.tag_data ?? {}
+      // Include movements even if they don't have tags yet
+      // (they may still be useful for movement-based analysis)
+      
+      const td = tr?.tag_data ?? {}
       const tag: MovementTag = {
         movement_id: m.id,
-        economic_class: tr.economic_class as MovementTag["economic_class"],
-        cashflow_bucket: tr.cashflow_bucket as MovementTag["cashflow_bucket"],
-        counterparty_role: tr.counterparty_role as MovementTag["counterparty_role"],
+        economic_class: (tr?.economic_class as MovementTag["economic_class"]) ?? "unknown",
+        cashflow_bucket: (tr?.cashflow_bucket as MovementTag["cashflow_bucket"]) ?? "unknown",
+        counterparty_role: (tr?.counterparty_role as MovementTag["counterparty_role"]) ?? "unknown",
         is_operating: (td.is_operating as boolean) ?? false,
         is_financing: (td.is_financing as boolean) ?? false,
         is_investing: (td.is_investing as boolean) ?? false,
@@ -117,12 +118,12 @@ async function fetchTaggedMovements(userId: string): Promise<TaggedMovement[]> {
         hits_pnl: (td.hits_pnl as boolean) ?? false,
         hits_working_capital: (td.hits_working_capital as boolean) ?? false,
         state_scope: (td.state_scope as MovementTag["state_scope"]) ?? computeStateScope(
-          tr.economic_class as MovementTag["economic_class"],
-          tr.cashflow_bucket as MovementTag["cashflow_bucket"],
+          (tr?.economic_class as MovementTag["economic_class"]) ?? "unknown",
+          (tr?.cashflow_bucket as MovementTag["cashflow_bucket"]) ?? "unknown",
           (td.hits_working_capital as boolean) ?? false,
         ),
-        state_inclusion_policy: (td.state_inclusion_policy as MovementTag["state_inclusion_policy"]) ?? computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review, tr.economic_class),
-      policy_status: (td.policy_status as MovementTag["policy_status"]) ?? "include",
+        state_inclusion_policy: (td.state_inclusion_policy as MovementTag["state_inclusion_policy"]) ?? computeStatePolicy(m.confidence, m.evidence_strength, m.needs_review, tr?.economic_class ?? "unknown"),
+        policy_status: (td.policy_status as MovementTag["policy_status"]) ?? "include",
         classification_confidence: m.confidence,
         evidence_strength: m.evidence_strength,
         needs_review: m.needs_review,
@@ -140,7 +141,7 @@ async function fetchTaggedMovements(userId: string): Promise<TaggedMovement[]> {
         is_anomaly: (td.is_anomaly as boolean) ?? false,
         is_large_outlier: (td.is_large_outlier as boolean) ?? false,
         is_first_seen_counterparty: (td.is_first_seen_counterparty as boolean) ?? false,
-      display_name: (td.display_name as string) ?? null,
+        display_name: (td.display_name as string) ?? null,
       }
 
       tagged.push({ ...m, tag })
