@@ -121,7 +121,7 @@ Focus on:
         return []
       }
 
-      // Find matching closing brace
+      // Find matching closing brace, but be lenient with incomplete JSON
       let braceCount = 0
       let endIdx = -1
       for (let i = startIdx; i < content.length; i++) {
@@ -135,17 +135,19 @@ Focus on:
         }
       }
 
+      // If no matching brace found, try to use the rest of the content
       if (endIdx === -1) {
-        log("ai_entity_inference.error", { error: "Could not find matching closing brace" })
-        return []
+        endIdx = content.length
       }
 
-      const jsonStr = content.substring(startIdx, endIdx)
+      let jsonStr = content.substring(startIdx, endIdx)
+      
       // Clean up common JSON issues
       const cleaned = jsonStr
         .replace(/,\s*]/g, "]") // Remove trailing commas in arrays
         .replace(/,\s*}/g, "}") // Remove trailing commas in objects
         .replace(/[\x00-\x1F\x7F]/g, " ") // Remove control characters
+        .replace(/}\s*$/, "}") // Ensure ends with }
 
       parsed = JSON.parse(cleaned)
     } catch (parseErr) {
@@ -267,13 +269,16 @@ Only include relationships with confidence > 0.7`
         }
       }
 
-      if (endIdx === -1) return []
+      if (endIdx === -1) {
+        endIdx = content.length
+      }
 
-      const jsonStr = content.substring(startIdx, endIdx)
+      let jsonStr = content.substring(startIdx, endIdx)
       const cleaned = jsonStr
         .replace(/,\s*]/g, "]")
         .replace(/,\s*}/g, "}")
         .replace(/[\x00-\x1F\x7F]/g, " ")
+        .replace(/}\s*$/, "}")
 
       parsed = JSON.parse(cleaned)
     } catch (parseErr) {
@@ -383,13 +388,16 @@ Respond in JSON format:
         }
       }
 
-      if (endIdx === -1) return []
+      if (endIdx === -1) {
+        endIdx = content.length
+      }
 
       const jsonStr = content.substring(startIdx, endIdx)
       const cleaned = jsonStr
         .replace(/,\s*]/g, "]")
         .replace(/,\s*}/g, "}")
         .replace(/[\x00-\x1F\x7F]/g, " ")
+        .replace(/}\s*$/, "}")
 
       parsed = JSON.parse(cleaned)
     } catch (parseErr) {
