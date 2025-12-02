@@ -5076,6 +5076,9 @@ export async function computeCashflowForecast(
   const cal = mergeCalibration(DEFAULT_FORECAST_CALIBRATION, calibrationOverride)
   const calibrationHash = computeCalibrationHash(cal)
 
+  // Declare entityGraph at function level so it's accessible throughout
+  let entityGraph: EntityGraphMap | undefined = undefined
+
   setIdentityContext(identityCtx)
   
   // Calculate data span from movements AND invoices/bills (using due_date as proxy).
@@ -5157,7 +5160,6 @@ export async function computeCashflowForecast(
     const reconciledVendors = buildReconciledVendorModels(reconciledAPMovements)
     
     // Build entity graph and clustering for additional confidence boosting
-    let entityGraph: EntityGraphMap | undefined
     let clustering: ClusteringResult | undefined
     
     try {
