@@ -120,11 +120,6 @@ export async function convertShopifyOrdersToMovements(userId: string, shopDomain
 
       // Create/update the main order movement (inflow - customer payment)
       const movementId = `shopify_order_${shopDomain}_${orderId}`
-      
-      const { rowCount: existingCount } = await query(
-        `SELECT 1 FROM movements WHERE id = $1 AND user_id = $2`,
-        [movementId, userId]
-      )
 
       const metadata = {
         source: "shopify",
@@ -147,54 +142,32 @@ export async function convertShopifyOrdersToMovements(userId: string, shopDomain
         })),
       }
 
-      if (existingCount && existingCount > 0) {
-        // Update existing movement
-        await query(
-          `UPDATE movements SET
-            amount = $1,
-            date = $2,
-            counterparty = $3,
-            raw_description = $4,
-            metadata = $5,
-            currency = $6,
-            updated_at = NOW()
-          WHERE id = $7 AND user_id = $8`,
-          [
-            totalPrice,
-            orderDate.slice(0, 10),
-            customerName,
-            `Shopify Order ${orderRef} - ${customerName}`,
-            JSON.stringify(metadata),
-            currency,
-            movementId,
-            userId,
-          ]
-        )
-        stats.updated++
-      } else {
-        // Create new movement
-        await query(
-          `INSERT INTO movements (
-            id, user_id, direction, amount, date, movement_type, provenance,
-            counterparty, raw_description, metadata, currency, confidence, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [
-            movementId,
-            userId,
-            "inflow",
-            totalPrice,
-            orderDate.slice(0, 10),
-            "shopify_order",
-            "shopify",
-            customerName,
-            `Shopify Order ${orderRef} - ${customerName}`,
-            JSON.stringify(metadata),
-            currency,
-            0.9, // High confidence for Shopify data
-          ]
-        )
-        stats.created++
-      }
+      const { rowCount } = await query(
+        `INSERT INTO movements (
+          id, user_id, direction, amount, date, movement_type, provenance,
+          counterparty, raw_description, metadata, currency, confidence, created_at
+        ) VALUES ($1, $2, 'inflow', $3, $4, 'shopify_order', 'shopify', $5, $6, $7, $8, 0.9, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          date = EXCLUDED.date,
+          counterparty = EXCLUDED.counterparty,
+          raw_description = EXCLUDED.raw_description,
+          metadata = EXCLUDED.metadata,
+          currency = EXCLUDED.currency,
+          updated_at = NOW()
+        WHERE movements.user_id = $2`,
+        [
+          movementId,
+          userId,
+          totalPrice,
+          orderDate.slice(0, 10),
+          customerName,
+          `Shopify Order ${orderRef} - ${customerName}`,
+          JSON.stringify(metadata),
+          currency,
+        ]
+      )
+      if (rowCount && rowCount > 0) stats.created++; else stats.updated++
 
       // Process refunds as separate outflow movements
       for (const refund of order.refunds ?? []) {
@@ -226,55 +199,31 @@ export async function convertShopifyOrdersToMovements(userId: string, shopDomain
           original_order_amount: totalPrice,
         }
 
-        const { rowCount: refundExists } = await query(
-          `SELECT 1 FROM movements WHERE id = $1 AND user_id = $2`,
-          [refundMovementId, userId]
+        await query(
+          `INSERT INTO movements (
+            id, user_id, direction, amount, date, movement_type, provenance,
+            counterparty, raw_description, metadata, currency, confidence, created_at
+          ) VALUES ($1, $2, 'outflow', $3, $4, 'shopify_refund', 'shopify', $5, $6, $7, $8, 0.9, NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            amount = EXCLUDED.amount,
+            date = EXCLUDED.date,
+            counterparty = EXCLUDED.counterparty,
+            raw_description = EXCLUDED.raw_description,
+            metadata = EXCLUDED.metadata,
+            updated_at = NOW()
+          WHERE movements.user_id = $2`,
+          [
+            refundMovementId,
+            userId,
+            refundAmount,
+            refundDate.slice(0, 10),
+            customerName,
+            `Shopify Refund for ${orderRef} - ${customerName}`,
+            JSON.stringify(refundMetadata),
+            currency,
+          ]
         )
-
-        if (refundExists && refundExists > 0) {
-          await query(
-            `UPDATE movements SET
-              amount = $1,
-              date = $2,
-              counterparty = $3,
-              raw_description = $4,
-              metadata = $5,
-              updated_at = NOW()
-            WHERE id = $6 AND user_id = $7`,
-            [
-              refundAmount,
-              refundDate.slice(0, 10),
-              customerName,
-              `Shopify Refund for ${orderRef} - ${customerName}`,
-              JSON.stringify(refundMetadata),
-              refundMovementId,
-              userId,
-            ]
-          )
-          stats.updated++
-        } else {
-          await query(
-            `INSERT INTO movements (
-              id, user_id, direction, amount, date, movement_type, provenance,
-              counterparty, raw_description, metadata, currency, confidence, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-            [
-              refundMovementId,
-              userId,
-              "outflow",
-              refundAmount,
-              refundDate.slice(0, 10),
-              "shopify_refund",
-              "shopify",
-              customerName,
-              `Shopify Refund for ${orderRef} - ${customerName}`,
-              JSON.stringify(refundMetadata),
-              currency,
-              0.9,
-            ]
-          )
-          stats.created++
-        }
+        stats.created++
       }
     } catch (e) {
       stats.errors++

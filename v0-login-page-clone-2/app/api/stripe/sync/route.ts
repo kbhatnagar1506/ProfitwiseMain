@@ -44,35 +44,40 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // ignore
   }
 
-  const accountIds = requestedAccountId ? [requestedAccountId] : null
-  const { ok, results } = await runStripeSyncForUser(user.id, {
-    accountIds: accountIds ?? undefined,
-    entityTypes: requestedTypes ?? undefined,
-  })
-
-  if (!ok) {
-    return NextResponse.json(
-      { error: "No Stripe accounts connected for this user" },
-      { status: 400 }
-    )
-  }
-
-  // Convert Stripe entities to movements
-  let movementStats
-  if (requestedAccountId) {
-    movementStats = await convertStripeToMovements(user.id, requestedAccountId)
-  } else {
-    movementStats = await convertAllStripeToMovements(user.id)
-  }
-
-  // Auto-resolve duplicates between Stripe and other sources
-  let dedupStats = { resolved: 0, candidates: 0 }
   try {
-    dedupStats = await autoResolveDuplicates(user.id)
-    log("stripe.sync.dedup", { userId: user.id, ...dedupStats }, "stripe")
-  } catch (dedupErr) {
-    log("stripe.sync.dedup.error", { userId: user.id, error: String(dedupErr) }, "stripe")
-  }
+    const accountIds = requestedAccountId ? [requestedAccountId] : null
+    const { ok, results } = await runStripeSyncForUser(user.id, {
+      accountIds: accountIds ?? undefined,
+      entityTypes: requestedTypes ?? undefined,
+    })
 
-  return NextResponse.json({ ok: true, results, movements: movementStats, deduplication: dedupStats })
+    if (!ok) {
+      return NextResponse.json(
+        { error: "No Stripe accounts connected for this user" },
+        { status: 400 }
+      )
+    }
+
+    // Convert Stripe entities to movements
+    let movementStats
+    if (requestedAccountId) {
+      movementStats = await convertStripeToMovements(user.id, requestedAccountId)
+    } else {
+      movementStats = await convertAllStripeToMovements(user.id)
+    }
+
+    // Auto-resolve duplicates between Stripe and other sources
+    let dedupStats = { resolved: 0, candidates: 0 }
+    try {
+      dedupStats = await autoResolveDuplicates(user.id)
+      log("stripe.sync.dedup", { userId: user.id, ...dedupStats }, "stripe")
+    } catch (dedupErr) {
+      log("stripe.sync.dedup.error", { userId: user.id, error: String(dedupErr) }, "stripe")
+    }
+
+    return NextResponse.json({ ok: true, results, movements: movementStats, deduplication: dedupStats })
+  } catch (err) {
+    log("stripe.sync.error", { userId: user.id, error: String(err) }, "stripe")
+    return NextResponse.json({ error: "Stripe sync failed" }, { status: 500 })
+  }
 }

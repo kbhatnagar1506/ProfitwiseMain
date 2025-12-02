@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     log("dedup.get.failed", { userId: user.id, error: message }, "dedup")
-    return NextResponse.json({ error: "Failed to find duplicates", detail: message }, { status: 500 })
+    return NextResponse.json({ error: "Failed to find duplicates" }, { status: 500 })
   }
 }
 
@@ -96,6 +96,6 @@ export async function POST(request: NextRequest) {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     log("dedup.action.failed", { userId: user.id, action, error: message }, "dedup")
-    return NextResponse.json({ error: "Deduplication action failed", detail: message }, { status: 500 })
+    return NextResponse.json({ error: "Deduplication action failed" }, { status: 500 })
   }
 }

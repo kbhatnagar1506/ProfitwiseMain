@@ -78,16 +78,23 @@ async function getPoolAsync(): Promise<Pool | null> {
   if (pool) return pool
   if (!poolPromise) {
     poolPromise = (async () => {
+      let p: Pool | null = null
       if (process.env.INSTANCE_CONNECTION_NAME && process.env.DB_USER && process.env.DB_PASS && process.env.DB_NAME) {
         try {
-          pool = await createPoolWithConnector()
-          return pool
+          p = await createPoolWithConnector()
         } catch (err) {
           log("db.connector.failed", { pgErr: err && typeof err === "object" && "code" in err ? (err as { code: string }).code : undefined }, "db")
           throw err
         }
+      } else {
+        p = createPoolWithUrl()
       }
-      pool = createPoolWithUrl()
+      if (p) {
+        p.on("error", (err) => {
+          console.error("Unexpected pool idle client error", err.message)
+        })
+      }
+      pool = p
       return pool
     })()
   }

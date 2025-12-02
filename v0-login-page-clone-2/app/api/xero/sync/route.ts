@@ -18,25 +18,30 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Xero not configured" }, { status: 500 })
   }
 
-  const result = await runXeroSyncForUser(user.id)
-
-  // Convert Xero entities to movements
-  const movementStats = await convertAllXeroToMovements(user.id)
-
-  // Auto-resolve duplicates between Xero and other sources
-  let dedupStats = { resolved: 0, candidates: 0 }
   try {
-    dedupStats = await autoResolveDuplicates(user.id)
-    log("xero.sync.dedup", { userId: user.id, ...dedupStats }, "xero")
-  } catch (dedupErr) {
-    log("xero.sync.dedup.error", { userId: user.id, error: String(dedupErr) }, "xero")
-  }
+    const result = await runXeroSyncForUser(user.id)
 
-  return NextResponse.json({
-    synced: result.totalSynced,
-    tenants: result.tenants,
-    byType: result.byType,
-    movements: movementStats,
-    deduplication: dedupStats,
-  })
+    // Convert Xero entities to movements
+    const movementStats = await convertAllXeroToMovements(user.id)
+
+    // Auto-resolve duplicates between Xero and other sources
+    let dedupStats = { resolved: 0, candidates: 0 }
+    try {
+      dedupStats = await autoResolveDuplicates(user.id)
+      log("xero.sync.dedup", { userId: user.id, ...dedupStats }, "xero")
+    } catch (dedupErr) {
+      log("xero.sync.dedup.error", { userId: user.id, error: String(dedupErr) }, "xero")
+    }
+
+    return NextResponse.json({
+      synced: result.totalSynced,
+      tenants: result.tenants,
+      byType: result.byType,
+      movements: movementStats,
+      deduplication: dedupStats,
+    })
+  } catch (err) {
+    log("xero.sync.error", { userId: user.id, error: String(err) }, "xero")
+    return NextResponse.json({ error: "Xero sync failed" }, { status: 500 })
+  }
 }

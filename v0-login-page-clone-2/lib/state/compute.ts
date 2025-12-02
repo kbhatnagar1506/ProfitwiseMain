@@ -416,29 +416,17 @@ export function computeLiquidityState(
   const avgDailyOutflow = totalOut / periodDays
   const netCashFlow = totalIn - totalOut
   
-  // Burn rate: use actual period data without aggressive monthly projection
-  // If period < 30 days, show the actual daily burn * 30 but cap at reasonable multiple
-  // This prevents misleading projections from short data windows
+  // Burn rate: operating outflows normalized to 30-day month
   const dailyOperatingBurn = opOut / periodDays
+  const monthlyBurnRate = dailyOperatingBurn * 30
   
-  // For monthly burn rate: if we have >= 30 days of data, use actual monthly average
-  // Otherwise, use the daily rate but don't over-project from very short periods
-  const monthlyBurnRate = periodDays >= 30 
-    ? (opOut / periodDays) * 30  // Actual monthly average
-    : opOut  // Just show the period total if < 30 days (more honest)
-  
-  // For starting/ending cash, we derive from net flows
-  // Since we don't have actual bank balances here, we use the largest account's net flow as a proxy
-  // In production, this should be fetched from Plaid balances
-  const largestAccountBalance = cashByAccount.length > 0 
-    ? Math.max(...cashByAccount.map(a => Math.abs(a.net_flow)))
-    : 0
-  
-  // Estimate ending cash as the sum of positive net flows (money that came in and stayed)
+  // Cash position derived from account flows
+  // endingCash = sum of positive account net flows (money retained in accounts)
+  // startingCash = clamp to 0 since we can't infer negative opening balances from flow data alone
   const endingCash = cashByAccount.reduce((sum, a) => sum + Math.max(0, a.net_flow), 0)
-  const startingCash = endingCash - netCashFlow
+  const startingCash = Math.max(0, endingCash - netCashFlow)
   
-  // Runway: how many days until cash runs out at current operating burn rate
+  // Runway: days until cash runs out at current operating burn rate
   const runwayDays = dailyOperatingBurn > 0 && endingCash > 0
     ? Math.round(endingCash / dailyOperatingBurn)
     : null
@@ -470,14 +458,15 @@ export function computeLiquidityState(
     operating_dependency_ratio: Math.round(operatingDependencyRatio * 1000) / 1000,
     liquidity_regime: liquidityRegime,
     excluded_cash: r2(excludedCash),
-    // New derived fields
     starting_cash: r2(startingCash),
     ending_cash: r2(endingCash),
     avg_daily_outflow: r2(avgDailyOutflow),
     burn_rate: r2(monthlyBurnRate),
     runway_days: runwayDays,
     bank_account_count: bankAccountCount,
-    largest_account_balance: r2(largestAccountBalance),
+    largest_account_balance: r2(cashByAccount.length > 0
+      ? Math.max(...cashByAccount.map(a => Math.abs(a.net_flow)))
+      : 0),
     transfer_count: transferCount,
     period_days: periodDays,
   }

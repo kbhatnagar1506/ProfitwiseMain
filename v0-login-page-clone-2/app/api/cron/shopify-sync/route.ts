@@ -9,11 +9,10 @@ export const dynamic = "force-dynamic"
 export const maxDuration = 300
 
 export async function GET(request: NextRequest) {
-  // Verify cron secret for security
   const authHeader = request.headers.get("authorization")
   const cronSecret = process.env.CRON_SECRET
   
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -78,7 +77,7 @@ export async function GET(request: NextRequest) {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     log("shopify.cron.failed", { error: message }, "shopify")
-    return NextResponse.json({ error: "Shopify cron sync failed", detail: message }, { status: 500 })
+    return NextResponse.json({ error: "Shopify cron sync failed" }, { status: 500 })
   }
 }
 

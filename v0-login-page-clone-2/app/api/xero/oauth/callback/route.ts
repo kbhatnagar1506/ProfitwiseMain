@@ -25,7 +25,7 @@ async function handleCallback(request: NextRequest) {
 
   if (errorParam) {
     logError("oauth.callback.failed", new Error(errorParam), "xero")
-    return NextResponse.redirect(new URL(`/onboarding?error=xero_${errorParam}`, base), 302)
+    return NextResponse.redirect(new URL(`/onboarding?error=xero_${encodeURIComponent(errorParam)}`, base), 302)
   }
 
   if (!code) {
@@ -64,15 +64,14 @@ async function handleCallback(request: NextRequest) {
     await exchangeCodeAndStore(code, userId)
     log("oauth.callback.succeeded", { hasState: !!state, hasUserId: !!userId }, "xero")
 
-    // Run full Xero sync in background so invoices/contacts/etc. are pulled without user action
+    // Capture userId for background task to avoid stale closure
+    const capturedUserId = userId!
     void (async () => {
       try {
-        await runXeroSyncForUser(userId)
-        // Convert to movements after sync
-        await convertAllXeroToMovements(userId)
-        // Auto-resolve duplicates
-        await autoResolveDuplicates(userId)
-        log("xero.oauth.callback.sync_complete", { userId }, "xero")
+        await runXeroSyncForUser(capturedUserId)
+        await convertAllXeroToMovements(capturedUserId)
+        await autoResolveDuplicates(capturedUserId)
+        log("xero.oauth.callback.sync_complete", { userId: capturedUserId }, "xero")
       } catch (e) {
         logError("xero.oauth.callback.sync_failed", e, "xero")
       }

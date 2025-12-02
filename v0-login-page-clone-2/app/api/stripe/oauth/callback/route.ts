@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
 
   if (errorParam) {
     logError("stripe.oauth.callback.failed", new Error(errorParam), "stripe")
-    return NextResponse.redirect(new URL(`/onboarding?error=stripe_${errorParam}`, base), 302)
+    return NextResponse.redirect(new URL(`/onboarding?error=stripe_${encodeURIComponent(errorParam)}`, base), 302)
   }
 
   if (!code) {
@@ -67,15 +67,14 @@ export async function GET(request: NextRequest) {
     )
     log("stripe.oauth.callback.succeeded", { stripeUserId, hasScope: !!scope }, "stripe")
 
-    // Run full Stripe sync in background so invoices/customers/etc. are pulled without user action
+    // Capture userId for background task to avoid stale closure
+    const capturedUserId = userId!
     void (async () => {
       try {
-        await runStripeSyncForUser(userId)
-        // Convert to movements after sync
-        await convertAllStripeToMovements(userId)
-        // Auto-resolve duplicates
-        await autoResolveDuplicates(userId)
-        log("stripe.oauth.callback.sync_complete", { userId }, "stripe")
+        await runStripeSyncForUser(capturedUserId)
+        await convertAllStripeToMovements(capturedUserId)
+        await autoResolveDuplicates(capturedUserId)
+        log("stripe.oauth.callback.sync_complete", { userId: capturedUserId }, "stripe")
       } catch (e) {
         logError("stripe.oauth.callback.sync_failed", e, "stripe")
       }

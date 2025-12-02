@@ -321,7 +321,10 @@ export function OnboardingFlow({
   type TransferPairsResult = { pairs: TransferPair[]; unpaired_transfers: ExcludedMovement[]; total_paired_amount: number; total_unpaired_amount: number }
   type ARState = { total_outstanding: number; total_overdue: number; overdue_count: number; invoice_count: number; invoices: OutstandingInvoice[]; paid_invoices?: OutstandingInvoice[]; avg_days_to_due: number | null; reconciliation_summary?: ARReconciliationSummary }
   type APState = { total_expected_30d: number; obligation_count: number; obligations: { obligation_id: string; source: "bill" | "inferred"; vendor_name: string; expected_amount: number; next_expected_date: string; days_until_due: number; days_overdue: number | null; confidence: string; cadence: string; payment_count: number; priority: "high" | "medium" | "low"; risk_flag: string | null }[]; bills?: OutstandingBill[]; paid_bills?: OutstandingBill[]; reconciliation_summary?: APReconciliationSummary }
+  type LifetimeSide = { total: number; reconciled: number; reconciled_pct: number; paid: number; paid_pct: number; outstanding: number; invoice_count?: number; bill_count?: number; paid_count: number; open_count: number }
+  type LifetimeData = { ar: LifetimeSide; ap: LifetimeSide }
   const [arApData, setArApData] = useState<{ ar: ARState; ap: APState } | null>(null)
+  const [lifetimeData, setLifetimeData] = useState<LifetimeData | null>(null)
   const [excludedCategories, setExcludedCategories] = useState<ExcludedCategories | null>(null)
   const [transferPairs, setTransferPairs] = useState<TransferPairsResult | null>(null)
   const [arApLoading, setArApLoading] = useState(false)
@@ -595,6 +598,7 @@ export function OnboardingFlow({
     fetch("/api/plaid/link-token", { method: "POST" })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => (data?.link_token ? setAddAccountLinkToken(data.link_token) : null))
+      .catch(() => {})
       .finally(() => setAddAccountLinkLoading(false))
   }, [currentStep, fetchConnectedItems])
 
@@ -602,6 +606,8 @@ export function OnboardingFlow({
   const lastRealmCountRef = useRef<number>(0)
   const lastTenantCountRef = useRef<number>(0)
   const pollRetryCountRef = useRef<number>(0)
+  const reconPollCancelledRef = useRef<boolean>(false)
+  const reconPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const SYNC_COOLDOWN_MS = 60_000 // 1 minute: avoid duplicate syncs and QBO 429
   const MAX_POLL_RETRIES = 90 // 90 retries * 2s = 3 minutes max polling
 
@@ -636,6 +642,7 @@ export function OnboardingFlow({
     fetch("/api/plaid/link-token", { method: "POST" })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => (data?.link_token ? setAccountingStepLinkToken(data.link_token) : null))
+      .catch(() => {})
       .finally(() => setAccountingStepLinkLoading(false))
     fetch("/api/connections")
       .then((res) => (res.ok ? res.json() : { connected: [], realmIds: [], tenantIds: [] }))
@@ -652,8 +659,7 @@ export function OnboardingFlow({
           missingScopes: c.missingScopes ?? [],
         }))
         setShopifyConnections(connections)
-        
-        // Update connected integrations to include Shopify if connected
+        setShopifyConnecting(false)
         if (data.connected) {
           setConnectedIntegrations((prev) => prev.includes("Shopify") ? prev : [...prev, "Shopify"])
         }
@@ -670,6 +676,7 @@ export function OnboardingFlow({
       .catch(() => {
         setShopifyScopeWarning(null)
         setShopifyConnections([])
+        setShopifyConnecting(false)
       })
   }, [currentStep])
 
@@ -972,6 +979,7 @@ export function OnboardingFlow({
   useEffect(() => {
     if (currentStep !== 11) return
     let cancelled = false
+    reconPollCancelledRef.current = false
 
     setArApLoading(true)
     setArApError(null)
@@ -998,6 +1006,7 @@ export function OnboardingFlow({
         setWaterfallReview(data.waterfall_review ?? null)
         setExcludedCategories(data.excluded_categories ?? null)
         setTransferPairs(data.transfer_pairs ?? null)
+        if (data.lifetime) setLifetimeData(data.lifetime)
         setArApLoading(false)
         setMappingLoading(false)
       })
@@ -1010,7 +1019,11 @@ export function OnboardingFlow({
         setMappingLoading(false)
       })
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      reconPollCancelledRef.current = true
+      if (reconPollTimerRef.current) { clearTimeout(reconPollTimerRef.current); reconPollTimerRef.current = null }
+    }
   }, [currentStep])
 
   const runArApReconciliation = useCallback(async () => {
@@ -1055,6 +1068,7 @@ export function OnboardingFlow({
       if (data.waterfall_review !== undefined) setWaterfallReview(data.waterfall_review)
       if (data.excluded_categories !== undefined) setExcludedCategories(data.excluded_categories)
       if (data.transfer_pairs !== undefined) setTransferPairs(data.transfer_pairs)
+      if (data.lifetime) setLifetimeData(data.lifetime)
       
       setReconRefreshLoading(false)
     } catch (e) {
@@ -1066,8 +1080,10 @@ export function OnboardingFlow({
   }, [])
 
   const pollReconciliationStatus = useCallback(async () => {
+    if (reconPollCancelledRef.current) return
     try {
       const r = await fetch("/api/ar-ap-step")
+      if (reconPollCancelledRef.current) return
       const data = (await r.json()) as {
         ar?: ARState
         ap?: APState
@@ -1079,7 +1095,6 @@ export function OnboardingFlow({
         message?: string
       }
       if (r.ok) {
-        // If still reconciling (no data returned), keep polling with retry limit
         if (data.is_reconciling) {
           pollRetryCountRef.current++
           if (pollRetryCountRef.current >= MAX_POLL_RETRIES) {
@@ -1088,9 +1103,9 @@ export function OnboardingFlow({
             pollRetryCountRef.current = 0
             return
           }
-          setTimeout(() => {
+          reconPollTimerRef.current = setTimeout(() => {
             void pollReconciliationStatus()
-          }, 2000) // Poll every 2 seconds
+          }, 2000)
           return
         }
         
@@ -1104,6 +1119,7 @@ export function OnboardingFlow({
         if (data.waterfall_review !== undefined) setWaterfallReview(data.waterfall_review)
         if (data.excluded_categories !== undefined) setExcludedCategories(data.excluded_categories)
         if (data.transfer_pairs !== undefined) setTransferPairs(data.transfer_pairs)
+        if (data.lifetime) setLifetimeData(data.lifetime)
         setReconRefreshLoading(false)
       }
     } catch {
@@ -1159,17 +1175,17 @@ export function OnboardingFlow({
         if (arApResult) setStep13ArAp(arApResult as { ar: ARState; ap: APState })
         if (movementsResult) setStep13Movements(movementsResult as { movements: unknown[]; summary: unknown[]; summaryFromTags?: MovementStats })
         if (entitiesResult) {
-          const profiles = (entitiesResult as { profiles?: EntitySummary[] }).profiles ?? []
+          const entities = (entitiesResult as { entities?: EntitySummary[] }).entities ?? []
           const summary = (entitiesResult as { summary?: EntityProfilesSummary }).summary ?? {
-            total_entities: profiles.length,
-            total_customers: profiles.filter((p: EntitySummary) => p.entity_type === "customer").length,
-            total_vendors: profiles.filter((p: EntitySummary) => p.entity_type === "vendor").length,
-            total_ar_outstanding: profiles.reduce((sum: number, p: EntitySummary) => sum + (p.entity_type === "customer" ? (p.outstanding_amount ?? 0) : 0), 0),
-            total_ap_outstanding: profiles.reduce((sum: number, p: EntitySummary) => sum + (p.entity_type === "vendor" ? (p.outstanding_amount ?? 0) : 0), 0),
-            total_lifetime_value: profiles.reduce((sum: number, p: EntitySummary) => sum + (p.lifetime_value ?? 0), 0),
-            at_risk_count: profiles.filter((p: EntitySummary) => p.reliability_score < 50).length,
+            total_entities: entities.length,
+            total_customers: entities.filter((p: EntitySummary) => p.entity_type === "customer").length,
+            total_vendors: entities.filter((p: EntitySummary) => p.entity_type === "vendor").length,
+            total_ar_outstanding: entities.reduce((sum: number, p: EntitySummary) => sum + (p.entity_type === "customer" ? (p.outstanding_amount ?? 0) : 0), 0),
+            total_ap_outstanding: entities.reduce((sum: number, p: EntitySummary) => sum + (p.entity_type === "vendor" ? (p.outstanding_amount ?? 0) : 0), 0),
+            total_lifetime_value: entities.reduce((sum: number, p: EntitySummary) => sum + (p.lifetime_value ?? 0), 0),
+            at_risk_count: entities.filter((p: EntitySummary) => p.reliability_score < 50).length,
           }
-          setStep13Entities({ profiles, summary })
+          setStep13Entities({ profiles: entities, summary })
         }
         setStateLoading(false)
         setStep13DataLoading(false)
@@ -1282,7 +1298,7 @@ export function OnboardingFlow({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ finalContext: toSave }),
-        }).finally(() => handleNext())
+        }).catch(() => {}).finally(() => handleNext())
       } else {
         handleNext()
       }
@@ -1291,7 +1307,7 @@ export function OnboardingFlow({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ form: companyForm }),
-      }).finally(() => handleNext())
+      }).catch(() => {}).finally(() => handleNext())
     } else if (currentStep === 9) {
       setAfterIdentityLoading(true)
       setIdentityError(null)
@@ -3090,6 +3106,7 @@ export function OnboardingFlow({
                           .then((r) => (r.ok ? fetch("/api/movements") : null))
                           .then((r) => r?.json())
                           .then((d) => { if (d) setMovementsData(d) })
+                          .catch(() => {})
                       } else {
                         setMovementEditMessage({ type: "error", text: data.error ?? "Edit failed" })
                       }
@@ -3669,7 +3686,117 @@ export function OnboardingFlow({
               <div className="space-y-6">
                 {arApData && (
                 <>
-                {/* ─── Summary bar ─── */}
+                {/* ─── Lifetime AP/AR + Reconciliation Hero ─── */}
+                {lifetimeData && (
+                  <div className="bg-gradient-to-br from-indigo-500/10 via-purple-500/8 to-cyan-500/10 border border-indigo-500/25 rounded-xl p-6 mb-2">
+                    <h3 className="text-sm font-semibold text-indigo-300 uppercase tracking-wider mb-5">Lifetime Overview</h3>
+                    <div className="grid grid-cols-2 gap-6">
+                      {/* AR Lifetime */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                          <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">Accounts Receivable</span>
+                        </div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-3xl font-bold font-mono text-white">{money(lifetimeData.ar.total)}</span>
+                          <span className="text-xs text-gray-500">lifetime invoiced</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="bg-emerald-500/10 rounded-lg px-2 py-2">
+                            <div className="text-lg font-bold font-mono text-emerald-400">{money(lifetimeData.ar.paid)}</div>
+                            <div className="text-[10px] text-gray-500">Collected</div>
+                          </div>
+                          <div className="bg-amber-500/10 rounded-lg px-2 py-2">
+                            <div className="text-lg font-bold font-mono text-amber-400">{money(lifetimeData.ar.outstanding)}</div>
+                            <div className="text-[10px] text-gray-500">Outstanding</div>
+                          </div>
+                          <div className="bg-cyan-500/10 rounded-lg px-2 py-2">
+                            <div className="text-lg font-bold font-mono text-cyan-400">{lifetimeData.ar.reconciled_pct}%</div>
+                            <div className="text-[10px] text-gray-500">Reconciled</div>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[10px] text-gray-500">
+                            <span>{lifetimeData.ar.invoice_count ?? 0} invoices</span>
+                            <span>{lifetimeData.ar.paid_count} paid · {lifetimeData.ar.open_count} open</span>
+                          </div>
+                          <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden flex">
+                            <div className="h-full bg-cyan-500 transition-all" style={{ width: `${lifetimeData.ar.reconciled_pct}%` }} />
+                            <div className="h-full bg-cyan-500/20" style={{ width: `${Math.max(0, lifetimeData.ar.paid_pct - lifetimeData.ar.reconciled_pct)}%` }} />
+                          </div>
+                          <div className="flex justify-between text-[9px]">
+                            <span className="text-cyan-400">{money(lifetimeData.ar.reconciled)} reconciled</span>
+                            <span className="text-gray-600">{money(lifetimeData.ar.total - lifetimeData.ar.reconciled)} unreconciled</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* AP Lifetime */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="w-2 h-2 rounded-full bg-red-400" />
+                          <span className="text-xs font-semibold text-red-400 uppercase tracking-wider">Accounts Payable</span>
+                        </div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-3xl font-bold font-mono text-white">{money(lifetimeData.ap.total)}</span>
+                          <span className="text-xs text-gray-500">lifetime billed</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="bg-emerald-500/10 rounded-lg px-2 py-2">
+                            <div className="text-lg font-bold font-mono text-emerald-400">{money(lifetimeData.ap.paid)}</div>
+                            <div className="text-[10px] text-gray-500">Paid</div>
+                          </div>
+                          <div className="bg-amber-500/10 rounded-lg px-2 py-2">
+                            <div className="text-lg font-bold font-mono text-amber-400">{money(lifetimeData.ap.outstanding)}</div>
+                            <div className="text-[10px] text-gray-500">Outstanding</div>
+                          </div>
+                          <div className="bg-cyan-500/10 rounded-lg px-2 py-2">
+                            <div className="text-lg font-bold font-mono text-cyan-400">{lifetimeData.ap.reconciled_pct}%</div>
+                            <div className="text-[10px] text-gray-500">Reconciled</div>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[10px] text-gray-500">
+                            <span>{lifetimeData.ap.bill_count ?? 0} bills</span>
+                            <span>{lifetimeData.ap.paid_count} paid · {lifetimeData.ap.open_count} open</span>
+                          </div>
+                          <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden flex">
+                            <div className="h-full bg-cyan-500 transition-all" style={{ width: `${lifetimeData.ap.reconciled_pct}%` }} />
+                            <div className="h-full bg-cyan-500/20" style={{ width: `${Math.max(0, lifetimeData.ap.paid_pct - lifetimeData.ap.reconciled_pct)}%` }} />
+                          </div>
+                          <div className="flex justify-between text-[9px]">
+                            <span className="text-cyan-400">{money(lifetimeData.ap.reconciled)} reconciled</span>
+                            <span className="text-gray-600">{money(lifetimeData.ap.total - lifetimeData.ap.reconciled)} unreconciled</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Net Position */}
+                    <div className="mt-5 pt-4 border-t border-white/10 flex items-center justify-center gap-8">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold font-mono text-white">{money(lifetimeData.ar.total - lifetimeData.ap.total)}</div>
+                        <div className="text-[10px] text-gray-500">Lifetime Net (AR − AP)</div>
+                      </div>
+                      <div className="h-8 w-px bg-white/10" />
+                      <div className="text-center">
+                        <div className="text-2xl font-bold font-mono text-white">{money(lifetimeData.ar.outstanding - lifetimeData.ap.outstanding)}</div>
+                        <div className="text-[10px] text-gray-500">Net Outstanding</div>
+                      </div>
+                      <div className="h-8 w-px bg-white/10" />
+                      <div className="text-center">
+                        <div className={`text-2xl font-bold font-mono ${((lifetimeData.ar.reconciled_pct + lifetimeData.ap.reconciled_pct) / 2) >= 80 ? "text-emerald-400" : ((lifetimeData.ar.reconciled_pct + lifetimeData.ap.reconciled_pct) / 2) >= 50 ? "text-amber-400" : "text-red-400"}`}>
+                          {(lifetimeData.ar.total + lifetimeData.ap.total) > 0
+                            ? Math.round(((lifetimeData.ar.reconciled + lifetimeData.ap.reconciled) / (lifetimeData.ar.total + lifetimeData.ap.total)) * 100)
+                            : 0}%
+                        </div>
+                        <div className="text-[10px] text-gray-500">Overall Reconciled</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Current Period Summary bar ─── */}
                 <div className="flex flex-wrap gap-4 justify-center text-sm mb-4">
                   <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                     <span className="text-emerald-400 font-bold">{money(arApData.ar.total_outstanding)}</span>

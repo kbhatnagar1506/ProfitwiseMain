@@ -17,20 +17,23 @@ export async function POST() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    log("state.compute.start", { userId: user.id })
+    log("state.compute.start", { userId: user.id }, "state")
     const state = await computeBusinessState(user.id)
-    log("state.compute.complete", { userId: user.id })
+    log("state.compute.complete", { userId: user.id }, "state")
 
     return NextResponse.json(state)
   } catch (err) {
     log("state.compute.error", { error: String(err) }, "error")
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to compute business state" },
+      { error: "Failed to compute business state" },
       { status: 500 }
     )
   }
 }
 
 export async function GET() {
-  return POST()
+  return NextResponse.json(
+    { error: "Use POST to compute state" },
+    { status: 405 }
+  )
 }
