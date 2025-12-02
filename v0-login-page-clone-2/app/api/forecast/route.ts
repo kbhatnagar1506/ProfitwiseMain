@@ -298,19 +298,32 @@ export async function GET() {
     ])
 
     // Sync cash events bridge (AR/AP to forecast events)
+    const today = new Date().toISOString().slice(0, 10)
     const apObligations = bills.map((b) => ({
+      obligation_id: `ap://bill/${b.source}/${b.bill_id}`,
+      source: "bill" as const,
       vendor_name: b.vendor_name,
       entity_id: b.entity_id ?? null,
-      amount: b.amount_due,
+      expected_amount: b.amount_due,
+      amount_due: b.amount_due,
       due_date: b.due_date ?? null,
+      next_expected_date: b.due_date ?? today,
+      days_until_due: b.days_until_due ?? 0,
+      days_overdue: b.days_overdue ?? null,
+      priority: (b.status === "overdue" ? "high" : "medium") as "high" | "medium" | "low",
+      risk_flag: null,
+      confidence: (b.due_date ? "high" : "medium") as "high" | "medium" | "low",
+      cadence: "one-time",
+      payment_count: 0,
+      payment_terms: null,
+      tolerance_days: null,
       bill_id: b.bill_id,
-      source: b.source,
+      metadata: {},
     }))
     await syncCashEventsForUser(user.id, invoices, apObligations)
 
     // Fetch bridge events for the next 30 days
     const cashEventRows = await fetchCashEventsForUser30d(user.id)
-    const today = new Date().toISOString().slice(0, 10)
     const bridgeEvents = cashEventRowsToForecastEvents(cashEventRows, today)
 
     // Build forecast context
