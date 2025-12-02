@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: pwdCheck.error }, { status: 400 })
   }
 
-  if (process.env.RECAPTCHA_SECRET_KEY) {
+  if (process.env.RECAPTCHA_SECRET_KEY && recaptchaToken) {
     const recaptcha = await verifyRecaptcha(recaptchaToken, "signup")
     if (!recaptcha.success) {
       log("auth.signup.rejected", { reason: "recaptcha_failed" }, "auth")
