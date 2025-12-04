@@ -617,6 +617,20 @@ function buildInvoiceForecasts(
       p7 *= 0.7; p14 *= 0.8; p30 *= 0.9
     }
     
+    // Reconciliation status adjustment: matched invoices have higher collection probability
+    if (inv.reconciliation_status === "matched") {
+      // Already matched to a payment - very high probability
+      p7 = Math.min(0.95, p7 * 1.5)
+      p14 = Math.min(0.95, p14 * 1.4)
+      p30 = Math.min(0.95, p30 * 1.3)
+    } else if (inv.reconciliation_status === "partial" && inv.matched_amount) {
+      // Partially matched - boost based on % matched
+      const matchedPct = inv.matched_amount / inv.amount
+      const boost = 1 + matchedPct * 0.3
+      p7 *= boost; p14 *= boost; p30 *= boost
+    }
+    // Unmatched invoices use base probability (no adjustment)
+    
     // Cap probabilities
     p7 = Math.min(0.95, Math.max(0.02, p7))
     p14 = Math.min(0.95, Math.max(p7, p14))
@@ -1835,6 +1849,137 @@ export function buildBehavioralModels(movements: TaggedMovement[], invoices: Out
     recurring_fixed: buildRecurringFixed(movements),
     invoice_signal: buildInvoiceSignal(invoices),
     seasonality,
+  }
+}
+
+/**
+ * Enhance behavioral models with pre-computed entity payment profiles.
+ * This uses rich historical data (avg_days_to_pay, on_time_rate, risk_score, etc.)
+ * to improve forecast accuracy.
+ */
+function enhanceModelsWithProfiles(
+  models: BehavioralModels,
+  profiles: EntityPaymentProfile[]
+): BehavioralModels {
+  if (profiles.length === 0) return models
+
+  // Build lookup map by entity_id
+  const profileMap = new Map<string, EntityPaymentProfile>()
+  for (const p of profiles) {
+    profileMap.set(p.entity_id, p)
+  }
+
+  // Enhance customer models
+  const enhancedCustomers = models.customers.map((c) => {
+    const profile = profileMap.get(c.entity_id)
+    if (!profile || profile.entity_type !== "customer") return c
+
+    // Use profile's archetype if it has more data
+    let archetype = c.archetype
+    if (profile.transaction_count > c.payment_count && profile.archetype) {
+      const archetypeMap: Record<string, CustomerArchetype> = {
+        clockwork: "clockwork",
+        slow_reliable: "slow_reliable",
+        bursty: "bursty",
+        volatile: "volatile",
+        low_data: "low_data",
+        episodic: "episodic",
+      }
+      archetype = archetypeMap[profile.archetype] ?? c.archetype
+    }
+
+    // Enhance features with profile data
+    const features = { ...c.features }
+    if (profile.avg_days_to_pay !== null) {
+      features.avg_days_to_pay = profile.avg_days_to_pay
+    }
+    if (profile.std_days_to_pay !== null) {
+      features.std_days_to_pay = profile.std_days_to_pay
+    }
+    if (profile.interval_cv !== null) {
+      features.interval_cv = profile.interval_cv
+    }
+    if (profile.on_time_payment_rate !== null) {
+      features.pct_overdue_paid = profile.on_time_payment_rate
+    }
+
+    // Adjust probability based on reliability score and on-time rate
+    let probability = c.probability_of_next
+    if (profile.reliability_score !== null && profile.reliability_score > 0) {
+      // Blend current probability with profile-based estimate
+      const profileProb = 0.3 + profile.reliability_score * 0.5 // 0.3 to 0.8 range
+      probability = probability * 0.4 + profileProb * 0.6
+    }
+    if (profile.on_time_payment_rate !== null) {
+      // Boost probability for reliable payers
+      if (profile.on_time_payment_rate > 0.8) {
+        probability = Math.min(0.95, probability * 1.15)
+      } else if (profile.on_time_payment_rate < 0.5) {
+        probability = probability * 0.85
+      }
+    }
+
+    // Adjust confidence based on profile data quality
+    let confidence = c.confidence
+    if (profile.transaction_count >= 10 && profile.reliability_score !== null && profile.reliability_score > 0.7) {
+      confidence = "high"
+    } else if (profile.transaction_count >= 5 && profile.reliability_score !== null && profile.reliability_score > 0.5) {
+      confidence = confidence === "low" ? "medium" : confidence
+    }
+
+    // Use profile's avg_interval if available and better
+    let paymentIntervalDays = c.payment_interval_days
+    if (profile.avg_interval_days !== null && profile.transaction_count > c.payment_count) {
+      paymentIntervalDays = Math.round(profile.avg_interval_days)
+    }
+
+    return {
+      ...c,
+      archetype,
+      features,
+      probability_of_next: r2(Math.max(0.02, Math.min(0.98, probability))),
+      confidence,
+      payment_interval_days: paymentIntervalDays,
+    }
+  })
+
+  // Enhance vendor models similarly
+  const enhancedVendors = models.vendors.map((v) => {
+    const profile = profileMap.get(v.entity_id)
+    if (!profile || profile.entity_type !== "vendor") return v
+
+    // Enhance recurrence confidence with profile data
+    const recurrence = { ...v.recurrence }
+    if (profile.interval_cv !== null && profile.transaction_count >= 3) {
+      // Lower CV = more predictable = higher recurrence confidence
+      const cvBasedConf = Math.max(0, 1 - profile.interval_cv)
+      recurrence.recurrence_confidence = Math.max(recurrence.recurrence_confidence, cvBasedConf * 0.8)
+      
+      // Classify recurrence type based on CV
+      if (profile.interval_cv < 0.2) {
+        recurrence.recurrence_type = "hard"
+      } else if (profile.interval_cv < 0.5) {
+        recurrence.recurrence_type = recurrence.recurrence_type === "unknown" ? "soft" : recurrence.recurrence_type
+      }
+    }
+
+    // Use profile's avg_interval if available
+    let cadenceIntervalDays = v.cadence_interval_days
+    if (profile.avg_interval_days !== null && profile.transaction_count > v.payment_count) {
+      cadenceIntervalDays = Math.round(profile.avg_interval_days)
+    }
+
+    return {
+      ...v,
+      recurrence,
+      cadence_interval_days: cadenceIntervalDays,
+    }
+  })
+
+  return {
+    ...models,
+    customers: enhancedCustomers,
+    vendors: enhancedVendors,
   }
 }
 
@@ -4192,6 +4337,7 @@ export function computeCashflowForecast(
   bills: OutstandingBill[] = [],
   forecastCtx: ForecastContext | null = null,
   bridgeEvents30d: ForecastEvent[] | null = null,
+  entityProfiles: EntityPaymentProfile[] = [],
 ): CashflowForecast {
   setIdentityContext(identityCtx)
   const dates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
@@ -4204,7 +4350,12 @@ export function computeCashflowForecast(
   const components = buckets.map((b) => buildComponent(b, dataSpanDays))
 
   // Entity-level behavioral models (enhanced with invoice + bill data)
-  const behavioral_models = buildBehavioralModels(movements, invoices, bills)
+  let behavioral_models = buildBehavioralModels(movements, invoices, bills)
+  
+  // Enhance models with entity payment profiles (pre-computed behavioral data)
+  if (entityProfiles.length > 0) {
+    behavioral_models = enhanceModelsWithProfiles(behavioral_models, entityProfiles)
+  }
 
   // Event generation: discrete 30-day forecast (+ optional cash_events bridge)
   let events_30d = generateEvents30d(behavioral_models, components)
