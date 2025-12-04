@@ -187,6 +187,27 @@ async function getStartingCash(userId: string): Promise<{ cash: number; source: 
       return { cash: totalCash, source: "plaid" }
     }
   }
+  
+  // Fallback: derive starting cash from movement history
+  // Sum all inflows minus outflows to get approximate current position
+  try {
+    const { rows } = await query<{ net_cash: string }>(
+      `SELECT COALESCE(
+        SUM(CASE WHEN direction = 'inflow' THEN amount ELSE -amount END),
+        0
+      )::float AS net_cash
+       FROM movements
+       WHERE user_id = $1 AND duplicate_of IS NULL`,
+      [userId]
+    )
+    const netCash = parseFloat(rows[0]?.net_cash ?? "0")
+    if (netCash > 0) {
+      return { cash: netCash, source: "derived" }
+    }
+  } catch {
+    // Query failed, return 0
+  }
+  
   return { cash: 0, source: "derived" }
 }
 
