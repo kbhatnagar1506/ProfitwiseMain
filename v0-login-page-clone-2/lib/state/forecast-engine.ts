@@ -1863,15 +1863,17 @@ function enhanceModelsWithProfiles(
 ): BehavioralModels {
   if (profiles.length === 0) return models
 
-  // Build lookup map by entity_id
-  const profileMap = new Map<string, EntityPaymentProfile>()
+  // Build lookup map by entity_id only (profiles don't have canonical_name)
+  const profileByEntityId = new Map<string, EntityPaymentProfile>()
+  
   for (const p of profiles) {
-    profileMap.set(p.entity_id, p)
+    profileByEntityId.set(p.entity_id, p)
   }
 
   // Enhance customer models
   const enhancedCustomers = models.customers.map((c) => {
-    const profile = profileMap.get(c.entity_id)
+    // Try to find profile by entity_id
+    const profile = profileByEntityId.get(c.entity_id)
     if (!profile || profile.entity_type !== "customer") return c
 
     // Use profile's archetype if it has more data
@@ -1945,7 +1947,8 @@ function enhanceModelsWithProfiles(
 
   // Enhance vendor models similarly
   const enhancedVendors = models.vendors.map((v) => {
-    const profile = profileMap.get(v.entity_id)
+    // Try to find profile by entity_id
+    const profile = profileByEntityId.get(v.entity_id)
     if (!profile || profile.entity_type !== "vendor") return v
 
     // Enhance recurrence confidence with profile data
@@ -4340,14 +4343,71 @@ export function computeCashflowForecast(
   entityProfiles: EntityPaymentProfile[] = [],
 ): CashflowForecast {
   setIdentityContext(identityCtx)
-  const dates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
-  const periodStart = dates[0] ?? new Date().toISOString().slice(0, 10)
-  const periodEnd = dates[dates.length - 1] ?? new Date().toISOString().slice(0, 10)
+  
+  // Calculate data span from movements AND invoices/bills (using due_date as proxy)
+  const movementDates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean)
+  const invoiceDates = invoices
+    .map((inv) => inv.due_date ? toDateStr(inv.due_date) : null)
+    .filter(Boolean) as string[]
+  const billDates = bills
+    .map((b) => b.due_date ? toDateStr(b.due_date) : null)
+    .filter(Boolean) as string[]
+  
+  const allDates = [...movementDates, ...invoiceDates, ...billDates].sort()
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const periodStart = allDates[0] ?? todayStr
+  const periodEnd = allDates[allDates.length - 1] ?? todayStr
   const dataSpanDays = daysBetween(periodStart, periodEnd)
 
   // Aggregate component models (for non-entity categories)
   const buckets = decomposeMovements(movements)
-  const components = buckets.map((b) => buildComponent(b, dataSpanDays))
+  let components = buckets.map((b) => buildComponent(b, dataSpanDays))
+  
+  // If no movement-based components but we have invoices/bills, create synthetic components
+  // This ensures invoice-only users still see meaningful component data
+  if (components.length === 0 && (invoices.length > 0 || bills.length > 0)) {
+    const syntheticComponents: CashflowComponent[] = []
+    
+    if (invoices.length > 0) {
+      const totalAR = invoices.reduce((sum, inv) => sum + inv.amount_due, 0)
+      const avgInvoice = totalAR / invoices.length
+      const monthlyCount = invoices.length / Math.max(1, dataSpanDays / 30)
+      syntheticComponents.push({
+        id: "ar_collections_in",
+        label: "AR Collections",
+        direction: "in",
+        category: "customer_receipts",
+        behavior: "episodic",
+        monthly_avg: r2(avgInvoice * monthlyCount),
+        monthly_count: r2(monthlyCount),
+        volatility: 0.4,
+        confidence: "medium",
+        trend: 0,
+        seasonal_index: null,
+      })
+    }
+    
+    if (bills.length > 0) {
+      const totalAP = bills.reduce((sum, b) => sum + b.amount_due, 0)
+      const avgBill = totalAP / bills.length
+      const monthlyCount = bills.length / Math.max(1, dataSpanDays / 30)
+      syntheticComponents.push({
+        id: "ap_payments_out",
+        label: "AP Payments",
+        direction: "out",
+        category: "vendor_payments",
+        behavior: "episodic",
+        monthly_avg: r2(avgBill * monthlyCount),
+        monthly_count: r2(monthlyCount),
+        volatility: 0.3,
+        confidence: "medium",
+        trend: 0,
+        seasonal_index: null,
+      })
+    }
+    
+    components = syntheticComponents
+  }
 
   // Entity-level behavioral models (enhanced with invoice + bill data)
   let behavioral_models = buildBehavioralModels(movements, invoices, bills)
