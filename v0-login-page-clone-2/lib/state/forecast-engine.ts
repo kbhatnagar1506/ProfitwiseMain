@@ -14,7 +14,7 @@
 // This is behavioral simulation, not time-series ML.
 
 const FORECAST_ENGINE_VERSION = "2.1"
-const MODEL_VERSION = "2.1"
+const MODEL_VERSION = "2.2"
 const TAGGING_VERSION = "1.0"
 const CALIBRATION_VERSION = "1.0"
 const POLICY_VERSION = "1.0"
@@ -771,7 +771,10 @@ function buildInvoiceReasoning(
     bursty: "Clusters payments then pauses",
     episodic: "Project-based, irregular",
     volatile: "Erratic timing and amounts",
-    low_data: "Insufficient payment history",
+    low_data:
+      features.invoice_count > 0
+        ? "Limited tagged bank history — modeled from open invoices"
+        : "Insufficient payment history",
   }
   parts.push(archetypeDesc[archetype])
   
@@ -781,6 +784,8 @@ function buildInvoiceReasoning(
     if (dso > 0) {
       parts.push(`avg ${Math.round(dso)}d to pay`)
     }
+  } else if (features.invoice_count > 0) {
+    parts.push("no tagged customer_receipt movements — expecting cash from open invoices")
   } else {
     parts.push("no payment history")
   }
@@ -1043,7 +1048,10 @@ function buildCustomerModels(movements: TaggedMovement[], invoices: OutstandingI
     })
   }
 
-  return models.sort((a, b) => b.avg_amount * b.payment_count - a.avg_amount * a.payment_count)
+  return models.sort(
+    (a, b) =>
+      b.avg_amount * Math.max(1, b.payment_count) - a.avg_amount * Math.max(1, a.payment_count),
+  )
 }
 
 /**
@@ -1608,7 +1616,10 @@ function buildVendorModels(movements: TaggedMovement[], bills: OutstandingBill[]
     })
   }
 
-  return models.sort((a, b) => b.avg_amount * b.payment_count - a.avg_amount * a.payment_count)
+  return models.sort(
+    (a, b) =>
+      b.avg_amount * Math.max(1, b.payment_count) - a.avg_amount * Math.max(1, a.payment_count),
+  )
 }
 
 // ─── Step 2c: Settlement Delay Model ────────────────────────────────
@@ -2242,23 +2253,29 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
         const dueDate =
           bill.due_date
           ?? (bill.days_until_due != null ? addDays(today, Math.max(1, bill.days_until_due)) : addDays(today, 7 + bi * 2))
-        let offset = daysBetween(today, dueDate)
-        if (offset < 0) offset = 1
-        if (offset > 30) continue
+        let rawOffset = daysBetween(today, dueDate)
+        if (rawOffset < 1) rawOffset = 1
+        // Bills due after the 30d UI window still matter for cash — map to horizon edge instead of dropping
+        const beyond30 = rawOffset > 30
+        const offset = beyond30 ? 30 : rawOffset
         // Stagger bills landing on the same date: spread by vendor to avoid cliff
         const stagger = bi * 1
         const adjustedOffset = Math.min(30, offset + stagger)
         const adjustedDate = addDays(today, adjustedOffset)
+        const baseProb = bill.status === "overdue" ? 0.8 : 0.7
+        const prob = beyond30 ? Math.max(0.35, baseProb * 0.75) : baseProb
         events.push({
           date: adjustedDate, day_offset: adjustedOffset, type: "vendor_payment",
           entity: v.name, amount: r2(bill.amount_due),
-          direction: "out", probability: bill.status === "overdue" ? 0.8 : 0.7,
+          direction: "out", probability: r2(prob),
           confidence: "high", source_model: "vendor",
           bill_id: bill.bill_id,
           reasoning: {
             ...vendReasoning,
             invoice_info: `Bill $${bill.amount_due.toLocaleString()}, ${bill.status}${bill.days_overdue ? ` (${bill.days_overdue}d overdue)` : ""}`,
-            basis: `AP bill due ${dueDate}`,
+            basis: beyond30
+              ? `AP due ${dueDate} (beyond 30d — shown at D+30 for horizon summary)`
+              : `AP bill due ${dueDate}`,
           },
         })
       }
@@ -3341,6 +3358,7 @@ function computeForecastConfidence(
   dataSpanDays: number,
   backtest: BacktestResult | null,
   movements?: TaggedMovement[],
+  bills: OutstandingBill[] = [],
 ): ForecastConfidence {
   const reasons: string[] = []
   const by_component: ComponentConfidence[] = []
@@ -3398,13 +3416,15 @@ function computeForecastConfidence(
 
   // ── 2. Outflow model confidence (weight: 0.20) ──
   const vendTotal = models.vendors.length
+  const apOpenBills = bills.filter((b) => b.amount_due > 0)
+  const apOutComp = components.find((c) => c.category === "vendor_payments" && c.direction === "out")
   let outflowScore = 0
   if (vendTotal > 0) {
-    const totalSpend = models.vendors.reduce((s, v) => s + v.avg_amount * v.payment_count, 0)
+    const totalSpend = models.vendors.reduce((s, v) => s + v.avg_amount * Math.max(1, v.payment_count), 0)
     if (totalSpend > 0) {
       let weightedConf = 0
       for (const v of models.vendors) {
-        const weight = (v.avg_amount * v.payment_count) / totalSpend
+        const weight = (v.avg_amount * Math.max(1, v.payment_count)) / totalSpend
         const recBonus = v.recurrence.recurrence_confidence
         const confMult = v.confidence === "high" ? 1.0 : v.confidence === "medium" ? 0.6 : 0.25
         weightedConf += weight * recBonus * confMult
@@ -3416,16 +3436,26 @@ function computeForecastConfidence(
       outflowScore = (vendHigh * 1 + vendMed * 0.6) / vendTotal
     }
   }
+  if (vendTotal === 0 && (apOpenBills.length > 0 || (apOutComp && apOutComp.monthly_avg > 0))) {
+    const base = 0.28
+    const compBoost = apOutComp && apOutComp.monthly_avg > 0 ? Math.min(0.22, Math.log10(1 + apOutComp.monthly_avg) / 25) : 0
+    const billBoost = Math.min(0.12, apOpenBills.length * 0.008)
+    outflowScore = Math.min(0.52, base + compBoost + billBoost)
+  }
   if (outflowScore < 0.3) reasons.push("Outflow models are weak — vendor recurrence uncertain")
   const outflowLabel: ComponentConfidence["label"] = outflowScore >= 0.7 ? "high" : outflowScore >= 0.4 ? "medium" : "low"
   const recurrenceBreakdown = vendTotal > 0 ? (() => {
     const counts: Record<string, number> = {}
     models.vendors.forEach((v) => { counts[v.recurrence.recurrence_type] = (counts[v.recurrence.recurrence_type] ?? 0) + 1 })
     return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ")
-  })() : "No vendors"
+  })() : apOpenBills.length > 0 ? `AP from ${apOpenBills.length} open bill(s)` : "No vendors"
   by_component.push({
     area: "Outflow models", score: r2(outflowScore), label: outflowLabel,
-    reason: `${vendTotal} vendors (${recurrenceBreakdown}) — spend-weighted`,
+    reason: vendTotal > 0
+      ? `${vendTotal} vendors (${recurrenceBreakdown}) — spend-weighted`
+      : apOpenBills.length > 0 || apOutComp
+        ? `${recurrenceBreakdown}${apOutComp ? ` · component ~$${apOutComp.monthly_avg.toLocaleString()}/mo` : ""}`
+        : `${vendTotal} vendors (${recurrenceBreakdown}) — spend-weighted`,
   })
 
   // ── 3. Settlement confidence (weight: 0.10) ──
@@ -3474,11 +3504,17 @@ function computeForecastConfidence(
   if (vendTotal > 0) {
     const totalRecConf = models.vendors.reduce((s, v) => s + v.recurrence.recurrence_confidence, 0)
     recurrenceScore = totalRecConf / vendTotal
+  } else if (apOpenBills.length > 0) {
+    recurrenceScore = Math.min(0.38, 0.14 + Math.min(0.24, apOpenBills.length * 0.006))
   }
   by_component.push({
     area: "Recurrence quality", score: r2(recurrenceScore),
     label: recurrenceScore >= 0.6 ? "high" : recurrenceScore >= 0.35 ? "medium" : "low",
-    reason: vendTotal === 0 ? "No vendor recurrence data" : `Avg recurrence confidence: ${(recurrenceScore * 100).toFixed(0)}%`,
+    reason: vendTotal === 0 && apOpenBills.length === 0
+      ? "No vendor recurrence data"
+      : vendTotal === 0
+        ? `AP obligations from ${apOpenBills.length} open bill(s) (due-date cadence)`
+        : `Avg recurrence confidence: ${(recurrenceScore * 100).toFixed(0)}%`,
   })
 
   // ── 6. Data span confidence (weight: 0.10) ──
@@ -4614,7 +4650,7 @@ export function computeCashflowForecast(
   const backtest = runBacktest(movements, invoices, bills)
 
   // Forecast confidence (8-component weighted, with backtest input)
-  const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements)
+  const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements, bills)
 
   // Separated forecast: operating vs settlement vs treasury vs owner
   const today = new Date().toISOString().slice(0, 10)
