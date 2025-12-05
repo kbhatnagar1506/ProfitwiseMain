@@ -721,9 +721,11 @@ function computePortfolioPriors(
     priors.avg_collection_delay = Math.max(pp.collection_delay_clamp_min, Math.min(pp.collection_delay_clamp_max, avgDelay + pp.delay_base_offset))
   } else if (customerReceipts.length >= pp.min_receipts_interval) {
     const intervals: number[] = []
-    const sorted = [...customerReceipts].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
+    const sorted = [...customerReceipts].sort((a, b) =>
+      toDateStr(a.occurred_at).localeCompare(toDateStr(b.occurred_at)),
+    )
     for (let i = 1; i < sorted.length; i++) {
-      intervals.push(daysBetween(sorted[i-1].occurred_at, sorted[i].occurred_at))
+      intervals.push(daysBetween(toDateStr(sorted[i - 1].occurred_at), toDateStr(sorted[i].occurred_at)))
     }
     if (intervals.length > 0) {
       const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length
