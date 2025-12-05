@@ -4522,7 +4522,16 @@ function runSingleBacktest(
   const training = movements.filter((m) => toDateStr(m.occurred_at) <= cutoffDate)
   const testSet = movements.filter((m) => toDateStr(m.occurred_at) > cutoffDate)
 
-  if (training.length < cal.backtest_min_training_movements || testSet.length < cal.backtest_min_test_movements) return null
+  if (training.length < cal.backtest_min_training_movements || testSet.length < cal.backtest_min_test_movements) {
+    log("backtest.skip.insufficient_split", {
+      training_count: training.length,
+      test_count: testSet.length,
+      min_training: cal.backtest_min_training_movements,
+      min_test: cal.backtest_min_test_movements,
+      test_days: testDays,
+    }, "forecast")
+    return null
+  }
 
   const models = buildBehavioralModels(training, invoices, bills, entityProfiles)
   const buckets = decomposeMovements(training)
@@ -4559,7 +4568,15 @@ function runSingleBacktest(
     if ((pred >= 0 && actual >= 0) || (pred < 0 && actual < 0)) directionMatches++
   }
 
-  if (activeDays < cal.backtest_min_active_days) return null
+  if (activeDays < cal.backtest_min_active_days) {
+    log("backtest.skip.insufficient_active_days", {
+      active_days: activeDays,
+      min_active: cal.backtest_min_active_days,
+      test_days: testDays,
+      total_days_checked: testDays,
+    }, "forecast")
+    return null
+  }
 
   const mae = absErrorSum / activeDays
   const directionAccuracy = directionMatches / activeDays
@@ -4638,13 +4655,25 @@ function runBacktest(
 ): BacktestResult | null {
   const allDates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
   const minMovements = cal.backtest_min_training_movements + cal.backtest_min_test_movements
-  if (allDates.length < minMovements) return null
+  if (allDates.length < minMovements) {
+    log("backtest.skip.insufficient_total_movements", {
+      total_movements: allDates.length,
+      min_required: minMovements,
+    }, "forecast")
+    return null
+  }
 
   const totalSpanDays = daysBetween(allDates[0], allDates[allDates.length - 1])
 
   // Primary backtest at 14 days
   const primary = runSingleBacktest(movements, invoices, bills, 14, allDates, cal, entityProfiles)
-  if (!primary) return null
+  if (!primary) {
+    log("backtest.skip.primary_14d_failed", {
+      total_movements: allDates.length,
+      total_span_days: totalSpanDays,
+    }, "forecast")
+    return null
+  }
 
   const by_horizon: BacktestByHorizon[] = []
   for (const h of cal.backtest_horizons) {
