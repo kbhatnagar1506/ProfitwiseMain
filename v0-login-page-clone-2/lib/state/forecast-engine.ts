@@ -5366,24 +5366,52 @@ export async function computeCashflowForecast(
 
   // Movement-based pattern analysis (ground truth from actual bank transactions)
   const movementPatterns = analyzeAllMovementPatterns(
-    movements.map((m) => ({
-      entity_id: m.entity_id || "unknown",
-      entity_name: m.counterparty || "Unknown",
-      direction: m.direction,
-      amount: m.amount,
-      occurred_at: typeof m.occurred_at === "string" ? m.occurred_at : new Date(m.occurred_at).toISOString(),
-    }))
+    movements
+      .filter((m) => m.occurred_at) // Filter out movements with no date
+      .map((m) => {
+        let dateStr: string
+        if (typeof m.occurred_at === "string") {
+          dateStr = m.occurred_at
+        } else if (m.occurred_at instanceof Date) {
+          dateStr = m.occurred_at.toISOString()
+        } else {
+          // Skip movements with invalid dates
+          return null
+        }
+        return {
+          entity_id: m.entity_id || "unknown",
+          entity_name: m.counterparty || "Unknown",
+          direction: m.direction,
+          amount: m.amount,
+          occurred_at: dateStr,
+        }
+      })
+      .filter((m) => m !== null) as Array<{ entity_id: string; entity_name: string; direction: "inflow" | "outflow"; amount: number; occurred_at: string }>
   )
 
   // Run movement-based backtest for real accuracy metrics
   const movementBacktest = runMovementBacktest(
-    movements.map((m) => ({
-      entity_id: m.entity_id || "unknown",
-      entity_name: m.counterparty || "Unknown",
-      direction: m.direction,
-      amount: m.amount,
-      occurred_at: typeof m.occurred_at === "string" ? m.occurred_at : new Date(m.occurred_at).toISOString(),
-    }))
+    movements
+      .filter((m) => m.occurred_at) // Filter out movements with no date
+      .map((m) => {
+        let dateStr: string
+        if (typeof m.occurred_at === "string") {
+          dateStr = m.occurred_at
+        } else if (m.occurred_at instanceof Date) {
+          dateStr = m.occurred_at.toISOString()
+        } else {
+          // Skip movements with invalid dates
+          return null
+        }
+        return {
+          entity_id: m.entity_id || "unknown",
+          entity_name: m.counterparty || "Unknown",
+          direction: m.direction,
+          amount: m.amount,
+          occurred_at: dateStr,
+        }
+      })
+      .filter((m) => m !== null) as Array<{ entity_id: string; entity_name: string; direction: "inflow" | "outflow"; amount: number; occurred_at: string }>
   )
 
   log("movement_analysis.complete", {
