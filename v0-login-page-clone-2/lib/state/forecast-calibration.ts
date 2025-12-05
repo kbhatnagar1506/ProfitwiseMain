@@ -428,6 +428,19 @@ export interface PortfolioPriorParams {
   delay_base_offset: number
 }
 
+export interface SettlementTimingParams {
+  // Reconciliation data weight (0-1): how much to trust reconciliation delays vs. processor intervals
+  reconciliation_weight: number
+  // Minimum reconciliation samples to use reconciliation data
+  min_reconciliation_samples: number
+  // Confidence boost when reconciliation data is available
+  confidence_boost_with_reconciliation: number
+  // Default settlement delay (days) when no data available
+  default_delay_days: number
+  // Standard deviation multiplier for delay uncertainty
+  delay_std_multiplier: number
+}
+
 export interface ComponentDetectionParams {
   peak_deviation: number
   trough_deviation: number
@@ -579,6 +592,9 @@ export interface ForecastCalibrationParams {
 
   // ─── Phase 9: Portfolio Prior Computation ───
   portfolio_prior: PortfolioPriorParams
+
+  // ─── Settlement Timing (Reconciliation-based) ───
+  settlement_timing: SettlementTimingParams
 
   // ─── Phase 10: Component Detection, Event Generation, Route ───
   component_detection: ComponentDetectionParams
@@ -923,6 +939,15 @@ export const DEFAULT_FORECAST_CALIBRATION: ForecastCalibrationParams = {
     p30_offset: 0.15, p30_freq_mult: 0.05,
     min_paid_invoices: 3, min_receipts_interval: 10,
     delay_base_offset: 7,
+  },
+
+  // Settlement Timing (Reconciliation-based)
+  settlement_timing: {
+    reconciliation_weight: 0.6,
+    min_reconciliation_samples: 3,
+    confidence_boost_with_reconciliation: 0.15,
+    default_delay_days: 2,
+    delay_std_multiplier: 1.2,
   },
 
   // Phase 10: Component Detection, Event Generation, Route Config
