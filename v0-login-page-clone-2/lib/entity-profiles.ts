@@ -28,22 +28,35 @@ export async function aggregateEntityTransactions(
   userId: string,
   entityId: string
 ): Promise<EntityTransaction[]> {
-  // Get payment transactions from movement_attributions
   const paymentRows = await query<{
     movement_id: string
     amount: string
     direction: string
     transaction_date: string
     component_type: string
+    ref_due_date: string | null
   }>(
     `SELECT 
       m.id as movement_id,
       ABS(a.net_amount::float) as amount,
       m.direction,
       m.date as transaction_date,
-      a.component_type
+      a.component_type,
+      COALESCE(
+        (qe.data->>'DueDate')::text,
+        (xe.data->>'DueDateString')::text,
+        (xe.data->>'DueDate')::text
+      ) as ref_due_date
     FROM movement_attributions a
     JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
+    LEFT JOIN qbo_entities qe
+      ON qe.entity_id = a.reference_id
+      AND qe.entity_type IN ('Invoice', 'Bill')
+      AND a.reference_id IS NOT NULL
+    LEFT JOIN xero_entities xe
+      ON xe.entity_id = a.reference_id
+      AND xe.entity_type IN ('Invoice', 'Bill')
+      AND a.reference_id IS NOT NULL
     WHERE a.user_id = $1::uuid
       AND m.counterparty_entity_id = $2::uuid
       AND a.component_type IN ('ar', 'ap')
@@ -51,22 +64,37 @@ export async function aggregateEntityTransactions(
     [userId, entityId]
   )
 
-  const transactions: EntityTransaction[] = paymentRows.rows.map((r) => ({
-    id: r.movement_id,
-    user_id: userId,
-    entity_id: entityId,
-    transaction_type: "payment" as const,
-    direction: r.direction as "inflow" | "outflow",
-    reference_type: "movement" as const,
-    reference_id: r.movement_id,
-    amount: parseFloat(r.amount) || 0,
-    transaction_date: r.transaction_date,
-    due_date: null,
-    days_to_pay: null,
-    was_on_time: null,
-    metadata: { component_type: r.component_type },
-    created_at: new Date().toISOString(),
-  }))
+  const transactions: EntityTransaction[] = paymentRows.rows.map((r) => {
+    const dueDate = r.ref_due_date?.slice(0, 10) ?? null
+    let daysToPay: number | null = null
+    let wasOnTime: boolean | null = null
+
+    if (dueDate && r.transaction_date) {
+      const payMs = new Date(r.transaction_date).getTime()
+      const dueMs = new Date(dueDate).getTime()
+      if (!isNaN(payMs) && !isNaN(dueMs)) {
+        daysToPay = Math.round((payMs - dueMs) / 86_400_000)
+        wasOnTime = daysToPay <= 0
+      }
+    }
+
+    return {
+      id: r.movement_id,
+      user_id: userId,
+      entity_id: entityId,
+      transaction_type: "payment" as const,
+      direction: r.direction as "inflow" | "outflow",
+      reference_type: "movement" as const,
+      reference_id: r.movement_id,
+      amount: parseFloat(r.amount) || 0,
+      transaction_date: r.transaction_date,
+      due_date: dueDate,
+      days_to_pay: daysToPay,
+      was_on_time: wasOnTime,
+      metadata: { component_type: r.component_type },
+      created_at: new Date().toISOString(),
+    }
+  })
 
   return transactions
 }
