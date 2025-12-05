@@ -1837,6 +1837,10 @@ function buildVendorModels(
  * Extract settlement delays from reconciliation data.
  * Compares movement date vs. when it was attributed/matched to infer clearing delays.
  * Returns intervals (in days) between transaction date and settlement/attribution date.
+ * 
+ * Note: This function looks for reconcile_at in movement metadata, which is populated
+ * when movements are enriched with attribution data. For direct attribution queries,
+ * use fetchMovementsWithAttributionTimestamps() instead.
  */
 function extractSettlementDelaysFromReconciliation(
   movements: TaggedMovement[],
@@ -1853,37 +1857,29 @@ function extractSettlementDelaysFromReconciliation(
     if (!m.metadata || typeof m.metadata !== "object") continue
 
     const md = m.metadata as Record<string, unknown>
+    
+    // Try multiple possible timestamp fields (in order of preference)
+    const reconcileAt = md.reconcile_at
     const attributedAt = md.attributed_at
     const matchedAt = md.matched_at
+    const createdAt = md.created_at
 
-    // If we have an attribution/match timestamp, calculate delay
-    if (attributedAt && typeof attributedAt === "string") {
-      try {
-        const movementDate = new Date(m.occurred_at).getTime()
-        const attrDate = new Date(attributedAt).getTime()
-        if (!isNaN(movementDate) && !isNaN(attrDate)) {
-          const delayDays = Math.round((attrDate - movementDate) / 86_400_000)
-          if (delayDays >= 0 && delayDays <= 90) {
-            delays.push(delayDays)
+    // If we have a reconciliation timestamp, calculate delay
+    for (const ts of [reconcileAt, attributedAt, matchedAt, createdAt]) {
+      if (ts && typeof ts === "string") {
+        try {
+          const movementDate = new Date(m.occurred_at).getTime()
+          const reconDate = new Date(ts).getTime()
+          if (!isNaN(movementDate) && !isNaN(reconDate)) {
+            const delayDays = Math.round((reconDate - movementDate) / 86_400_000)
+            if (delayDays >= 0 && delayDays <= 90) {
+              delays.push(delayDays)
+              break // Only use first available timestamp
+            }
           }
+        } catch {
+          // Ignore parse errors, try next timestamp
         }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-
-    if (matchedAt && typeof matchedAt === "string") {
-      try {
-        const movementDate = new Date(m.occurred_at).getTime()
-        const matchDate = new Date(matchedAt).getTime()
-        if (!isNaN(movementDate) && !isNaN(matchDate)) {
-          const delayDays = Math.round((matchDate - movementDate) / 86_400_000)
-          if (delayDays >= 0 && delayDays <= 90) {
-            delays.push(delayDays)
-          }
-        }
-      } catch {
-        // Ignore parse errors
       }
     }
   }
