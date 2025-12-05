@@ -2826,6 +2826,7 @@ function simulateMonthFromModels(
   let inflows = 0
   let outflows = 0
   const componentAmounts: { component_id: string; amount: number }[] = []
+  const mp = cal.monthly_projection
 
   // Customer receipts: bottom-up from entity models
   let customerTotal = 0
@@ -2840,7 +2841,6 @@ function simulateMonthFromModels(
   }
   
   for (const c of models.customers) {
-    const mp = cal.monthly_projection
     const dataQuality = Math.min(1, c.payment_count / mp.data_quality_count_norm) * (c.confidence === "high" ? 1 : c.confidence === "medium" ? mp.data_quality_conf_high : mp.data_quality_conf_low)
     const monthDecay = 1 / (1 + monthIndex * (cal.customer_decay_base - dataQuality * cal.customer_decay_data_quality_factor))
 
