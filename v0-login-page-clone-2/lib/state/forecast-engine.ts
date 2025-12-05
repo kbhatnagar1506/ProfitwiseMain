@@ -380,8 +380,8 @@ export function classifyEventBehavior(
 //   volatile   → erratic, large confidence penalty
 //   low_data   → <3 payments, anchor to invoices with sparse penalty
 
-function sigmoidDecay(overdueRatio: number): number {
-  return 1 / (1 + Math.exp(2.5 * (overdueRatio - 2)))
+function sigmoidDecay(overdueRatio: number, cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): number {
+  return 1 / (1 + Math.exp(cal.sigmoid_decay.steepness * (overdueRatio - cal.sigmoid_decay.midpoint)))
 }
 
 // Cohort statistics computed from actual payment data
@@ -396,16 +396,15 @@ type CohortStats = {
 // Global cohort stats - will be populated from actual data
 let globalCohortStats: CohortStats | null = null
 
-function computeCohortStats(customerModels: CustomerModel[]): CohortStats {
+function computeCohortStats(customerModels: CustomerModel[], cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): CohortStats {
   // Compute cohort-level statistics from customers with actual payment history
   const withHistory = customerModels.filter(c => c.payment_count >= 3)
   
   if (withHistory.length === 0) {
-    // No customers with history - use uninformative prior
     return {
-      avg_prob_7d: 0.3,
-      avg_prob_14d: 0.5,
-      avg_prob_30d: 0.7,
+      avg_prob_7d: cal.cohort_prior_fallback.avg_prob_7d,
+      avg_prob_14d: cal.cohort_prior_fallback.avg_prob_14d,
+      avg_prob_30d: cal.cohort_prior_fallback.avg_prob_30d,
       avg_interval: 30,
       sample_count: 0,
     }
@@ -425,7 +424,7 @@ function computeCohortStats(customerModels: CustomerModel[]): CohortStats {
     
     // Derive probabilities from interval distribution
     const interval = c.payment_interval_days || 30
-    const variance = c.interval_variance || interval * 0.3
+    const variance = c.interval_variance || interval * cal.cohort_prior_fallback.default_variance_mult
     
     // Probability of payment within N days given interval and variance
     // Using cumulative normal approximation
@@ -488,10 +487,10 @@ function classifyCustomerArchetype(
   if (paymentCount < 3) return "low_data"
   if (intervalCv < cal.archetype_clockwork_interval_cv_max && amountCv < cal.archetype_clockwork_amount_cv_max) return "clockwork"
   if (intervalCv > cal.archetype_volatile_interval_cv_min && paymentCount >= 3) return "volatile"
-  if (avgDaysToPay > cal.archetype_slow_reliable_avg_days_min && intervalCv < 0.5) return "slow_reliable"
+  if (avgDaysToPay > cal.archetype_slow_reliable_avg_days_min && intervalCv < cal.archetype_residual.slow_reliable_cv) return "slow_reliable"
   if (intervalCv > cal.archetype_bursty_interval_cv_range[0] && intervalCv <= cal.archetype_bursty_interval_cv_range[1]) return "bursty"
-  if (paymentCount >= cal.archetype_episodic_payment_count_range[0] && paymentCount <= cal.archetype_episodic_payment_count_range[1] && intervalCv > 0.4) return "episodic"
-  if (intervalCv < 0.5) return "clockwork"
+  if (paymentCount >= cal.archetype_episodic_payment_count_range[0] && paymentCount <= cal.archetype_episodic_payment_count_range[1] && intervalCv > cal.archetype_residual.episodic_cv) return "episodic"
+  if (intervalCv < cal.archetype_residual.clockwork_cv) return "clockwork"
   return "bursty"
 }
 
@@ -500,6 +499,7 @@ function computeCustomerFeatures(
   invoiceCount: number,
   overdueCount: number,
   now: string,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): CustomerFeatures {
   const amounts = payments.map((p) => p.amount)
   const amountMean = amounts.reduce((a, b) => a + b, 0) / amounts.length
@@ -513,6 +513,7 @@ function computeCustomerFeatures(
   const stdInterval = std(intervals)
   const intervalCv = avgInterval > 0 ? stdInterval / avgInterval : 999
 
+  const cf = cal.customer_features
   let recentTrend: CustomerFeatures["recent_trend"] = "insufficient"
   if (payments.length >= 4) {
     const mid = Math.floor(payments.length / 2)
@@ -520,7 +521,7 @@ function computeCustomerFeatures(
     const secondAvg = amounts.slice(mid).reduce((a, b) => a + b, 0) / (amounts.length - mid)
     if (firstAvg > 0) {
       const ratio = secondAvg / firstAvg
-      recentTrend = ratio > 1.15 ? "accelerating" : ratio < 0.85 ? "decelerating" : "stable"
+      recentTrend = ratio > cf.accel_threshold ? "accelerating" : ratio < cf.decel_threshold ? "decelerating" : "stable"
     }
   }
 
@@ -531,7 +532,7 @@ function computeCustomerFeatures(
   const dayCounts = new Array(7).fill(0)
   dayOfWeek.forEach((d) => dayCounts[d]++)
   const maxDay = Math.max(...dayCounts)
-  const weekdayBias = payments.length >= 5 && maxDay / payments.length > 0.4
+  const weekdayBias = payments.length >= cf.weekday_min_payments && maxDay / payments.length > cf.weekday_bias_threshold
     ? dayOfWeek[dayCounts.indexOf(maxDay)]
     : null
 
@@ -542,7 +543,7 @@ function computeCustomerFeatures(
   const dataSpanMonths = payments.length >= 2 ? daysBetween(payments[0].date, payments[payments.length - 1].date) / 30 : 1
   const monthly_cadence = dataSpanMonths > 0 ? r2(payments.length / dataSpanMonths) : 0
   const last_3_intervals = intervals.slice(-3)
-  const payer_reliability_cluster = intervalCv < 0.3 ? "reliable" : intervalCv < 0.6 ? "moderate" : "volatile"
+  const payer_reliability_cluster = intervalCv < cf.reliable_cv ? "reliable" : intervalCv < cf.moderate_cv ? "moderate" : "volatile"
 
   return {
     payment_count: payments.length,
@@ -675,14 +676,7 @@ function defaultPortfolioPriors(cal: ForecastCalibrationParams = DEFAULT_FORECAS
     base_p14: cal.portfolio_prior_base_p14,
     base_p30: cal.portfolio_prior_base_p30,
     avg_collection_delay: cal.portfolio_prior_avg_collection_delay,
-    archetype_multipliers: {
-      clockwork: 1.4,
-      slow_reliable: 0.9,
-      bursty: 0.8,
-      episodic: 0.6,
-      volatile: 0.5,
-      low_data: 0.7,
-    },
+    archetype_multipliers: { ...cal.portfolio_prior.archetype_weights },
   }
 }
 
@@ -692,21 +686,16 @@ function computePortfolioPriors(
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): PortfolioPriors {
   const priors = defaultPortfolioPriors(cal)
+  const pp = cal.portfolio_prior
   
-  // Compute actual collection rates from historical data
   const customerReceipts = movements.filter(m => 
     m.tag?.economic_class === "customer_receipt" && m.direction === "inflow"
   )
   
-  if (customerReceipts.length < 5) {
-    return priors // Not enough data, use defaults
+  if (customerReceipts.length < pp.min_receipts) {
+    return priors
   }
   
-  // Compute average collection delay from movements
-  const delays: number[] = []
-  const now = new Date().toISOString().slice(0, 10)
-  
-  // Group receipts by month to estimate collection patterns
   const byMonth = new Map<string, number[]>()
   for (const m of customerReceipts) {
     const month = monthKey(m.occurred_at)
@@ -715,27 +704,22 @@ function computePortfolioPriors(
     byMonth.set(month, arr)
   }
   
-  // Estimate base probabilities from payment frequency
   const monthCount = byMonth.size
   const avgPaymentsPerMonth = customerReceipts.length / Math.max(1, monthCount)
   
-  // More payments per month = higher base probability
-  const frequencyFactor = Math.min(2, avgPaymentsPerMonth / 10)
-  priors.base_p7 = Math.min(0.6, 0.15 + 0.1 * frequencyFactor)
-  priors.base_p14 = Math.min(0.75, priors.base_p7 + 0.15 + 0.05 * frequencyFactor)
-  priors.base_p30 = Math.min(0.9, priors.base_p14 + 0.15 + 0.05 * frequencyFactor)
+  const frequencyFactor = Math.min(pp.frequency_cap, avgPaymentsPerMonth / pp.frequency_divisor)
+  priors.base_p7 = Math.min(pp.p7_cap, pp.p7_base + pp.p7_freq_mult * frequencyFactor)
+  priors.base_p14 = Math.min(pp.p14_cap, priors.base_p7 + pp.p14_offset + pp.p14_freq_mult * frequencyFactor)
+  priors.base_p30 = Math.min(pp.p30_cap, priors.base_p14 + pp.p30_offset + pp.p30_freq_mult * frequencyFactor)
   
-  // Estimate average collection delay from invoice data if available
   const paidInvoices = invoices.filter(i => i.status === "paid" && i.due_date)
-  if (paidInvoices.length >= 3) {
-    // Use paid invoices to estimate typical delay
+  if (paidInvoices.length >= pp.min_paid_invoices) {
     const avgDelay = paidInvoices.reduce((sum, i) => {
       const delay = i.days_overdue ?? 0
       return sum + Math.max(0, delay)
     }, 0) / paidInvoices.length
-    priors.avg_collection_delay = Math.max(7, Math.min(45, avgDelay + 7))
-  } else if (customerReceipts.length >= 10) {
-    // Estimate from payment intervals
+    priors.avg_collection_delay = Math.max(pp.collection_delay_clamp_min, Math.min(pp.collection_delay_clamp_max, avgDelay + pp.delay_base_offset))
+  } else if (customerReceipts.length >= pp.min_receipts_interval) {
     const intervals: number[] = []
     const sorted = [...customerReceipts].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
     for (let i = 1; i < sorted.length; i++) {
@@ -743,7 +727,7 @@ function computePortfolioPriors(
     }
     if (intervals.length > 0) {
       const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length
-      priors.avg_collection_delay = Math.max(7, Math.min(45, avgInterval))
+      priors.avg_collection_delay = Math.max(pp.collection_delay_clamp_min, Math.min(pp.collection_delay_clamp_max, avgInterval))
     }
   }
   
@@ -809,8 +793,9 @@ function buildCustomerModels(
   portfolioPriors?: PortfolioPriors,
   profileByEntityId?: Map<string, EntityPaymentProfile>,
   profileByNormalizedName?: Map<string, EntityPaymentProfile>,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): CustomerModel[] {
-  const priors = portfolioPriors ?? computePortfolioPriors(movements, invoices)
+  const priors = portfolioPriors ?? computePortfolioPriors(movements, invoices, cal)
   const byEntity = new Map<string, { name: string; payments: { amount: number; date: string; isAnomaly: boolean; isOutlier: boolean; isFirstSeen: boolean; confidence: number }[] }>()
 
   // Helper to find profile for an entity
@@ -910,36 +895,31 @@ function buildCustomerModels(
     // Data-driven probability based on archetype and payment history
     const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : (daysSinceLast / priors.avg_collection_delay)
     const baseProb = priors.archetype_multipliers[archetype] * priors.base_p30
+    const cp = cal.customer_probability
     
     let probability: number
     if (payments.length >= 3) {
-      // Enough data: use sigmoid decay based on overdue ratio
-      probability = sigmoidDecay(overdueRatio) * baseProb * (1 + 0.1 * Math.min(1, payments.length / 6))
+      probability = sigmoidDecay(overdueRatio, cal) * baseProb * (1 + cp.payment_count_scale * Math.min(1, payments.length / cp.payment_count_norm))
     } else if (customerInvoices.length > 0) {
-      // Low data but has invoices: use invoice status
       const hasOverdue = customerInvoices.some((i) => i.status === "overdue")
-      probability = baseProb * (hasOverdue ? 1.2 : 0.9)
+      probability = baseProb * (hasOverdue ? cp.overdue_mult : cp.not_overdue_mult)
     } else {
-      // Very low data: conservative estimate
-      probability = baseProb * 0.5 * sigmoidDecay(overdueRatio)
+      probability = baseProb * cp.low_data_mult * sigmoidDecay(overdueRatio, cal)
     }
 
-    // Amount trend dampening
-    if (features.recent_trend === "decelerating") probability *= 0.8
-    if (payments.length === 1 && payments[0].isFirstSeen) probability *= 0.4
+    if (features.recent_trend === "decelerating") probability *= cp.decel_mult
+    if (payments.length === 1 && payments[0].isFirstSeen) probability *= cp.first_seen_mult
 
-    probability = Math.max(0.02, Math.min(0.98, probability))
+    probability = Math.max(cp.floor, Math.min(cp.ceiling, probability))
 
     let nextDate: string | null = null
     if (archetype === "clockwork" || archetype === "slow_reliable" || archetype === "bursty") {
-      if (avgInterval > 0 && probability > 0.1) {
+      if (avgInterval > 0 && probability > cp.min_prob_for_next_date) {
         nextDate = addDays(lastDate, avgInterval)
-        // Advance by full intervals until we're in the future, not a fractional snap
         while (nextDate < now && avgInterval > 0) {
           nextDate = addDays(nextDate, avgInterval)
         }
-        // Ensure we don't cluster on D+1
-        if (daysBetween(now, nextDate) < 2) nextDate = addDays(now, Math.max(2, Math.round(avgInterval * 0.5)))
+        if (daysBetween(now, nextDate) < cp.min_day_offset) nextDate = addDays(now, Math.max(cp.min_day_offset, Math.round(avgInterval * cp.interval_fraction)))
       }
     } else if (archetype === "low_data" && customerInvoices.length > 0) {
       const earliest = customerInvoices.filter((i) => i.due_date).sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
@@ -959,10 +939,9 @@ function buildCustomerModels(
         .filter((i) => i.due_date)
         .sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))[0]
 
-      // Boost proportional to archetype reliability
-      const invoiceBoost = (priors.archetype_multipliers[archetype] - 0.5) * 0.2
-      if (probability < 0.8 && invoiceBoost > 0) {
-        probability = Math.min(0.9, probability + invoiceBoost)
+      const invoiceBoost = (priors.archetype_multipliers[archetype] - cp.invoice_boost_offset) * cp.invoice_boost_scale
+      if (probability < cp.invoice_boost_cap && invoiceBoost > 0) {
+        probability = Math.min(cp.invoice_boost_max, probability + invoiceBoost)
       }
       if (confidence === "low" && payments.length >= 2) confidence = "medium"
 
@@ -971,11 +950,11 @@ function buildCustomerModels(
         if (dueOffset <= 30) nextDate = earliestDue.due_date
       } else if (earliestDue?.status === "overdue") {
         nextDate = addDays(now, Math.max(1, Math.round(priors.avg_collection_delay / 4)))
-        probability = Math.min(0.9, probability * 1.1)
+        probability = Math.min(cp.overdue_invoice_cap, probability * cp.overdue_invoice_mult)
       }
     }
 
-    probability = Math.max(0.02, Math.min(0.98, probability))
+    probability = Math.max(cp.floor, Math.min(cp.ceiling, probability))
 
     const invoiceForecasts = buildInvoiceForecasts(customerInvoices, features, archetype, now, priors)
 
@@ -1041,18 +1020,17 @@ function buildCustomerModels(
     // Try to find entity profile for this invoice-only customer
     const profile = findProfile(entityId, canonicalName)
 
-    // Use profile data if available, otherwise fall back to defaults
+    const ioc = cal.invoice_only_customer
+
     let archetype: CustomerArchetype = "low_data"
-    let probability = custInvs.some((i) => i.status === "overdue") ? 0.4 : 0.3
+    let probability = custInvs.some((i) => i.status === "overdue") ? ioc.overdue_prob : ioc.not_overdue_prob
     let confidence: "high" | "medium" | "low" = "low"
     let paymentIntervalDays = 0
     let paymentCount = 0
 
     if (profile && profile.transaction_count > 0) {
-      // Entity has payment history in profile - use it!
       paymentCount = profile.transaction_count
 
-      // Determine archetype from profile
       if (profile.archetype) {
         const archetypeMap: Record<string, CustomerArchetype> = {
           clockwork: "clockwork", slow_reliable: "slow_reliable", bursty: "bursty",
@@ -1060,23 +1038,20 @@ function buildCustomerModels(
         }
         archetype = archetypeMap[profile.archetype] ?? "low_data"
       } else if (profile.interval_cv !== null && profile.transaction_count >= 3) {
-        // Infer archetype from interval CV
-        if (profile.interval_cv < 0.25) archetype = "clockwork"
-        else if (profile.interval_cv < 0.5) archetype = "slow_reliable"
-        else if (profile.interval_cv < 0.8) archetype = "bursty"
+        if (profile.interval_cv < ioc.cv_clockwork) archetype = "clockwork"
+        else if (profile.interval_cv < ioc.cv_slow_reliable) archetype = "slow_reliable"
+        else if (profile.interval_cv < ioc.cv_bursty) archetype = "bursty"
         else archetype = "volatile"
       }
 
-      // Use reliability score for probability
       if (profile.reliability_score !== null && profile.reliability_score > 0) {
-        probability = 0.3 + profile.reliability_score * 0.5
-        if (profile.on_time_payment_rate !== null && profile.on_time_payment_rate > 0.8) {
-          probability = Math.min(0.95, probability * 1.15)
+        probability = ioc.profile_prob_base + profile.reliability_score * ioc.profile_prob_scale
+        if (profile.on_time_payment_rate !== null && profile.on_time_payment_rate > ioc.on_time_threshold) {
+          probability = Math.min(ioc.on_time_cap, probability * ioc.on_time_mult)
         }
       }
 
-      // Set confidence based on transaction count
-      if (profile.transaction_count >= 10 && profile.reliability_score !== null && profile.reliability_score > 0.7) {
+      if (profile.transaction_count >= ioc.high_conf_count && profile.reliability_score !== null && profile.reliability_score > ioc.high_conf_reliability) {
         confidence = "high"
       } else if (profile.transaction_count >= 5) {
         confidence = "medium"
@@ -1113,7 +1088,7 @@ function buildCustomerModels(
       interval_variance: 0,
       last_payment_date: profile?.last_transaction_date ?? now,
       payment_count: paymentCount,
-      probability_of_next: r2(Math.max(0.02, Math.min(0.98, probability))),
+      probability_of_next: r2(Math.max(cal.customer_probability.floor, Math.min(cal.customer_probability.ceiling, probability))),
       next_expected_date: earliest?.due_date ?? addDays(now, 14),
       confidence,
       outstanding_invoices: custInvs,
@@ -1173,14 +1148,14 @@ export function enhanceModelsWithEntityProfiles(
 
     // Adjust probability based on reliability score
     if (profile.reliability_score > 0) {
-      const reliabilityBoost = (profile.reliability_score - 0.5) * 0.2
-      model.probability_of_next = Math.max(0.02, Math.min(0.98, model.probability_of_next + reliabilityBoost))
+      const reliabilityBoost = (profile.reliability_score - cal.profile_enhancement.reliability_boost_offset) * cal.profile_enhancement.reliability_boost_scale
+      model.probability_of_next = Math.max(cal.customer_probability.floor, Math.min(cal.customer_probability.ceiling, model.probability_of_next + reliabilityBoost))
     }
 
     // Upgrade confidence if profile has good data
-    if (profile.transaction_count >= 6 && profile.reliability_score > 0.7) {
+    if (profile.transaction_count >= cal.profile_enhancement.upgrade_txn_count && profile.reliability_score > cal.profile_enhancement.upgrade_base_reliability) {
       if (model.confidence === "low") model.confidence = "medium"
-      if (model.confidence === "medium" && profile.reliability_score > 0.85) model.confidence = "high"
+      if (model.confidence === "medium" && profile.reliability_score > cal.profile_enhancement.upgrade_high_reliability) model.confidence = "high"
     }
   }
 
@@ -1264,11 +1239,12 @@ export function computeEntityProfileQuality(
 
 // ─── Step 2b: Vendor Behavioral Models ──────────────────────────────
 
-function detectCadence(avgInterval: number): VendorModel["cadence"] {
-  if (avgInterval <= 10) return "weekly"
-  if (avgInterval <= 18) return "biweekly"
-  if (avgInterval <= 45) return "monthly"
-  if (avgInterval <= 120) return "quarterly"
+function detectCadence(avgInterval: number, cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): VendorModel["cadence"] {
+  const cd = cal.cadence_detection
+  if (avgInterval <= cd.weekly_max) return "weekly"
+  if (avgInterval <= cd.biweekly_max) return "biweekly"
+  if (avgInterval <= cd.monthly_max) return "monthly"
+  if (avgInterval <= cd.quarterly_max) return "quarterly"
   return "irregular"
 }
 
@@ -1278,12 +1254,14 @@ function computeVendorFeatures(
   intervalCV: number,
   amountCV: number,
   archetype: VendorArchetype,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): VendorFeatures {
-  const due_date_adherence = vendorBills.length > 0 ? 0.7 : 0.5
+  const vc = cal.vendor_classification
+  const due_date_adherence = vendorBills.length > 0 ? vc.due_date_adherence_with_bills : vc.due_date_adherence_without
   const monthKeys = new Set(payments.map((p) => p.date.slice(0, 7)))
   const dataSpanMonths = monthKeys.size || 1
   const skipped_month_freq = dataSpanMonths > 1 ? r2(1 - payments.length / dataSpanMonths) : 0
-  const payment_batching = payments.length >= 3 && intervalCV < 0.4 ? 0.8 : 0.3
+  const payment_batching = payments.length >= 3 && intervalCV < vc.batch_supplier_cv ? vc.batching_score_batch : vc.batching_score_non_batch
   return {
     due_date_adherence,
     payment_batching,
@@ -1300,14 +1278,16 @@ function classifyVendorArchetype(
   intervalCV: number,
   amountCV: number,
   economicClass: string,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): VendorArchetype {
+  const vc = cal.vendor_classification
   if (economicClass === "transfer") return "treasury_linked"
   if (hasBills && paymentCount < 3) return "one_off_ap"
   if (hasBills && recurrenceType !== "hard" && recurrenceType !== "soft") return "hard_due_date"
-  if (recurrenceType === "hard" && intervalCV < 0.2) return "soft_recurring"
+  if (recurrenceType === "hard" && intervalCV < vc.hard_cv_threshold) return "soft_recurring"
   if (recurrenceType === "soft") return "soft_recurring"
-  if (recurrenceType === "episodic" && paymentCount >= 4 && amountCV > 0.5) return "spend_on_demand"
-  if (recurrenceType === "seasonal" || (paymentCount >= 5 && intervalCV < 0.4)) return "batch_supplier"
+  if (recurrenceType === "episodic" && paymentCount >= vc.spend_on_demand_count && amountCV > vc.spend_on_demand_cv) return "spend_on_demand"
+  if (recurrenceType === "seasonal" || (paymentCount >= vc.batch_supplier_count && intervalCV < vc.batch_supplier_cv)) return "batch_supplier"
   if (hasBills) return "hard_due_date"
   return "spend_on_demand"
 }
@@ -1322,9 +1302,12 @@ function classifyRecurrence(
   amounts?: number[],
   hasBillsWithDueDates?: boolean,
   billDueDates?: string[],
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): RecurrenceModel {
   const n = payments.length
   const intervalStd = std(intervals)
+  const rc = cal.recurrence_confidence
+  const cw = rc.component_weights
 
   const interval_stability_score = intervalCV < 1 ? r2(Math.max(0, 1 - intervalCV)) : 0
   const amts = amounts ?? payments.map((p) => p.amount).filter((a): a is number => typeof a === "number")
@@ -1337,11 +1320,11 @@ function classifyRecurrence(
   const class_consistency = 1
 
   const componentConfidence = (
-    interval_stability_score * 0.35 +
-    amount_stability_score * 0.25 +
-    counterparty_consistency * 0.15 +
-    due_date_consistency * 0.15 +
-    class_consistency * 0.1
+    interval_stability_score * cw.interval +
+    amount_stability_score * cw.amount +
+    counterparty_consistency * cw.counterparty +
+    due_date_consistency * cw.due_date +
+    class_consistency * cw.class_consistency
   )
 
   // When payment count is low, try to infer recurrence from bill due date intervals
@@ -1355,9 +1338,8 @@ function classifyRecurrence(
   const billIntervalCV = billAvgInterval > 0 ? billIntervalStd / billAvgInterval : 999
 
   if (n <= 2 && !taggedRecurring && !familyRecurring) {
-    // Use bill due date intervals to upgrade from unknown/episodic to soft
-    if (billIntervals.length >= 2 && billIntervalCV < 0.5) {
-      const billConf = Math.min(0.55, componentConfidence * 0.8 + 0.15)
+    if (billIntervals.length >= 2 && billIntervalCV < cal.vendor_soft_recurrence_cv_max) {
+      const billConf = Math.min(rc.bill_soft_cap, componentConfidence * rc.bill_soft_base + rc.bill_soft_floor)
       return {
         recurrence_type: "soft",
         recurrence_confidence: r2(billConf),
@@ -1373,7 +1355,7 @@ function classifyRecurrence(
       }
     }
     if (billIntervals.length >= 1 && billIntervalCV < 0.8) {
-      const billConf = Math.min(0.35, componentConfidence * 0.5 + 0.1)
+      const billConf = Math.min(rc.bill_episodic_cap, componentConfidence * rc.bill_episodic_base + rc.bill_episodic_floor)
       return {
         recurrence_type: "episodic",
         recurrence_confidence: r2(billConf),
@@ -1390,7 +1372,7 @@ function classifyRecurrence(
     }
     return {
       recurrence_type: n === 0 ? "unknown" : "episodic",
-      recurrence_confidence: r2(n === 0 ? 0 : Math.min(0.15, componentConfidence * 0.3)),
+      recurrence_confidence: r2(n === 0 ? 0 : Math.min(rc.unknown_cap, componentConfidence * rc.unknown_base)),
       expected_interval_days: avgInterval > 0 ? Math.round(avgInterval) : null,
       interval_std_days: null,
       amount_mean: amountMean > 0 ? r2(amountMean) : null,
@@ -1413,7 +1395,7 @@ function classifyRecurrence(
     if (dataSpanMonths >= 6 && activeMonths <= dataSpanMonths - 3 && peakMonth >= 2) {
       return {
         recurrence_type: "seasonal",
-        recurrence_confidence: r2(Math.min(0.85, componentConfidence * 1.1)),
+        recurrence_confidence: r2(Math.min(rc.seasonal_cap, componentConfidence * rc.seasonal_mult)),
         expected_interval_days: Math.round(avgInterval),
         interval_std_days: r2(intervalStd),
         amount_mean: amountMean > 0 ? r2(amountMean) : null,
@@ -1427,10 +1409,10 @@ function classifyRecurrence(
     }
   }
 
-  if (intervals.length >= 3 && intervalCV < 0.25) {
+  if (intervals.length >= 3 && intervalCV < cal.vendor_hard_recurrence_cv_max) {
     return {
       recurrence_type: "hard",
-      recurrence_confidence: r2(Math.min(0.95, componentConfidence * 1.1)),
+      recurrence_confidence: r2(Math.min(rc.hard_cap, componentConfidence * rc.hard_mult)),
       expected_interval_days: Math.round(avgInterval),
       interval_std_days: r2(intervalStd),
       amount_mean: amountMean > 0 ? r2(amountMean) : null,
@@ -1443,10 +1425,10 @@ function classifyRecurrence(
     }
   }
 
-  if (intervals.length >= 2 && intervalCV < 0.5 && (taggedRecurring || familyRecurring || n >= 3)) {
+  if (intervals.length >= 2 && intervalCV < cal.vendor_soft_recurrence_cv_max && (taggedRecurring || familyRecurring || n >= 3)) {
     return {
       recurrence_type: "soft",
-      recurrence_confidence: r2(Math.min(0.8, componentConfidence)),
+      recurrence_confidence: r2(Math.min(rc.soft_cap, componentConfidence)),
       expected_interval_days: Math.round(avgInterval),
       interval_std_days: r2(intervalStd),
       amount_mean: amountMean > 0 ? r2(amountMean) : null,
@@ -1462,7 +1444,7 @@ function classifyRecurrence(
   if (n >= 3) {
     return {
       recurrence_type: "episodic",
-      recurrence_confidence: r2(Math.min(0.5, componentConfidence * 0.7)),
+      recurrence_confidence: r2(Math.min(rc.episodic_cap, componentConfidence * rc.episodic_mult)),
       expected_interval_days: Math.round(avgInterval),
       interval_std_days: r2(intervalStd),
       amount_mean: amountMean > 0 ? r2(amountMean) : null,
@@ -1477,10 +1459,10 @@ function classifyRecurrence(
 
   // Fallback: also try bill due dates for low-data vendors that passed the n>2 check
   // but failed all other classification criteria
-  if (billIntervals.length >= 2 && billIntervalCV < 0.5 && n < 3) {
+  if (billIntervals.length >= 2 && billIntervalCV < cal.vendor_soft_recurrence_cv_max && n < 3) {
     return {
       recurrence_type: "soft",
-      recurrence_confidence: r2(Math.min(0.45, componentConfidence * 0.6 + 0.1)),
+      recurrence_confidence: r2(Math.min(rc.bill_interval_soft_cap, componentConfidence * 0.6 + 0.1)),
       expected_interval_days: Math.round(billAvgInterval),
       interval_std_days: r2(billIntervalStd),
       amount_mean: amountMean > 0 ? r2(amountMean) : null,
@@ -1495,7 +1477,7 @@ function classifyRecurrence(
 
   return {
     recurrence_type: taggedRecurring || familyRecurring ? "soft" : "unknown",
-    recurrence_confidence: r2(Math.min(0.3, componentConfidence * 0.5)),
+    recurrence_confidence: r2(Math.min(rc.fallback_cap, componentConfidence * rc.fallback_base)),
     expected_interval_days: avgInterval > 0 ? Math.round(avgInterval) : null,
     interval_std_days: intervals.length > 0 ? r2(intervalStd) : null,
     amount_mean: amountMean > 0 ? r2(amountMean) : null,
@@ -1513,6 +1495,7 @@ function buildVendorModels(
   bills: OutstandingBill[] = [],
   profileByEntityId?: Map<string, EntityPaymentProfile>,
   profileByNormalizedName?: Map<string, EntityPaymentProfile>,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): VendorModel[] {
   const byEntity = new Map<string, { name: string; ecCounts: Record<string, number>; payments: { amount: number; date: string; recurring: boolean; isAnomaly: boolean; isOutlier: boolean; confidence: number; familyKey: string | null }[] }>()
 
@@ -1568,7 +1551,7 @@ function buildVendorModels(
     }
     const avgAmount = vWeightTotal > 0 ? vWeightedSum / vWeightTotal : usePayments.reduce((s, p) => s + p.amount, 0) / usePayments.length
     const amountStd = std(usePayments.map((p) => p.amount))
-    const taggedRecurring = payments.filter((p) => p.recurring).length > payments.length * 0.5
+    const taggedRecurring = payments.filter((p) => p.recurring).length > payments.length * cal.vendor_classification.tagged_recurring_fraction
 
     const familyKeys = new Set(payments.map((p) => p.familyKey).filter(Boolean))
     let familyRecurring = false
@@ -1619,7 +1602,7 @@ function buildVendorModels(
     recurrence.amount_std = r2(amountStd)
 
     const lastDate = payments[payments.length - 1].date
-    const cadence = detectCadence(avgInterval)
+    const cadence = detectCadence(avgInterval, cal)
 
     let nextDate: string | null = null
     if (avgInterval > 0 && (isRecurring || payments.length >= 3)) {
@@ -1668,6 +1651,7 @@ function buildVendorModels(
       intervalCV,
       amountCV,
       primaryEc,
+      cal,
     )
 
     const features = computeVendorFeatures(
@@ -1676,6 +1660,7 @@ function buildVendorModels(
       intervalCV,
       amountCV,
       archetype,
+      cal,
     )
 
     models.push({
@@ -1741,7 +1726,8 @@ function buildVendorModels(
 
     // Use profile data if available
     let recurrenceType: RecurrenceModel["recurrence_type"] = "unknown"
-    let recurrenceConfidence = 0.12
+    const rc = cal.recurrence_confidence
+    let recurrenceConfidence = rc.bill_only_base_conf
     let cadenceIntervalDays = 0
     let isRecurring = false
     let paymentCount = 0
@@ -1752,12 +1738,12 @@ function buildVendorModels(
 
       if (profile.interval_cv !== null && profile.transaction_count >= 3) {
         const cvBasedConf = Math.max(0, 1 - profile.interval_cv)
-        recurrenceConfidence = Math.max(recurrenceConfidence, cvBasedConf * 0.8)
+        recurrenceConfidence = Math.max(recurrenceConfidence, cvBasedConf * rc.bill_only_cv_mult)
 
-        if (profile.interval_cv < 0.2) {
+        if (profile.interval_cv < rc.bill_only_hard_cv) {
           recurrenceType = "hard"
           isRecurring = true
-        } else if (profile.interval_cv < 0.5) {
+        } else if (profile.interval_cv < rc.bill_only_soft_cv) {
           recurrenceType = "soft"
           isRecurring = true
         }
@@ -1775,14 +1761,14 @@ function buildVendorModels(
     }
 
     // If profile didn't classify recurrence, try bill due date intervals
-    if (recurrenceType === "unknown" && billDueIntervals.length >= 2 && billDueCV < 0.5) {
+    if (recurrenceType === "unknown" && billDueIntervals.length >= 2 && billDueCV < cal.vendor_soft_recurrence_cv_max) {
       recurrenceType = "soft"
-      recurrenceConfidence = Math.max(recurrenceConfidence, Math.min(0.55, (1 - billDueCV) * 0.7))
+      recurrenceConfidence = Math.max(recurrenceConfidence, Math.min(rc.bill_interval_soft_cap, (1 - billDueCV) * rc.bill_interval_soft_base))
       cadenceIntervalDays = Math.round(billDueAvgInterval)
       isRecurring = true
     } else if (recurrenceType === "unknown" && billDueIntervals.length >= 1 && billDueCV < 0.8) {
       recurrenceType = "episodic"
-      recurrenceConfidence = Math.max(recurrenceConfidence, Math.min(0.35, (1 - billDueCV) * 0.5))
+      recurrenceConfidence = Math.max(recurrenceConfidence, Math.min(rc.bill_interval_episodic_cap, (1 - billDueCV) * rc.bill_interval_episodic_base))
       cadenceIntervalDays = Math.round(billDueAvgInterval)
     }
 
@@ -1796,14 +1782,14 @@ function buildVendorModels(
       interval_stability_score: profile?.interval_cv != null ? Math.max(0, 1 - profile.interval_cv) : 0,
       amount_stability_score: 0,
       counterparty_consistency: 0.5,
-      due_date_consistency: vendBills.some((b) => b.due_date) ? 0.85 : 0.4,
+      due_date_consistency: vendBills.some((b) => b.due_date) ? cal.vendor_classification.bill_only_due_date_with : cal.vendor_classification.bill_only_due_date_without,
       class_consistency: 0.5,
     }
     const vf: VendorFeatures = {
-      due_date_adherence: profile?.on_time_payment_rate ?? 0.65,
+      due_date_adherence: profile?.on_time_payment_rate ?? cal.vendor_classification.bill_only_adherence_fallback,
       payment_batching: 0.4,
       skipped_month_freq: 0,
-      amount_volatility: 0.35,
+      amount_volatility: cal.vendor_classification.bill_only_amount_volatility,
       discretionary_flag: false,
     }
     let nextDate: string | null = null
@@ -1821,7 +1807,7 @@ function buildVendorModels(
       archetype: isRecurring ? "soft_recurring" : "one_off_ap",
       features: vf,
       avg_amount: r2(avgAmount),
-      cadence: cadenceIntervalDays > 0 ? detectCadence(cadenceIntervalDays) : "irregular",
+      cadence: cadenceIntervalDays > 0 ? detectCadence(cadenceIntervalDays, cal) : "irregular",
       cadence_interval_days: cadenceIntervalDays,
       is_recurring: isRecurring,
       recurrence: bareRecurrence,
@@ -1935,7 +1921,7 @@ function buildSettlementModel(movements: TaggedMovement[]): SettlementModel {
 //   irregular: some pattern but not consistent enough to predict reliably
 //   unknown:   too few data points to determine
 
-function buildTransferModel(movements: TaggedMovement[]): TransferBehaviorModel {
+function buildTransferModel(movements: TaggedMovement[], cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): TransferBehaviorModel {
   const transfers: { amount: number; date: string; account: string | null }[] = []
 
   for (const m of movements) {
@@ -1965,10 +1951,11 @@ function buildTransferModel(movements: TaggedMovement[]): TransferBehaviorModel 
   const intervalStd = std(intervals)
   const cv = avgInterval && avgInterval > 0 ? intervalStd / avgInterval : Infinity
 
+  const tm = cal.transfer_model
   let triggerPattern: TransferBehaviorModel["trigger_pattern"] = "unknown"
-  if (avgInterval && cv < 0.3 && intervals.length >= 3) {
+  if (avgInterval && cv < tm.periodic_cv && intervals.length >= 3) {
     triggerPattern = "periodic"
-  } else if (intervals.length >= 3 && cv < 0.7) {
+  } else if (intervals.length >= 3 && cv < tm.irregular_cv) {
     triggerPattern = "irregular"
   }
 
@@ -1990,9 +1977,9 @@ function buildTransferModel(movements: TaggedMovement[]): TransferBehaviorModel 
         const priorDate = addDays(t.date, -lookback)
         priorNet += netByDate.get(priorDate) ?? 0
       }
-      if (priorNet < -avgAmount * 0.3) lowBalanceTriggers++
+      if (priorNet < -avgAmount * tm.low_balance_threshold) lowBalanceTriggers++
     }
-    if (sorted.length >= 3 && lowBalanceTriggers / sorted.length > 0.5) {
+    if (sorted.length >= 3 && lowBalanceTriggers / sorted.length > tm.low_balance_frequency) {
       triggerPattern = "low_balance"
     }
   }
@@ -2078,10 +2065,10 @@ function buildInvoiceSignal(invoices: OutstandingInvoice[]): InvoiceSignal {
 // Detect month-over-month revenue patterns from historical movements.
 // Returns peak/low months and monthly weights for forecast adjustment.
 
-function detectSeasonality(movements: TaggedMovement[]): SeasonalityPattern | undefined {
-  // Need at least 6 months of data for meaningful seasonality detection
+function detectSeasonality(movements: TaggedMovement[], cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): SeasonalityPattern | undefined {
+  const sc = cal.seasonality_config
   const inflowMovements = movements.filter((m) => isInflow(m) && m.tag?.state_inclusion_policy !== "exclude_and_review")
-  if (inflowMovements.length < 20) return undefined
+  if (inflowMovements.length < sc.min_inflow_movements) return undefined
 
   // Group inflows by month
   const monthlyTotals = new Map<string, number>()
@@ -2091,7 +2078,7 @@ function detectSeasonality(movements: TaggedMovement[]): SeasonalityPattern | un
   }
 
   // Need at least 6 distinct months
-  if (monthlyTotals.size < 6) return undefined
+  if (monthlyTotals.size < sc.min_distinct_months) return undefined
 
   // Calculate average monthly revenue
   const monthValues = [...monthlyTotals.values()]
@@ -2116,7 +2103,7 @@ function detectSeasonality(movements: TaggedMovement[]): SeasonalityPattern | un
       const avg = values.reduce((a, b) => a + b, 0) / values.length
       monthAverages[m - 1] = avg
       // Weight is ratio to overall average (capped between 0.5 and 2.0)
-      monthWeights[m - 1] = avgMonthly > 0 ? Math.max(0.5, Math.min(2.0, avg / avgMonthly)) : 1
+      monthWeights[m - 1] = avgMonthly > 0 ? Math.max(sc.weight_floor, Math.min(sc.weight_ceiling, avg / avgMonthly)) : 1
     }
   }
 
@@ -2126,8 +2113,8 @@ function detectSeasonality(movements: TaggedMovement[]): SeasonalityPattern | un
   
   for (let m = 1; m <= 12; m++) {
     const weight = monthWeights[m - 1]
-    if (weight > 1.2) peakMonths.push(m)
-    else if (weight < 0.8) lowMonths.push(m)
+    if (weight > sc.peak_threshold) peakMonths.push(m)
+    else if (weight < sc.low_threshold) lowMonths.push(m)
   }
 
   // Only return seasonality if there's meaningful variation
@@ -2199,7 +2186,8 @@ function refreshInvoiceForecastsAfterProfileEnhance(c: CustomerModel): InvoiceFo
 
 function enhanceModelsWithProfiles(
   models: BehavioralModels,
-  profiles: EntityPaymentProfile[]
+  profiles: EntityPaymentProfile[],
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): BehavioralModels {
   if (profiles.length === 0) return models
 
@@ -2275,22 +2263,23 @@ function enhanceModelsWithProfiles(
     }
 
     let probability = c.probability_of_next
+    const pe = cal.profile_enhancement
     if (profile.reliability_score !== null && profile.reliability_score > 0) {
-      const profileProb = 0.3 + profile.reliability_score * 0.5
-      probability = probability * 0.4 + profileProb * 0.6
+      const profileProb = pe.reliability_boost_offset + profile.reliability_score * pe.reliability_boost_scale * 2.5
+      probability = probability * pe.blend_model_weight + profileProb * pe.blend_profile_weight
     }
     if (profile.on_time_payment_rate !== null) {
-      if (profile.on_time_payment_rate > 0.8) {
-        probability = Math.min(0.95, probability * 1.15)
-      } else if (profile.on_time_payment_rate < 0.5) {
-        probability = probability * 0.85
+      if (profile.on_time_payment_rate > pe.on_time_good_threshold) {
+        probability = Math.min(pe.on_time_good_cap, probability * pe.on_time_good_mult)
+      } else if (profile.on_time_payment_rate < pe.on_time_bad_threshold) {
+        probability = probability * pe.on_time_bad_mult
       }
     }
 
     let confidence = c.confidence
-    if (profile.transaction_count >= 10 && profile.reliability_score !== null && profile.reliability_score > 0.7) {
+    if (profile.transaction_count >= pe.high_conf_count && profile.reliability_score !== null && profile.reliability_score > pe.high_conf_reliability) {
       confidence = "high"
-    } else if (profile.transaction_count >= 5 && profile.reliability_score !== null && profile.reliability_score > 0.5) {
+    } else if (profile.transaction_count >= pe.medium_conf_count && profile.reliability_score !== null && profile.reliability_score > pe.medium_conf_reliability) {
       confidence = confidence === "low" ? "medium" : confidence
     }
 
@@ -2304,7 +2293,7 @@ function enhanceModelsWithProfiles(
       archetype,
       features,
       payment_count: txCount,
-      probability_of_next: r2(Math.max(0.02, Math.min(0.98, probability))),
+      probability_of_next: r2(Math.max(cal.customer_probability.floor, Math.min(cal.customer_probability.ceiling, probability))),
       confidence,
       payment_interval_days: paymentIntervalDays,
     }
@@ -2319,9 +2308,9 @@ function enhanceModelsWithProfiles(
       const cvBasedConf = Math.max(0, 1 - profile.interval_cv)
       recurrence.recurrence_confidence = Math.max(recurrence.recurrence_confidence, cvBasedConf * 0.8)
 
-      if (profile.interval_cv < 0.2) {
+      if (profile.interval_cv < cal.vendor_hard_recurrence_cv_max) {
         recurrence.recurrence_type = "hard"
-      } else if (profile.interval_cv < 0.5) {
+      } else if (profile.interval_cv < cal.vendor_soft_recurrence_cv_max) {
         recurrence.recurrence_type = recurrence.recurrence_type === "unknown" ? "soft" : recurrence.recurrence_type
       }
     }
@@ -2359,7 +2348,7 @@ function getSeasonalWeight(date: string, seasonality: SeasonalityPattern | undef
   return seasonality.month_weights[month] ?? 1
 }
 
-function generateEvents30d(models: BehavioralModels, components: CashflowComponent[]): ForecastEvent[] {
+function generateEvents30d(models: BehavioralModels, components: CashflowComponent[], cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): ForecastEvent[] {
   const events: ForecastEvent[] = []
   const now = new Date()
   const today = now.toISOString().slice(0, 10)
@@ -2389,7 +2378,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
 
   // Customer payment events — invoice-aware with archetype reasoning
   for (const c of models.customers) {
-    if (c.probability_of_next < 0.15) continue
+    if (c.probability_of_next < cal.event_generation.min_customer_prob) continue
 
     const openInvs = c.outstanding_invoices.filter((i) => i.amount_due > 0)
     const baseReasoning: EventReasoning = {
@@ -2430,7 +2419,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
         const prob = invFc
           ? (offset <= 7 ? invFc.probability_7d : offset <= 14 ? invFc.probability_14d : invFc.probability_30d)
           : inv.status === "overdue"
-            ? Math.min(0.95, c.probability_of_next + 0.1)
+            ? Math.min(cal.event_generation.overdue_invoice_prob_cap, c.probability_of_next + cal.event_generation.overdue_invoice_prob_boost)
             : c.probability_of_next
 
         events.push({
@@ -2498,8 +2487,8 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
         const stagger = bi * 1
         const adjustedOffset = Math.min(30, offset + stagger)
         const adjustedDate = addDays(today, adjustedOffset)
-        const baseProb = bill.status === "overdue" ? 0.8 : 0.7
-        const prob = beyond30 ? Math.max(0.35, baseProb * 0.75) : baseProb
+        const baseProb = bill.status === "overdue" ? cal.vendor_event_probability.bill_overdue_prob : cal.vendor_event_probability.bill_not_overdue_prob
+        const prob = beyond30 ? Math.max(cal.event_generation.beyond_30d_prob_floor, baseProb * cal.event_generation.beyond_30d_prob_mult) : baseProb
         events.push({
           date: adjustedDate, day_offset: adjustedOffset, type: "vendor_payment",
           entity: v.name, amount: r2(bill.amount_due),
@@ -2518,16 +2507,17 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
       continue
     }
 
-    if (!v.is_recurring && v.payment_count < 3) continue
+    if (!v.is_recurring && v.payment_count < cal.event_generation.vendor_min_payment_count) continue
     const recConf = v.recurrence.recurrence_confidence
     const recType = v.recurrence.recurrence_type
     // Don't generate repeating events for episodic/unknown vendors
     if (recType === "episodic" || recType === "unknown") continue
-    if (recConf < 0.2) continue
-    const prob = recType === "hard" ? Math.min(0.92, 0.8 + recConf * 0.1)
-      : recType === "soft" ? Math.min(0.8, 0.55 + recConf * 0.2)
-      : recType === "seasonal" ? Math.min(0.7, 0.4 + recConf * 0.2)
-      : v.is_recurring ? 0.6 : 0.35
+    if (recConf < cal.vendor_min_recurrence_confidence) continue
+    const vep = cal.vendor_event_probability
+    const prob = recType === "hard" ? Math.min(vep.hard_cap, vep.hard_base + recConf * vep.hard_conf_scale)
+      : recType === "soft" ? Math.min(vep.soft_cap, vep.soft_base + recConf * vep.soft_conf_scale)
+      : recType === "seasonal" ? Math.min(vep.seasonal_cap, vep.seasonal_base + recConf * vep.seasonal_conf_scale)
+      : v.is_recurring ? vep.recurring_fallback : vep.non_recurring_fallback
 
     generateRepeating(v.last_payment_date, v.cadence_interval_days, 5, (date, offset) => {
       events.push({
@@ -2548,7 +2538,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
       events.push({
         date, day_offset: offset, type: "recurring_expense",
         entity: rf.label, amount: r2(rf.monthly_amount),
-        direction: "out", probability: 0.8,
+        direction: "out", probability: cal.vendor_event_probability.recurring_fixed_prob,
         confidence: "high", source_model: "recurring",
         reasoning: {
           basis: `Fixed recurring obligation, $${rf.monthly_amount.toLocaleString()}/mo`,
@@ -2559,10 +2549,10 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
   }
 
   // Settlement events — per-processor when available
-  if (models.settlement.confidence !== "insufficient" && models.settlement.sample_count >= 3) {
+  if (models.settlement.confidence !== "insufficient" && models.settlement.sample_count >= cal.event_generation.settlement_min_samples) {
     if (models.settlement.by_processor.length > 0) {
       for (const proc of models.settlement.by_processor) {
-        if (proc.sample_count < 2) continue
+        if (proc.sample_count < cal.event_generation.processor_min_samples) continue
         const monthlyAvg = components.find((c) => c.category === "processor_payouts" && c.direction === "in")?.monthly_avg ?? 0
         const procShare = proc.sample_count / Math.max(1, models.settlement.sample_count)
         const weeklyAmount = (monthlyAvg * procShare) / 4
@@ -2573,8 +2563,8 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
           events.push({
             date: addDays(today, offset), day_offset: offset, type: "settlement",
             entity: proc.processor, amount: r2(weeklyAmount),
-            direction: "in", probability: 0.8,
-            confidence: proc.sample_count >= 10 ? "high" : "medium",
+            direction: "in", probability: cal.transfer_model.settlement_event_prob,
+            confidence: proc.sample_count >= cal.event_generation.processor_high_conf_samples ? "high" : "medium",
             source_model: "settlement",
             reasoning: {
               basis: `${proc.processor}: avg ${proc.avg_delay_days.toFixed(1)}d delay, ${proc.sample_count} samples`,
@@ -2594,7 +2584,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
           events.push({
             date: addDays(today, offset), day_offset: offset, type: "settlement",
             entity: "Processor settlement", amount: r2(weeklyAmount),
-            direction: "in", probability: 0.8,
+            direction: "in", probability: cal.transfer_model.settlement_agg_prob,
             confidence: models.settlement.confidence === "high" ? "high" : "medium",
             source_model: "settlement",
             reasoning: {
@@ -2607,7 +2597,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
   }
 
   // Transfer events
-  if (models.transfers.transfer_count >= 3 && models.transfers.trigger_pattern !== "unknown") {
+  if (models.transfers.transfer_count >= cal.event_generation.transfer_min_count && models.transfers.trigger_pattern !== "unknown") {
     const transferEntity = models.transfers.primary_account ?? "Internal transfer"
     const transferReasoning: EventReasoning = {
       basis: `${models.transfers.trigger_pattern} pattern, ${models.transfers.transfer_count} historical transfers`,
@@ -2623,7 +2613,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
           events.push({
             date, day_offset: offset, type: "transfer",
             entity: transferEntity, amount: r2(models.transfers.avg_transfer_amount),
-            direction: "in", probability: 0.7,
+            direction: "in", probability: cal.transfer_model.periodic_event_prob,
             confidence: models.transfers.confidence as "high" | "medium" | "low",
             source_model: "transfer", reasoning: transferReasoning,
           })
@@ -2642,7 +2632,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
         events.push({
           date: addDays(today, triggerDay), day_offset: triggerDay, type: "transfer",
           entity: transferEntity, amount: r2(models.transfers.avg_transfer_amount),
-          direction: "in", probability: 0.6, confidence: "medium", source_model: "transfer",
+          direction: "in", probability: cal.transfer_model.low_balance_event_prob, confidence: "medium", source_model: "transfer",
           reasoning: { ...transferReasoning, basis: `Reactive transfer: triggered by outflow cluster at D+${outDay}` },
         })
         transfersPlaced++
@@ -2651,7 +2641,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
       events.push({
         date: addDays(today, 15), day_offset: 15, type: "transfer",
         entity: transferEntity, amount: r2(models.transfers.avg_transfer_amount),
-        direction: "in", probability: 0.4, confidence: "low", source_model: "transfer",
+        direction: "in", probability: cal.transfer_model.irregular_event_prob, confidence: "low", source_model: "transfer",
         reasoning: { ...transferReasoning, risk_factors: ["Irregular pattern — low predictability"] },
       })
     }
@@ -2718,13 +2708,12 @@ function decomposeMovements(movements: TaggedMovement[]): ComponentBucket[] {
   return [...buckets.values()].filter((b) => b.movements.length > 0)
 }
 
-function detectBehavior(bucket: ComponentBucket, totalMonths: number): ComponentBehavior {
+function detectBehavior(bucket: ComponentBucket, totalMonths: number, cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): ComponentBehavior {
+  const cd = cal.component_detection
   const months = new Set(bucket.movements.map((m) => monthKey(m.date)))
   const coverage = months.size / Math.max(1, totalMonths)
   const recurringPct = bucket.movements.filter((m) => m.is_recurring).length / bucket.movements.length
 
-  // Seasonality detection: need at least 6 months of data and check if same
-  // calendar months consistently spike or dip relative to the mean
   if (months.size >= 6) {
     const byCalMonth = new Map<number, number[]>()
     for (const m of bucket.movements) {
@@ -2733,7 +2722,6 @@ function detectBehavior(bucket: ComponentBucket, totalMonths: number): Component
       if (!arr) { arr = []; byCalMonth.set(cm, arr) }
       arr.push(m.amount)
     }
-    // Check if any calendar months deviate >50% from overall mean
     const allAmounts = bucket.movements.map((m) => m.amount)
     const overallMean = allAmounts.reduce((a, b) => a + b, 0) / allAmounts.length
     if (overallMean > 0) {
@@ -2743,21 +2731,22 @@ function detectBehavior(bucket: ComponentBucket, totalMonths: number): Component
         if (amounts.length < 2) continue
         const monthMean = amounts.reduce((a, b) => a + b, 0) / amounts.length
         const ratio = monthMean / overallMean
-        if (ratio > 1.5) peakMonths++
-        else if (ratio < 0.5) troughMonths++
+        if (ratio > cd.peak_deviation) peakMonths++
+        else if (ratio < cd.trough_deviation) troughMonths++
       }
       if (peakMonths >= 1 && troughMonths >= 1) return "seasonal"
       if (peakMonths >= 2 || troughMonths >= 2) return "seasonal"
     }
   }
 
-  if (recurringPct > 0.6 || coverage > 0.7) return "recurring"
+  if (recurringPct > cd.recurring_pct || coverage > cd.recurring_coverage) return "recurring"
   if (bucket.movements.length <= 2) return "one_time"
-  if (coverage > 0.4) return "episodic"
+  if (coverage > cd.episodic_coverage) return "episodic"
   return "one_time"
 }
 
-function buildComponent(bucket: ComponentBucket, dataSpanDays: number): CashflowComponent {
+function buildComponent(bucket: ComponentBucket, dataSpanDays: number, cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): CashflowComponent {
+  const cd = cal.component_detection
   const totalMonths = Math.max(1, dataSpanDays / 30)
   const totalAmount = bucket.movements.reduce((s, m) => s + m.amount, 0)
   const monthlyAvg = totalAmount / totalMonths
@@ -2773,14 +2762,14 @@ function buildComponent(bucket: ComponentBucket, dataSpanDays: number): Cashflow
   const volatility = mean > 0 ? std(monthValues) / mean : 0
 
   let trend = 0
-  if (monthValues.length >= 4) {
+  if (monthValues.length >= cd.min_trend_months) {
     const mid = Math.floor(monthValues.length / 2)
     const firstHalf = monthValues.slice(0, mid).reduce((a, b) => a + b, 0) / mid
     const secondHalf = monthValues.slice(mid).reduce((a, b) => a + b, 0) / (monthValues.length - mid)
     trend = firstHalf > 0 ? (secondHalf - firstHalf) / firstHalf : 0
   }
 
-  const behavior = detectBehavior(bucket, totalMonths)
+  const behavior = detectBehavior(bucket, totalMonths, cal)
 
   // Compute seasonal index: ratio of calendar-month average to overall mean
   let seasonal_index: Record<number, number> | null = null
@@ -2805,11 +2794,11 @@ function buildComponent(bucket: ComponentBucket, dataSpanDays: number): Cashflow
   }
 
   let confidence: "high" | "medium" | "low" = "low"
-  if ((behavior === "recurring" || behavior === "seasonal") && monthValues.length >= 3 && volatility < 0.5) confidence = "high"
-  else if (monthValues.length >= 2 && volatility < 1.0) confidence = "medium"
+  if ((behavior === "recurring" || behavior === "seasonal") && monthValues.length >= cd.min_high_months && volatility < cd.high_conf_volatility) confidence = "high"
+  else if (monthValues.length >= cd.min_medium_months && volatility < cd.medium_conf_volatility) confidence = "medium"
 
-  const cappedTrend = Math.max(-2, Math.min(2, trend))
-  const cappedVolatility = Math.min(3, volatility)
+  const cappedTrend = Math.max(-cd.trend_cap, Math.min(cd.trend_cap, trend))
+  const cappedVolatility = Math.min(cd.volatility_cap, volatility)
 
   return {
     id: `${bucket.category}_${bucket.direction}`,
@@ -2851,8 +2840,8 @@ function simulateMonthFromModels(
   }
   
   for (const c of models.customers) {
-    // Compute data quality from payment history
-    const dataQuality = Math.min(1, c.payment_count / 6) * (c.confidence === "high" ? 1 : c.confidence === "medium" ? 0.7 : 0.4)
+    const mp = cal.monthly_projection
+    const dataQuality = Math.min(1, c.payment_count / mp.data_quality_count_norm) * (c.confidence === "high" ? 1 : c.confidence === "medium" ? mp.data_quality_conf_high : mp.data_quality_conf_low)
     const monthDecay = 1 / (1 + monthIndex * (cal.customer_decay_base - dataQuality * cal.customer_decay_data_quality_factor))
 
     if (c.next_expected_date && c.next_expected_date >= monthStart && c.next_expected_date < monthEnd) {
@@ -2867,11 +2856,11 @@ function simulateMonthFromModels(
       // Use a conversion rate that decays over time (invoices get collected eventually)
       const totalOutstanding = c.outstanding_invoices.reduce((sum, inv) => sum + inv.amount_due, 0)
       // Month 0: expect 40% collection, Month 1: 30%, Month 2: 20%, etc.
-      const collectionRate = Math.max(0.05, 0.4 - monthIndex * 0.1)
+      const collectionRate = Math.max(mp.invoice_collection_floor, mp.invoice_collection_base - monthIndex * mp.invoice_collection_decay)
       customerTotal += totalOutstanding * c.probability_of_next * collectionRate
     } else if (c.payment_count >= 2 && c.avg_amount > 0) {
       // Has some payment history but no invoices
-      customerTotal += c.avg_amount * c.probability_of_next * monthDecay * 0.5
+      customerTotal += c.avg_amount * c.probability_of_next * monthDecay * mp.no_invoice_mult
     }
   }
   
@@ -2879,7 +2868,7 @@ function simulateMonthFromModels(
   // This handles the case where all customers are invoice-only
   if (customerTotal === 0 && totalInvoicePipeline > 0) {
     // Assume invoices convert to cash over ~3 months with decay
-    const pipelineConversion = Math.max(0.05, 0.35 - monthIndex * 0.08)
+    const pipelineConversion = Math.max(mp.pipeline_conversion_floor, mp.pipeline_conversion_base - monthIndex * mp.pipeline_conversion_decay)
     customerTotal = totalInvoicePipeline * pipelineConversion
   }
 
@@ -2889,8 +2878,8 @@ function simulateMonthFromModels(
   if (custComp && custComp.monthly_avg > 0) {
     const historicalAvg = custComp.monthly_avg
     // Compute floor decay from data: more volatile history = faster decay
-    const volatilityFactor = Math.min(1, custComp.volatility ?? 0.5)
-    const floorDecay = (1 - volatilityFactor * 0.3) / (1 + monthIndex * (cal.component_decay_base + volatilityFactor * cal.component_decay_volatility_factor))
+    const volatilityFactor = Math.min(1, custComp.volatility ?? mp.default_volatility)
+    const floorDecay = (1 - volatilityFactor * mp.floor_decay_volatility_coeff) / (1 + monthIndex * (cal.component_decay_base + volatilityFactor * cal.component_decay_volatility_factor))
     const portfolioFloor = historicalAvg * floorDecay
     if (customerTotal < portfolioFloor) {
       // Blend toward floor when bottom-up is weak
@@ -2917,7 +2906,7 @@ function simulateMonthFromModels(
     // Skip episodic/unknown vendors from monthly projection — they are noise
     if (recType === "episodic" || recType === "unknown") continue
     // Require minimum confidence to project
-    if (recConf < cal.vendor_min_recurrence_confidence) continue
+    if (recConf < mp.vendor_min_recurrence_conf) continue
 
     // Compute decay based on vendor's recurrence confidence
     const vendorDecay = 1 / (1 + monthIndex * (cal.vendor_decay_base - recConf * cal.vendor_decay_recurrence_factor))
@@ -2944,7 +2933,7 @@ function simulateMonthFromModels(
   const combinedVendorProjection = vendorTotal + recurringTotal
   if (vendComp && vendComp.monthly_avg > 0) {
     const historicalVendorAvg = vendComp.monthly_avg
-    const vendorFloorDecay = 0.85 / (1 + monthIndex * 0.06)
+    const vendorFloorDecay = mp.vendor_floor_base / (1 + monthIndex * mp.vendor_floor_decay)
     const vendorFloor = historicalVendorAvg * vendorFloorDecay
     if (combinedVendorProjection < vendorFloor) {
       // Scale up vendor projection to meet the floor
@@ -2976,9 +2965,9 @@ function simulateMonthFromModels(
     if (comp.behavior === "one_time") continue
     
     // Compute decay based on component's volatility
-    const compVolatility = comp.volatility ?? 0.5
+    const compVolatility = comp.volatility ?? mp.default_volatility
     const compDecay = 1 / (1 + monthIndex * (cal.component_decay_base + compVolatility * cal.component_decay_volatility_factor))
-    if (comp.behavior === "episodic") amount *= 0.5 * compDecay
+    if (comp.behavior === "episodic") amount *= mp.episodic_component_mult * compDecay
 
     if (comp.behavior === "seasonal" && comp.seasonal_index) {
       const idx = comp.seasonal_index[targetMonth]
@@ -3138,7 +3127,7 @@ function gaussianRandom(): number {
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v)
 }
 
-type ScenarioBias = {
+type MCScenarioBias = {
   inflow_prob_mult: number
   outflow_prob_mult: number
   inflow_amount_mult: number
@@ -3147,28 +3136,23 @@ type ScenarioBias = {
   outflow_delay_bias: number
 }
 
-const SCENARIO_BIASES: Record<string, ScenarioBias> = {
-  base: {
-    inflow_prob_mult: 1.0, outflow_prob_mult: 1.0,
-    inflow_amount_mult: 1.0, outflow_amount_mult: 1.0,
-    inflow_delay_bias: 0, outflow_delay_bias: 0,
-  },
-  conservative: {
-    inflow_prob_mult: 0.75, outflow_prob_mult: 1.0,
-    inflow_amount_mult: 0.9, outflow_amount_mult: 1.1,
-    inflow_delay_bias: 3, outflow_delay_bias: -1,
-  },
-  aggressive: {
-    inflow_prob_mult: 1.0, outflow_prob_mult: 0.85,
-    inflow_amount_mult: 1.1, outflow_amount_mult: 0.92,
-    inflow_delay_bias: -2, outflow_delay_bias: 1,
-  },
+function getMCScenarioBiases(cal: ForecastCalibrationParams): Record<string, MCScenarioBias> {
+  return {
+    base: {
+      inflow_prob_mult: 1.0, outflow_prob_mult: 1.0,
+      inflow_amount_mult: 1.0, outflow_amount_mult: 1.0,
+      inflow_delay_bias: 0, outflow_delay_bias: 0,
+    },
+    conservative: cal.monte_carlo_config.scenario_biases.conservative,
+    aggressive: cal.monte_carlo_config.scenario_biases.aggressive,
+  }
 }
 
-function runSingleMonteCarlo(events: ForecastEvent[], startingCash: number, bias: ScenarioBias): number[] {
+function runSingleMonteCarlo(events: ForecastEvent[], startingCash: number, bias: MCScenarioBias, cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): number[] {
   const cashByDay = new Array<number>(31).fill(0)
   let cash = startingCash
   const dailyFlows = new Array<number>(31).fill(0)
+  const mc = cal.monte_carlo_config
 
   for (const e of events) {
     const isIn = e.direction === "in"
@@ -3178,13 +3162,13 @@ function runSingleMonteCarlo(events: ForecastEvent[], startingCash: number, bias
     if (seededRandom() > effectiveProb) continue
 
     const amountMult = isIn ? bias.inflow_amount_mult : bias.outflow_amount_mult
-    const noiseFactor = e.confidence === "high" ? 0.08 : e.confidence === "medium" ? 0.15 : 0.25
+    const noiseFactor = e.confidence === "high" ? mc.noise_high : e.confidence === "medium" ? mc.noise_medium : mc.noise_low
     const amountNoise = 1 + gaussianRandom() * noiseFactor
     const amount = Math.max(0, e.amount * amountMult * amountNoise)
 
     const delayBias = isIn ? bias.inflow_delay_bias : bias.outflow_delay_bias
-    const delayRange = e.confidence === "high" ? 1 : e.confidence === "medium" ? 3 : 5
-    const delay = Math.round(gaussianRandom() * delayRange * 0.5 + delayBias)
+    const delayRange = e.confidence === "high" ? mc.delay_high : e.confidence === "medium" ? mc.delay_medium : mc.delay_low
+    const delay = Math.round(gaussianRandom() * delayRange * mc.delay_mult + delayBias)
     const adjustedDay = Math.max(1, Math.min(30, e.day_offset + delay))
 
     if (isIn) dailyFlows[adjustedDay] += amount
@@ -3207,13 +3191,15 @@ function percentile(sorted: number[], p: number): number {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)
 }
 
-function runMonteCarlo(events: ForecastEvent[], startingCash: number, numSims: number = 500): MonteCarloResult {
-  const baseBias = SCENARIO_BIASES.base
+function runMonteCarlo(events: ForecastEvent[], startingCash: number, numSims: number = 500, cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): MonteCarloResult {
+  const scenarioBiases = getMCScenarioBiases(cal)
+  const baseBias = scenarioBiases.base
+  const mc = cal.monte_carlo_config
 
   // Run base simulations for percentile bands + probability queries
   const allRuns: number[][] = []
   for (let i = 0; i < numSims; i++) {
-    allRuns.push(runSingleMonteCarlo(events, startingCash, baseBias))
+    allRuns.push(runSingleMonteCarlo(events, startingCash, baseBias, cal))
   }
 
   const percentiles: MonteCarloPercentile[] = []
@@ -3221,11 +3207,11 @@ function runMonteCarlo(events: ForecastEvent[], startingCash: number, numSims: n
     const dayValues = allRuns.map((run) => run[d]).sort((a, b) => a - b)
     percentiles.push({
       day: d,
-      p5: r2(percentile(dayValues, 5)),
+      p5: r2(percentile(dayValues, mc.percentile_worst)),
       p25: r2(percentile(dayValues, 25)),
       p50: r2(percentile(dayValues, 50)),
       p75: r2(percentile(dayValues, 75)),
-      p95: r2(percentile(dayValues, 95)),
+      p95: r2(percentile(dayValues, mc.percentile_best)),
     })
   }
 
@@ -3238,11 +3224,10 @@ function runMonteCarlo(events: ForecastEvent[], startingCash: number, numSims: n
 
   const sorted30d = [...cash30d].sort((a, b) => a - b)
   const expected30d = cash30d.reduce((a, b) => a + b, 0) / numSims
-  const worst30d = sorted30d[Math.floor(numSims * 0.05)]
-  const best30d = sorted30d[Math.floor(numSims * 0.95)]
+  const worst30d = sorted30d[Math.floor(numSims * mc.percentile_worst / 100)]
+  const best30d = sorted30d[Math.floor(numSims * mc.percentile_best / 100)]
 
-  // Run 3 biased day-level scenarios (each 200 sims, take median)
-  const scenarioSims = 200
+  const scenarioSims = mc.biased_sim_count
   const day_scenarios: DayScenarioSnapshot[] = []
 
   const scenarioDefs: { key: string; scenario: DayScenarioSnapshot["scenario"]; label: string }[] = [
@@ -3252,10 +3237,10 @@ function runMonteCarlo(events: ForecastEvent[], startingCash: number, numSims: n
   ]
 
   for (const def of scenarioDefs) {
-    const bias = SCENARIO_BIASES[def.key]
+    const bias = scenarioBiases[def.key]
     const runs: number[][] = []
     for (let i = 0; i < scenarioSims; i++) {
-      runs.push(runSingleMonteCarlo(events, startingCash, bias))
+      runs.push(runSingleMonteCarlo(events, startingCash, bias, cal))
     }
 
     const vals14 = runs.map((r) => r[14]).sort((a, b) => a - b)
@@ -3312,18 +3297,17 @@ type ScenarioConfig = {
   trend_dampening: number
 }
 
-function buildScenarios(ctx: ForecastContext | null): ScenarioConfig[] {
-  // Risk-aware scenario biases: higher risk → more aggressive pessimistic stress
+function buildScenarios(ctx: ForecastContext | null, cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): ScenarioConfig[] {
+  const ms = cal.monthly_scenarios
   const riskScore = ctx?.risk_score ?? 0
   const concRisk = ctx?.concentration_risk_score ?? 0
   const depRisk = ctx?.dependency_risk_score ?? 0
   const regime = ctx?.liquidity_regime ?? "stable"
   const hasTransitions = (ctx?.transitions ?? []).some((t) => t.regime_change)
 
-  // Pessimistic multipliers get worse with higher risk
-  const pessInflowMult = 0.88 - (concRisk > 50 ? 0.08 : 0) - (hasTransitions ? 0.05 : 0)
-  const pessOutflowMult = 1.12 + (depRisk > 50 ? 0.06 : 0) + (regime === "tightening" ? 0.04 : 0)
-  const pessCustProb = 0.75 - (riskScore > 60 ? 0.10 : riskScore > 40 ? 0.05 : 0)
+  const pessInflowMult = ms.pess_inflow_base - (concRisk > 50 ? ms.pess_inflow_conc_penalty : 0) - (hasTransitions ? ms.pess_inflow_transition_penalty : 0)
+  const pessOutflowMult = ms.pess_outflow_base + (depRisk > 50 ? ms.pess_outflow_dep_penalty : 0) + (regime === "tightening" ? ms.pess_outflow_regime_penalty : 0)
+  const pessCustProb = ms.pess_cust_prob_base - (riskScore > 60 ? ms.pess_cust_prob_risk_high : riskScore > 40 ? ms.pess_cust_prob_risk_mid : 0)
 
   return [
     {
@@ -3333,13 +3317,13 @@ function buildScenarios(ctx: ForecastContext | null): ScenarioConfig[] {
     },
     {
       scenario: "optimistic", label: "Optimistic — faster collections, stable costs",
-      customer_prob_mult: 1.15, inflow_amount_mult: 1.08,
-      outflow_amount_mult: 0.95, trend_dampening: 1.2,
+      customer_prob_mult: ms.opt_cust_prob, inflow_amount_mult: ms.opt_inflow_mult,
+      outflow_amount_mult: ms.opt_outflow_mult, trend_dampening: ms.opt_trend_dampening,
     },
     {
       scenario: "pessimistic", label: `Pessimistic — risk-adjusted${riskScore > 50 ? " (elevated risk)" : ""}`,
       customer_prob_mult: r2(pessCustProb), inflow_amount_mult: r2(pessInflowMult),
-      outflow_amount_mult: r2(pessOutflowMult), trend_dampening: 0.5,
+      outflow_amount_mult: r2(pessOutflowMult), trend_dampening: ms.pess_trend_dampening,
     },
   ]
 }
@@ -3366,7 +3350,7 @@ function runScenario(
     // trend_dampening affects how quickly projections decay over time
     // Higher values = slower decay = more optimistic about future months
     // Base: 1.0, Optimistic: 1.2 (slower decay), Pessimistic: 0.5 (faster decay)
-    const decayFactor = 1 / (1 + i * 0.3 / config.trend_dampening)
+    const decayFactor = 1 / (1 + i * cal.monthly_scenarios.decay_coefficient / config.trend_dampening)
 
     const { inflows, outflows, componentAmounts } = simulateMonthFromModels(
       models, components, monthStart, monthEnd,
@@ -3432,6 +3416,7 @@ function generateNarrative(
   events: ForecastEvent[],
   startingCash: number,
   ctx: ForecastContext | null = null,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): ForecastNarrative {
   // Guard: if no events or no simulation data, return safe defaults
   if (events.length === 0 || mc.percentiles.length === 0) {
@@ -3451,8 +3436,10 @@ function generateNarrative(
   // ── Forecast ──
   const delta14 = cash14 - startingCash
   const absDelta = money(Math.abs(delta14))
+  const nr = cal.narrative
+
   let forecast: string
-  if (Math.abs(delta14) < startingCash * 0.01) {
+  if (Math.abs(delta14) < startingCash * nr.flat_threshold) {
     forecast = `Projected cash in 14 days: ${money(cash14)} (roughly flat from ${money(startingCash)})`
   } else if (delta14 >= 0) {
     forecast = `Projected cash in 14 days: ${money(cash14)} (+${absDelta} from ${money(startingCash)})`
@@ -3463,14 +3450,14 @@ function generateNarrative(
   // ── Risk ──
   let risk: string
   const safeStarting = Math.max(1, startingCash)
-  const threshold50 = safeStarting * 0.5
+  const threshold50 = safeStarting * nr.risk_50pct
   const probBelowThreshold14 = mc.percentiles[13]
     ? (mc.percentiles[13].p5 < threshold50 ? "elevated" : "low")
     : "unknown"
 
-  if (mc.prob_below_zero_14d > 0.1) {
+  if (mc.prob_below_zero_14d > nr.risk_prob_threshold) {
     risk = `${Math.round(mc.prob_below_zero_14d * 100)}% chance of running out of cash in 14 days`
-  } else if (mc.prob_below_zero_30d > 0.1) {
+  } else if (mc.prob_below_zero_30d > nr.risk_prob_threshold) {
     risk = `${Math.round(mc.prob_below_zero_30d * 100)}% chance of running out of cash in 30 days`
   } else if (sim.min_cash < threshold50 && sim.min_cash_day > 0 && startingCash > 0) {
     const dropPct = Math.round(((startingCash - sim.min_cash) / safeStarting) * 100)
@@ -3484,10 +3471,10 @@ function generateNarrative(
 
   // Enrich risk with state context
   if (ctx) {
-    if (ctx.concentration_risk_score > 50) {
+    if (ctx.concentration_risk_score > nr.concentration_risk_threshold) {
       risk += ` · Revenue concentration elevated (top customer ${ctx.top_customer_pct}%)`
     }
-    if (ctx.dependency_risk_score > 50) {
+    if (ctx.dependency_risk_score > nr.dependency_risk_threshold) {
       risk += ` · Operating dependency only ${Math.round(ctx.operating_dependency_ratio * 100)}%`
     }
   }
@@ -3506,15 +3493,15 @@ function generateNarrative(
     ? (topCustomer.avg_amount * topCustomer.payment_count) / customerTotal
     : 0
 
-  if (inflowEvents.length > 0 && lowConfInflows.length > inflowEvents.length * 0.4) {
+  if (inflowEvents.length > 0 && lowConfInflows.length > inflowEvents.length * nr.low_conf_inflow_fraction) {
     insight = `Cash volatility is driven by irregular customer payments — ${lowConfInflows.length} of ${inflowEvents.length} expected inflows are low confidence`
-  } else if (topCustomerShare > 0.3 && topCustomer) {
+  } else if (topCustomerShare > nr.top_customer_share && topCustomer) {
     insight = `${Math.round(topCustomerShare * 100)}% of expected inflows come from ${topCustomer.name} — cash position is sensitive to their payment timing`
   } else if (models.transfers.trigger_pattern === "irregular" && models.transfers.transfer_count >= 5) {
     insight = `Liquidity relies on irregular transfers (${models.transfers.transfer_count} observed with no clear pattern) — cash position depends on manual intervention`
-  } else if (inflowTotal > 0 && outflowTotal > inflowTotal * 1.2) {
+  } else if (inflowTotal > 0 && outflowTotal > inflowTotal * nr.outflow_excess_ratio) {
     insight = `Expected outflows exceed inflows by ${Math.round(((outflowTotal - inflowTotal) / inflowTotal) * 100)}% — net cash position will tighten`
-  } else if (models.settlement.avg_delay_days > 3 && models.settlement.confidence !== "insufficient") {
+  } else if (models.settlement.avg_delay_days > nr.settlement_delay_threshold && models.settlement.confidence !== "insufficient") {
     insight = `Settlement cadence averaging ${models.settlement.avg_delay_days.toFixed(1)} days between payouts affects cash arrival timing`
   } else if (outflowTotal > 0) {
     const recurringVendorNames = new Set(models.vendors.filter((v) => v.is_recurring).map((v) => v.name))
@@ -3523,9 +3510,9 @@ function generateNarrative(
     ).reduce((s, e) => s + e.amount, 0)
     const recurringPct = recurringAmount / outflowTotal
     const pctRound = Math.round(recurringPct * 100)
-    if (recurringPct >= 0.95) {
+    if (recurringPct >= nr.recurring_high) {
       insight = `Near-term outflows are dominated by recurring obligations (~${pctRound}% of modeled spend) — spend base is highly fixed`
-    } else if (recurringPct > 0.6) {
+    } else if (recurringPct > nr.recurring_moderate) {
       insight = `~${pctRound}% of expected outflows come from recurring patterns — spend base is largely fixed with some variable spend`
     } else {
       insight = `~${pctRound}% of expected outflows are recurring — spend base is moderately flexible`
@@ -3536,10 +3523,10 @@ function generateNarrative(
 
   // Enrich insight with state-level context
   if (ctx) {
-    if (ctx.repeat_revenue_ratio < 0.4 && ctx.repeat_revenue_ratio > 0) {
+    if (ctx.repeat_revenue_ratio < nr.repeat_revenue_threshold && ctx.repeat_revenue_ratio > 0) {
       insight += ` · Revenue retention is weak (${Math.round(ctx.repeat_revenue_ratio * 100)}% repeat)`
     }
-    if (ctx.recurring_spend_ratio > 0.8) {
+    if (ctx.recurring_spend_ratio > nr.recurring_spend_threshold) {
       insight += ` · Spend base is ${Math.round(ctx.recurring_spend_ratio * 100)}% fixed obligations`
     }
     const regimeTransition = ctx.transitions.find((t) => t.regime_change)
@@ -3550,24 +3537,24 @@ function generateNarrative(
 
   // ── Action ──
   let action: string
-  const topCustomers = models.customers.slice(0, 2).filter((c) => c.probability_of_next > 0.3)
+  const topCustomers = models.customers.slice(0, 2).filter((c) => c.probability_of_next > nr.action_prob_threshold)
   const topCustomerCash = topCustomers.reduce((s, c) => s + c.avg_amount, 0)
 
   const conservative = mc.day_scenarios.find((s) => s.scenario === "conservative")
   const conservativeGap = conservative ? Math.max(0, cash14 - conservative.cash_14d) : 0
 
-  if (topCustomers.length >= 1 && topCustomerCash > safeStarting * 0.03) {
+  if (topCustomers.length >= 1 && topCustomerCash > safeStarting * nr.action_cash_significance) {
     const riskReduction = conservativeGap > 0
-      ? Math.min(90, Math.round((topCustomerCash / Math.max(1, conservativeGap)) * 100))
-      : 30
+      ? Math.min(nr.risk_reduction_cap, Math.round((topCustomerCash / Math.max(1, conservativeGap)) * 100))
+      : nr.risk_reduction_default
     const names = topCustomers.map((c) => c.name).join(" and ")
     action = `Accelerating payments from ${names} (~${money(topCustomerCash)}) reduces downside risk by ~${riskReduction}%`
-  } else if (models.recurring_fixed.length > 3 && models.recurring_fixed[0] && models.recurring_fixed[0].monthly_amount > safeStarting * 0.02) {
+  } else if (models.recurring_fixed.length > nr.obligation_count_threshold && models.recurring_fixed[0] && models.recurring_fixed[0].monthly_amount > safeStarting * nr.obligation_significance) {
     const topObligation = models.recurring_fixed[0]
     action = `Review top recurring obligation (${topObligation.label}: ${money(topObligation.monthly_amount)}/mo) for cost reduction opportunity`
   } else if (models.transfers.trigger_pattern === "irregular" && models.transfers.transfer_count >= 5) {
     action = `Set up a regular transfer schedule — current transfers are irregular, making cash position harder to predict`
-  } else if (mc.prob_below_zero_30d > 0.05) {
+  } else if (mc.prob_below_zero_30d > nr.credit_line_threshold) {
     action = `Secure a credit line or prepay arrangements to cover the ${Math.round(mc.prob_below_zero_30d * 100)}% scenario where cash goes negative`
   } else {
     action = `Cash position is stable — focus on accelerating top customer collections to build buffer`
@@ -3575,12 +3562,12 @@ function generateNarrative(
 
   // ── Severity ──
   let severity: ForecastNarrative["severity"] = "healthy"
-  if (mc.prob_below_zero_14d > 0.1 || sim.min_cash < 0) {
+  if (mc.prob_below_zero_14d > nr.severity_danger_prob || sim.min_cash < 0) {
     severity = "danger"
   } else if (
-    mc.prob_below_zero_30d > 0.05 ||
-    (startingCash > 0 && sim.min_cash < startingCash * 0.3) ||
-    (startingCash > 0 && cash14 < startingCash * 0.6)
+    mc.prob_below_zero_30d > nr.severity_caution_prob ||
+    (startingCash > 0 && sim.min_cash < startingCash * nr.severity_caution_drop) ||
+    (startingCash > 0 && cash14 < startingCash * nr.severity_caution_14d)
   ) {
     severity = "caution"
   }
@@ -3603,6 +3590,7 @@ function computeForecastConfidence(
   const reasons: string[] = []
   const by_component: ComponentConfidence[] = []
   const cw = cal.confidence_weights
+  const cs = cal.confidence_scoring
 
   // ── 0. Transaction tagging & unresolved (from movements) ──
   let transactionTaggingScore = 1
@@ -3627,13 +3615,8 @@ function computeForecastConfidence(
       let weightedConf = 0
       for (const c of models.customers) {
         const weight = (c.avg_amount * c.payment_count) / totalRevenue
-        const archetypeBonus = c.archetype === "clockwork" ? 1.0
-          : c.archetype === "slow_reliable" ? 0.7
-          : c.archetype === "bursty" ? 0.5
-          : c.archetype === "episodic" ? 0.35
-          : c.archetype === "volatile" ? 0.2
-          : 0.15
-        const confMult = c.confidence === "high" ? 1.0 : c.confidence === "medium" ? 0.6 : 0.25
+        const archetypeBonus = cs.archetype_bonus[c.archetype] ?? 0.15
+        const confMult = cs.confidence_mult[c.confidence] ?? 0.25
         weightedConf += weight * archetypeBonus * confMult
       }
       inflowScore = weightedConf
@@ -3643,8 +3626,8 @@ function computeForecastConfidence(
       inflowScore = (custHigh * 1 + custMed * 0.6) / custTotal
     }
   }
-  if (inflowScore < 0.3) reasons.push("Top inflows are sparse or episodic")
-  const inflowLabel: ComponentConfidence["label"] = inflowScore >= 0.7 ? "high" : inflowScore >= 0.4 ? "medium" : "low"
+  if (inflowScore < cs.inflow_low_threshold) reasons.push("Top inflows are sparse or episodic")
+  const inflowLabel: ComponentConfidence["label"] = inflowScore >= cs.inflow_low_label_threshold ? "high" : inflowScore >= 0.4 ? "medium" : "low"
   const archetypeBreakdown = custTotal > 0 ? (() => {
     const counts: Record<string, number> = {}
     models.customers.forEach((c) => { counts[c.archetype] = (counts[c.archetype] ?? 0) + 1 })
@@ -3667,7 +3650,7 @@ function computeForecastConfidence(
       for (const v of models.vendors) {
         const weight = (v.avg_amount * Math.max(1, v.payment_count)) / totalSpend
         const recBonus = v.recurrence.recurrence_confidence
-        const confMult = v.confidence === "high" ? 1.0 : v.confidence === "medium" ? 0.6 : 0.25
+        const confMult = cs.vendor_conf_mult[v.confidence] ?? 0.25
         weightedConf += weight * recBonus * confMult
       }
       outflowScore = weightedConf
@@ -3678,13 +3661,13 @@ function computeForecastConfidence(
     }
   }
   if (vendTotal === 0 && (apOpenBills.length > 0 || (apOutComp && apOutComp.monthly_avg > 0))) {
-    const base = 0.28
-    const compBoost = apOutComp && apOutComp.monthly_avg > 0 ? Math.min(0.22, Math.log10(1 + apOutComp.monthly_avg) / 25) : 0
-    const billBoost = Math.min(0.12, apOpenBills.length * 0.008)
-    outflowScore = Math.min(0.52, base + compBoost + billBoost)
+    const base = cs.outflow_fallback_base
+    const compBoost = apOutComp && apOutComp.monthly_avg > 0 ? Math.min(cs.outflow_fallback_comp_cap, Math.log10(1 + apOutComp.monthly_avg) / cs.outflow_fallback_comp_divisor) : 0
+    const billBoost = Math.min(cs.outflow_fallback_bill_cap, apOpenBills.length * cs.outflow_fallback_bill_scale)
+    outflowScore = Math.min(cs.outflow_fallback_total_cap, base + compBoost + billBoost)
   }
-  if (outflowScore < 0.3) reasons.push("Outflow models are weak — vendor recurrence uncertain")
-  const outflowLabel: ComponentConfidence["label"] = outflowScore >= 0.7 ? "high" : outflowScore >= 0.4 ? "medium" : "low"
+  if (outflowScore < cs.outflow_weak_threshold) reasons.push("Outflow models are weak — vendor recurrence uncertain")
+  const outflowLabel: ComponentConfidence["label"] = outflowScore >= cs.outflow_label_high ? "high" : outflowScore >= cs.outflow_label_medium ? "medium" : "low"
   const recurrenceBreakdown = vendTotal > 0 ? (() => {
     const counts: Record<string, number> = {}
     models.vendors.forEach((v) => { counts[v.recurrence.recurrence_type] = (counts[v.recurrence.recurrence_type] ?? 0) + 1 })
@@ -3702,7 +3685,7 @@ function computeForecastConfidence(
   // ── 3. Settlement confidence (weight: 0.10) ──
   const settConf = models.settlement.confidence
   const procCount = models.settlement.by_processor.length
-  const settScore = settConf === "high" ? 0.9 : settConf === "medium" ? 0.65 : settConf === "low" ? 0.35 : 0.1
+  const settScore = cs.settlement_score_map[settConf as keyof typeof cs.settlement_score_map] ?? 0.1
   by_component.push({
     area: "Settlement timing", score: r2(settScore),
     label: settConf === "high" ? "high" : settConf === "medium" ? "medium" : "low",
@@ -3746,11 +3729,11 @@ function computeForecastConfidence(
     const totalRecConf = models.vendors.reduce((s, v) => s + v.recurrence.recurrence_confidence, 0)
     recurrenceScore = totalRecConf / vendTotal
   } else if (apOpenBills.length > 0) {
-    recurrenceScore = Math.min(0.38, 0.14 + Math.min(0.24, apOpenBills.length * 0.006))
+    recurrenceScore = Math.min(cs.recurrence_fallback_cap, cs.recurrence_fallback_base + Math.min(cs.recurrence_fallback_cap - cs.recurrence_fallback_base, apOpenBills.length * cs.recurrence_fallback_bill_scale))
   }
   by_component.push({
     area: "Recurrence quality", score: r2(recurrenceScore),
-    label: recurrenceScore >= 0.6 ? "high" : recurrenceScore >= 0.35 ? "medium" : "low",
+    label: recurrenceScore >= cs.recurrence_label_high ? "high" : recurrenceScore >= cs.recurrence_label_medium ? "medium" : "low",
     reason: vendTotal === 0 && apOpenBills.length === 0
       ? "No vendor recurrence data"
       : vendTotal === 0
@@ -3760,7 +3743,7 @@ function computeForecastConfidence(
 
   // ── 6. Data span confidence (weight: 0.10) ──
   const monthsOfData = Math.max(1, dataSpanDays / 30)
-  const dataSpanScore = Math.min(1, monthsOfData / 6)
+  const dataSpanScore = Math.min(1, monthsOfData / cs.data_span_target_months)
   if (monthsOfData < 3) reasons.push("Less than 3 months of data")
   if (monthsOfData < 1) reasons.push("Less than 1 month of data — forecast is speculative")
   by_component.push({
@@ -3772,7 +3755,7 @@ function computeForecastConfidence(
   // ── 7. Variance penalty (weight: 0.10) ──
   const avgVolatility = components.length > 0
     ? components.reduce((s, c) => s + c.volatility, 0) / components.length : 0
-  const variancePenalty = Math.min(0.4, avgVolatility * 0.3)
+  const variancePenalty = Math.min(cs.variance_penalty_base, avgVolatility * cs.variance_penalty_scale)
   const varianceScore = Math.max(0, 1 - variancePenalty * 2)
   if (avgVolatility > 0.8) reasons.push("High volatility in cashflow components")
   by_component.push({
@@ -3807,8 +3790,8 @@ function computeForecastConfidence(
     varianceScore * cw.stability * redistributionScale +
     backtestScore * backtestWeight
 
-  const score = Math.max(0.05, Math.min(hasUnresolvedOrExcluded ? 0.99 : 1, weightedScore))
-  const label: ForecastConfidence["label"] = score >= 0.7 ? "high" : score >= 0.45 ? "medium" : "low"
+  const score = Math.max(cs.composite_floor, Math.min(hasUnresolvedOrExcluded ? cs.composite_ceiling : 1, weightedScore))
+  const label: ForecastConfidence["label"] = score >= cs.label_high ? "high" : score >= cs.label_medium ? "medium" : "low"
   if (reasons.length === 0) reasons.push("Forecast based on sufficient data and stable models")
 
   const modelCoverage = components.length > 0
@@ -3830,7 +3813,7 @@ function computeForecastConfidence(
   // Build diagnostic sentence
   const weakest = by_component.reduce((min, c) => c.score < min.score ? c : min, by_component[0])
   const strongest = by_component.reduce((max, c) => c.score > max.score ? c : max, by_component[0])
-  const diagnosis = score < 0.45
+  const diagnosis = score < cs.label_medium
     ? `Forecast is ${label} confidence because ${weakest.area.toLowerCase()} is weak (${(weakest.score * 100).toFixed(0)}%) — ${weakest.reason}`
     : `Forecast is ${label} confidence — strongest: ${strongest.area.toLowerCase()} (${(strongest.score * 100).toFixed(0)}%), weakest: ${weakest.area.toLowerCase()} (${(weakest.score * 100).toFixed(0)}%)`
 
@@ -4007,86 +3990,88 @@ function computeInterventions(
   mc: MonteCarloResult,
   startingCash: number,
   dailySim?: DailySimulation,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): Intervention[] {
+  const iv = cal.interventions
   const interventions: Intervention[] = []
   const baseCash14 = mc.day_scenarios.find((s) => s.scenario === "base")?.cash_14d ?? mc.expected_cash_30d
   const baseCash30 = mc.expected_cash_30d
   const baseRisk30 = mc.prob_below_zero_30d
-  const baseLowPoint = dailySim?.min_cash ?? baseCash14 * 0.85
-  const stressProb = mc.prob_below_zero_14d > 0.05 ? mc.prob_below_zero_14d : mc.prob_below_zero_30d
+  const baseLowPoint = dailySim?.min_cash ?? baseCash14 * iv.base_low_point_fallback
+  const stressProb = mc.prob_below_zero_14d > iv.stress_prob_threshold ? mc.prob_below_zero_14d : mc.prob_below_zero_30d
 
-  // Accelerate top customer collections (3 days earlier)
+  // Accelerate top customer collections
   for (const c of models.customers.slice(0, 3)) {
-    if (c.probability_of_next < 0.3) continue
+    if (c.probability_of_next < iv.accel_min_prob) continue
     const expectedCash = c.avg_amount * c.probability_of_next
-    if (expectedCash < 100) continue
-    const impact14 = r2(expectedCash * 0.7)
-    const impact30 = r2(expectedCash * 0.5)
-    const riskReduction = baseRisk30 > 0 ? r2(Math.min(50, (expectedCash / Math.max(1, startingCash)) * 100)) : 0
+    if (expectedCash < iv.accel_min_cash) continue
+    const impact14 = r2(expectedCash * iv.accel_impact_14d)
+    const impact30 = r2(expectedCash * iv.accel_impact_30d)
+    const riskReduction = baseRisk30 > 0 ? r2(Math.min(iv.accel_risk_cap, (expectedCash / Math.max(1, startingCash)) * 100)) : 0
 
     const simImpact: ActionSimulationImpact = {
       low_point_before: baseLowPoint,
-      low_point_after: r2(baseLowPoint + impact14 * 0.6),
+      low_point_after: r2(baseLowPoint + impact14 * iv.accel_low_point),
       stress_prob_before: stressProb,
       stress_prob_after: r2(Math.max(0, stressProb - riskReduction / 100)),
     }
     interventions.push({
       id: `accel_${c.entity_id}`,
-      label: `Accelerate ${c.name} by 3 days`,
+      label: `Accelerate ${c.name} by ${iv.accel_days} days`,
       type: "accelerate_collection",
       entity: c.name,
-      parameter_days: 3,
+      parameter_days: iv.accel_days,
       parameter_pct: null,
       impact_cash_14d: impact14,
       impact_cash_30d: impact30,
       impact_risk_reduction: riskReduction,
-      description: `If ${c.name} pays 3 days earlier, expected cash improves by ~$${Math.round(impact14).toLocaleString()} at day 14`,
-      plausible_range_low: r2(impact14 * 0.6),
-      plausible_range_high: r2(impact14 * 1.2),
+      description: `If ${c.name} pays ${iv.accel_days} days earlier, expected cash improves by ~$${Math.round(impact14).toLocaleString()} at day 14`,
+      plausible_range_low: r2(impact14 * iv.plausible_low),
+      plausible_range_high: r2(impact14 * iv.plausible_high),
       confidence_band: c.confidence === "high" ? "medium" : "low-medium",
       assumptions: ["Customer agrees to accelerate payment", "No discount required"],
       simulation_impact: simImpact,
     })
   }
 
-  // Delay top vendor payments (5 days)
+  // Delay top vendor payments
   for (const v of models.vendors.slice(0, 3)) {
-    if (!v.is_recurring && v.payment_count < 3) continue
+    if (!v.is_recurring && v.payment_count < iv.delay_min_count) continue
     const monthlyCash = v.avg_amount
-    if (monthlyCash < 100) continue
-    const impact14 = r2(monthlyCash * 0.5)
-    const impact30 = r2(monthlyCash * 0.3)
-    const riskReduction = baseRisk30 > 0 ? r2(Math.min(30, (monthlyCash / Math.max(1, startingCash)) * 80)) : 0
+    if (monthlyCash < iv.delay_min_cash) continue
+    const impact14 = r2(monthlyCash * iv.delay_impact_14d)
+    const impact30 = r2(monthlyCash * iv.delay_impact_30d)
+    const riskReduction = baseRisk30 > 0 ? r2(Math.min(iv.delay_risk_cap, (monthlyCash / Math.max(1, startingCash)) * iv.delay_risk_mult)) : 0
 
     const simImpact: ActionSimulationImpact = {
       low_point_before: baseLowPoint,
-      low_point_after: r2(baseLowPoint + impact14 * 0.5),
+      low_point_after: r2(baseLowPoint + impact14 * iv.delay_low_point),
       stress_prob_before: stressProb,
       stress_prob_after: r2(Math.max(0, stressProb - riskReduction / 100)),
     }
-    const lateFeeP = v.outstanding_bills.length > 0 ? 0.2 : 0.05
-    const relRisk = v.recurrence.recurrence_type === "hard" ? 0.15 : 0.08
-    const nextTrough = r2(-monthlyCash * 0.4)
+    const lateFeeP = v.outstanding_bills.length > 0 ? iv.late_fee_with_bills : iv.late_fee_without
+    const relRisk = v.recurrence.recurrence_type === "hard" ? iv.rel_risk_hard : iv.rel_risk_other
+    const nextTrough = r2(-monthlyCash * iv.vendor_trough_mult)
     interventions.push({
       id: `delay_${v.entity_id}`,
-      label: `Delay ${v.name} by 5 days`,
+      label: `Delay ${v.name} by ${iv.delay_days} days`,
       type: "delay_payment",
       entity: v.name,
-      parameter_days: 5,
+      parameter_days: iv.delay_days,
       parameter_pct: null,
       impact_cash_14d: impact14,
       impact_cash_30d: impact30,
       impact_risk_reduction: riskReduction,
-      description: `Delaying ${v.name} payments by 5 days frees ~$${Math.round(impact14).toLocaleString()} in the near term`,
+      description: `Delaying ${v.name} payments by ${iv.delay_days} days frees ~$${Math.round(impact14).toLocaleString()} in the near term`,
       vendor_relationship_risk: relRisk,
       late_fee_probability: lateFeeP,
       impact_on_next_month_trough: nextTrough,
-      cascade_crunch_probability: startingCash < monthlyCash * 2 ? 0.12 : 0.03,
+      cascade_crunch_probability: startingCash < monthlyCash * 2 ? iv.cascade_high : iv.cascade_low,
       expected_impact: impact14,
-      plausible_range_low: r2(impact14 * 0.6),
-      plausible_range_high: r2(impact14 * 1.2),
+      plausible_range_low: r2(impact14 * iv.plausible_low),
+      plausible_range_high: r2(impact14 * iv.plausible_high),
       confidence_band: "medium",
-      assumptions: ["Vendor accepts 5-day delay", "No late fees incurred", "AP load shifts to next month"],
+      assumptions: [`Vendor accepts ${iv.delay_days}-day delay`, "No late fees incurred", "AP load shifts to next month"],
       simulation_impact: simImpact,
       second_order_risks: {
         late_fee: lateFeeP > 0.1 ? `~${Math.round(lateFeeP * 100)}% chance of late fee if terms are strict` : undefined,
@@ -4096,32 +4081,32 @@ function computeInterventions(
     })
   }
 
-  // Reduce overall spend by 10%
+  // Reduce overall spend
   const totalOutflowEvents = events.filter((e) => e.direction === "out")
   const totalOutflow30 = totalOutflowEvents.reduce((s, e) => s + e.amount * e.probability, 0)
   if (totalOutflow30 > 0) {
-    const savings = r2(totalOutflow30 * 0.1)
-    const riskRed = baseRisk30 > 0 ? r2(Math.min(40, (savings / Math.max(1, startingCash)) * 100)) : 0
+    const savings = r2(totalOutflow30 * iv.spend_reduction_pct)
+    const riskRed = baseRisk30 > 0 ? r2(Math.min(iv.spend_risk_cap, (savings / Math.max(1, startingCash)) * 100)) : 0
     const simImpact: ActionSimulationImpact = {
       low_point_before: baseLowPoint,
-      low_point_after: r2(baseLowPoint + savings * 0.4),
+      low_point_after: r2(baseLowPoint + savings * iv.spend_sim_low_point),
       stress_prob_before: stressProb,
       stress_prob_after: r2(Math.max(0, stressProb - riskRed / 100)),
       runway_months_change: startingCash > 0 && savings > 0 ? r2((savings / 30) / (startingCash / 90)) : undefined,
     }
     interventions.push({
       id: "reduce_spend_10",
-      label: "Reduce overall spend by 10%",
+      label: `Reduce overall spend by ${Math.round(iv.spend_reduction_pct * 100)}%`,
       type: "reduce_spend",
       entity: null,
       parameter_days: null,
-      parameter_pct: 10,
-      impact_cash_14d: r2(savings * 0.5),
+      parameter_pct: Math.round(iv.spend_reduction_pct * 100),
+      impact_cash_14d: r2(savings * iv.spend_14d_fraction),
       impact_cash_30d: savings,
       impact_risk_reduction: riskRed,
-      description: `A 10% spend reduction saves ~$${Math.round(savings).toLocaleString()} over 30 days`,
-      plausible_range_low: r2(savings * 0.5 * 0.7),
-      plausible_range_high: r2(savings * 0.5 * 1.3),
+      description: `A ${Math.round(iv.spend_reduction_pct * 100)}% spend reduction saves ~$${Math.round(savings).toLocaleString()} over 30 days`,
+      plausible_range_low: r2(savings * iv.spend_14d_fraction * iv.spend_plausible_low),
+      plausible_range_high: r2(savings * iv.spend_14d_fraction * iv.spend_plausible_high),
       confidence_band: "low-medium",
       assumptions: ["Spend reduction is achievable without affecting operations"],
       simulation_impact: simImpact,
@@ -4130,12 +4115,12 @@ function computeInterventions(
 
   // Sort by risk reduction first (when stress prob > 0), else by cash impact; assign rank
   interventions.sort((a, b) => {
-    if (baseRisk30 > 0.05 && Math.abs(a.impact_risk_reduction - b.impact_risk_reduction) > 2) {
+    if (baseRisk30 > iv.sort_risk_threshold && Math.abs(a.impact_risk_reduction - b.impact_risk_reduction) > iv.sort_risk_diff) {
       return b.impact_risk_reduction - a.impact_risk_reduction
     }
     return b.impact_cash_14d - a.impact_cash_14d
   })
-  const top = interventions.slice(0, 6)
+  const top = interventions.slice(0, iv.max_interventions)
   top.forEach((iv, i) => { iv.rank = i + 1 })
   return top
 }
@@ -4146,56 +4131,55 @@ function computeCombinedStrategies(
   interventions: Intervention[],
   baseLowPoint: number,
   stressProb: number,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): CombinedStrategy[] {
+  const iv = cal.interventions
   const strategies: CombinedStrategy[] = []
   const accel = interventions.filter((i) => i.type === "accelerate_collection")
   const delay = interventions.filter((i) => i.type === "delay_payment")
   const reduce = interventions.filter((i) => i.type === "reduce_spend")
 
-  // Strategy A: delay + accelerate (most common founder combo)
   if (delay.length > 0 && accel.length > 0) {
     const d = delay[0]
     const a = accel[0]
-    const combinedLow = r2(baseLowPoint + (d.impact_cash_14d + a.impact_cash_14d) * 0.5)
+    const combinedLow = r2(baseLowPoint + (d.impact_cash_14d + a.impact_cash_14d) * iv.delay_low_point)
     const newStress = Math.max(0, stressProb - (d.impact_risk_reduction + a.impact_risk_reduction) / 100)
     strategies.push({
       id: "strat_delay_accel",
       actions: [d, a],
       low_point: combinedLow,
       stress_prob: r2(newStress),
-      risk_level: newStress < 0.15 ? "low" : newStress < 0.35 ? "medium" : "high",
-      summary: `Delay ${d.entity} 5d + accelerate ${a.entity} 3d → low point $${Math.round(combinedLow).toLocaleString()}, stress prob ${(newStress * 100).toFixed(0)}%`,
+      risk_level: newStress < iv.risk_level_low ? "low" : newStress < iv.risk_level_medium ? "medium" : "high",
+      summary: `Delay ${d.entity} ${iv.delay_days}d + accelerate ${a.entity} ${iv.accel_days}d → low point $${Math.round(combinedLow).toLocaleString()}, stress prob ${(newStress * 100).toFixed(0)}%`,
     })
   }
 
-  // Strategy B: delay + reduce spend
   if (delay.length > 0 && reduce.length > 0) {
     const d = delay[0]
     const r = reduce[0]
-    const combinedLow = r2(baseLowPoint + d.impact_cash_14d * 0.5 + r.impact_cash_14d * 0.5)
+    const combinedLow = r2(baseLowPoint + d.impact_cash_14d * iv.delay_low_point + r.impact_cash_14d * iv.delay_low_point)
     const newStress = Math.max(0, stressProb - (d.impact_risk_reduction + r.impact_risk_reduction) / 100)
     strategies.push({
       id: "strat_delay_reduce",
       actions: [d, r],
       low_point: combinedLow,
       stress_prob: r2(newStress),
-      risk_level: newStress < 0.15 ? "low" : newStress < 0.35 ? "medium" : "high",
-      summary: `Delay ${d.entity} 5d + reduce spend 10% → low point $${Math.round(combinedLow).toLocaleString()}, stress prob ${(newStress * 100).toFixed(0)}%`,
+      risk_level: newStress < iv.risk_level_low ? "low" : newStress < iv.risk_level_medium ? "medium" : "high",
+      summary: `Delay ${d.entity} ${iv.delay_days}d + reduce spend ${Math.round(iv.spend_reduction_pct * 100)}% → low point $${Math.round(combinedLow).toLocaleString()}, stress prob ${(newStress * 100).toFixed(0)}%`,
     })
   }
 
-  // Strategy C: accelerate + accelerate (two top customers)
   if (accel.length >= 2) {
     const a1 = accel[0]
     const a2 = accel[1]
-    const combinedLow = r2(baseLowPoint + (a1.impact_cash_14d + a2.impact_cash_14d) * 0.5)
+    const combinedLow = r2(baseLowPoint + (a1.impact_cash_14d + a2.impact_cash_14d) * iv.accel_low_point)
     const newStress = Math.max(0, stressProb - (a1.impact_risk_reduction + a2.impact_risk_reduction) / 100)
     strategies.push({
       id: "strat_accel_accel",
       actions: [a1, a2],
       low_point: combinedLow,
       stress_prob: r2(newStress),
-      risk_level: newStress < 0.15 ? "low" : newStress < 0.35 ? "medium" : "high",
+      risk_level: newStress < iv.risk_level_low ? "low" : newStress < iv.risk_level_medium ? "medium" : "high",
       summary: `Accelerate ${a1.entity} + ${a2.entity} → low point $${Math.round(combinedLow).toLocaleString()}, stress prob ${(newStress * 100).toFixed(0)}%`,
     })
   }
@@ -4210,18 +4194,19 @@ function computeScenarioDrivers(
   events: ForecastEvent[],
   baseResult: ScenarioResult,
   pessResult: ScenarioResult,
+  cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
 ): ScenarioDriver[] {
+  const sd = cal.monthly_scenarios
   const drivers: ScenarioDriver[] = []
   const baseEnding = baseResult.ending_cash
   const pessEnding = pessResult.ending_cash
   const gap = baseEnding - pessEnding
   if (gap <= 0) return drivers
 
-  // Customer delay impact
   const customerInflows = events.filter((e) => e.direction === "in" && e.source_model === "customer")
   const customerTotal = customerInflows.reduce((s, e) => s + e.amount * e.probability, 0)
   if (customerTotal > 0) {
-    const delayedAmount = r2(customerTotal * 0.25)
+    const delayedAmount = r2(customerTotal * sd.driver_customer_delay)
     drivers.push({
       factor: `Delayed customer payments (top ${Math.min(3, models.customers.length)} customers)`,
       impact_amount: delayedAmount,
@@ -4229,33 +4214,30 @@ function computeScenarioDrivers(
     })
   }
 
-  // Higher vendor outflows
   const vendorOutflows = events.filter((e) => e.direction === "out" && e.source_model === "vendor")
   const vendorTotal = vendorOutflows.reduce((s, e) => s + e.amount * e.probability, 0)
   if (vendorTotal > 0) {
-    const higherCost = r2(vendorTotal * 0.12)
+    const higherCost = r2(vendorTotal * sd.driver_vendor_stress)
     drivers.push({
-      factor: "Higher vendor costs (+12% stress)",
+      factor: `Higher vendor costs (+${Math.round(sd.driver_vendor_stress * 100)}% stress)`,
       impact_amount: higherCost,
       direction: "negative",
     })
   }
 
-  // Missing settlements
   if (models.settlement.sample_count > 0) {
     const settlementEvents = events.filter((e) => e.type === "settlement")
     const settlementCash = settlementEvents.reduce((s, e) => s + e.amount * e.probability, 0)
     if (settlementCash > 0) {
       drivers.push({
         factor: "Settlement timing delays",
-        impact_amount: r2(settlementCash * 0.15),
+        impact_amount: r2(settlementCash * sd.driver_settlement_delay),
         direction: "negative",
       })
     }
   }
 
-  // No offsetting inflows
-  const recurringIn = events.filter((e) => e.direction === "in" && e.probability >= 0.9)
+  const recurringIn = events.filter((e) => e.direction === "in" && e.probability >= sd.driver_recurring_prob)
   if (recurringIn.length === 0) {
     drivers.push({
       factor: "No highly predictable inflows to offset",
@@ -4372,7 +4354,7 @@ function mergeLowSampleBuckets(
   return result
 }
 
-function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cutoffDate: string, testDays: number): CalibrationResult | null {
+function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cutoffDate: string, testDays: number, cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION): CalibrationResult | null {
   // Group forecast events into probability buckets and check if they actually occurred
   const buckets = [
     { range: "0-20%", lo: 0, hi: 0.2, predicted: 0, actual: 0, count: 0 },
@@ -4468,27 +4450,27 @@ function runCalibration(events: ForecastEvent[], testSet: TaggedMovement[], cuto
   const avgPredicted = calibrationBuckets.reduce((s, b) => s + b.predicted_prob * b.count, 0) / totalEvents
   const avgActual = calibrationBuckets.reduce((s, b) => s + b.actual_rate * b.count, 0) / totalEvents
 
-  const isOverconfident = avgPredicted > avgActual + 0.1
-  const isUnderconfident = avgActual > avgPredicted + 0.1
+  const isOverconfident = avgPredicted > avgActual + cal.backtest_scoring.overconfidence_gap
+  const isUnderconfident = avgActual > avgPredicted + cal.backtest_scoring.overconfidence_gap
 
   let details = `Calibration across ${totalEvents} events: ECE ${(calibrationError * 100).toFixed(1)}%`
   if (isOverconfident) details += " — probabilities are overconfident (predicted > actual)"
   else if (isUnderconfident) details += " — probabilities are underconfident (actual > predicted)"
   else details += " — probabilities are reasonably calibrated"
 
-  const suggested_interpretation = isOverconfident && calibrationError > 0.25
+  const suggested_interpretation = isOverconfident && calibrationError > cal.backtest_scoring.interpretation_high_threshold
     ? "Model is overconfident: interpret a 70% prediction as ~50–55% in practice. Use ranges, not point estimates."
     : isOverconfident
       ? "Slight overconfidence: treat high probabilities (80%+) with some caution."
       : undefined
 
   // Temperature scaling: p_adj = p^T with T>1 pulls high probs down (reduces overconfidence)
-  const probability_temperature = isOverconfident && calibrationError > 0.2
-    ? r2(1 + calibrationError * 1.5)
+  const probability_temperature = isOverconfident && calibrationError > cal.backtest_scoring.temperature_threshold
+    ? r2(1 + calibrationError * cal.backtest_scoring.temperature_mult)
     : undefined
 
   // Merge low-sample buckets (n < 5) with adjacent buckets for more stable display
-  const mergedBuckets = mergeLowSampleBuckets(calibrationBuckets, 5)
+  const mergedBuckets = mergeLowSampleBuckets(calibrationBuckets, cal.backtest_scoring.merge_min_sample)
 
   return { total_events_evaluated: totalEvents, buckets: mergedBuckets, calibration_error: calibrationError, is_overconfident: isOverconfident, is_underconfident: isUnderconfident, details, suggested_interpretation, probability_temperature }
 }
@@ -4545,7 +4527,7 @@ function runSingleBacktest(
   const models = buildBehavioralModels(training, invoices, bills, entityProfiles)
   const buckets = decomposeMovements(training)
   const dataSpan = daysBetween(allDates[0], cutoffDate)
-  const components = buckets.map((b) => buildComponent(b, dataSpan))
+  const components = buckets.map((b) => buildComponent(b, dataSpan, cal))
   const events = generateEvents30d(models, components)
 
   const predictedDailyNet = new Array<number>(testDays + 1).fill(0)
@@ -4593,7 +4575,7 @@ function runSingleBacktest(
     ))
   )
 
-  const calibration = runCalibration(events, testSet, cutoffDate, testDays)
+  const calibration = runCalibration(events, testSet, cutoffDate, testDays, cal)
 
   // Event occurrence accuracy: of events with prob >= 0.5, what fraction actually occurred?
   let eventOccurrenceAccuracy: number | null = null
@@ -4655,7 +4637,8 @@ function runBacktest(
   entityProfiles: EntityPaymentProfile[] = [],
 ): BacktestResult | null {
   const allDates = movements.map((m) => toDateStr(m.occurred_at)).filter(Boolean).sort()
-  if (allDates.length < 30) return null
+  const minMovements = cal.backtest_min_training_movements + cal.backtest_min_test_movements
+  if (allDates.length < minMovements) return null
 
   const totalSpanDays = daysBetween(allDates[0], allDates[allDates.length - 1])
 
@@ -4799,7 +4782,7 @@ export function computeCashflowForecast(
 
   // Aggregate component models (for non-entity categories)
   const buckets = decomposeMovements(movements)
-  let components = buckets.map((b) => buildComponent(b, dataSpanDays))
+  let components = buckets.map((b) => buildComponent(b, dataSpanDays, cal))
   
   // If no movement-based components but we have invoices/bills, create synthetic components
   // This ensures invoice-only users still see meaningful component data
@@ -4884,13 +4867,13 @@ export function computeCashflowForecast(
   const daily_simulation = simulateDaily(events_30d, startingCash)
 
   // Monte Carlo: simulations with payment delays, amount variance, missed payments
-  const monte_carlo = runMonteCarlo(events_30d, startingCash, cal.monte_carlo_iterations)
+  const monte_carlo = runMonteCarlo(events_30d, startingCash, cal.monte_carlo_iterations, cal)
 
   // Narrative: deterministic Forecast / Risk / Insight / Action (enriched with state context)
-  const narrative = generateNarrative(monte_carlo, daily_simulation, behavioral_models, events_30d, startingCash, forecastCtx)
+  const narrative = generateNarrative(monte_carlo, daily_simulation, behavioral_models, events_30d, startingCash, forecastCtx, cal)
 
   // Run risk-aware scenarios
-  const scenarios = buildScenarios(forecastCtx).map((config) =>
+  const scenarios = buildScenarios(forecastCtx, cal).map((config) =>
     runScenario(behavioral_models, components, horizonMonths, startingCash, config, cal)
   )
 
@@ -4901,18 +4884,19 @@ export function computeCashflowForecast(
   const sensitivity = computeSensitivity(events_30d, behavioral_models, monte_carlo, startingCash)
 
   // Intervention engine
-  const interventions = computeInterventions(events_30d, behavioral_models, monte_carlo, startingCash, daily_simulation)
+  const interventions = computeInterventions(events_30d, behavioral_models, monte_carlo, startingCash, daily_simulation, cal)
   const combined_strategies = computeCombinedStrategies(
     interventions,
     daily_simulation.min_cash,
-    monte_carlo.prob_below_zero_14d > 0.05 ? monte_carlo.prob_below_zero_14d : monte_carlo.prob_below_zero_30d,
+    monte_carlo.prob_below_zero_14d > cal.interventions.stress_prob_threshold ? monte_carlo.prob_below_zero_14d : monte_carlo.prob_below_zero_30d,
+    cal,
   )
 
   // Scenario drivers (WHY the pessimistic scenario is bad)
   const baseScenario = scenarios.find((s) => s.scenario === "base")
   const pessScenario = scenarios.find((s) => s.scenario === "pessimistic")
   const pessDrivers = baseScenario && pessScenario
-    ? computeScenarioDrivers(behavioral_models, events_30d, baseScenario, pessScenario)
+    ? computeScenarioDrivers(behavioral_models, events_30d, baseScenario, pessScenario, cal)
     : []
   if (pessScenario && pessDrivers.length > 0) {
     (pessScenario as ScenarioResult & { drivers?: ScenarioDriver[] }).drivers = pessDrivers
