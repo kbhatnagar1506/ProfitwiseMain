@@ -3985,9 +3985,9 @@ function computeForecastConfidence(
         let archetypeBonus = cs.archetype_bonus[c.archetype] ?? 0.15
         let confMult = cs.confidence_mult[c.confidence] ?? 0.25
         
-        // Floor: any customer with observed payments deserves minimum credit
-        if (c.payment_count >= 1 && archetypeBonus < 0.20) archetypeBonus = 0.20
-        if (c.payment_count >= 3 && archetypeBonus < 0.40) archetypeBonus = 0.40
+        // Floor: any customer with observed payments deserves meaningful credit
+        if (c.payment_count >= 1 && archetypeBonus < 0.30) archetypeBonus = 0.30
+        if (c.payment_count >= 3 && archetypeBonus < 0.50) archetypeBonus = 0.50
         
         // Apply entity graph score boost if available
         const entityGraphBoost = (c as any)._entity_graph_score_boost || 0
@@ -4004,7 +4004,7 @@ function computeForecastConfidence(
           confMult = Math.min(1, confMult + aiBoost * 0.5)
         }
         
-        weightedConf += weight * archetypeBonus * confMult
+        weightedConf += weight * Math.max(0.15, archetypeBonus * confMult)
       }
       inflowScore = weightedConf
     } else {
@@ -4039,9 +4039,9 @@ function computeForecastConfidence(
         let recBonus = v.recurrence.recurrence_confidence
         let confMult = cs.vendor_conf_mult[v.confidence] ?? 0.25
         
-        // Floor: any vendor with observed payments deserves minimum credit
-        if (v.payment_count >= 1 && recBonus < 0.15) recBonus = 0.15
-        if (v.payment_count >= 3 && recBonus < 0.30) recBonus = 0.30
+        // Floor: any vendor with observed payments deserves meaningful credit
+        if (v.payment_count >= 1 && recBonus < 0.30) recBonus = 0.30
+        if (v.payment_count >= 3 && recBonus < 0.50) recBonus = 0.50
         
         // Apply entity graph score boost if available
         const entityGraphBoost = (v as any)._entity_graph_score_boost || 0
@@ -4058,7 +4058,7 @@ function computeForecastConfidence(
           confMult = Math.min(1, confMult + aiBoost * 0.5)
         }
         
-        weightedConf += weight * recBonus * confMult
+        weightedConf += weight * Math.max(0.15, recBonus * confMult)
       }
       outflowScore = weightedConf
     } else {
@@ -4140,29 +4140,19 @@ function computeForecastConfidence(
 
   // ── 5. Recurrence confidence (weight: 0.10) ──
   let recurrenceScore = 0
-  if (vendTotal > 0 || custTotal > 0) {
-    let totalRecConf = 0
-    let entityCount = 0
-    if (vendTotal > 0) {
-      for (const v of models.vendors) {
-        let rc = v.recurrence.recurrence_confidence
-        if (v.payment_count >= 1 && rc < 0.15) rc = 0.15
-        if (v.payment_count >= 3 && rc < 0.30) rc = 0.30
-        totalRecConf += rc
-        entityCount++
-      }
+  if (vendTotal > 0) {
+    const totalSpendForRec = models.vendors.reduce((s, v) => s + v.avg_amount * Math.max(1, v.payment_count), 0)
+    let weightedRecConf = 0
+    for (const v of models.vendors) {
+      const w = totalSpendForRec > 0 ? (v.avg_amount * Math.max(1, v.payment_count)) / totalSpendForRec : 1 / vendTotal
+      let rc = v.recurrence.recurrence_confidence
+      if (v.payment_count >= 1 && rc < 0.25) rc = 0.25
+      if (v.payment_count >= 3 && rc < 0.45) rc = 0.45
+      if (v.confidence === "high") rc = Math.max(rc, 0.70)
+      else if (v.confidence === "medium") rc = Math.max(rc, 0.40)
+      weightedRecConf += w * rc
     }
-    if (custTotal > 0) {
-      for (const c of models.customers) {
-        const intervalCv = c.features?.interval_cv ?? 999
-        let rc = intervalCv < 1 ? Math.max(0, 1 - intervalCv) : 0
-        if (c.payment_count >= 1 && rc < 0.15) rc = 0.15
-        if (c.payment_count >= 3 && rc < 0.30) rc = 0.30
-        totalRecConf += rc
-        entityCount++
-      }
-    }
-    recurrenceScore = entityCount > 0 ? totalRecConf / entityCount : 0
+    recurrenceScore = weightedRecConf
   } else if (apOpenBills.length > 0) {
     recurrenceScore = Math.min(cs.recurrence_fallback_cap, cs.recurrence_fallback_base + Math.min(cs.recurrence_fallback_cap - cs.recurrence_fallback_base, apOpenBills.length * cs.recurrence_fallback_bill_scale))
   }
