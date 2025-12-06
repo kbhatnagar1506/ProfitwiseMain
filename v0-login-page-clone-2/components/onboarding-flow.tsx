@@ -5094,9 +5094,12 @@ export function OnboardingFlow({
               <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
 
               {forecastLoading && (
-                <div className="flex items-center justify-center gap-2 py-6 text-gray-400">
-                  <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                  Computing forecast…
+                <div className="flex flex-col items-center justify-center gap-3 py-12">
+                  <div className="relative w-12 h-12">
+                    <div className="absolute inset-0 rounded-full border-2 border-white/10" />
+                    <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-blue-400 animate-spin" />
+                  </div>
+                  <span className="text-sm text-gray-400">Computing forecast…</span>
                 </div>
               )}
 
@@ -5108,18 +5111,40 @@ export function OnboardingFlow({
             {!forecastLoading && forecastData && (
               <div className="space-y-6">
                 {/* ─── Data Quality + Forecast Confidence ─── */}
-                <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
-                  <span>Data span: {forecastData.data_span_days}d</span>
-                  <span>Components: {forecastData.components.length}</span>
-                  <span>Horizon: {forecastData.forecast_horizon_months} months</span>
-                  {forecastData.context && (
-                    <span className="text-gray-400">Balance: <span className={forecastData.context.balance_source === "plaid" ? "text-emerald-400" : "text-amber-400"}>{forecastData.context.balance_source === "plaid" ? "Live (Plaid)" : "Derived"}</span></span>
-                  )}
-                  {forecastData.forecast_confidence && (
-                    <span className={`font-semibold ${forecastData.forecast_confidence.label === "high" ? "text-emerald-400" : forecastData.forecast_confidence.label === "medium" ? "text-amber-400" : "text-red-400"}`}>
-                      Forecast confidence: {Math.round(forecastData.forecast_confidence.score * 100)}% ({forecastData.forecast_confidence.label})
-                    </span>
-                  )}
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
+                  <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
+                    <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Data span: {forecastData.data_span_days}d</span>
+                    <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Components: {forecastData.components.length}</span>
+                    <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Horizon: {forecastData.forecast_horizon_months} months</span>
+                    {forecastData.context && (
+                      <span className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${forecastData.context.balance_source === "plaid" ? "bg-emerald-400" : "bg-amber-400"}`} />
+                        Balance: <span className={forecastData.context.balance_source === "plaid" ? "text-emerald-400" : "text-amber-400"}>{forecastData.context.balance_source === "plaid" ? "Live (Plaid)" : "Derived"}</span>
+                      </span>
+                    )}
+                  </div>
+                  {forecastData.forecast_confidence && (() => {
+                    const conf = forecastData.forecast_confidence
+                    const pct = Math.round(conf.score * 100)
+                    const color = conf.label === "high" ? "emerald" : conf.label === "medium" ? "amber" : "red"
+                    return (
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <div className="relative w-10 h-10">
+                            <svg viewBox="0 0 36 36" className="w-10 h-10 -rotate-90">
+                              <circle cx="18" cy="18" r="15.5" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
+                              <circle cx="18" cy="18" r="15.5" fill="none" stroke={color === "emerald" ? "rgb(52,211,153)" : color === "amber" ? "rgb(251,191,36)" : "rgb(248,113,113)"} strokeWidth="3" strokeDasharray={`${pct * 0.975} 100`} strokeLinecap="round" />
+                            </svg>
+                            <span className={`absolute inset-0 flex items-center justify-center text-xs font-bold font-mono text-${color}-400`}>{pct}</span>
+                          </div>
+                          <div className="text-right">
+                            <div className={`text-xs font-semibold text-${color}-400`}>Confidence</div>
+                            <div className="text-[10px] text-gray-500 capitalize">{conf.label}</div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
                 {/* ─── Context: Risk & Account Balances ─── */}
                 {forecastData.context && (forecastData.context.risk_score > 0 || forecastData.context.account_balances.length > 0) && (
@@ -5159,36 +5184,37 @@ export function OnboardingFlow({
                   const borderColor = n.severity === "danger" ? "border-red-500/30" : n.severity === "caution" ? "border-amber-500/30" : "border-emerald-500/30"
                   const bgColor = n.severity === "danger" ? "bg-red-500/5" : n.severity === "caution" ? "bg-amber-500/5" : "bg-emerald-500/5"
                   const accentColor = n.severity === "danger" ? "text-red-400" : n.severity === "caution" ? "text-amber-400" : "text-emerald-400"
+                  const glowColor = n.severity === "danger" ? "shadow-red-500/10" : n.severity === "caution" ? "shadow-amber-500/10" : "shadow-emerald-500/10"
                   return (
-                    <div className={`border rounded-xl p-6 ${borderColor} ${bgColor}`}>
-                      <div className="space-y-4">
-                        <div className="flex items-start gap-3">
-                          <span className="text-lg mt-0.5">🔮</span>
-                          <div>
-                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Forecast</div>
-                            <div className={`text-sm font-semibold ${accentColor}`}>{n.forecast}</div>
+                    <div className={`border rounded-2xl ${borderColor} ${bgColor} shadow-lg ${glowColor} overflow-hidden`}>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-white/5">
+                        <div className="p-5">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-lg">🔮</span>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Forecast</span>
                           </div>
+                          <div className={`text-sm leading-relaxed ${accentColor} font-medium`}>{n.forecast}</div>
                         </div>
-                        <div className="flex items-start gap-3">
-                          <span className="text-lg mt-0.5">⚠️</span>
-                          <div>
-                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Risk</div>
-                            <div className="text-sm text-gray-200">{n.risk}</div>
+                        <div className="p-5">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-lg">⚠️</span>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Risk</span>
                           </div>
+                          <div className="text-sm leading-relaxed text-gray-200">{n.risk}</div>
                         </div>
-                        <div className="flex items-start gap-3">
-                          <span className="text-lg mt-0.5">🧠</span>
-                          <div>
-                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Insight</div>
-                            <div className="text-sm text-gray-300">{n.insight}</div>
+                        <div className="p-5">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-lg">🧠</span>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Insight</span>
                           </div>
+                          <div className="text-sm leading-relaxed text-gray-300">{n.insight}</div>
                         </div>
-                        <div className="flex items-start gap-3">
-                          <span className="text-lg mt-0.5">🎯</span>
-                          <div>
-                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Action</div>
-                            <div className="text-sm text-white font-medium">{n.action}</div>
+                        <div className="p-5">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-lg">🎯</span>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Action</span>
                           </div>
+                          <div className="text-sm leading-relaxed text-white font-medium">{n.action}</div>
                         </div>
                       </div>
                     </div>
@@ -5209,25 +5235,25 @@ export function OnboardingFlow({
                   const lowDay = sim.min_cash_day > 0 ? sim.days.find((d) => d.day === sim.min_cash_day) : null
 
                   return (
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                    <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-5">
                       {/* Summary bar */}
-                      <div className="grid grid-cols-4 gap-3 mb-5 text-center">
-                        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg py-2">
-                          <div className="text-[10px] text-emerald-400/70">Expected in</div>
-                          <div className="text-sm font-bold font-mono text-emerald-400">{money(totalIn)}</div>
+                      <div className="grid grid-cols-4 gap-4 mb-6 text-center">
+                        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+                          <div className="text-[10px] text-emerald-400/70 uppercase tracking-wider mb-1">Expected in</div>
+                          <div className="text-lg font-bold font-mono text-emerald-400">{money(totalIn)}</div>
                         </div>
-                        <div className="bg-red-500/10 border border-red-500/20 rounded-lg py-2">
-                          <div className="text-[10px] text-red-400/70">Expected out</div>
-                          <div className="text-sm font-bold font-mono text-red-400">{money(totalOut)}</div>
+                        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+                          <div className="text-[10px] text-red-400/70 uppercase tracking-wider mb-1">Expected out</div>
+                          <div className="text-lg font-bold font-mono text-red-400">{money(totalOut)}</div>
                         </div>
-                        <div className={`${net >= 0 ? "bg-blue-500/10 border-blue-500/20" : "bg-amber-500/10 border-amber-500/20"} border rounded-lg py-2`}>
-                          <div className="text-[10px] text-gray-400">Net</div>
-                          <div className={`text-sm font-bold font-mono ${net >= 0 ? "text-blue-400" : "text-amber-400"}`}>{signedMoney(net)}</div>
+                        <div className={`${net >= 0 ? "bg-blue-500/10 border-blue-500/20" : "bg-amber-500/10 border-amber-500/20"} border rounded-xl p-3`}>
+                          <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">Net</div>
+                          <div className={`text-lg font-bold font-mono ${net >= 0 ? "text-blue-400" : "text-amber-400"}`}>{signedMoney(net)}</div>
                         </div>
                         {lowDay && sim.min_cash < sim.starting_cash * 0.8 && (
-                          <div className={`${sim.min_cash < 0 ? "bg-red-500/10 border-red-500/20" : "bg-amber-500/10 border-amber-500/20"} border rounded-lg py-2`}>
-                            <div className={`text-[10px] ${sim.min_cash < 0 ? "text-red-400/70" : "text-amber-400/70"}`}>Low point D{sim.min_cash_day}</div>
-                            <div className={`text-sm font-bold font-mono ${sim.min_cash < 0 ? "text-red-400" : "text-amber-400"}`}>{cashDisplay(sim.min_cash)}</div>
+                          <div className={`${sim.min_cash < 0 ? "bg-red-500/10 border-red-500/20" : "bg-amber-500/10 border-amber-500/20"} border rounded-xl p-3`}>
+                            <div className={`text-[10px] ${sim.min_cash < 0 ? "text-red-400/70" : "text-amber-400/70"} uppercase tracking-wider mb-1`}>Low point D{sim.min_cash_day}</div>
+                            <div className={`text-lg font-bold font-mono ${sim.min_cash < 0 ? "text-red-400" : "text-amber-400"}`}>{cashDisplay(sim.min_cash)}</div>
                           </div>
                         )}
                       </div>
@@ -5345,28 +5371,29 @@ export function OnboardingFlow({
                   const barHeight = (cash: number) => Math.max(2, ((cash - minCash) / range) * 100)
 
                   return (
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-                      <div className="flex items-center justify-between mb-4">
+                    <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6">
+                      <div className="flex items-center justify-between mb-5">
                         <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Daily Cash Position — 30 Days</h3>
-                        <div className="flex items-center gap-4 text-xs">
-                          <span className="text-gray-500">Start: <span className="text-white font-mono">{money(sim.starting_cash)}</span></span>
-                          <span className="text-gray-500">End: <span className={`font-mono ${sim.ending_cash >= sim.starting_cash ? "text-emerald-400" : "text-red-400"}`}>{money(sim.ending_cash)}</span></span>
+                        <div className="flex items-center gap-5 text-xs">
+                          <span className="text-gray-500">Start: <span className="text-white font-mono font-semibold">{money(sim.starting_cash)}</span></span>
+                          <span className="text-gray-500">End: <span className={`font-mono font-semibold ${sim.ending_cash >= sim.starting_cash ? "text-emerald-400" : "text-red-400"}`}>{money(sim.ending_cash)}</span></span>
                         </div>
                       </div>
 
                       {sim.min_cash < sim.starting_cash * 0.5 && (
-                        <div className="mb-3 flex items-center gap-2 text-xs">
+                        <div className={`mb-4 px-3 py-2 rounded-lg border text-xs flex items-center gap-2 ${sim.min_cash < 0 ? "bg-red-500/10 border-red-500/20" : "bg-amber-500/10 border-amber-500/20"}`}>
+                          <span className={`w-2 h-2 rounded-full animate-pulse ${sim.min_cash < 0 ? "bg-red-400" : "bg-amber-400"}`} />
                           <span className={`font-semibold ${sim.min_cash < 0 ? "text-red-400" : "text-amber-400"}`}>Expected path low</span>
-                          <span className={sim.min_cash < 0 ? "text-red-400" : "text-gray-400"}>Day {sim.min_cash_day}: {cashDisplay(sim.min_cash)}</span>
+                          <span className={sim.min_cash < 0 ? "text-red-300" : "text-gray-400"}>Day {sim.min_cash_day}: <span className="font-mono font-semibold">{cashDisplay(sim.min_cash)}</span></span>
                         </div>
                       )}
 
                       {/* Bar chart */}
-                      <div className="flex items-end gap-[2px] h-24 mb-2">
+                      <div className="flex items-end gap-[2px] h-32 mb-2">
                         {sim.days.map((d) => {
                           const h = barHeight(d.cash)
                           const isMin = d.day === sim.min_cash_day && sim.min_cash < sim.starting_cash * 0.7
-                          const color = d.cash < 0 ? "bg-red-500" : isMin ? "bg-amber-400" : d.cash >= sim.starting_cash ? "bg-emerald-400/70" : "bg-blue-400/70"
+                          const color = d.cash < 0 ? "bg-red-500" : isMin ? "bg-amber-400" : d.cash >= sim.starting_cash ? "bg-emerald-400/60" : "bg-blue-400/60"
                           return (
                             <div
                               key={d.day}
@@ -5452,8 +5479,8 @@ export function OnboardingFlow({
                   const probColor = (p: number) => p > 0.3 ? "text-red-400" : p > 0.1 ? "text-amber-400" : "text-emerald-400"
 
                   return (
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-                      <div className="flex items-center justify-between mb-4">
+                    <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6">
+                      <div className="flex items-center justify-between mb-5">
                         <div>
                           <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Monte Carlo Simulation</h3>
                           <p className="text-[10px] text-gray-500 mt-0.5">{mc.simulations} simulations with payment delays, amount variance, missed payments</p>
@@ -5461,31 +5488,41 @@ export function OnboardingFlow({
                       </div>
 
                       {/* Probability queries */}
-                      <div className="grid grid-cols-3 gap-3 mb-5">
-                        <div className="bg-white/5 border border-white/10 rounded-lg p-3 text-center">
-                          <div className="text-[10px] text-gray-500 mb-1">P(cash &lt; 0) in 14d</div>
-                          <div className={`text-lg font-bold font-mono ${probColor(mc.prob_below_zero_14d)}`}>{Math.round(mc.prob_below_zero_14d * 100)}%</div>
+                      <div className="grid grid-cols-3 gap-4 mb-6">
+                        <div className={`rounded-xl p-4 text-center border ${mc.prob_below_zero_14d > 0.3 ? "bg-red-500/10 border-red-500/20" : mc.prob_below_zero_14d > 0.1 ? "bg-amber-500/10 border-amber-500/20" : "bg-emerald-500/10 border-emerald-500/20"}`}>
+                          <div className="text-[10px] text-gray-400 mb-2 uppercase tracking-wider">P(cash &lt; 0) in 14d</div>
+                          <div className={`text-2xl font-bold font-mono ${probColor(mc.prob_below_zero_14d)}`}>{Math.round(mc.prob_below_zero_14d * 100)}%</div>
                         </div>
-                        <div className="bg-white/5 border border-white/10 rounded-lg p-3 text-center">
-                          <div className="text-[10px] text-gray-500 mb-1">P(cash &lt; 0) in 30d</div>
-                          <div className={`text-lg font-bold font-mono ${probColor(mc.prob_below_zero_30d)}`}>{Math.round(mc.prob_below_zero_30d * 100)}%</div>
+                        <div className={`rounded-xl p-4 text-center border ${mc.prob_below_zero_30d > 0.3 ? "bg-red-500/10 border-red-500/20" : mc.prob_below_zero_30d > 0.1 ? "bg-amber-500/10 border-amber-500/20" : "bg-emerald-500/10 border-emerald-500/20"}`}>
+                          <div className="text-[10px] text-gray-400 mb-2 uppercase tracking-wider">P(cash &lt; 0) in 30d</div>
+                          <div className={`text-2xl font-bold font-mono ${probColor(mc.prob_below_zero_30d)}`}>{Math.round(mc.prob_below_zero_30d * 100)}%</div>
                         </div>
-                        <div className="bg-white/5 border border-white/10 rounded-lg p-3 text-center">
-                          <div className="text-[10px] text-gray-500 mb-1">P(cash &gt; start) in 30d</div>
-                          <div className={`text-lg font-bold font-mono ${mc.prob_above_starting_30d > 0.5 ? "text-emerald-400" : "text-amber-400"}`}>{Math.round(mc.prob_above_starting_30d * 100)}%</div>
+                        <div className={`rounded-xl p-4 text-center border ${mc.prob_above_starting_30d > 0.5 ? "bg-emerald-500/10 border-emerald-500/20" : "bg-amber-500/10 border-amber-500/20"}`}>
+                          <div className="text-[10px] text-gray-400 mb-2 uppercase tracking-wider">P(cash &gt; start) in 30d</div>
+                          <div className={`text-2xl font-bold font-mono ${mc.prob_above_starting_30d > 0.5 ? "text-emerald-400" : "text-amber-400"}`}>{Math.round(mc.prob_above_starting_30d * 100)}%</div>
                         </div>
                       </div>
 
                       {/* Percentile fan chart */}
-                      <div className="relative h-32 mb-2">
+                      <div className="relative h-40 mb-3 bg-white/[0.02] rounded-xl p-2">
                         <svg viewBox="0 0 300 100" preserveAspectRatio="none" className="w-full h-full">
+                          <defs>
+                            <linearGradient id="fanOuter" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="rgb(59,130,246)" stopOpacity="0.06" />
+                              <stop offset="100%" stopColor="rgb(59,130,246)" stopOpacity="0.12" />
+                            </linearGradient>
+                            <linearGradient id="fanInner" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="rgb(59,130,246)" stopOpacity="0.12" />
+                              <stop offset="100%" stopColor="rgb(59,130,246)" stopOpacity="0.25" />
+                            </linearGradient>
+                          </defs>
                           {/* P5-P95 band */}
                           <polygon
                             points={
                               pctiles.map((p, i) => `${(i / 29) * 300},${yPos(p.p95)}`).join(" ") + " " +
                               [...pctiles].reverse().map((p, i) => `${((29 - i) / 29) * 300},${yPos(p.p5)}`).join(" ")
                             }
-                            fill="rgba(59,130,246,0.08)"
+                            fill="url(#fanOuter)"
                           />
                           {/* P25-P75 band */}
                           <polygon
@@ -5493,16 +5530,16 @@ export function OnboardingFlow({
                               pctiles.map((p, i) => `${(i / 29) * 300},${yPos(p.p75)}`).join(" ") + " " +
                               [...pctiles].reverse().map((p, i) => `${((29 - i) / 29) * 300},${yPos(p.p25)}`).join(" ")
                             }
-                            fill="rgba(59,130,246,0.15)"
+                            fill="url(#fanInner)"
                           />
                           {/* P50 median line */}
                           <polyline
                             points={pctiles.map((p, i) => `${(i / 29) * 300},${yPos(p.p50)}`).join(" ")}
-                            fill="none" stroke="rgb(96,165,250)" strokeWidth="1.5"
+                            fill="none" stroke="rgb(96,165,250)" strokeWidth="2" strokeLinejoin="round"
                           />
                           {/* Zero line if visible */}
                           {minVal < 0 && (
-                            <line x1="0" y1={yPos(0)} x2="300" y2={yPos(0)} stroke="rgba(239,68,68,0.4)" strokeWidth="0.5" strokeDasharray="4,3" />
+                            <line x1="0" y1={yPos(0)} x2="300" y2={yPos(0)} stroke="rgba(239,68,68,0.5)" strokeWidth="0.5" strokeDasharray="4,3" />
                           )}
                         </svg>
 
@@ -5519,18 +5556,18 @@ export function OnboardingFlow({
                       </div>
 
                       {/* Summary stats */}
-                      <div className="grid grid-cols-3 gap-3 text-center text-xs">
-                        <div>
-                          <div className="text-gray-500">Expected (30d)</div>
-                          <div className="text-white font-mono font-semibold">{money(mc.expected_cash_30d)}</div>
+                      <div className="grid grid-cols-3 gap-4 text-center">
+                        <div className="bg-white/[0.03] rounded-xl p-3">
+                          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Expected (30d)</div>
+                          <div className="text-lg text-white font-mono font-bold">{cashDisplay(mc.expected_cash_30d)}</div>
                         </div>
-                        <div>
-                          <div className="text-gray-500">Probabilistic downside (5th %ile)</div>
-                          <div className={`font-mono font-semibold ${mc.worst_case_cash_30d < 0 ? "text-red-400" : "text-amber-400"}`}>{money(mc.worst_case_cash_30d)}</div>
+                        <div className="bg-white/[0.03] rounded-xl p-3">
+                          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Probabilistic downside (5th %ile)</div>
+                          <div className={`text-lg font-mono font-bold ${mc.worst_case_cash_30d < 0 ? "text-red-400" : "text-amber-400"}`}>{cashDisplay(mc.worst_case_cash_30d)}</div>
                         </div>
-                        <div>
-                          <div className="text-gray-500">Best case (95th %ile)</div>
-                          <div className="text-emerald-400 font-mono font-semibold">{money(mc.best_case_cash_30d)}</div>
+                        <div className="bg-white/[0.03] rounded-xl p-3">
+                          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Best case (95th %ile)</div>
+                          <div className="text-lg text-emerald-400 font-mono font-bold">{cashDisplay(mc.best_case_cash_30d)}</div>
                         </div>
                       </div>
 
