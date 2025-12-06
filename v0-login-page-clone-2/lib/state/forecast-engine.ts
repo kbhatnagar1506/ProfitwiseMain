@@ -994,14 +994,10 @@ function buildCustomerModels(
     else if (archetype === "slow_reliable" && payments.length >= 4) confidence = "medium"
     else if (archetype === "bursty" && payments.length >= 4) confidence = "medium"
     else if (payments.length >= 3) confidence = "medium"
-    // Boost low_data customers if we have invoice signals
     else if (archetype === "low_data" && customerInvoices.length > 0) {
-      // If customer has open/overdue invoices, they're likely to pay soon
-      const hasOpenOrOverdue = customerInvoices.some((i) => i.status === "open" || i.status === "overdue")
-      if (hasOpenOrOverdue) {
-        confidence = "medium" // Upgrade from low to medium based on invoice signal
-      }
+      confidence = "medium"
     }
+    else if (payments.length >= 1) confidence = "medium"
 
     // Invoice boost — scaled by archetype multiplier from portfolio data
     if (customerInvoices.length > 0) {
@@ -1362,9 +1358,10 @@ function classifyRecurrence(
         class_consistency,
       }
     }
+    const lowDataConf = n === 0 ? 0 : n === 1 ? Math.min(rc.unknown_cap, Math.max(0.15, componentConfidence * rc.unknown_base)) : Math.min(rc.unknown_cap, Math.max(0.20, componentConfidence * rc.unknown_base))
     return {
       recurrence_type: n === 0 ? "unknown" : "episodic",
-      recurrence_confidence: r2(n === 0 ? 0 : Math.min(rc.unknown_cap, componentConfidence * rc.unknown_base)),
+      recurrence_confidence: r2(lowDataConf),
       expected_interval_days: avgInterval > 0 ? Math.round(avgInterval) : null,
       interval_std_days: null,
       amount_mean: amountMean > 0 ? r2(amountMean) : null,
@@ -1611,6 +1608,8 @@ function buildVendorModels(
     else if (payments.length >= 3 && isRecurring) confidence = "medium"
     else if (payments.length >= 3) confidence = "medium"
     else if (payments.length >= 2 && (taggedRecurring || familyRecurring)) confidence = "medium"
+    else if (payments.length >= 2) confidence = "medium"
+    else if (payments.length >= 1) confidence = "medium"
 
     if (vendorBills.length > 0) {
       const now = new Date().toISOString().slice(0, 10)
@@ -3986,6 +3985,10 @@ function computeForecastConfidence(
         let archetypeBonus = cs.archetype_bonus[c.archetype] ?? 0.15
         let confMult = cs.confidence_mult[c.confidence] ?? 0.25
         
+        // Floor: any customer with observed payments deserves minimum credit
+        if (c.payment_count >= 1 && archetypeBonus < 0.20) archetypeBonus = 0.20
+        if (c.payment_count >= 3 && archetypeBonus < 0.40) archetypeBonus = 0.40
+        
         // Apply entity graph score boost if available
         const entityGraphBoost = (c as any)._entity_graph_score_boost || 0
         if (entityGraphBoost > 0) {
@@ -4035,6 +4038,10 @@ function computeForecastConfidence(
         const weight = (v.avg_amount * Math.max(1, v.payment_count)) / totalSpend
         let recBonus = v.recurrence.recurrence_confidence
         let confMult = cs.vendor_conf_mult[v.confidence] ?? 0.25
+        
+        // Floor: any vendor with observed payments deserves minimum credit
+        if (v.payment_count >= 1 && recBonus < 0.15) recBonus = 0.15
+        if (v.payment_count >= 3 && recBonus < 0.30) recBonus = 0.30
         
         // Apply entity graph score boost if available
         const entityGraphBoost = (v as any)._entity_graph_score_boost || 0
@@ -4133,9 +4140,29 @@ function computeForecastConfidence(
 
   // ── 5. Recurrence confidence (weight: 0.10) ──
   let recurrenceScore = 0
-  if (vendTotal > 0) {
-    const totalRecConf = models.vendors.reduce((s, v) => s + v.recurrence.recurrence_confidence, 0)
-    recurrenceScore = totalRecConf / vendTotal
+  if (vendTotal > 0 || custTotal > 0) {
+    let totalRecConf = 0
+    let entityCount = 0
+    if (vendTotal > 0) {
+      for (const v of models.vendors) {
+        let rc = v.recurrence.recurrence_confidence
+        if (v.payment_count >= 1 && rc < 0.15) rc = 0.15
+        if (v.payment_count >= 3 && rc < 0.30) rc = 0.30
+        totalRecConf += rc
+        entityCount++
+      }
+    }
+    if (custTotal > 0) {
+      for (const c of models.customers) {
+        const intervalCv = c.features?.interval_cv ?? 999
+        let rc = intervalCv < 1 ? Math.max(0, 1 - intervalCv) : 0
+        if (c.payment_count >= 1 && rc < 0.15) rc = 0.15
+        if (c.payment_count >= 3 && rc < 0.30) rc = 0.30
+        totalRecConf += rc
+        entityCount++
+      }
+    }
+    recurrenceScore = entityCount > 0 ? totalRecConf / entityCount : 0
   } else if (apOpenBills.length > 0) {
     recurrenceScore = Math.min(cs.recurrence_fallback_cap, cs.recurrence_fallback_base + Math.min(cs.recurrence_fallback_cap - cs.recurrence_fallback_base, apOpenBills.length * cs.recurrence_fallback_bill_scale))
   }
@@ -4211,13 +4238,16 @@ function computeForecastConfidence(
       const relationshipDensity = entityGraphStats.relationships_count / (totalEntities * (totalEntities - 1))
       const businessEntityRatio = entityGraphStats.business_entities_count / totalEntities
       
-      // Score based on relationship coverage
+      // Score based on relationship coverage and absolute count
       let score = 0
-      if (relationshipDensity > 0.5) score = 0.9
-      else if (relationshipDensity > 0.3) score = 0.75
-      else if (relationshipDensity > 0.1) score = 0.6
-      else if (relationshipDensity > 0.05) score = 0.45
-      else if (relationshipDensity > 0.01) score = 0.3
+      if (relationshipDensity > 0.3) score = 0.9
+      else if (relationshipDensity > 0.1) score = 0.8
+      else if (relationshipDensity > 0.05) score = 0.7
+      else if (relationshipDensity > 0.01) score = 0.6
+      else if (relationshipDensity > 0.005) score = 0.5
+      else if (entityGraphStats.relationships_count > 50) score = 0.55
+      else if (entityGraphStats.relationships_count > 20) score = 0.45
+      else if (entityGraphStats.relationships_count > 5) score = 0.35
       
       // Additional boost for business entity clustering
       if (businessEntityRatio > 0.3) score = Math.min(1, score + 0.1)
