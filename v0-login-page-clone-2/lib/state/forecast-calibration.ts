@@ -865,9 +865,9 @@ export const DEFAULT_FORECAST_CALIBRATION: ForecastCalibrationParams = {
 
   // Phase 7: Confidence Scoring, Backtest Scoring
   confidence_scoring: {
-    archetype_bonus: { clockwork: 1.0, slow_reliable: 0.7, bursty: 0.5, episodic: 0.35, volatile: 0.2, low_data: 0.15 },
-    confidence_mult: { high: 1.0, medium: 0.6, low: 0.25 },
-    vendor_conf_mult: { high: 1.0, medium: 0.6, low: 0.25 },
+    archetype_bonus: { clockwork: 1.0, slow_reliable: 0.7, bursty: 0.5, episodic: 0.35, volatile: 0.2, low_data: 0.40 },
+    confidence_mult: { high: 1.0, medium: 0.75, low: 0.30 },
+    vendor_conf_mult: { high: 1.0, medium: 0.75, low: 0.30 },
     settlement_score_map: { high: 0.9, medium: 0.65, low: 0.35, insufficient: 0.1 },
     data_span_target_months: 6,
     variance_penalty_base: 0.4, variance_penalty_scale: 0.3,
