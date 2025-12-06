@@ -347,8 +347,7 @@ export async function GET() {
     }
 
     // Check for cached forecast first
-    // DISABLED FOR DEBUGGING: const cached = await getCachedForecast(user.id)
-    const cached = null // Force fresh compute
+    const cached = await getCachedForecast(user.id)
     if (cached) {
       log("forecast.cache.hit", { userId: user.id, computedAt: cached.computed_at }, "forecast")
       return NextResponse.json(cached.forecast_data)
