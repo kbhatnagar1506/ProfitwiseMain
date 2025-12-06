@@ -4173,19 +4173,22 @@ function computeForecastConfidence(
   })
 
   // ── 8. Backtest confidence (weight: 0.10) ──
-  // accuracy_score is 0-100, normalize to 0-1 for the composite
-  // Prefer movement backtest if available (ground truth from actual bank transactions)
+  // Use the BETTER of movement backtest and traditional backtest
   let backtestScore = 0
   let backtestReason = "No backtest data available"
   
-  if (movementBacktest && movementBacktest.total_entities_tested > 0) {
-    // Use movement backtest as primary signal (more reliable than traditional backtest)
-    backtestScore = Math.min(1, movementBacktest.accuracy_rate)
+  const hasMovementBacktest = movementBacktest && movementBacktest.total_entities_tested > 0
+  const hasTraditionalBacktest = backtest !== null
+  
+  const movementBtScore = hasMovementBacktest ? Math.min(1, movementBacktest.accuracy_rate) : 0
+  const traditionalBtScore = hasTraditionalBacktest ? Math.min(1, backtest!.accuracy_score / 100) : 0
+  
+  if (movementBtScore >= traditionalBtScore && hasMovementBacktest) {
+    backtestScore = movementBtScore
     backtestReason = `Movement backtest: ${(movementBacktest.accuracy_rate * 100).toFixed(0)}% accuracy on ${movementBacktest.total_entities_tested} entities (inflow: ${(movementBacktest.inflow_accuracy * 100).toFixed(0)}%, outflow: ${(movementBacktest.outflow_accuracy * 100).toFixed(0)}%)`
-  } else if (backtest !== null) {
-    // Fall back to traditional backtest
-    backtestScore = Math.min(1, backtest.accuracy_score / 100)
-    backtestReason = `${backtest.days_tested}d tested, direction accuracy ${(backtest.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest.mean_absolute_error.toLocaleString()}`
+  } else if (hasTraditionalBacktest) {
+    backtestScore = traditionalBtScore
+    backtestReason = `${backtest!.days_tested}d tested, direction accuracy ${(backtest!.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest!.mean_absolute_error.toLocaleString()}`
   }
   
   by_component.push({
