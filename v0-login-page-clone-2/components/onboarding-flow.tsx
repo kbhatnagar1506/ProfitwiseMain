@@ -5080,6 +5080,7 @@ export function OnboardingFlow({
       case 14: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        const cashDisplay = (n: number) => n < 0 ? `-$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : `$${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         const behaviorLabel = (b: ComponentBehavior) => b === "recurring" ? "Recurring" : b === "episodic" ? "Episodic" : b === "seasonal" ? "Seasonal" : "One-time"
         const confDot = (c: "high" | "medium" | "low") => c === "high" ? "bg-emerald-400" : c === "medium" ? "bg-amber-400" : "bg-red-400"
         const scenarioColor = (s: string) => s === "optimistic" ? "text-emerald-400" : s === "pessimistic" ? "text-red-400" : "text-blue-400"
@@ -5224,9 +5225,9 @@ export function OnboardingFlow({
                           <div className={`text-sm font-bold font-mono ${net >= 0 ? "text-blue-400" : "text-amber-400"}`}>{signedMoney(net)}</div>
                         </div>
                         {lowDay && sim.min_cash < sim.starting_cash * 0.8 && (
-                          <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg py-2">
-                            <div className="text-[10px] text-amber-400/70">Low point D{sim.min_cash_day}</div>
-                            <div className="text-sm font-bold font-mono text-amber-400">{money(sim.min_cash)}</div>
+                          <div className={`${sim.min_cash < 0 ? "bg-red-500/10 border-red-500/20" : "bg-amber-500/10 border-amber-500/20"} border rounded-lg py-2`}>
+                            <div className={`text-[10px] ${sim.min_cash < 0 ? "text-red-400/70" : "text-amber-400/70"}`}>Low point D{sim.min_cash_day}</div>
+                            <div className={`text-sm font-bold font-mono ${sim.min_cash < 0 ? "text-red-400" : "text-amber-400"}`}>{cashDisplay(sim.min_cash)}</div>
                           </div>
                         )}
                       </div>
@@ -5355,8 +5356,8 @@ export function OnboardingFlow({
 
                       {sim.min_cash < sim.starting_cash * 0.5 && (
                         <div className="mb-3 flex items-center gap-2 text-xs">
-                          <span className="text-amber-400 font-semibold">Expected path low</span>
-                          <span className="text-gray-400">Day {sim.min_cash_day}: {money(sim.min_cash)}</span>
+                          <span className={`font-semibold ${sim.min_cash < 0 ? "text-red-400" : "text-amber-400"}`}>Expected path low</span>
+                          <span className={sim.min_cash < 0 ? "text-red-400" : "text-gray-400"}>Day {sim.min_cash_day}: {cashDisplay(sim.min_cash)}</span>
                         </div>
                       )}
 
@@ -5374,7 +5375,7 @@ export function OnboardingFlow({
                             >
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 bg-gray-900 border border-white/20 rounded px-2 py-1.5 text-[10px] whitespace-nowrap shadow-lg">
                                 <div className="text-white font-semibold">D{d.day} — {d.date}</div>
-                                <div className="text-gray-400">Cash: <span className="text-white font-mono">{money(d.cash)}</span></div>
+                                <div className="text-gray-400">Cash: <span className={`font-mono ${d.cash < 0 ? "text-red-400" : "text-white"}`}>{cashDisplay(d.cash)}</span></div>
                                 {d.inflows > 0 && <div className="text-emerald-400">+{money(d.inflows)} in</div>}
                                 {d.outflows > 0 && <div className="text-red-400">-{money(d.outflows)} out</div>}
                                 {d.events.map((e, i) => (
@@ -5552,16 +5553,16 @@ export function OnboardingFlow({
                                   <div className="space-y-1">
                                     <div className="flex justify-between text-xs">
                                       <span className="text-gray-400">14d</span>
-                                      <span className="text-white font-mono font-semibold">{money(sc.cash_14d)}</span>
+                                      <span className={`font-mono font-semibold ${sc.cash_14d < 0 ? "text-red-400" : "text-white"}`}>{cashDisplay(sc.cash_14d)}</span>
                                     </div>
                                     <div className="flex justify-between text-xs">
                                       <span className="text-gray-400">30d</span>
-                                      <span className="text-white font-mono font-semibold">{money(sc.cash_30d)}</span>
+                                      <span className={`font-mono font-semibold ${sc.cash_30d < 0 ? "text-red-400" : "text-white"}`}>{cashDisplay(sc.cash_30d)}</span>
                                     </div>
                                     {sc.min_cash_day > 0 && (
                                       <div className="flex justify-between text-xs">
                                         <span className="text-gray-500">Low D{sc.min_cash_day}</span>
-                                        <span className={`font-mono ${sc.min_cash < 0 ? "text-red-400" : "text-gray-400"}`}>{money(sc.min_cash)}</span>
+                                        <span className={`font-mono ${sc.min_cash < 0 ? "text-red-400" : "text-gray-400"}`}>{cashDisplay(sc.min_cash)}</span>
                                       </div>
                                     )}
                                   </div>
@@ -5906,9 +5907,31 @@ export function OnboardingFlow({
                 ))}
 
                 {/* ─── Cash Runway ─── */}
-                {forecastData.cash_runway && (
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
+                {forecastData.cash_runway && (() => {
+                  const mc = forecastData.monte_carlo
+                  const sim = forecastData.daily_simulation
+                  const shortTermRisk = mc && mc.prob_below_zero_14d > 0.2
+                  const shortTermCrisis = mc && mc.prob_below_zero_14d > 0.5
+                  return (
+                  <div className={`bg-white/5 border ${shortTermCrisis ? "border-red-500/30" : "border-white/10"} rounded-xl p-5`}>
                     <h3 className="text-sm font-semibold text-white uppercase tracking-wider mb-3">Cash Runway</h3>
+                    
+                    {shortTermRisk && sim && (
+                      <div className={`mb-4 p-3 rounded-lg border ${shortTermCrisis ? "bg-red-500/10 border-red-500/20" : "bg-amber-500/10 border-amber-500/20"}`}>
+                        <div className={`text-xs font-semibold ${shortTermCrisis ? "text-red-400" : "text-amber-400"} mb-1`}>
+                          Short-term liquidity risk
+                        </div>
+                        <div className="text-[10px] text-gray-300">
+                          {Math.round(mc.prob_below_zero_14d * 100)}% chance of cash going negative in the next 14 days
+                          {sim.min_cash < 0 && <span className="text-red-400 font-mono"> (low point: {cashDisplay(sim.min_cash)} on day {sim.min_cash_day})</span>}
+                          {sim.min_cash >= 0 && <span className="text-amber-400 font-mono"> (low point: {cashDisplay(sim.min_cash)} on day {sim.min_cash_day})</span>}
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-1">
+                          Long-term projections are positive, but near-term large outflows create a temporary crunch
+                        </div>
+                      </div>
+                    )}
+                    
                     <div className="grid grid-cols-2 gap-4">
                       <div className="bg-white/5 rounded-lg p-3 text-center">
                         <div className="text-xs text-gray-500 mb-1">Base case</div>
@@ -5949,7 +5972,8 @@ export function OnboardingFlow({
                       </div>
                     )}
                   </div>
-                )}
+                  )
+                })()}
 
                 {/* ─── Sensitivity Analysis ─── */}
                 {forecastData.sensitivity && forecastData.sensitivity.drivers.length > 0 && (
@@ -6011,7 +6035,7 @@ export function OnboardingFlow({
                             </div>
                             {sim && (
                               <div className="flex flex-wrap gap-3 text-[10px] text-gray-400 mb-2">
-                                <span>Low point: ${Math.round(sim.low_point_before).toLocaleString()} → <span className="text-emerald-400">${Math.round(sim.low_point_after).toLocaleString()}</span></span>
+                                <span>Low point: <span className={sim.low_point_before < 0 ? "text-red-400" : ""}>{cashDisplay(Math.round(sim.low_point_before))}</span> → <span className="text-emerald-400">{cashDisplay(Math.round(sim.low_point_after))}</span></span>
                                 <span>Stress prob: {(sim.stress_prob_before * 100).toFixed(0)}% → <span className="text-emerald-400">{(sim.stress_prob_after * 100).toFixed(0)}%</span></span>
                                 {sim.runway_months_change != null && sim.runway_months_change > 0 && (
                                   <span>Runway: <span className="text-emerald-400">+{sim.runway_months_change.toFixed(1)} mo</span></span>
@@ -6057,7 +6081,7 @@ export function OnboardingFlow({
                                 <span className={`${s.risk_level === "low" ? "text-emerald-400" : s.risk_level === "medium" ? "text-amber-400" : "text-red-400"}`}>
                                   Risk: {s.risk_level.toUpperCase()}
                                 </span>
-                                <span className="text-gray-500">Low point: ${Math.round(s.low_point).toLocaleString()}</span>
+                                <span className={s.low_point < 0 ? "text-red-400" : "text-gray-500"}>Low point: {cashDisplay(Math.round(s.low_point))}</span>
                                 <span className="text-gray-500">Stress prob: {(s.stress_prob * 100).toFixed(0)}%</span>
                               </div>
                             </div>
@@ -6283,6 +6307,7 @@ export function OnboardingFlow({
 
       case 15: {
         const money = (n: number) => `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+        const cashDisplay = (n: number) => n < 0 ? `-$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : `$${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
         return (
           <div className="space-y-6">
             <div className="text-center mb-2">
@@ -6323,7 +6348,7 @@ export function OnboardingFlow({
                             </div>
                             {sim && (
                               <div className="flex flex-wrap gap-3 text-[10px] text-gray-400 mb-2">
-                                <span>Low point: ${Math.round(sim.low_point_before).toLocaleString()} → <span className="text-emerald-400">${Math.round(sim.low_point_after).toLocaleString()}</span></span>
+                                <span>Low point: <span className={sim.low_point_before < 0 ? "text-red-400" : ""}>{cashDisplay(Math.round(sim.low_point_before))}</span> → <span className="text-emerald-400">{cashDisplay(Math.round(sim.low_point_after))}</span></span>
                                 <span>Stress prob: {(sim.stress_prob_before * 100).toFixed(0)}% → <span className="text-emerald-400">{(sim.stress_prob_after * 100).toFixed(0)}%</span></span>
                                 {sim.runway_months_change != null && sim.runway_months_change > 0 && (
                                   <span>Runway: <span className="text-emerald-400">+{sim.runway_months_change.toFixed(1)} mo</span></span>
@@ -6366,7 +6391,7 @@ export function OnboardingFlow({
                                 <span className={`${s.risk_level === "low" ? "text-emerald-400" : s.risk_level === "medium" ? "text-amber-400" : "text-red-400"}`}>
                                   Risk: {s.risk_level.toUpperCase()}
                                 </span>
-                                <span className="text-gray-500">Low point: ${Math.round(s.low_point).toLocaleString()}</span>
+                                <span className={s.low_point < 0 ? "text-red-400" : "text-gray-500"}>Low point: {cashDisplay(Math.round(s.low_point))}</span>
                                 <span className="text-gray-500">Stress prob: {(s.stress_prob * 100).toFixed(0)}%</span>
                               </div>
                             </div>
