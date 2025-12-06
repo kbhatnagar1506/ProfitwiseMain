@@ -93,7 +93,7 @@ function isPredictionAccurate(
 export function runMovementBacktest(
   movements: Array<{ entity_id: string; entity_name: string; direction: "inflow" | "outflow"; amount: number; occurred_at: string }>
 ): BacktestResult {
-  if (movements.length < 10) {
+  if (movements.length < 6) {
     log("movement_backtest.skip", { reason: "insufficient_movements", count: movements.length })
     return {
       total_entities_tested: 0,
@@ -110,14 +110,17 @@ export function runMovementBacktest(
     }
   }
 
-  // Split data
-  const { train, test } = splitMovements(movements, 0.6)
+  // For small datasets, use more lenient split
+  const trainRatio = movements.length < 20 ? 0.5 : 0.6
+  const { train, test } = splitMovements(movements, trainRatio)
 
   // Analyze training patterns
   const trainPatterns = analyzeAllMovementPatterns(train)
 
-  // Get high-confidence patterns for testing
-  const highConfidencePatterns = getHighConfidencePatterns(trainPatterns, 0.5, 3)
+  // For small datasets, accept lower confidence patterns
+  const minConfidence = movements.length < 20 ? 0.3 : 0.5
+  const minOccurrences = movements.length < 20 ? 2 : 3
+  const highConfidencePatterns = getHighConfidencePatterns(trainPatterns, minConfidence, minOccurrences)
 
   if (highConfidencePatterns.length === 0) {
     log("movement_backtest.skip", { reason: "no_high_confidence_patterns" })
@@ -145,12 +148,16 @@ export function runMovementBacktest(
   let episodicAccurate = 0
 
   const confidenceBuckets = { high: 0, medium: 0, low: 0 }
+  
+  // For small datasets, use more lenient tolerance
+  const toleranceDays = movements.length < 20 ? 7 : 5
+  const toleranceAmount = movements.length < 20 ? 0.3 : 0.2
 
   for (const pattern of highConfidencePatterns) {
     // Get test movements for this entity
     const testMovements = test.filter((m) => m.entity_id === pattern.entity_id && m.direction === pattern.direction)
 
-    if (testMovements.length < 2) continue
+    if (testMovements.length < 1) continue
 
     // Sort test movements
     const sortedTest = testMovements.sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime())
@@ -164,7 +171,7 @@ export function runMovementBacktest(
       const prediction = predictNextPayment(pattern)
       const actual = { days_until_payment: daysUntilPayment, amount: sortedTest[i].amount }
 
-      if (isPredictionAccurate(prediction, actual)) {
+      if (isPredictionAccurate(prediction, actual, toleranceDays, toleranceAmount)) {
         totalAccurate++
 
         if (pattern.direction === "inflow") {

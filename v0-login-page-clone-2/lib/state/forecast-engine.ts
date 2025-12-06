@@ -911,13 +911,39 @@ function buildCustomerModels(
     )
 
     const amountCv = features.amount_mean > 0 ? features.amount_std / features.amount_mean : 0
-    const archetype = classifyCustomerArchetype(
+    let archetype = classifyCustomerArchetype(
       payments.length,
       features.interval_cv,
       features.avg_days_to_pay,
       amountCv,
       features.recent_trend,
     )
+    
+    // For low_data customers, try to infer archetype from invoice patterns
+    if (archetype === "low_data" && customerInvoices.length >= 2) {
+      const invoicesWithDueDates = customerInvoices.filter((i) => i.due_date)
+      if (invoicesWithDueDates.length >= 2) {
+        // Calculate invoice due date intervals
+        const sortedByDue = invoicesWithDueDates.sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))
+        const dueIntervals: number[] = []
+        for (let i = 1; i < sortedByDue.length; i++) {
+          const days = daysBetween(sortedByDue[i - 1].due_date!, sortedByDue[i].due_date!)
+          if (days > 0 && days < 365) dueIntervals.push(days)
+        }
+        
+        if (dueIntervals.length > 0) {
+          const avgDueInterval = dueIntervals.reduce((a, b) => a + b, 0) / dueIntervals.length
+          const dueCv = dueIntervals.length > 1 ? std(dueIntervals) / avgDueInterval : 0
+          
+          // If invoice due dates are regular, customer is likely clockwork
+          if (dueCv < 0.2 && avgDueInterval > 0) {
+            archetype = "clockwork"
+          } else if (dueCv < 0.4) {
+            archetype = "bursty"
+          }
+        }
+      }
+    }
 
     // Data-driven probability based on archetype and payment history
     const overdueRatio = avgInterval > 0 ? daysSinceLast / avgInterval : (daysSinceLast / priors.avg_collection_delay)
@@ -959,6 +985,14 @@ function buildCustomerModels(
     else if (archetype === "slow_reliable" && payments.length >= 4) confidence = "medium"
     else if (archetype === "bursty" && payments.length >= 4) confidence = "medium"
     else if (payments.length >= 3) confidence = "medium"
+    // Boost low_data customers if we have invoice signals
+    else if (archetype === "low_data" && customerInvoices.length > 0) {
+      // If customer has open/overdue invoices, they're likely to pay soon
+      const hasOpenOrOverdue = customerInvoices.some((i) => i.status === "open" || i.status === "overdue")
+      if (hasOpenOrOverdue) {
+        confidence = "medium" // Upgrade from low to medium based on invoice signal
+      }
+    }
 
     // Invoice boost — scaled by archetype multiplier from portfolio data
     if (customerInvoices.length > 0) {
@@ -1579,6 +1613,27 @@ function buildVendorModels(
         nextDate = addDays(new Date().toISOString().slice(0, 10), 2)
       }
       if (confidence === "low") confidence = "medium"
+      
+      // Boost confidence further if we have multiple bills with regular due dates
+      const billsWithDueDates = vendorBills.filter((b) => b.due_date)
+      if (billsWithDueDates.length >= 2 && confidence === "medium") {
+        const sortedByDue = billsWithDueDates.sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))
+        const dueIntervals: number[] = []
+        for (let i = 1; i < sortedByDue.length; i++) {
+          const days = daysBetween(sortedByDue[i - 1].due_date!, sortedByDue[i].due_date!)
+          if (days > 0 && days < 365) dueIntervals.push(days)
+        }
+        
+        if (dueIntervals.length > 0) {
+          const avgDueInterval = dueIntervals.reduce((a, b) => a + b, 0) / dueIntervals.length
+          const dueCv = dueIntervals.length > 1 ? std(dueIntervals) / avgDueInterval : 0
+          
+          // If bill due dates are very regular, upgrade to high confidence
+          if (dueCv < 0.15 && avgDueInterval > 0) {
+            confidence = "high"
+          }
+        }
+      }
     }
 
     const totalEc = Object.values(data.ecCounts).reduce((a, b) => a + b, 0)
