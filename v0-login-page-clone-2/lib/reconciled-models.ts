@@ -66,10 +66,13 @@ export async function fetchReconciledARMovements(userId: string): Promise<Reconc
         m.amount::float,
         m.date::text,
         a.reference_id as invoice_id,
-        i.due_date::text as due_date,
+        COALESCE(
+          (qbo.data->>'DueDate')::text,
+          (qbo.data->>'TxnDate')::text
+        ) as due_date,
         CASE 
-          WHEN i.due_date IS NOT NULL 
-          THEN FLOOR(EXTRACT(DAY FROM m.date::timestamp - i.due_date::timestamp))::int
+          WHEN (qbo.data->>'DueDate')::text IS NOT NULL 
+          THEN FLOOR(EXTRACT(DAY FROM m.date::timestamp - ((qbo.data->>'DueDate')::text)::timestamp))::int
           ELSE NULL::int
         END as days_overdue,
         a.confidence::text,
@@ -78,7 +81,7 @@ export async function fetchReconciledARMovements(userId: string): Promise<Reconc
        FROM movement_attributions a
        JOIN movements m ON a.movement_id = m.id
        LEFT JOIN entities e ON a.entity_id = e.id::text
-       LEFT JOIN invoices i ON a.reference_id = i.id AND a.user_id = i.user_id
+       LEFT JOIN qbo_entities qbo ON a.reference_id = qbo.data->>'Id' AND qbo.entity_type = 'Invoice'
        WHERE a.user_id = $1::uuid
          AND a.component_type = 'ar'
          AND m.direction = 'inflow'

@@ -2205,12 +2205,20 @@ export async function blendReconciledModels(
     let newConfidence: "high" | "medium" | "low" = customer.confidence
     let confidenceReason = ""
 
+    // Use reliability_score to boost confidence directly
+    const reliabilityScore = reconData.stats.reliability_score || 0
     if (reconData.stats.payment_count >= 5) {
-      newConfidence = "high"
-      confidenceReason = `High confidence: ${reconData.stats.payment_count} reconciled AR payments with ${Math.round(reconData.stats.reliability_score * 100)}% reliability`
+      // High payment count + high reliability = high confidence
+      if (reliabilityScore >= 0.8) {
+        newConfidence = "high"
+        confidenceReason = `High confidence: ${reconData.stats.payment_count} reconciled AR payments with ${Math.round(reliabilityScore * 100)}% reliability`
+      } else {
+        newConfidence = "high"
+        confidenceReason = `High confidence: ${reconData.stats.payment_count} reconciled AR payments with ${Math.round(reliabilityScore * 100)}% reliability`
+      }
     } else if (reconData.stats.payment_count >= 3) {
       newConfidence = customer.confidence === "low" ? "medium" : customer.confidence
-      confidenceReason = `Medium confidence: ${reconData.stats.payment_count} reconciled AR payments`
+      confidenceReason = `Medium confidence: ${reconData.stats.payment_count} reconciled AR payments (reliability: ${Math.round(reliabilityScore * 100)}%)`
     } else if (reconData.stats.payment_count >= 2) {
       if (customer.confidence === "low") {
         newConfidence = "medium"
@@ -2218,11 +2226,17 @@ export async function blendReconciledModels(
       }
     }
 
-    return {
+    // Store reconciled stats for potential archetype re-classification
+    const enhanced = {
       ...customer,
       confidence: newConfidence,
       payment_count: Math.max(customer.payment_count, reconData.stats.payment_count),
-    }
+      _reconciled_avg_days_to_pay: reconData.stats.avg_days_to_pay || 0,
+      _reconciled_reliability_score: reliabilityScore,
+      _reconciled_payment_count: reconData.stats.payment_count,
+    } as any
+
+    return enhanced
   })
 
   // Enhance vendor models with reconciled data
@@ -2234,12 +2248,20 @@ export async function blendReconciledModels(
     let newConfidence: "high" | "medium" | "low" = vendor.confidence
     let confidenceReason = ""
 
+    // Use recurrence_score to boost confidence directly
+    const recurrenceScore = reconData.stats.recurrence_score || 0
     if (reconData.stats.payment_count >= 5) {
-      newConfidence = "high"
-      confidenceReason = `High confidence: ${reconData.stats.payment_count} reconciled AP payments with ${Math.round(reconData.stats.recurrence_score * 100)}% recurrence`
+      // High payment count + high recurrence = high confidence
+      if (recurrenceScore >= 0.8) {
+        newConfidence = "high"
+        confidenceReason = `High confidence: ${reconData.stats.payment_count} reconciled AP payments with ${Math.round(recurrenceScore * 100)}% recurrence`
+      } else {
+        newConfidence = "high"
+        confidenceReason = `High confidence: ${reconData.stats.payment_count} reconciled AP payments with ${Math.round(recurrenceScore * 100)}% recurrence`
+      }
     } else if (reconData.stats.payment_count >= 3) {
       newConfidence = vendor.confidence === "low" ? "medium" : vendor.confidence
-      confidenceReason = `Medium confidence: ${reconData.stats.payment_count} reconciled AP payments`
+      confidenceReason = `Medium confidence: ${reconData.stats.payment_count} reconciled AP payments (recurrence: ${Math.round(recurrenceScore * 100)}%)`
     } else if (reconData.stats.payment_count >= 2) {
       if (vendor.confidence === "low") {
         newConfidence = "medium"
@@ -2247,11 +2269,17 @@ export async function blendReconciledModels(
       }
     }
 
-    return {
+    // Store reconciled stats for potential archetype re-classification
+    const enhanced = {
       ...vendor,
       confidence: newConfidence,
       payment_count: Math.max(vendor.payment_count, reconData.stats.payment_count),
-    }
+      _reconciled_avg_days_to_pay: reconData.stats.avg_days_to_pay || 0,
+      _reconciled_recurrence_score: recurrenceScore,
+      _reconciled_payment_count: reconData.stats.payment_count,
+    } as any
+
+    return enhanced
   })
 
   // Apply AI-powered enhancements (entity inference, pattern learning)
@@ -2334,6 +2362,88 @@ export async function blendReconciledModels(
 
     logEntityGraphBoosting(customerBoosts, vendorBoosts)
   }
+
+  // Re-classify archetypes using reconciled data (due-date-derived metrics)
+  // This upgrades archetypes from reconciled due-date variance
+  enhancedCustomers = enhancedCustomers.map((customer) => {
+    const reconData = reconCustomerMap.get(customer.entity_id)
+    if (!reconData || !reconData.stats.avg_days_to_pay) return customer
+
+    // If reconciled data shows very consistent days-to-pay, upgrade to clockwork
+    const avgDaysToPay = reconData.stats.avg_days_to_pay
+    const reliabilityScore = reconData.stats.reliability_score || 0
+
+    // Calculate variance in days-to-pay from reconciled movements
+    let daysToPayVariance = 0
+    if (reconData.movements && reconData.movements.length > 1) {
+      const daysToPayList: number[] = []
+      for (const m of reconData.movements) {
+        if (m.due_date) {
+          const days = Math.round(
+            (new Date(m.date).getTime() - new Date(m.due_date).getTime()) / 86_400_000
+          )
+          daysToPayList.push(Math.max(0, days))
+        }
+      }
+      if (daysToPayList.length > 1) {
+        const mean = daysToPayList.reduce((a, b) => a + b, 0) / daysToPayList.length
+        const variance = daysToPayList.reduce((sum, x) => sum + Math.pow(x - mean, 2), 0) / daysToPayList.length
+        daysToPayVariance = Math.sqrt(variance)
+      }
+    }
+
+    // Upgrade archetype if reconciled data shows high consistency
+    let newArchetype = customer.archetype
+    if (reliabilityScore >= 0.85 && daysToPayVariance < 5 && reconData.stats.payment_count >= 3) {
+      newArchetype = "clockwork"
+    } else if (reliabilityScore >= 0.7 && daysToPayVariance < 10 && reconData.stats.payment_count >= 3) {
+      newArchetype = "slow_reliable"
+    }
+
+    return {
+      ...customer,
+      archetype: newArchetype,
+    }
+  })
+
+  enhancedVendors = enhancedVendors.map((vendor) => {
+    const reconData = reconVendorMap.get(vendor.entity_id)
+    if (!reconData || !reconData.stats.avg_days_to_pay) return vendor
+
+    // If reconciled data shows very consistent payment intervals, upgrade to soft_recurring
+    const recurrenceScore = reconData.stats.recurrence_score || 0
+
+    // Calculate variance in payment intervals from reconciled movements
+    let paymentIntervalVariance = 0
+    if (reconData.movements && reconData.movements.length > 1) {
+      const sorted = [...reconData.movements].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      const intervals: number[] = []
+      for (let i = 1; i < sorted.length; i++) {
+        const days = Math.round(
+          (new Date(sorted[i].date).getTime() - new Date(sorted[i - 1].date).getTime()) / 86_400_000
+        )
+        if (days > 0 && days < 365) intervals.push(days)
+      }
+      if (intervals.length > 1) {
+        const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length
+        const variance = intervals.reduce((sum, x) => sum + Math.pow(x - mean, 2), 0) / intervals.length
+        paymentIntervalVariance = Math.sqrt(variance)
+      }
+    }
+
+    // Upgrade archetype if reconciled data shows high consistency
+    let newArchetype = vendor.archetype
+    if (recurrenceScore >= 0.85 && paymentIntervalVariance < 5 && reconData.stats.payment_count >= 3) {
+      newArchetype = "soft_recurring"
+    } else if (recurrenceScore >= 0.7 && paymentIntervalVariance < 10 && reconData.stats.payment_count >= 3) {
+      newArchetype = "soft_recurring"
+    }
+
+    return {
+      ...vendor,
+      archetype: newArchetype,
+    }
+  })
 
   return {
     ...rawModels,
@@ -3769,6 +3879,8 @@ function computeForecastConfidence(
   bills: OutstandingBill[] = [],
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
   settlementTimingConfidence: any = null,
+  movementBacktest?: any,
+  entityGraphStats?: { relationships_count: number; business_entities_count: number },
 ): ForecastConfidence {
   const reasons: string[] = []
   const by_component: ComponentConfidence[] = []
@@ -3989,14 +4101,24 @@ function computeForecastConfidence(
 
   // ── 8. Backtest confidence (weight: 0.10) ──
   // accuracy_score is 0-100, normalize to 0-1 for the composite
-  const hasBacktest = backtest !== null
-  const backtestScore = hasBacktest ? Math.min(1, backtest.accuracy_score / 100) : 0
+  // Prefer movement backtest if available (ground truth from actual bank transactions)
+  let backtestScore = 0
+  let backtestReason = "No backtest data available"
+  
+  if (movementBacktest && movementBacktest.total_entities_tested > 0) {
+    // Use movement backtest as primary signal (more reliable than traditional backtest)
+    backtestScore = Math.min(1, movementBacktest.accuracy_rate)
+    backtestReason = `Movement backtest: ${(movementBacktest.accuracy_rate * 100).toFixed(0)}% accuracy on ${movementBacktest.total_entities_tested} entities (inflow: ${(movementBacktest.inflow_accuracy * 100).toFixed(0)}%, outflow: ${(movementBacktest.outflow_accuracy * 100).toFixed(0)}%)`
+  } else if (backtest !== null) {
+    // Fall back to traditional backtest
+    backtestScore = Math.min(1, backtest.accuracy_score / 100)
+    backtestReason = `${backtest.days_tested}d tested, direction accuracy ${(backtest.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest.mean_absolute_error.toLocaleString()}`
+  }
+  
   by_component.push({
     area: "Backtest accuracy", score: r2(backtestScore),
-    label: hasBacktest ? (backtestScore >= 0.7 ? "high" : backtestScore >= 0.4 ? "medium" : "low") : "low",
-    reason: hasBacktest
-      ? `${backtest.days_tested}d tested, direction accuracy ${(backtest.direction_accuracy * 100).toFixed(0)}%, MAE $${backtest.mean_absolute_error.toLocaleString()}`
-      : "No backtest data available",
+    label: backtestScore >= 0.7 ? "high" : backtestScore >= 0.4 ? "medium" : "low",
+    reason: backtestReason,
   })
 
   // ── 9. Entity graph coverage (weight: 0.05) ──
@@ -4006,11 +4128,30 @@ function computeForecastConfidence(
   let entityGraphScore = 0
   let entityGraphReason = "No entity relationships available"
   
-  // This will be populated if entity graph is available during forecast computation
-  // For now, we use a conservative default
-  if (customerIds.length > 0 || vendorIds.length > 0) {
-    // Placeholder: actual score will be computed in forecast engine
-    entityGraphScore = 0.3
+  if (entityGraphStats && entityGraphStats.relationships_count > 0) {
+    // Calculate relationship density
+    const totalEntities = customerIds.length + vendorIds.length
+    if (totalEntities > 0) {
+      const relationshipDensity = entityGraphStats.relationships_count / (totalEntities * (totalEntities - 1))
+      const businessEntityRatio = entityGraphStats.business_entities_count / totalEntities
+      
+      // Score based on relationship coverage
+      let score = 0
+      if (relationshipDensity > 0.5) score = 0.9
+      else if (relationshipDensity > 0.3) score = 0.75
+      else if (relationshipDensity > 0.1) score = 0.6
+      else if (relationshipDensity > 0.05) score = 0.45
+      else if (relationshipDensity > 0.01) score = 0.3
+      
+      // Additional boost for business entity clustering
+      if (businessEntityRatio > 0.3) score = Math.min(1, score + 0.1)
+      
+      entityGraphScore = Math.min(1, score)
+      entityGraphReason = `Entity relationships: ${entityGraphStats.relationships_count} connections across ${totalEntities} entities (density: ${(relationshipDensity * 100).toFixed(1)}%)`
+    }
+  } else if (customerIds.length > 0 || vendorIds.length > 0) {
+    // Conservative default when no graph data available
+    entityGraphScore = 0.2
     entityGraphReason = "Entity relationships not yet analyzed"
   }
   
@@ -4022,6 +4163,7 @@ function computeForecastConfidence(
 
   // ── Weighted composite score ──
   // When backtest is unavailable, redistribute its weight proportionally to other components
+  const hasBacktest = backtestScore > 0
   const backtestWeight = hasBacktest ? cw.backtest : 0
   const redistributionScale = hasBacktest ? 1 : 1 / (1 - cw.backtest)
   const weightedScore =
@@ -5252,39 +5394,82 @@ export async function computeCashflowForecast(
   }
 
   // Apply AI-powered enhancements (entity inference, pattern learning)
-  // Run asynchronously in background to not block forecast computation
+  // Await with timeout to ensure results are applied before confidence scoring
   if (behavioral_models.customers.length > 0 || behavioral_models.vendors.length > 0) {
-    // Fire and forget - don't await, let it run in background
-    enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
-      .then((aiResult) => {
-        log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
-      })
-      .catch((err) => {
-        const message = err instanceof Error ? err.message : String(err)
-        log("forecast.ai_enhancement.error", { error: message })
-      })
+    try {
+      // Use Promise.race with timeout to prevent blocking forever
+      const aiEnhancementPromise = enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("AI enhancement timeout")), 5000)
+      )
+      
+      const aiResult = await Promise.race([aiEnhancementPromise, timeoutPromise]) as any
+      
+      // Apply AI boosts to behavioral models
+      if (aiResult.enhanced_customers && aiResult.enhanced_customers.length > 0) {
+        const aiCustomerMap = new Map(aiResult.enhanced_customers.map((c: any) => [c.entity_id, c]))
+        behavioral_models.customers = behavioral_models.customers.map((c) => {
+          const enhanced = aiCustomerMap.get(c.entity_id) as any
+          if (enhanced && enhanced._ai_confidence_boost) {
+            return {
+              ...c,
+              _ai_confidence_boost: enhanced._ai_confidence_boost,
+            } as any
+          }
+          return c
+        })
+      }
+      
+      if (aiResult.enhanced_vendors && aiResult.enhanced_vendors.length > 0) {
+        const aiVendorMap = new Map(aiResult.enhanced_vendors.map((v: any) => [v.entity_id, v]))
+        behavioral_models.vendors = behavioral_models.vendors.map((v) => {
+          const enhanced = aiVendorMap.get(v.entity_id) as any
+          if (enhanced && enhanced._ai_confidence_boost) {
+            return {
+              ...v,
+              _ai_confidence_boost: enhanced._ai_confidence_boost,
+            } as any
+          }
+          return v
+        })
+      }
+      
+      log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log("forecast.ai_enhancement.error", { error: message })
+    }
 
-    // Apply comprehensive confidence boosts (also in background)
-    // Use optional chaining to safely access entityGraph which may not be defined
-    const graphRelationships = (entityGraph as any)?.relationships?.length || 0
-    const graphBusinessEntities = (entityGraph as any)?.business_entities?.length || 0
-    
-    applyComprehensiveConfidenceBoosts(
-      behavioral_models.customers,
-      behavioral_models.vendors,
-      movements,
-      graphRelationships,
-      graphBusinessEntities,
-      behavioral_models.customers.length + behavioral_models.vendors.length,
-      dataSpanDays
-    )
-      .then((boostResult) => {
-        log("forecast.confidence_boost.applied", boostResult)
-      })
-      .catch((err) => {
-        const message = err instanceof Error ? err.message : String(err)
-        log("forecast.confidence_boost.error", { error: message })
-      })
+    // Apply comprehensive confidence boosts (await with timeout)
+    try {
+      const graphRelationships = (entityGraph as any)?.relationships?.length || 0
+      const graphBusinessEntities = (entityGraph as any)?.business_entities?.length || 0
+      
+      const boostPromise = applyComprehensiveConfidenceBoosts(
+        behavioral_models.customers,
+        behavioral_models.vendors,
+        movements.map((m) => ({
+          date: typeof m.occurred_at === "string" ? m.occurred_at : new Date(m.occurred_at).toISOString(),
+          amount: m.amount,
+          entity_id: m.entity_id || "unknown",
+          type: m.direction as "inflow" | "outflow",
+        })),
+        graphRelationships,
+        graphBusinessEntities,
+        behavioral_models.customers.length + behavioral_models.vendors.length,
+        dataSpanDays
+      )
+      
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Confidence boost timeout")), 5000)
+      )
+      
+      const boostResult = await Promise.race([boostPromise, timeoutPromise]) as any
+      log("forecast.confidence_boost.applied", boostResult)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log("forecast.confidence_boost.error", { error: message })
+    }
   }
 
   // Event generation: discrete 30-day forecast (+ optional cash_events bridge)
@@ -5370,17 +5555,18 @@ export async function computeCashflowForecast(
       .filter((m) => m.occurred_at) // Filter out movements with no date
       .map((m) => {
         let dateStr: string
-        if (typeof m.occurred_at === "string") {
-          dateStr = m.occurred_at
-        } else if (m.occurred_at instanceof Date) {
-          dateStr = m.occurred_at.toISOString()
+        const occurred_at = m.occurred_at as any
+        if (typeof occurred_at === "string") {
+          dateStr = occurred_at
+        } else if (occurred_at instanceof Date) {
+          dateStr = occurred_at.toISOString()
         } else {
           // Skip movements with invalid dates
           return null
         }
         return {
           entity_id: m.entity_id || "unknown",
-          entity_name: m.counterparty || "Unknown",
+          entity_name: (m as any).counterparty || "Unknown",
           direction: m.direction,
           amount: m.amount,
           occurred_at: dateStr,
@@ -5395,17 +5581,18 @@ export async function computeCashflowForecast(
       .filter((m) => m.occurred_at) // Filter out movements with no date
       .map((m) => {
         let dateStr: string
-        if (typeof m.occurred_at === "string") {
-          dateStr = m.occurred_at
-        } else if (m.occurred_at instanceof Date) {
-          dateStr = m.occurred_at.toISOString()
+        const occurred_at = m.occurred_at as any
+        if (typeof occurred_at === "string") {
+          dateStr = occurred_at
+        } else if (occurred_at instanceof Date) {
+          dateStr = occurred_at.toISOString()
         } else {
           // Skip movements with invalid dates
           return null
         }
         return {
           entity_id: m.entity_id || "unknown",
-          entity_name: m.counterparty || "Unknown",
+          entity_name: (m as any).counterparty || "Unknown",
           direction: m.direction,
           amount: m.amount,
           occurred_at: dateStr,
@@ -5421,8 +5608,17 @@ export async function computeCashflowForecast(
     backtest_entities_tested: movementBacktest.total_entities_tested,
   })
 
+  // Prepare entity graph stats for confidence scoring
+  let entityGraphStats: { relationships_count: number; business_entities_count: number } | undefined
+  if (entityGraph) {
+    entityGraphStats = {
+      relationships_count: (entityGraph.relationships as any)?.size || 0,
+      business_entities_count: entityGraph.businessEntities?.size || 0,
+    }
+  }
+
   // Forecast confidence (8-component weighted, with backtest input)
-  const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements, bills, cal, settlementTimingConfidence)
+  const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements, bills, cal, settlementTimingConfidence, movementBacktest, entityGraphStats)
 
   // Separated forecast: operating vs settlement vs treasury vs owner
   const today = new Date().toISOString().slice(0, 10)
