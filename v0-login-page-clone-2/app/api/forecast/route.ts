@@ -6,7 +6,7 @@ import { log } from "@/lib/logger"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { fetchBillsForReconciliation } from "@/lib/bills-fetch"
 import { syncCashEventsForUser, fetchCashEventsForUser30d, cashEventRowsToForecastEvents } from "@/lib/cash-events-build"
-import { computeCashflowForecast, seedPrng, resetPrng, setIdentityContext, type IdentityContext } from "@/lib/state/forecast-engine"
+import { computeCashflowForecast, seedPrng, resetPrng, setIdentityContext, blendReconciledModels, type IdentityContext } from "@/lib/state/forecast-engine"
 import { generateNarrativeWithLLM } from "@/lib/forecast-llm"
 import { getAccountsWithBalancesByUserId } from "@/lib/plaid-persistence"
 import { getAllEntityProfiles, buildEntityProfiles } from "@/lib/entity-profiles"
@@ -16,6 +16,7 @@ import { DEFAULT_FORECAST_CALIBRATION, mergeCalibration } from "@/lib/state/fore
 import type { ForecastCalibrationParams } from "@/lib/state/forecast-calibration"
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
 import type { OutstandingInvoice, OutstandingBill, ForecastContext, CashflowForecast } from "@/lib/state/types"
+import { fetchReconciledARMovements, fetchReconciledAPMovements, buildReconciledCustomerModels, buildReconciledVendorModels } from "@/lib/reconciled-models"
 
 type TagRow = {
   movement_id: string
@@ -366,6 +367,8 @@ export async function GET() {
       identityCtx,
       startingCashResult,
       calibrationResult,
+      reconciledARMovements,
+      reconciledAPMovements,
     ] = await Promise.all([
       fetchTaggedMovements(user.id),
       fetchInvoicesForReconciliation(user.id),
@@ -373,6 +376,8 @@ export async function GET() {
       buildIdentityContext(user.id),
       getStartingCash(user.id),
       getForecastCalibrationForUser(user.id),
+      fetchReconciledARMovements(user.id),
+      fetchReconciledAPMovements(user.id),
     ])
 
     // Enrich movements with attribution timestamps for settlement timing
@@ -448,6 +453,8 @@ export async function GET() {
       bridgeEvents,
       entityProfiles,
       cal,
+      reconciledARMovements,
+      reconciledAPMovements,
     )
 
     // Update metadata with calibration source
