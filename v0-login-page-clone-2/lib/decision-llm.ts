@@ -23,6 +23,9 @@ const API_KEY = process.env.FORECAST_LLM_API_KEY ?? process.env.OPENAI_API_KEY
 async function callLLM(messages: { role: string; content: string }[], maxTokens = 800): Promise<string | null> {
   if (!API_KEY) return null
   try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 3000) // 3 second timeout
+    
     const res = await fetch(API_URL, {
       method: "POST",
       headers: {
@@ -35,12 +38,15 @@ async function callLLM(messages: { role: string; content: string }[], maxTokens 
         max_tokens: maxTokens,
         temperature: 0.3,
       }),
+      signal: controller.signal,
     })
+    clearTimeout(timeoutId)
+    
     if (!res.ok) return null
     const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
     const content = data.choices?.[0]?.message?.content?.trim()
     return content ?? null
-  } catch {
+  } catch (err) {
     return null
   }
 }

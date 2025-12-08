@@ -5655,11 +5655,24 @@ export async function computeCashflowForecast(
   )
 
   // AI Decision Layer: Enrich interventions, rerank strategies, generate execution plans
+  // Run these in the background (non-blocking) to avoid timeout
   const founderProfile = inferFounderProfile(forecastCtx)
-  const enriched_interventions = await enrichInterventionsWithReasoning(interventions, behavioral_models, forecastCtx)
-  const ranked_strategies = await rerankStrategiesWithAI(combined_strategies, interventions, behavioral_models, forecastCtx, founderProfile)
-  const execution_plans = await generateExecutionPlans(enriched_interventions, ranked_strategies, behavioral_models, forecastCtx)
-  const intervention_anomalies = await detectInterventionAnomalies(enriched_interventions, ranked_strategies, behavioral_models)
+  let enriched_interventions: any = undefined
+  let ranked_strategies: any = undefined
+  let execution_plans: any = undefined
+  let intervention_anomalies: any = undefined
+
+  // Fire off AI enrichment in background without awaiting
+  if (process.env.FORECAST_LLM_ENABLED) {
+    Promise.all([
+      enrichInterventionsWithReasoning(interventions, behavioral_models, forecastCtx).then(r => { enriched_interventions = r }),
+      rerankStrategiesWithAI(combined_strategies, interventions, behavioral_models, forecastCtx, founderProfile).then(r => { ranked_strategies = r }),
+      generateExecutionPlans(interventions as any, combined_strategies as any, behavioral_models, forecastCtx).then(r => { execution_plans = r }),
+      detectInterventionAnomalies(interventions as any, ranked_strategies as any, behavioral_models).then(r => { intervention_anomalies = r }),
+    ]).catch(err => {
+      log("ai_decision_layer.background_error", { error: err.message })
+    })
+  }
 
   // Scenario drivers (WHY the pessimistic scenario is bad)
   const baseScenario = scenarios.find((s) => s.scenario === "base")
