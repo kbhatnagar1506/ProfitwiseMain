@@ -348,8 +348,7 @@ export async function GET() {
     }
 
     // Check for cached forecast first
-    // Temporarily disable cache to test reconciled models
-    const cached = null // await getCachedForecast(user.id)
+    const cached = await getCachedForecast(user.id)
     if (cached) {
       log("forecast.cache.hit", { userId: user.id, computedAt: cached.computed_at })
       return NextResponse.json(cached.forecast_data)
