@@ -659,9 +659,5 @@ export async function POST() {
   }
 }
 
-export async function POST() {
-  return GET()
-}
-
 // Export for use by other modules to invalidate cache when data changes
 export { invalidateForecastCache }
