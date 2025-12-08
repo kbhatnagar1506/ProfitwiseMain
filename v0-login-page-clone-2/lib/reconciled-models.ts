@@ -62,7 +62,7 @@ export async function fetchReconciledARMovements(userId: string): Promise<Reconc
       `SELECT 
         m.id as movement_id,
         a.entity_id,
-        COALESCE(e.name, a.entity_id) as entity_name,
+        COALESCE(e.display_name, e.canonical_name, a.entity_id) as entity_name,
         m.amount::float,
         m.date::text,
         a.reference_id as invoice_id,
@@ -122,7 +122,7 @@ export async function fetchReconciledAPMovements(userId: string): Promise<Reconc
       `SELECT 
         m.id as movement_id,
         a.entity_id,
-        COALESCE(e.name, a.entity_id) as entity_name,
+        COALESCE(e.display_name, e.canonical_name, a.entity_id) as entity_name,
         m.amount::float,
         m.date::text,
         a.reference_id as bill_id,
