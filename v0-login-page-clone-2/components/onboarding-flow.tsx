@@ -1221,6 +1221,42 @@ export function OnboardingFlow({
         if (cancelled) return
         setForecastData(data)
         setForecastLoading(false)
+
+        // Start polling for enriched AI data
+        if (process.env.NEXT_PUBLIC_FORECAST_LLM_ENABLED) {
+          let pollCount = 0
+          const maxPolls = 60 // 5 minutes with 5s intervals
+          const pollInterval = setInterval(async () => {
+            pollCount++
+            try {
+              const enrichedRes = await fetch("/api/forecast", { method: "POST" })
+              if (enrichedRes.ok) {
+                const enrichedData = await enrichedRes.json()
+                if (enrichedData.ready && enrichedData.enriched_interventions) {
+                  clearInterval(pollInterval)
+                  setForecastData((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          enriched_interventions: enrichedData.enriched_interventions,
+                          ranked_strategies: enrichedData.ranked_strategies,
+                          execution_plans: enrichedData.execution_plans,
+                          intervention_anomalies: enrichedData.intervention_anomalies,
+                        }
+                      : null
+                  )
+                }
+              }
+            } catch (err) {
+              // Silently fail, polling will continue
+            }
+            if (pollCount >= maxPolls) {
+              clearInterval(pollInterval)
+            }
+          }, 5000)
+
+          return () => clearInterval(pollInterval)
+        }
       })
       .catch((err) => {
         if (cancelled) return
