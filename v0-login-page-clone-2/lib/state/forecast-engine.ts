@@ -52,6 +52,13 @@ import {
 } from "./forecast-calibration"
 import { analyzeAllMovementPatterns, getHighConfidencePatterns } from "@/lib/movement-pattern-analysis"
 import { runMovementBacktest } from "@/lib/movement-backtest"
+import {
+  enrichInterventionsWithReasoning,
+  rerankStrategiesWithAI,
+  generateExecutionPlans,
+  detectInterventionAnomalies,
+} from "@/lib/decision-llm"
+import { inferFounderProfile } from "@/lib/founder-profile"
 import type {
   BacktestByHorizon,
   BacktestBySegment,
@@ -918,7 +925,7 @@ function buildCustomerModels(
       amountCv,
       features.recent_trend,
     )
-    
+
     // For low_data customers, try to infer archetype from invoice patterns
     if (archetype === "low_data" && customerInvoices.length >= 1) {
       const invoicesWithDueDates = customerInvoices.filter((i) => i.due_date)
@@ -926,7 +933,7 @@ function buildCustomerModels(
         // If we have just 1 invoice with due date, assume it's recurring (clockwork)
         if (invoicesWithDueDates.length === 1) {
           archetype = "clockwork"
-        } else {
+    } else {
           // Calculate invoice due date intervals
           const sortedByDue = invoicesWithDueDates.sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))
           const dueIntervals: number[] = []
@@ -944,7 +951,7 @@ function buildCustomerModels(
               archetype = "clockwork"
             } else if (dueCv < 0.5) {
               archetype = "bursty"
-            } else {
+      } else {
               archetype = "episodic"
             }
           } else {
@@ -5647,6 +5654,13 @@ export async function computeCashflowForecast(
     cal,
   )
 
+  // AI Decision Layer: Enrich interventions, rerank strategies, generate execution plans
+  const founderProfile = inferFounderProfile(forecastCtx)
+  const enriched_interventions = await enrichInterventionsWithReasoning(interventions, behavioral_models, forecastCtx)
+  const ranked_strategies = await rerankStrategiesWithAI(combined_strategies, interventions, behavioral_models, forecastCtx, founderProfile)
+  const execution_plans = await generateExecutionPlans(enriched_interventions, ranked_strategies, behavioral_models, forecastCtx)
+  const intervention_anomalies = await detectInterventionAnomalies(enriched_interventions, ranked_strategies, behavioral_models)
+
   // Scenario drivers (WHY the pessimistic scenario is bad)
   const baseScenario = scenarios.find((s) => s.scenario === "base")
   const pessScenario = scenarios.find((s) => s.scenario === "pessimistic")
@@ -5773,6 +5787,11 @@ export async function computeCashflowForecast(
     sensitivity,
     interventions,
     combined_strategies,
+    enriched_interventions,
+    ranked_strategies,
+    execution_plans,
+    intervention_anomalies,
+    founder_profile: founderProfile,
     context,
     backtest,
     separated_forecast,

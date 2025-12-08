@@ -649,6 +649,62 @@ export type ExecutionSuggestion = {
   content?: string
 }
 
+// ─── AI Decision Layer Types ─────────────────────────────────────────
+
+export type EnrichedIntervention = Intervention & {
+  ai_reasoning: string
+  feasibility_score: number
+  relationship_risk_explanation: string
+  hidden_assumptions: string[]
+  failure_modes: string[]
+}
+
+export type RankedStrategy = CombinedStrategy & {
+  feasibility_score: number
+  feasibility_reason: string
+  execution_difficulty: "easy" | "medium" | "hard"
+  urgency_level: "low" | "medium" | "high"
+  recommendation_priority: number
+  ai_summary: string
+}
+
+export type ExecutionStep = {
+  step_number: number
+  action: string
+  details: string
+  owner: string
+  deadline?: string
+}
+
+export type ExecutionPlan = {
+  action_id: string
+  action_label: string
+  steps: ExecutionStep[]
+  email_draft?: string
+  trigger_condition?: string
+  success_metric?: string
+  contingency_plan?: string
+  estimated_time_minutes?: number
+}
+
+export type InterventionAnomaly = {
+  intervention_id: string
+  anomaly_type: "unusual" | "contradiction" | "missing_context" | "low_confidence"
+  severity: "info" | "warning" | "critical"
+  message: string
+  suggested_action?: string
+}
+
+export type FounderProfile = {
+  business_model: "saas" | "services" | "ecommerce" | "other"
+  risk_tolerance: "conservative" | "moderate" | "aggressive"
+  execution_bandwidth: "low" | "medium" | "high"
+  communication_style: "formal" | "casual"
+  payment_delay_history: number
+  collection_aggressiveness: "low" | "medium" | "high"
+  inferred_confidence: number
+}
+
 // ─── Scenario Drivers ────────────────────────────────────────────────
 
 export type ScenarioDriver = {
@@ -809,6 +865,11 @@ export type CashflowForecast = {
   interventions: Intervention[]
   combined_strategies?: CombinedStrategy[]
   execution_suggestions?: ExecutionSuggestion[]
+  enriched_interventions?: EnrichedIntervention[]
+  ranked_strategies?: RankedStrategy[]
+  execution_plans?: ExecutionPlan[]
+  intervention_anomalies?: InterventionAnomaly[]
+  founder_profile?: FounderProfile
   context: ForecastContext
   backtest: BacktestResult | null
   separated_forecast: SeparatedForecast
