@@ -3781,6 +3781,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Current Period Summary bar ─── */}
+                {arApData?.ar && arApData?.ap && (
                 <div className="flex flex-wrap gap-4 justify-center text-sm mb-4">
                   <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                     <span className="text-emerald-400 font-bold">{money(arApData.ar.total_outstanding)}</span>
@@ -3795,9 +3796,10 @@ export function OnboardingFlow({
                     <span className="text-gray-400">Net expected</span>
                   </div>
                 </div>
+                )}
 
                 {/* ─── Reconciliation Summary Cards ─── */}
-                {arApData.ar.reconciliation_summary && (
+                {arApData?.ar?.reconciliation_summary && (
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
                     <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 text-center">
                       <div className="text-2xl font-bold text-blue-400">{arApData.ar.reconciliation_summary.total_invoices - arApData.ar.reconciliation_summary.matched_count - arApData.ar.reconciliation_summary.partial_count}</div>
@@ -3823,6 +3825,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── AR (Accounts Receivable) ─── */}
+                {arApData?.ar && (
                 <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl overflow-hidden">
                   <div className="p-5 border-b border-emerald-500/10">
                     <div className="flex items-start justify-between gap-4">
@@ -3934,8 +3937,10 @@ export function OnboardingFlow({
                     <div className="p-8 text-center text-gray-500 text-sm">No outstanding invoices.</div>
                   )}
                 </div>
+                )}
 
                 {/* ─── AP (Accounts Payable) ─── */}
+                {arApData?.ap && (
                 <div className="bg-red-500/5 border border-red-500/20 rounded-xl overflow-hidden">
                   <div className="p-5 border-b border-red-500/10">
                     <div className="flex items-start justify-between gap-4">
@@ -3960,7 +3965,7 @@ export function OnboardingFlow({
                   </div>
 
                   {/* AP Summary Cards */}
-                  {arApData.ap.reconciliation_summary && (
+                  {arApData?.ap?.reconciliation_summary && (
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 border-b border-red-500/10">
                       <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-center">
                         <div className="text-xl font-bold text-blue-400">{(arApData.ap.bills ?? []).filter(b => b.status === "open").length}</div>
@@ -4079,7 +4084,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Reconciliation Summary Dashboard ─── */}
-                {(arApData?.ar.reconciliation_summary || arApData?.ap.reconciliation_summary) && mappingRecon && (
+                {(arApData?.ar?.reconciliation_summary || arApData?.ap?.reconciliation_summary) && mappingRecon && (
                   <div className="bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-xl p-5">
                     <h3 className="text-base font-semibold text-cyan-400 mb-4 flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-cyan-400" />
@@ -4105,7 +4110,7 @@ export function OnboardingFlow({
                     </div>
 
                     {/* Bank-Verified Outstanding */}
-                    {(arApData.ar.reconciliation_summary?.accounting_outstanding !== undefined || arApData.ap.reconciliation_summary?.accounting_outstanding !== undefined) && (
+                    {(arApData?.ar?.reconciliation_summary?.accounting_outstanding !== undefined || arApData?.ap?.reconciliation_summary?.accounting_outstanding !== undefined) && (
                       <div className="grid grid-cols-2 gap-4 mb-4 pt-4 border-t border-white/10">
                         <div className="bg-white/5 rounded-lg p-3">
                           <div className="text-xs text-gray-400 mb-2">AR Outstanding</div>
