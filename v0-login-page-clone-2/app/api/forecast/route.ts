@@ -475,7 +475,7 @@ export async function GET() {
       arSettlementTiming,
       apSettlementTiming,
       settlementTimingConfidence,
-      userId,
+      user.id,
     )
 
     // Update metadata with calibration source
