@@ -1012,6 +1012,11 @@ export async function seedIdentityGraph(userId: string): Promise<{
     [userId, `v4: ${stats.entitiesCreated} new, ${stats.entitiesUpdated} updated, ${stats.plaidSkipped} noise, ${stats.testSkipped} test, ${stats.bankAccounts} bank, from ${totalSignals} signals in ${allGroups.length} groups`]
   )
 
+  // Populate entity relationships after entities and aliases are created
+  const { populateEntityRelationships } = await import("./entity-relationship-detection")
+  const relStats = await populateEntityRelationships(userId)
+  log("identity.seed.relationships_populated", { userId, ...relStats }, "identity")
+
   log("identity.seed.done", { userId, ...stats }, "identity")
   return stats
 }
@@ -1152,6 +1157,12 @@ export async function refreshEntityAliasesFromAccounting(userId: string): Promis
   }
 
   log("identity.refresh_aliases.done", { userId, ...stats }, "identity")
+
+  // Refresh entity relationships after aliases are updated
+  const { populateEntityRelationships } = await import("./entity-relationship-detection")
+  const relStats = await populateEntityRelationships(userId)
+  log("identity.refresh_aliases.relationships_updated", { userId, ...relStats }, "identity")
+
   return stats
 }
 

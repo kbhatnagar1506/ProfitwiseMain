@@ -652,12 +652,12 @@ function buildInvoiceForecasts(
     
     // Expected collection date based on DSO or due date
     let expectedDate: string
-    if (daysOverdue > 0) {
+      if (daysOverdue > 0) {
       const expectedDelay = dso > 0 ? Math.max(1, dso - daysOverdue) : priors.avg_collection_delay
       expectedDate = addDays(now, Math.max(1, Math.round(expectedDelay)))
     } else if (dso > 0) {
       expectedDate = inv.due_date ? addDays(inv.due_date, Math.round(dso)) : addDays(now, Math.round(dso))
-    } else {
+      } else {
       expectedDate = inv.due_date ?? addDays(now, priors.avg_collection_delay)
     }
     
@@ -2546,7 +2546,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
         ? `${c.payment_count} payments, avg $${c.avg_amount.toLocaleString()}, interval ~${c.payment_interval_days}d`
         : c.features.invoice_count > 0
           ? `Invoice-only in movement tags — ${c.features.invoice_count} open invoice(s); entity profile may still reflect bank history`
-          : "No payment history — invoice-only customer",
+        : "No payment history — invoice-only customer",
       interval_info: c.payment_interval_days > 0
         ? `avg ${c.payment_interval_days}d (std ${c.interval_variance.toFixed(1)}d)`
         : undefined,
@@ -3297,11 +3297,11 @@ type MCScenarioBias = {
 
 function getMCScenarioBiases(cal: ForecastCalibrationParams): Record<string, MCScenarioBias> {
   return {
-    base: {
-      inflow_prob_mult: 1.0, outflow_prob_mult: 1.0,
-      inflow_amount_mult: 1.0, outflow_amount_mult: 1.0,
-      inflow_delay_bias: 0, outflow_delay_bias: 0,
-    },
+  base: {
+    inflow_prob_mult: 1.0, outflow_prob_mult: 1.0,
+    inflow_amount_mult: 1.0, outflow_amount_mult: 1.0,
+    inflow_delay_bias: 0, outflow_delay_bias: 0,
+  },
     conservative: cal.monte_carlo_config.scenario_biases.conservative,
     aggressive: cal.monte_carlo_config.scenario_biases.aggressive,
   }
