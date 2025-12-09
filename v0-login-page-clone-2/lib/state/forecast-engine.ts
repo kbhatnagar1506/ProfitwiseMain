@@ -3667,6 +3667,7 @@ function computeForecastConfidence(
   movements?: TaggedMovement[],
   bills: OutstandingBill[] = [],
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
+  settlementTimingConfidence: any = null,
 ): ForecastConfidence {
   const reasons: string[] = []
   const by_component: ComponentConfidence[] = []
@@ -5051,7 +5052,7 @@ export function computeCashflowForecast(
   const backtest = runBacktest(movements, invoices, bills, cal, entityProfiles)
 
   // Forecast confidence (8-component weighted, with backtest input)
-  const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements, bills, cal)
+  const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements, bills, cal, settlementTimingConfidence)
 
   // Separated forecast: operating vs settlement vs treasury vs owner
   const today = new Date().toISOString().slice(0, 10)
