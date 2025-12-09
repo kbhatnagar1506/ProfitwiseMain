@@ -3764,15 +3764,23 @@ function computeForecastConfidence(
   })
 
   // ── 3. Settlement confidence (weight: 0.10) ──
-  const settConf = models.settlement.confidence
-  const procCount = models.settlement.by_processor.length
-  const settScore = cs.settlement_score_map[settConf as keyof typeof cs.settlement_score_map] ?? 0.1
+  // Use settlement timing data from reconciled movements if available
+  let settScore = cs.settlement_score_map[models.settlement.confidence as keyof typeof cs.settlement_score_map] ?? 0.1
+  let settReason = models.settlement.sample_count === 0
+    ? "No settlement data"
+    : `${models.settlement.sample_count} samples across ${models.settlement.by_processor.length} processor(s), avg ${models.settlement.avg_delay_days.toFixed(1)}d`
+  
+  // Boost settlement confidence if we have empirical settlement timing data
+  if (settlementTimingConfidence && settlementTimingConfidence.overall_confidence > 0) {
+    const empiricalConfidence = settlementTimingConfidence.overall_confidence
+    settScore = Math.max(settScore, empiricalConfidence * 0.9) // Cap at 90% to leave room for uncertainty
+    settReason = `Empirical settlement timing: AR ${(settlementTimingConfidence.ar_confidence * 100).toFixed(0)}% (${settlementTimingConfidence.ar_count} entities), AP ${(settlementTimingConfidence.ap_confidence * 100).toFixed(0)}% (${settlementTimingConfidence.ap_count} entities)`
+  }
+  
   by_component.push({
     area: "Settlement timing", score: r2(settScore),
-    label: settConf === "high" ? "high" : settConf === "medium" ? "medium" : "low",
-    reason: models.settlement.sample_count === 0
-      ? "No settlement data"
-      : `${models.settlement.sample_count} samples across ${procCount} processor(s), avg ${models.settlement.avg_delay_days.toFixed(1)}d`,
+    label: settScore >= 0.7 ? "high" : settScore >= 0.4 ? "medium" : "low",
+    reason: settReason,
   })
 
   // ── 4. Identity coverage confidence (weight: 0.10) ──
@@ -4867,6 +4875,9 @@ export function computeCashflowForecast(
   calibrationOverride: Partial<ForecastCalibrationParams> = {},
   reconciledARMovements: any[] = [],
   reconciledAPMovements: any[] = [],
+  arSettlementTiming: any[] = [],
+  apSettlementTiming: any[] = [],
+  settlementTimingConfidence: any = null,
 ): CashflowForecast {
   // Merge calibration: defaults + any user/fitted overrides
   const cal = mergeCalibration(DEFAULT_FORECAST_CALIBRATION, calibrationOverride)

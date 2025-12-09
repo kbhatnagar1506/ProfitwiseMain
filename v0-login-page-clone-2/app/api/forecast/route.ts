@@ -17,6 +17,7 @@ import type { ForecastCalibrationParams } from "@/lib/state/forecast-calibration
 import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movement-types"
 import type { OutstandingInvoice, OutstandingBill, ForecastContext, CashflowForecast } from "@/lib/state/types"
 import { fetchReconciledARMovements, fetchReconciledAPMovements, buildReconciledCustomerModels, buildReconciledVendorModels } from "@/lib/reconciled-models"
+import { calculateARSettlementTiming, calculateAPSettlementTiming, getSettlementTimingConfidence } from "@/lib/settlement-timing"
 
 type TagRow = {
   movement_id: string
@@ -370,6 +371,9 @@ export async function GET() {
       calibrationResult,
       reconciledARMovements,
       reconciledAPMovements,
+      arSettlementTiming,
+      apSettlementTiming,
+      settlementTimingConfidence,
     ] = await Promise.all([
       fetchTaggedMovements(user.id),
       fetchInvoicesForReconciliation(user.id),
@@ -379,6 +383,9 @@ export async function GET() {
       getForecastCalibrationForUser(user.id),
       fetchReconciledARMovements(user.id),
       fetchReconciledAPMovements(user.id),
+      calculateARSettlementTiming(user.id),
+      calculateAPSettlementTiming(user.id),
+      getSettlementTimingConfidence(user.id),
     ])
 
     // Enrich movements with attribution timestamps for settlement timing
@@ -442,6 +449,15 @@ export async function GET() {
     // Set identity context for entity resolution
     setIdentityContext(identityCtx)
 
+    // Log settlement timing confidence
+    log("forecast.settlement_timing", {
+      ar_confidence: settlementTimingConfidence.ar_confidence,
+      ap_confidence: settlementTimingConfidence.ap_confidence,
+      overall_confidence: settlementTimingConfidence.overall_confidence,
+      ar_count: settlementTimingConfidence.ar_count,
+      ap_count: settlementTimingConfidence.ap_count,
+    })
+
     // Compute the forecast
     const forecast = computeCashflowForecast(
       enrichedMovements,
@@ -456,6 +472,9 @@ export async function GET() {
       cal,
       reconciledARMovements,
       reconciledAPMovements,
+      arSettlementTiming,
+      apSettlementTiming,
+      settlementTimingConfidence,
     )
 
     // Update metadata with calibration source
