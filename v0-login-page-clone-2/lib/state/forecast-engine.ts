@@ -5070,7 +5070,9 @@ export async function computeCashflowForecast(
     let clustering: ClusteringResult | undefined
     
     try {
-      entityGraph = await buildCompleteEntityGraph(userId)
+      if (userId) {
+        entityGraph = await buildCompleteEntityGraph(userId)
+      }
       
       if (entityGraph && entityGraph.businessEntities.size > 0) {
         // Build payment count maps for clustering
