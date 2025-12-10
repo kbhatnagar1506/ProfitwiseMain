@@ -19,6 +19,13 @@ import type { OutstandingInvoice, OutstandingBill, ForecastContext, CashflowFore
 import { fetchReconciledARMovements, fetchReconciledAPMovements, buildReconciledCustomerModels, buildReconciledVendorModels } from "@/lib/reconciled-models"
 import { calculateARSettlementTiming, calculateAPSettlementTiming, getSettlementTimingConfidence } from "@/lib/settlement-timing"
 import { ensureForecastStatusSchema } from "@/lib/forecast-status-schema"
+import {
+  enrichInterventionsWithReasoning,
+  rerankStrategiesWithAI,
+  generateExecutionPlans,
+  detectInterventionAnomalies,
+} from "@/lib/decision-llm"
+import { inferFounderProfile } from "@/lib/founder-profile"
 
 type TagRow = {
   movement_id: string
@@ -563,6 +570,39 @@ export async function GET() {
       }
     } catch (err) {
       log("forecast.enriched_data.merge_error", { error: err.message })
+    }
+
+    // Trigger background AI enrichment if not already cached
+    if (process.env.FORECAST_LLM_ENABLED) {
+      (async () => {
+        try {
+          const enrichedCacheKey = `forecast_enriched_${user.id}`
+          const existingEnriched = await query(
+            `SELECT data FROM forecast_cache WHERE user_id = $1 AND cache_key = $2 LIMIT 1`,
+            [user.id, enrichedCacheKey]
+          )
+          
+          // Only run enrichment if not already cached
+          if (existingEnriched.rows.length === 0) {
+            const founderProfile = inferFounderProfile(forecastCtx)
+            const enriched = await enrichInterventionsWithReasoning(forecast.interventions, forecast.behavioral_models, forecastCtx)
+            const ranked = await rerankStrategiesWithAI(forecast.combined_strategies, forecast.interventions, forecast.behavioral_models, forecastCtx, founderProfile)
+            const plans = await generateExecutionPlans(enriched, ranked, forecast.behavioral_models, forecastCtx)
+            const anomalies = await detectInterventionAnomalies(enriched, ranked, forecast.behavioral_models)
+            
+            // Store enriched data in cache
+            await query(
+              `INSERT INTO forecast_cache (user_id, cache_key, data, created_at, expires_at) 
+               VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '1 hour')
+               ON CONFLICT (user_id, cache_key) DO UPDATE SET data = $3, created_at = NOW()`,
+              [user.id, enrichedCacheKey, JSON.stringify({ enriched, ranked, plans, anomalies })]
+            )
+            log("ai_decision_layer.enrichment_cached", { userId: user.id, enriched_count: enriched.length, ranked_count: ranked.length })
+          }
+        } catch (err) {
+          log("ai_decision_layer.background_error", { error: err.message })
+        }
+      })()
     }
 
     // Cache the result for future requests
