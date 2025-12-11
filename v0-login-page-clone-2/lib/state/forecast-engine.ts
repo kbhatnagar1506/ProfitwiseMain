@@ -5002,6 +5002,15 @@ export async function computeCashflowForecast(
   settlementTimingConfidence: any = null,
   userId: string = "",
 ): Promise<CashflowForecast> {
+  // Debug: Log movements at function entry
+  log("forecast.compute.movements_input", {
+    movements_count: movements.length,
+    movements_sample: movements.slice(0, 2).map((m) => ({
+      id: m.id,
+      occurred_at: m.occurred_at,
+    })),
+  })
+
   // Merge calibration: defaults + any user/fitted overrides
   const cal = mergeCalibration(DEFAULT_FORECAST_CALIBRATION, calibrationOverride)
   const calibrationHash = computeCalibrationHash(cal)
