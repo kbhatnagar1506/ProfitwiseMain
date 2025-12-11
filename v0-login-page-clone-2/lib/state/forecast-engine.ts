@@ -4869,6 +4869,7 @@ function runBacktest(
       total_movements: allDates.length,
       min_required: minMovements,
       movements_array_length: movements.length,
+      movements_with_occurred_at: movements.filter((m) => m.occurred_at).length,
     })
     return null
   }
@@ -5242,7 +5243,6 @@ export async function computeCashflowForecast(
   }
 
   // Backtest: replay last 14 days to measure forecast accuracy
-  // TODO: Debug why backtest is finding 0 movements - temporarily disabled
   log("backtest.pre_call", {
     movements_count: movements.length,
     movements_with_dates: movements.filter((m) => m.occurred_at).length,
@@ -5252,7 +5252,7 @@ export async function computeCashflowForecast(
       direction: m.direction,
     })),
   })
-  const backtest = null // runBacktest(movements, invoices, bills, cal, entityProfiles)
+  const backtest = runBacktest(movements, invoices, bills, cal, entityProfiles)
 
   // Forecast confidence (8-component weighted, with backtest input)
   const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements, bills, cal, settlementTimingConfidence)
