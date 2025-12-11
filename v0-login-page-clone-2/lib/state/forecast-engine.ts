@@ -5242,6 +5242,15 @@ export async function computeCashflowForecast(
   }
 
   // Backtest: replay last 14 days to measure forecast accuracy
+  log("backtest.pre_call", {
+    movements_count: movements.length,
+    movements_with_dates: movements.filter((m) => m.occurred_at).length,
+    sample_movements: movements.slice(0, 3).map((m) => ({
+      id: m.id,
+      occurred_at: m.occurred_at,
+      direction: m.direction,
+    })),
+  })
   const backtest = runBacktest(movements, invoices, bills, cal, entityProfiles)
 
   // Forecast confidence (8-component weighted, with backtest input)
