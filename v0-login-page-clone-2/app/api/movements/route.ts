@@ -3,6 +3,7 @@ import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { toMovementClass } from "@/lib/movement-types"
+import { isValidQueryResult } from "@/lib/api-utils"
 import type { CanonicalMovement, MovementClass, ReviewReason } from "@/lib/movement-types"
 import { resolveDisplayNames } from "@/lib/display-name-resolve"
 
@@ -28,6 +29,17 @@ type DbMovementRow = {
   coalesced_group_id: string | null
   created_at: string
   observations: Array<{ source_id: string; source: string; source_type: string; [k: string]: unknown }> | null
+}
+
+// Type guard for DbMovementRow
+function isValidMovementRow(row: any): row is DbMovementRow {
+  return (
+    typeof row?.id === 'string' &&
+    typeof row?.direction === 'string' &&
+    typeof row?.amount === 'string' &&
+    typeof row?.date === 'string' &&
+    typeof row?.movement_type === 'string'
+  )
 }
 
 function toPublicMovement(row: DbMovementRow, userId: string): CanonicalMovement {
@@ -98,7 +110,9 @@ export async function GET() {
     [userId]
   ).then((r) => r.rows)
 
-  const movements: CanonicalMovement[] = dbRows.map((r) => toPublicMovement(r, userId))
+  const movements: CanonicalMovement[] = dbRows
+    .filter(isValidMovementRow)
+    .map((r) => toPublicMovement(r, userId))
 
   // Load tags (if they exist) and attach to movements
   type TagRow = { movement_id: string; economic_class: string; cashflow_bucket: string; counterparty_role: string; tag_data: Record<string, unknown> }
