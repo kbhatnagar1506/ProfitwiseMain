@@ -5,33 +5,36 @@ import { query, ensureMovementsSchema } from "@/lib/db"
 import { parseEditIntent, type MovementSummary } from "@/lib/movement-edit-llm"
 import { tagMovements } from "@/lib/movement-tag-enrich"
 import { addMerchantOverrideToSupermemory } from "@/lib/supermemory"
+import { createErrorResponse, validateString, safeJsonStringify, log } from "@/lib/api-utils"
 
 export async function POST(req: NextRequest) {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json(createErrorResponse("Unauthorized"), { status: 401 })
   }
 
   let body: { intent?: string; movement_ids?: string[] }
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
+    return NextResponse.json(createErrorResponse("Invalid JSON body"), { status: 400 })
   }
 
-  const intent = typeof body.intent === "string" ? body.intent.trim() : ""
+  const intent = validateString(body.intent, 1, 5000)
   const movementIds = Array.isArray(body.movement_ids) ? body.movement_ids.filter((id): id is string => typeof id === "string") : undefined
 
   if (!intent) {
-    return NextResponse.json({ error: "intent is required" }, { status: 400 })
+    return NextResponse.json(createErrorResponse("intent is required and must be non-empty"), { status: 400 })
   }
 
   try {
     await ensureMovementsSchema()
-  } catch {
-    return NextResponse.json({ error: "Schema not ready" }, { status: 500 })
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    log("movements.edit.schema_error", { error: errorMsg, userId: user.id })
+    return NextResponse.json(createErrorResponse("Schema not ready"), { status: 500 })
   }
 
   type DbRow = { id: string; direction: string; amount: string; raw_description: string | null; counterparty: string | null; movement_type: string; cash_account_id: string | null }
@@ -52,7 +55,8 @@ export async function POST(req: NextRequest) {
 
   const plan = await parseEditIntent(intent, movements, movementIds)
   if (!plan) {
-    return NextResponse.json({ error: "Could not parse your request. Try being more specific, e.g. 'Change all Gusto to payroll'." }, { status: 400 })
+    log("movements.edit.parse_failed", { userId: user.id, intent })
+    return NextResponse.json(createErrorResponse("Could not parse your request. Try being more specific, e.g. 'Change all Gusto to payroll'."), { status: 400 })
   }
 
   // Build list of movement IDs to update
@@ -112,7 +116,7 @@ export async function POST(req: NextRequest) {
     }
     if (plan.changes.confidence != null) {
       setClauses.push(`confidence = $${idx++}::jsonb`)
-      values.push(JSON.stringify({ score: plan.changes.confidence, evidence_strength: plan.changes.confidence }))
+      values.push(safeJsonStringify({ score: plan.changes.confidence, evidence_strength: plan.changes.confidence }))
     }
     if (plan.changes.movement_type) {
       setClauses.push(`pnl_eligible = $${idx++}`)
@@ -131,6 +135,8 @@ export async function POST(req: NextRequest) {
 
   // Re-tag so movement_tags reflect updated state
   await tagMovements(user.id)
+
+  log("movements.edit.success", { userId: user.id, updated, intent: intent.slice(0, 100) })
 
   // Persist user corrections to Supermemory so future classification improves
   if (process.env.SUPERMEMORY_API_KEY && (plan.changes.movement_type || plan.changes.counterparty != null)) {
@@ -164,3 +170,4 @@ export async function POST(req: NextRequest) {
     matched_count: candidateIds.length,
   })
 }
+
