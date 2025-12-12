@@ -541,7 +541,7 @@ export async function GET() {
     resetPrng()
 
     let result = {
-      ...forecast,
+            ...forecast,
       narrative: {
         ...forecast.narrative,
         forecast: enrichedNarrative,
@@ -645,7 +645,7 @@ export async function GET() {
     })
 
     return NextResponse.json(result)
-  } catch (err) {
+      } catch (err) {
     log("forecast.compute.error", { error: String(err) }, "error")
     
     // Update status to error (fire and forget)

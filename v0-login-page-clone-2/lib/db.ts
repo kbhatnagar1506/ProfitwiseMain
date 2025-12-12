@@ -1306,3 +1306,118 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
     client.release()
   }
 }
+
+// ─── User Decisions & Feedback (NEW) ───
+export async function ensureUserDecisionsSchema() {
+  const p = await pool
+  
+  // User intervention decisions
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS user_intervention_decisions (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      forecast_id       TEXT,
+      intervention_id   TEXT NOT NULL,
+      decision          TEXT NOT NULL CHECK (decision IN ('selected', 'rejected', 'deferred')),
+      notes             TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_user_intervention_decisions_user ON user_intervention_decisions (user_id, created_at DESC)"
+  )
+
+  // User strategy selections
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS user_strategy_selections (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      forecast_id       TEXT,
+      strategy_id       TEXT NOT NULL,
+      selected          BOOLEAN DEFAULT false,
+      implementation_notes TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_user_strategy_selections_user ON user_strategy_selections (user_id, created_at DESC)"
+  )
+
+  // Form drafts (auto-save)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS form_drafts (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      form_type         TEXT NOT NULL,
+      draft_data        JSONB NOT NULL,
+      saved_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, form_type)
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_form_drafts_user ON form_drafts (user_id)"
+  )
+
+  // Forecast history
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS forecast_history (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      forecast_data     JSONB NOT NULL,
+      computed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      parameters        JSONB,
+      enrichment_status TEXT,
+      enrichment_completed_at TIMESTAMPTZ
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_forecast_history_user ON forecast_history (user_id, computed_at DESC)"
+  )
+
+  // Entity profile feedback
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS entity_profile_feedback (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entity_id         UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      feedback_type     TEXT NOT NULL,
+      feedback_value    BOOLEAN,
+      notes             TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_entity_profile_feedback_user ON entity_profile_feedback (user_id, entity_id)"
+  )
+
+  // Onboarding audit trail
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS onboarding_audit (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      step_number       INT NOT NULL,
+      action            TEXT NOT NULL,
+      metadata          JSONB,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_onboarding_audit_user ON onboarding_audit (user_id, step_number, created_at DESC)"
+  )
+
+  // Context refinement history
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS context_refinement_history (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      refinement_text   TEXT NOT NULL,
+      context_version   INT NOT NULL,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_context_refinement_history_user ON context_refinement_history (user_id, context_version DESC)"
+  )
+}
