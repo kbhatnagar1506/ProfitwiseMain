@@ -177,7 +177,9 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const body = await req.json().catch(() => ({}))
-  const movementIds = Array.isArray(body?.movement_ids) ? (body.movement_ids as string[]).filter(Boolean) : []
+  const movementIds = Array.isArray(body?.movement_ids) 
+    ? (body.movement_ids as string[]).filter(Boolean).slice(0, 100)  // Max 100 items
+    : []
   const batchSize = Number.isFinite(body?.batch_size) ? Math.max(1, Math.min(20, Number(body.batch_size))) : 5
   if (movementIds.length === 0) return NextResponse.json({ generated: 0 })
 

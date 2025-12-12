@@ -3,12 +3,15 @@ import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema, query } from "@/lib/db"
 import { tagMovements } from "@/lib/movement-tag-enrich"
+import { validateEnumValue, validateString } from "@/lib/api-utils"
 
 type Body = {
   movement_id?: string
   override?: "include" | "exclude" | "clear"
   reason?: string
 }
+
+const ALLOWED_OVERRIDES = ["include", "exclude", "clear"] as const
 
 export async function POST(req: NextRequest) {
   const cookieStore = await cookies()
@@ -22,9 +25,9 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
   }
-  const movementId = (body.movement_id ?? "").trim()
-  const override = body.override ?? "include"
-  const reason = (body.reason ?? "manual_override").trim()
+  const movementId = validateString(body.movement_id, 1, 100)
+  const override = validateEnumValue(body.override, ALLOWED_OVERRIDES, "include")
+  const reason = validateString(body.reason, 1, 500) || "manual_override"
   if (!movementId) return NextResponse.json({ error: "movement_id is required" }, { status: 400 })
 
   await ensureMovementsSchema()
