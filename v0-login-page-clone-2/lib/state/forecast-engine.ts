@@ -2295,7 +2295,9 @@ export function blendReconciledModels(
       return {
         ...customer,
         confidence: boost.boosted_confidence,
-      }
+        // Store the confidence score boost for use in confidence calculation
+        _entity_graph_score_boost: boost.confidence_score_boost || 0,
+      } as any
     })
 
     // Apply boosts to vendors
@@ -2306,7 +2308,9 @@ export function blendReconciledModels(
       return {
         ...vendor,
         confidence: boost.boosted_confidence,
-      }
+        // Store the confidence score boost for use in confidence calculation
+        _entity_graph_score_boost: boost.confidence_score_boost || 0,
+      } as any
     })
 
     logEntityGraphBoosting(customerBoosts, vendorBoosts)
@@ -3777,7 +3781,10 @@ function computeForecastConfidence(
         const weight = (c.avg_amount * c.payment_count) / totalRevenue
         const archetypeBonus = cs.archetype_bonus[c.archetype] ?? 0.15
         const confMult = cs.confidence_mult[c.confidence] ?? 0.25
-        weightedConf += weight * archetypeBonus * confMult
+        // Apply entity graph score boost if available
+        const entityGraphBoost = (c as any)._entity_graph_score_boost || 0
+        const boostedConfMult = Math.min(1, confMult + entityGraphBoost)
+        weightedConf += weight * archetypeBonus * boostedConfMult
       }
       inflowScore = weightedConf
     } else {
@@ -3811,7 +3818,10 @@ function computeForecastConfidence(
         const weight = (v.avg_amount * Math.max(1, v.payment_count)) / totalSpend
         const recBonus = v.recurrence.recurrence_confidence
         const confMult = cs.vendor_conf_mult[v.confidence] ?? 0.25
-        weightedConf += weight * recBonus * confMult
+        // Apply entity graph score boost if available
+        const entityGraphBoost = (v as any)._entity_graph_score_boost || 0
+        const boostedConfMult = Math.min(1, confMult + entityGraphBoost)
+        weightedConf += weight * recBonus * boostedConfMult
       }
       outflowScore = weightedConf
     } else {

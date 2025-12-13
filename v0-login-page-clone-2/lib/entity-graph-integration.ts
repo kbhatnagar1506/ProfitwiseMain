@@ -27,10 +27,12 @@ export type EntityGraphBoostResult = {
   boost_reason: string
   anchor_entity_id?: string
   relationship_confidence?: number
+  confidence_score_boost?: number // Direct score boost (0-1)
 }
 
 /**
  * Boost customer confidence based on entity graph relationships
+ * Returns both confidence level boost and direct score boost
  */
 export function boostCustomerConfidenceFromGraph(
   customerId: string,
@@ -46,6 +48,7 @@ export function boostCustomerConfidenceFromGraph(
     boosted_confidence: originalConfidence,
     boost_amount: 0,
     boost_reason: "",
+    confidence_score_boost: 0,
   }
 
   // Check if this is a satellite entity
@@ -73,6 +76,8 @@ export function boostCustomerConfidenceFromGraph(
     if (anchorModel.confidence === "high" || anchorModel.confidence === "medium") {
       result.boosted_confidence = "medium"
       result.boost_amount = 0.2
+      // Direct score boost: inherit 40% of anchor's confidence advantage
+      result.confidence_score_boost = relConfidence * 0.4
       result.boost_reason = `Related to anchor entity with ${anchorModel.payment_count} payments (${anchorModel.confidence} confidence)`
       result.anchor_entity_id = anchorId
       result.relationship_confidence = relConfidence
@@ -83,6 +88,8 @@ export function boostCustomerConfidenceFromGraph(
   if (originalConfidence === "medium" && anchorModel.confidence === "high") {
     result.boosted_confidence = "high"
     result.boost_amount = 0.15
+    // Direct score boost: inherit 30% of anchor's confidence advantage
+    result.confidence_score_boost = relConfidence * 0.3
     result.boost_reason = `Related to high-confidence anchor entity with ${anchorModel.payment_count} payments`
     result.anchor_entity_id = anchorId
     result.relationship_confidence = relConfidence
@@ -93,6 +100,7 @@ export function boostCustomerConfidenceFromGraph(
 
 /**
  * Boost vendor confidence based on entity graph relationships
+ * Returns both confidence level boost and direct score boost
  */
 export function boostVendorConfidenceFromGraph(
   vendorId: string,
@@ -109,6 +117,7 @@ export function boostVendorConfidenceFromGraph(
     boosted_confidence: originalConfidence,
     boost_amount: 0,
     boost_reason: "",
+    confidence_score_boost: 0,
   }
 
   // Check if this is a satellite entity
@@ -136,6 +145,8 @@ export function boostVendorConfidenceFromGraph(
     if (originalConfidence === "low") {
       result.boosted_confidence = "medium"
       result.boost_amount = 0.2
+      // Direct score boost: inherit 40% of anchor's confidence advantage
+      result.confidence_score_boost = relConfidence * 0.4
       result.boost_reason = `Related to ${anchorModel.archetype} vendor with ${anchorModel.payment_count} payments`
       result.anchor_entity_id = anchorId
       result.relationship_confidence = relConfidence
@@ -147,6 +158,8 @@ export function boostVendorConfidenceFromGraph(
     if (anchorModel.confidence === "high" || anchorModel.confidence === "medium") {
       result.boosted_confidence = "medium"
       result.boost_amount = 0.2
+      // Direct score boost: inherit 40% of anchor's confidence advantage
+      result.confidence_score_boost = relConfidence * 0.4
       result.boost_reason = `Related to anchor entity with ${anchorModel.payment_count} payments (${anchorModel.confidence} confidence)`
       result.anchor_entity_id = anchorId
       result.relationship_confidence = relConfidence
@@ -157,6 +170,8 @@ export function boostVendorConfidenceFromGraph(
   if (originalConfidence === "medium" && anchorModel.confidence === "high") {
     result.boosted_confidence = "high"
     result.boost_amount = 0.15
+    // Direct score boost: inherit 30% of anchor's confidence advantage
+    result.confidence_score_boost = relConfidence * 0.3
     result.boost_reason = `Related to high-confidence anchor entity with ${anchorModel.payment_count} payments`
     result.anchor_entity_id = anchorId
     result.relationship_confidence = relConfidence
