@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server"
+import { NextResponse, NextRequest } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema } from "@/lib/db"
@@ -18,6 +18,7 @@ import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movemen
 import type { OutstandingInvoice, OutstandingBill, ForecastContext, CashflowForecast } from "@/lib/state/types"
 import { fetchReconciledARMovements, fetchReconciledAPMovements, buildReconciledCustomerModels, buildReconciledVendorModels } from "@/lib/reconciled-models"
 import { calculateARSettlementTiming, calculateAPSettlementTiming, getSettlementTimingConfidence } from "@/lib/settlement-timing"
+import { rateLimiters, getRateLimitHeaders } from "@/lib/rate-limiter"
 import { withTimeout } from "@/lib/api-utils"
 import { ensureForecastStatusSchema } from "@/lib/forecast-status-schema"
 import {
@@ -358,7 +359,22 @@ async function invalidateForecastCache(userId: string): Promise<void> {
   }
 }
 
-export async function GET() {
+export async function GET(req?: NextRequest) {
+  const clientIp = (req?.headers?.get('x-forwarded-for') || req?.headers?.get('x-real-ip') || 'unknown') as string
+  const rateLimitCheck = rateLimiters.forecast.check({ ip: clientIp })
+  
+  if (!rateLimitCheck.allowed) {
+    const status = rateLimiters.forecast.getStatus({ ip: clientIp })
+    log("forecast.rate_limited", { ip: clientIp, operation: "forecast" })
+    return NextResponse.json(
+      { error: "Too many forecast requests. Please try again later." },
+      {
+        status: 429,
+        headers: getRateLimitHeaders(status),
+      }
+    )
+  }
+
   try {
     const user = await getUser()
     if (!user) {

@@ -1,9 +1,11 @@
-import { NextResponse } from "next/server"
+import { NextResponse, NextRequest } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema, query } from "@/lib/db"
 import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 import { generateMovementExplanation } from "@/lib/movement-explain"
+import { rateLimiters, getRateLimitHeaders } from "@/lib/rate-limiter"
+import { log } from "@/lib/logger"
 
 type CacheRow = {
   movement_id: string
@@ -21,6 +23,21 @@ function parseMovementIds(value: string | null): string[] {
 }
 
 export async function GET(req: Request) {
+  const clientIp = (req as any).headers?.get('x-forwarded-for') || (req as any).headers?.get('x-real-ip') || 'unknown'
+  const rateLimitCheck = rateLimiters.expensive.check({ ip: clientIp })
+  
+  if (!rateLimitCheck.allowed) {
+    const status = rateLimiters.expensive.getStatus({ ip: clientIp })
+    log("movements.explain.batch.rate_limited", { ip: clientIp, operation: "batch_explain" })
+    return NextResponse.json(
+      { error: "Too many requests. Please try again later." },
+      {
+        status: 429,
+        headers: getRateLimitHeaders(status),
+      }
+    )
+  }
+
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
