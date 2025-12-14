@@ -16,8 +16,10 @@ import { refreshMovementEntityIds } from "@/lib/movement-classify"
 import { createErrorResponse, createSuccessResponse } from "@/lib/api-utils"
 import { log } from "@/lib/logger"
 import { rateLimiters, getRateLimitHeaders } from "@/lib/rate-limiter"
+import { PerformanceTracker } from "@/lib/performance-logger"
 
 export async function POST(req: NextRequest) {
+  const tracker = new PerformanceTracker("brain.financial_brain")
   const clientIp = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown'
   const rateLimitCheck = rateLimiters.forecast.check({ ip: clientIp })
   
@@ -78,6 +80,10 @@ export async function POST(req: NextRequest) {
       ...(syncCashEvents ? { outstandingInvoices, apObligations } : {}),
     })
 
+    tracker.end({ 
+      userId: user.id, 
+      recordCount: result.attribution.allocationsRefreshed.length + result.attribution.arSuggestions.length + result.attribution.apSuggestions.length 
+    })
     log("brain.success", { userId: user.id, operation: "financial_brain", arApOnly, merchantOnly, syncCashEvents })
     return NextResponse.json(createSuccessResponse({
       ok: true,
@@ -97,6 +103,7 @@ export async function POST(req: NextRequest) {
         : {}),
     }, { operation: "financial_brain" }))
   } catch (e) {
+    tracker.end({ userId: user.id, error: String(e) })
     const msg = e instanceof Error ? e.message : String(e)
     log("brain.error", { userId: user.id, error: msg, operation: "financial_brain" })
     return NextResponse.json(createErrorResponse("Financial brain failed", { details: msg }), { status: 500 })

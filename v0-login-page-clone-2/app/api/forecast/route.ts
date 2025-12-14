@@ -20,6 +20,7 @@ import { fetchReconciledARMovements, fetchReconciledAPMovements, buildReconciled
 import { calculateARSettlementTiming, calculateAPSettlementTiming, getSettlementTimingConfidence } from "@/lib/settlement-timing"
 import { rateLimiters, getRateLimitHeaders } from "@/lib/rate-limiter"
 import { withTimeout } from "@/lib/api-utils"
+import { PerformanceTracker } from "@/lib/performance-logger"
 import { ensureForecastStatusSchema } from "@/lib/forecast-status-schema"
 import {
   enrichInterventionsWithReasoning,
@@ -360,6 +361,7 @@ async function invalidateForecastCache(userId: string): Promise<void> {
 }
 
 export async function GET(req?: NextRequest) {
+  const tracker = new PerformanceTracker("forecast.compute")
   const clientIp = (req?.headers?.get('x-forwarded-for') || req?.headers?.get('x-real-ip') || 'unknown') as string
   const rateLimitCheck = rateLimiters.forecast.check({ ip: clientIp })
   
@@ -661,8 +663,10 @@ export async function GET(req?: NextRequest) {
       log("forecast.status.update.error", { error: String(err) })
     })
 
+    tracker.end({ userId: user.id, recordCount: forecast.events_30d.length })
     return NextResponse.json(result)
       } catch (err) {
+    tracker.end({ userId: (await getUser())?.id, error: String(err) })
     log("forecast.compute.error", { error: String(err) }, "error")
     
     // Update status to error (fire and forget)
