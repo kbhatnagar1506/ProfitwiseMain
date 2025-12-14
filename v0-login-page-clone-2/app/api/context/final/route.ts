@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { getAppBaseUrl } from "@/lib/supermemory"
 import { buildFinancialContext, type FinancialContext } from "@/lib/financial-context"
+import { checkRequestSize, getSizeLimitHeaders } from "@/lib/request-size-limiter"
+import { log } from "@/lib/logger"
 
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 
@@ -51,6 +53,22 @@ OUTPUT FORMAT: Flowing prose only. No markdown headings (#, ##, ###), no bullet 
 
 /** GET /api/context/final — Business context + financial context merged into final context. */
 export async function GET(req: NextRequest) {
+  // Check request size
+  const contentLength = req.headers.get("content-length")
+  const contentType = req.headers.get("content-type")
+  const sizeCheck = checkRequestSize(contentLength ? parseInt(contentLength) : null, contentType)
+  
+  if (!sizeCheck.allowed) {
+    log("context.final.size_exceeded", { error: sizeCheck.error })
+    return NextResponse.json(
+      { error: sizeCheck.error },
+      {
+        status: 413,
+        headers: getSizeLimitHeaders(),
+      }
+    )
+  }
+
   const token = req.cookies.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(token ?? "")
   if (!user) {
