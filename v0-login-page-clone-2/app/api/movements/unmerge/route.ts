@@ -5,7 +5,8 @@ import { ensureMovementsSchema, query } from "@/lib/db"
 import { classifyMovements } from "@/lib/movement-classify"
 import { tagMovements } from "@/lib/movement-tag-enrich"
 import { scrubMovementText } from "@/lib/text-cleaner"
-import { createErrorResponse, validateString, validateRequiredFields, validateMetadata, log } from "@/lib/api-utils"
+import { createErrorResponse, validateString, validateRequiredFields, validateMetadata } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 
 type Body = {
   movement_id?: string

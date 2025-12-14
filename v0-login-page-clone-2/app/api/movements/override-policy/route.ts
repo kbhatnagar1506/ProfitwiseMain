@@ -3,7 +3,8 @@ import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema, query } from "@/lib/db"
 import { tagMovements } from "@/lib/movement-tag-enrich"
-import { validateEnumValue, validateString, validateRequiredFields, createErrorResponse, log } from "@/lib/api-utils"
+import { validateEnumValue, validateString, validateRequiredFields, createErrorResponse } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 
 type Body = {
   movement_id?: string

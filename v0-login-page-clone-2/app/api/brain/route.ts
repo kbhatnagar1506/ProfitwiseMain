@@ -13,7 +13,8 @@ import { computeAPStateFromBills } from "@/lib/state/ar-ap"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
-import { createErrorResponse, createSuccessResponse, log } from "@/lib/api-utils"
+import { createErrorResponse, createSuccessResponse } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 
 export async function POST(req: Request) {
   const cookieStore = await cookies()

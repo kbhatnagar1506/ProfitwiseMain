@@ -5,7 +5,8 @@ import { query, ensureMovementsSchema } from "@/lib/db"
 import { parseEditIntent, type MovementSummary } from "@/lib/movement-edit-llm"
 import { tagMovements } from "@/lib/movement-tag-enrich"
 import { addMerchantOverrideToSupermemory } from "@/lib/supermemory"
-import { createErrorResponse, validateString, safeJsonStringify, log } from "@/lib/api-utils"
+import { createErrorResponse, validateString, safeJsonStringify } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 
 export async function POST(req: NextRequest) {
   const cookieStore = await cookies()
