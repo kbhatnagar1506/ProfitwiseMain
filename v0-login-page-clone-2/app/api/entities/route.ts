@@ -1,11 +1,12 @@
-import { NextResponse } from "next/server"
+import { NextResponse, NextRequest } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { buildEntityProfiles, getAllEntityProfiles } from "@/lib/entity-profiles"
 import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
 import { validateSortField, validateNumericParam, getErrorMessage } from "@/lib/api-utils"
-import { log } from "@/lib/logger"
+import { log, logWithRequestId } from "@/lib/logger"
+import { getOrCreateRequestId, addRequestIdToResponse } from "@/lib/request-id-middleware"
 import type { EntityPaymentProfile, EntityType } from "@/lib/state/types"
 
 async function getUser() {
@@ -16,7 +17,8 @@ async function getUser() {
 
 const ALLOWED_SORT_FIELDS = ["lifetime_value", "transaction_count", "last_transaction", "name"]
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
+  const requestId = getOrCreateRequestId(request)
   const user = await getUser()
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -88,11 +90,12 @@ export async function GET(request: Request) {
       at_risk_count: profiles.filter((p) => (p.risk_score || 0) > 0.5).length,
     }
 
-    log("entities.list.success", { userId, entityCount: entities.length, operation: "list_entities" })
-    return NextResponse.json({ entities, summary })
+    logWithRequestId("entities.list.success", requestId, { userId, entityCount: entities.length, operation: "list_entities" })
+    const response = NextResponse.json({ entities, summary })
+    return addRequestIdToResponse(response, requestId)
   } catch (error) {
     const errorMsg = getErrorMessage(error)
-    log("entities.list.error", { userId, error: errorMsg, operation: "list_entities" })
+    logWithRequestId("entities.list.error", requestId, { userId, error: errorMsg, operation: "list_entities" })
     return NextResponse.json(
       { error: "Failed to fetch entities" },
       { status: 500 }

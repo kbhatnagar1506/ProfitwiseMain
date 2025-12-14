@@ -1,10 +1,11 @@
-import { NextResponse } from "next/server"
+import { NextResponse, NextRequest } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { toMovementClass } from "@/lib/movement-types"
 import { isValidQueryResult } from "@/lib/api-utils"
-import { log } from "@/lib/logger"
+import { log, logWithRequestId } from "@/lib/logger"
+import { getOrCreateRequestId, addRequestIdToResponse } from "@/lib/request-id-middleware"
 import type { CanonicalMovement, MovementClass, ReviewReason } from "@/lib/movement-types"
 import { resolveDisplayNames } from "@/lib/display-name-resolve"
 
@@ -72,7 +73,8 @@ function toPublicMovement(row: DbMovementRow, userId: string): CanonicalMovement
   }
 }
 
-export async function GET() {
+export async function GET(req?: NextRequest) {
+  const requestId = getOrCreateRequestId(req)
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
@@ -251,6 +253,7 @@ export async function GET() {
     }
   }
 
-  log("movements.list.success", { userId, movementCount: movementsWithTags.length, operation: "list_movements" })
-  return NextResponse.json({ movements: movementsWithTags, summary, summary_from_tags: summaryFromTags })
+  logWithRequestId("movements.list.success", requestId, { userId, movementCount: movementsWithTags.length, operation: "list_movements" })
+  const response = NextResponse.json({ movements: movementsWithTags, summary, summary_from_tags: summaryFromTags })
+  return addRequestIdToResponse(response, requestId)
 }
