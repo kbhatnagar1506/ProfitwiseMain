@@ -13,7 +13,7 @@ type DbMovementRow = {
   id: string
   user_id: string
   direction: string
-  amount: string
+  amount: number | string
   date: string
   movement_type: string
   pnl_eligible: boolean
@@ -35,13 +35,26 @@ type DbMovementRow = {
 
 // Type guard for DbMovementRow
 function isValidMovementRow(row: any): row is DbMovementRow {
-  return (
+  const isValid = (
     typeof row?.id === 'string' &&
     typeof row?.direction === 'string' &&
-    typeof row?.amount === 'string' &&
+    (typeof row?.amount === 'string' || typeof row?.amount === 'number') &&
     typeof row?.date === 'string' &&
     typeof row?.movement_type === 'string'
   )
+  
+  if (!isValid && row) {
+    console.error('[movements] Invalid row:', {
+      id: row.id,
+      direction: row.direction,
+      amount: row.amount,
+      date: row.date,
+      movement_type: row.movement_type,
+      keys: Object.keys(row).slice(0, 10)
+    })
+  }
+  
+  return isValid
 }
 
 function toPublicMovement(row: DbMovementRow, userId: string): CanonicalMovement {
