@@ -35,26 +35,13 @@ type DbMovementRow = {
 
 // Type guard for DbMovementRow
 function isValidMovementRow(row: any): row is DbMovementRow {
-  const isValid = (
+  return (
     typeof row?.id === 'string' &&
     typeof row?.direction === 'string' &&
     (typeof row?.amount === 'string' || typeof row?.amount === 'number') &&
     typeof row?.date === 'string' &&
     typeof row?.movement_type === 'string'
   )
-  
-  if (!isValid && row) {
-    console.error('[movements] Invalid row:', {
-      id: row.id,
-      direction: row.direction,
-      amount: row.amount,
-      date: row.date,
-      movement_type: row.movement_type,
-      keys: Object.keys(row).slice(0, 10)
-    })
-  }
-  
-  return isValid
 }
 
 function toPublicMovement(row: DbMovementRow, userId: string): CanonicalMovement {
@@ -124,27 +111,10 @@ export async function GET(req?: NextRequest) {
      GROUP BY m.id
      ORDER BY m.date DESC, m.created_at DESC`,
     [userId]
-  ).then((r) => {
-    logWithRequestId("movements.db_query.result", requestId, { userId, dbRowCount: r.rows.length, sampleRow: r.rows[0] ? { id: r.rows[0].id, direction: r.rows[0].direction, amount: r.rows[0].amount } : null })
-    return r.rows
-  })
+  ).then((r) => r.rows)
 
   const movements: CanonicalMovement[] = dbRows
-    .filter((row) => {
-      const isValid = isValidMovementRow(row)
-      if (!isValid) {
-        logWithRequestId("movements.filter.invalid_row", requestId, { 
-          rowId: row?.id, 
-          hasId: typeof row?.id === 'string',
-          hasDirection: typeof row?.direction === 'string',
-          hasAmount: typeof row?.amount === 'string',
-          hasDate: typeof row?.date === 'string',
-          hasMovementType: typeof row?.movement_type === 'string',
-          rowKeys: Object.keys(row || {})
-        })
-      }
-      return isValid
-    })
+    .filter(isValidMovementRow)
     .map((r) => toPublicMovement(r, userId))
 
   // Load tags (if they exist) and attach to movements
