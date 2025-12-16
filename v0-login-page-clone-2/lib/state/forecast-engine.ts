@@ -5247,19 +5247,17 @@ export async function computeCashflowForecast(
   }
 
   // Apply AI-powered enhancements (entity inference, pattern learning)
+  // Run asynchronously in background to not block forecast computation
   if (behavioral_models.customers.length > 0 || behavioral_models.vendors.length > 0) {
-    try {
-      const aiResult = await enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
-      behavioral_models = {
-        ...behavioral_models,
-        customers: aiResult.enhanced_customers,
-        vendors: aiResult.enhanced_vendors,
-      }
-      log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      log("forecast.ai_enhancement.error", { error: message })
-    }
+    // Fire and forget - don't await, let it run in background
+    enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
+      .then((aiResult) => {
+        log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err)
+        log("forecast.ai_enhancement.error", { error: message })
+      })
   }
 
   // Event generation: discrete 30-day forecast (+ optional cash_events bridge)
