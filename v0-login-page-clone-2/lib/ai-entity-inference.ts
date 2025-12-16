@@ -111,14 +111,41 @@ Focus on:
       return []
     }
 
-    // Parse JSON from response
-    const jsonMatch = content.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      log("ai_entity_inference.error", { error: "Could not parse JSON response" })
+    // Parse JSON from response - extract first valid JSON object
+    let parsed
+    try {
+      // Try to find and parse JSON object
+      const startIdx = content.indexOf("{")
+      if (startIdx === -1) {
+        log("ai_entity_inference.error", { error: "No JSON object found in response" })
+        return []
+      }
+
+      // Find matching closing brace
+      let braceCount = 0
+      let endIdx = -1
+      for (let i = startIdx; i < content.length; i++) {
+        if (content[i] === "{") braceCount++
+        if (content[i] === "}") {
+          braceCount--
+          if (braceCount === 0) {
+            endIdx = i + 1
+            break
+          }
+        }
+      }
+
+      if (endIdx === -1) {
+        log("ai_entity_inference.error", { error: "Could not find matching closing brace" })
+        return []
+      }
+
+      parsed = JSON.parse(content.substring(startIdx, endIdx))
+    } catch (parseErr) {
+      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr)
+      log("ai_entity_inference.error", { error: `JSON parse failed: ${msg}` })
       return []
     }
-
-    const parsed = JSON.parse(jsonMatch[0])
     const inferences = parsed.inferences || []
 
     // Map back to entity IDs
@@ -215,10 +242,32 @@ Only include relationships with confidence > 0.7`
 
     if (!content) return []
 
-    const jsonMatch = content.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return []
+    let parsed
+    try {
+      const startIdx = content.indexOf("{")
+      if (startIdx === -1) return []
 
-    const parsed = JSON.parse(jsonMatch[0])
+      let braceCount = 0
+      let endIdx = -1
+      for (let i = startIdx; i < content.length; i++) {
+        if (content[i] === "{") braceCount++
+        if (content[i] === "}") {
+          braceCount--
+          if (braceCount === 0) {
+            endIdx = i + 1
+            break
+          }
+        }
+      }
+
+      if (endIdx === -1) return []
+
+      parsed = JSON.parse(content.substring(startIdx, endIdx))
+    } catch (parseErr) {
+      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr)
+      log("ai_entity_relationships.error", { error: `JSON parse failed: ${msg}` })
+      return []
+    }
     const relationships = parsed.relationships || []
 
     log("ai_entity_relationships.inferred", {
@@ -303,10 +352,30 @@ Respond in JSON format:
 
     if (!content) return []
 
-    const jsonMatch = content.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return []
+    let parsed
+    try {
+      const startIdx = content.indexOf("{")
+      if (startIdx === -1) return []
 
-    const parsed = JSON.parse(jsonMatch[0])
+      let braceCount = 0
+      let endIdx = -1
+      for (let i = startIdx; i < content.length; i++) {
+        if (content[i] === "{") braceCount++
+        if (content[i] === "}") {
+          braceCount--
+          if (braceCount === 0) {
+            endIdx = i + 1
+            break
+          }
+        }
+      }
+
+      if (endIdx === -1) return []
+
+      parsed = JSON.parse(content.substring(startIdx, endIdx))
+    } catch (parseErr) {
+      return []
+    }
     const inferences = parsed.inferences || []
 
     // Map back to IDs
