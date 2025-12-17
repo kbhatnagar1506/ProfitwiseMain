@@ -266,7 +266,7 @@ export function calculateEntityGraphCoverage(
 
   const customerCoverage = customerIds.length > 0 ? customerWithRelationships / customerIds.length : 0
   const vendorCoverage = vendorIds.length > 0 ? vendorWithRelationships / vendorIds.length : 0
-  const overallCoverage = (customerWithRelationships + vendorWithRelationships) / allIds.length
+  const overallCoverage = allIds.length > 0 ? (customerWithRelationships + vendorWithRelationships) / allIds.length : 0
   const avgConfidence = confidenceCount > 0 ? totalConfidence / confidenceCount : 0
 
   return {

@@ -127,7 +127,10 @@ function isOutflow(m: TaggedMovement): boolean {
 // ─── Utilities ──────────────────────────────────────────────────────
 
 function daysBetween(a: string, b: string): number {
-  return Math.max(0, Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000))
+  const aTime = new Date(a).getTime()
+  const bTime = new Date(b).getTime()
+  if (isNaN(aTime) || isNaN(bTime)) return 0
+  return Math.max(0, Math.round((bTime - aTime) / 86_400_000))
 }
 
 function monthKey(date: string): string {
@@ -835,13 +838,13 @@ function buildCustomerModels(
   // Helper to find profile for an entity
   function findProfile(entityId: string, name: string): EntityPaymentProfile | undefined {
     if (profileByEntityId?.has(entityId)) {
-      const p = profileByEntityId.get(entityId)!
-      if (p.entity_type !== "vendor") return p
+      const p = profileByEntityId.get(entityId)
+      if (p && p.entity_type !== "vendor") return p
     }
     const normName = name.toLowerCase().replace(/[^a-z0-9]/g, "")
     if (normName.length >= 3 && profileByNormalizedName?.has(normName)) {
-      const p = profileByNormalizedName.get(normName)!
-      if (p.entity_type !== "vendor") return p
+      const p = profileByNormalizedName.get(normName)
+      if (p && p.entity_type !== "vendor") return p
     }
     return undefined
   }
@@ -1309,7 +1312,8 @@ function classifyRecurrence(
   const amountMean = amts.length > 0 ? amts.reduce((a, b) => a + b, 0) / amts.length : 0
   const amountStd = amts.length > 1 ? std(amts) : 0
   const amountCV = amountMean > 0 ? amountStd / amountMean : 999
-  const amount_stability_score = amountCV < 1 ? r2(Math.max(0, 1 - amountCV)) : 0
+  // Compute stability score even for volatile amounts; cap CV at 2 for reasonable scoring
+  const amount_stability_score = amountCV > 0 ? r2(Math.max(0, 1 - Math.min(amountCV, 2))) : 0
   const counterparty_consistency = 1
   const due_date_consistency = hasBillsWithDueDates ? 0.9 : 0.5
   const class_consistency = 1
@@ -2733,11 +2737,15 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
     emitFn: (date: string, offset: number) => void,
   ) {
     if (intervalDays <= 0) return
+    
+    // Optimize: calculate jumps instead of looping for very small intervals
     let nextDate = addDays(lastDate, intervalDays)
-    // If next date is past, advance by full intervals until we're in the future
-    while (nextDate < today) {
-      nextDate = addDays(nextDate, intervalDays)
+    if (nextDate < today && intervalDays > 0) {
+      const daysUntilToday = daysBetween(lastDate, today)
+      const jumps = Math.ceil(daysUntilToday / intervalDays)
+      nextDate = addDays(lastDate, intervalDays * jumps)
     }
+    
     let count = 0
     while (nextDate <= horizon && count < maxOccurrences) {
       const offset = daysBetween(today, nextDate)

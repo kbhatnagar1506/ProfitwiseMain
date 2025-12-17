@@ -57,7 +57,10 @@ function toPublicMovement(row: DbMovementRow, userId: string): CanonicalMovement
     user_id: userId,
     occurred_at: dateStr,
     direction: row.direction as "inflow" | "outflow",
-    amount: (() => { const amt = parseFloat(String(row.amount)); return isNaN(amt) ? 0 : amt })(),
+    amount: (() => { 
+      const amt = parseFloat(String(row.amount))
+      return isNaN(amt) || amt < 0 ? 0 : amt 
+    })(),
     currency: row.currency ?? "USD",
     raw_description: row.raw_description,
     source_record_ids: obs.map((o) => o.source_id).filter(Boolean),
@@ -66,8 +69,14 @@ function toPublicMovement(row: DbMovementRow, userId: string): CanonicalMovement
     movement_class: toMovementClass(row.movement_type),
     movement_type_detail: row.movement_type,
     pnl_eligible: row.pnl_eligible,
-    confidence: (() => { const conf = row.confidence?.score ?? 0; return isNaN(conf) ? 0 : conf })(),
-    evidence_strength: (() => { const ev = row.confidence?.evidence_strength ?? 0; return isNaN(ev) ? 0 : ev })(),
+    confidence: (() => { 
+      const conf = row.confidence?.score ?? 0
+      return isNaN(conf) ? 0 : Math.max(0, Math.min(1, conf))
+    })(),
+    evidence_strength: (() => { 
+      const ev = row.confidence?.evidence_strength ?? 0
+      return isNaN(ev) ? 0 : Math.max(0, Math.min(1, ev))
+    })(),
     needs_review: row.review_needed,
     review_reasons: reviewReasons,
     provenance: row.provenance as CanonicalMovement["provenance"],
@@ -216,7 +225,7 @@ export async function GET(req?: NextRequest) {
       `SELECT COUNT(*)::text FROM movements WHERE user_id = $1 AND duplicate_of IS NOT NULL`,
       [userId]
     )
-    coalescedCount = parseInt(coalescedRows[0]?.count ?? "0", 10)
+    coalescedCount = coalescedRows.length > 0 ? parseInt(coalescedRows[0].count, 10) : 0
 
     for (const m of movementsWithTags as TaggedMovement[]) {
       const tag = m.tag

@@ -269,10 +269,14 @@ function computeAmountTrend(transactions: EntityTransaction[]): AmountTrend {
   const olderHalf = sorted.slice(0, midpoint)
   const newerHalf = sorted.slice(midpoint)
 
+  // Additional safety check for edge cases
+  if (olderHalf.length === 0 || newerHalf.length === 0) return "stable"
+
   const olderAvg = olderHalf.reduce((s, t) => s + t.amount, 0) / olderHalf.length
   const newerAvg = newerHalf.reduce((s, t) => s + t.amount, 0) / newerHalf.length
 
-  const changeRatio = (newerAvg - olderAvg) / olderAvg
+  // Prevent division by zero when olderAvg is 0
+  const changeRatio = olderAvg !== 0 ? (newerAvg - olderAvg) / olderAvg : 0
 
   if (changeRatio > 0.15) return "increasing"
   if (changeRatio < -0.15) return "decreasing"
@@ -346,7 +350,8 @@ export function computeRiskSignals(
       const recentAvg = recentDtp.reduce((a, b) => a + b, 0) / recentDtp.length
       const olderAvg = olderDtp.reduce((a, b) => a + b, 0) / olderDtp.length
       
-      if (recentAvg > olderAvg + 5) {
+      // More sensitive threshold: flag if payment delay increases by 2+ days
+      if (recentAvg > olderAvg + 2) {
         riskFactors.push("payment_slowing")
         riskScore += 0.15
       }

@@ -102,7 +102,7 @@ export function computeAPState(
 
     // Generate next expected payment dates
     let nextDate = addDays(v.last_payment_date, v.cadence_interval_days)
-    while (nextDate < today && v.cadence_interval_days > 0) {
+    while (nextDate <= today && v.cadence_interval_days > 0) {
       nextDate = addDays(nextDate, v.cadence_interval_days)
     }
     if (nextDate > horizon) continue

@@ -184,14 +184,20 @@ export async function runCalibrationTuneJob(userId: string): Promise<{
       [userId]
     )
 
-    // Fetch invoices and bills (simplified - full implementation would use proper fetchers)
+    // Fetch invoices and bills using proper queries
     const { rows: invoices } = await query<OutstandingInvoice>(
-      `SELECT * FROM (SELECT 'placeholder' AS invoice_id) x WHERE false`,
-      []
+      `SELECT id as invoice_id, customer_id, amount, due_date, created_at
+       FROM outstanding_invoices 
+       WHERE user_id = $1 AND due_date >= CURRENT_DATE - INTERVAL '180 days'
+       ORDER BY due_date DESC`,
+      [userId]
     )
     const { rows: bills } = await query<OutstandingBill>(
-      `SELECT * FROM (SELECT 'placeholder' AS bill_id) x WHERE false`,
-      []
+      `SELECT id as bill_id, vendor_id, amount, due_date, created_at
+       FROM outstanding_bills 
+       WHERE user_id = $1 AND due_date >= CURRENT_DATE - INTERVAL '180 days'
+       ORDER BY due_date DESC`,
+      [userId]
     )
 
     const result = await tuneForecastCalibration(userId, movements, invoices, bills)
