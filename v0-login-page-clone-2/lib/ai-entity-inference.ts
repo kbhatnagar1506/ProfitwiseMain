@@ -140,7 +140,14 @@ Focus on:
         return []
       }
 
-      parsed = JSON.parse(content.substring(startIdx, endIdx))
+      const jsonStr = content.substring(startIdx, endIdx)
+      // Clean up common JSON issues
+      const cleaned = jsonStr
+        .replace(/,\s*]/g, "]") // Remove trailing commas in arrays
+        .replace(/,\s*}/g, "}") // Remove trailing commas in objects
+        .replace(/[\x00-\x1F\x7F]/g, " ") // Remove control characters
+
+      parsed = JSON.parse(cleaned)
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr)
       log("ai_entity_inference.error", { error: `JSON parse failed: ${msg}` })
@@ -262,7 +269,13 @@ Only include relationships with confidence > 0.7`
 
       if (endIdx === -1) return []
 
-      parsed = JSON.parse(content.substring(startIdx, endIdx))
+      const jsonStr = content.substring(startIdx, endIdx)
+      const cleaned = jsonStr
+        .replace(/,\s*]/g, "]")
+        .replace(/,\s*}/g, "}")
+        .replace(/[\x00-\x1F\x7F]/g, " ")
+
+      parsed = JSON.parse(cleaned)
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr)
       log("ai_entity_relationships.error", { error: `JSON parse failed: ${msg}` })
@@ -372,7 +385,13 @@ Respond in JSON format:
 
       if (endIdx === -1) return []
 
-      parsed = JSON.parse(content.substring(startIdx, endIdx))
+      const jsonStr = content.substring(startIdx, endIdx)
+      const cleaned = jsonStr
+        .replace(/,\s*]/g, "]")
+        .replace(/,\s*}/g, "}")
+        .replace(/[\x00-\x1F\x7F]/g, " ")
+
+      parsed = JSON.parse(cleaned)
     } catch (parseErr) {
       return []
     }
