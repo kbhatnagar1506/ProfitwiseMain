@@ -43,6 +43,7 @@ import {
   logEntityGraphBoosting,
 } from "@/lib/entity-graph-integration"
 import { enhanceModelsWithAI } from "@/lib/ai-forecast-enhancement"
+import { applyComprehensiveConfidenceBoosts } from "@/lib/confidence-boost-engine"
 import {
   DEFAULT_FORECAST_CALIBRATION,
   mergeCalibration,
@@ -5257,6 +5258,24 @@ export async function computeCashflowForecast(
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err)
         log("forecast.ai_enhancement.error", { error: message })
+      })
+
+    // Apply comprehensive confidence boosts (also in background)
+    applyComprehensiveConfidenceBoosts(
+      behavioral_models.customers,
+      behavioral_models.vendors,
+      movements,
+      entityGraph?.relationships?.length || 0,
+      entityGraph?.business_entities?.length || 0,
+      behavioral_models.customers.length + behavioral_models.vendors.length,
+      dataSpanDays
+    )
+      .then((boostResult) => {
+        log("forecast.confidence_boost.applied", boostResult)
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err)
+        log("forecast.confidence_boost.error", { error: message })
       })
   }
 
