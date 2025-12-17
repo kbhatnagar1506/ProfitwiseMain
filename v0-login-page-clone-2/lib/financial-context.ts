@@ -13,13 +13,23 @@ export type FinancialContext = {
   narrative?: string
 }
 
+// Configuration constants
 const OPENAI_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
+const LLM_MAX_TOKENS = 1024
+const LLM_TEMPERATURE = 0.2
+const DAYS_WINDOW = 90
+const TOP_EXPENSES_LIMIT = 40
+const TOP_INFLOWS_LIMIT = 40
 
 async function pretagExpenses(
   expenses: { vendor: string; amount: number; count: number }[]
 ): Promise<{ vendor: string; tag: string }[]> {
   const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey || expenses.length === 0) return []
+  if (!apiKey) {
+    console.warn("[financial-context] Missing OPENAI_API_KEY for expense tagging")
+    return []
+  }
+  if (expenses.length === 0) return []
   const list = expenses.map((e) => `${e.vendor}: $${e.amount.toLocaleString()} (${e.count} txns)`).join("\n")
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -36,27 +46,16 @@ async function pretagExpenses(
         },
         { role: "user", content: list },
       ],
-      max_tokens: 1024,
-      temperature: 0.2,
-    }),
-  })
-  if (!res.ok) return []
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
-  const raw = data.choices?.[0]?.message?.content?.trim()
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, "").trim()) as { vendor: string; tag: string }[]
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-async function pretagInflows(
+      max_tokens: LLM_MAX_TOKENS,
+      temperature: LLM_TEMPERATURE,
   inflows: { source: string; amount: number; count: number }[]
 ): Promise<{ source: string; tag: string }[]> {
   const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey || inflows.length === 0) return []
+  if (!apiKey) {
+    console.warn("[financial-context] Missing OPENAI_API_KEY for inflow tagging")
+    return []
+  }
+  if (inflows.length === 0) return []
   const list = inflows.map((e) => `${e.source}: $${e.amount.toLocaleString()} (${e.count} txns)`).join("\n")
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -73,8 +72,8 @@ async function pretagInflows(
         },
         { role: "user", content: list },
       ],
-      max_tokens: 1024,
-      temperature: 0.2,
+      max_tokens: LLM_MAX_TOKENS,
+      temperature: LLM_TEMPERATURE,
     }),
   })
   if (!res.ok) return []
@@ -98,7 +97,10 @@ async function generateFinancialNarrative(
   inflows: { source: string; amount: number; tag?: string }[]
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) return ""
+  if (!apiKey) {
+    console.warn("[financial-context] Missing OPENAI_API_KEY for narrative generation")
+    return ""
+  }
   const userContent = [
     `Total outflows (last ${DAYS_WINDOW} days): $${totalOut.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
     `Total inflows: $${totalIn.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
@@ -121,7 +123,7 @@ async function generateFinancialNarrative(
         { role: "user", content: userContent },
       ],
       max_tokens: 2048,
-      temperature: 0.2,
+      temperature: LLM_TEMPERATURE,
     }),
   })
   if (!res.ok) return ""
@@ -175,7 +177,7 @@ export async function buildFinancialContext(userId: string): Promise<FinancialCo
     }
   }
   majorExpensesRaw.sort((a, b) => b.amount - a.amount)
-  const topExpensesRaw = majorExpensesRaw.slice(0, 40)
+  const topExpensesRaw = majorExpensesRaw.slice(0, TOP_EXPENSES_LIMIT)
 
   const tags = await pretagExpenses(topExpensesRaw)
   const tagMap = new Map(tags.map((t) => [t.vendor, t.tag]))
@@ -204,7 +206,7 @@ export async function buildFinancialContext(userId: string): Promise<FinancialCo
     }
   }
   inflowsRaw.sort((a, b) => b.amount - a.amount)
-  const topInflowsRaw = inflowsRaw.slice(0, 40)
+  const topInflowsRaw = inflowsRaw.slice(0, TOP_INFLOWS_LIMIT)
   const inflowTags = await pretagInflows(topInflowsRaw)
   const inflowTagMap = new Map(inflowTags.map((t) => [t.source, t.tag]))
   const majorInflows = topInflowsRaw.map((e) => ({
