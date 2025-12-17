@@ -91,7 +91,7 @@ async function getPoolAsync(): Promise<Pool | null> {
       }
       if (p) {
         p.on("error", (err) => {
-          console.error("Unexpected pool idle client error", err.message)
+          log("db.pool.idle_client_error", { error: err.message }, "db")
         })
       }
       pool = p

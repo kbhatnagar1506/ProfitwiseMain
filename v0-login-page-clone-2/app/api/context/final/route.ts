@@ -93,12 +93,12 @@ export async function GET(req: NextRequest) {
       try {
         const data = (await companyRes.json()) as { context?: string }
         companyContext = data.context ?? ""
-      } catch {
-        // ignore parse error
+      } catch (parseErr) {
+        log("context.final.company_context_parse_error", { error: parseErr instanceof Error ? parseErr.message : String(parseErr) })
       }
     } else {
       const body = await companyRes.text()
-      console.error("[context/final] company-context failed", companyRes.status, body.slice(0, 200))
+      log("context.final.company_context_failed", { status: companyRes.status, body: body.slice(0, 200) })
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

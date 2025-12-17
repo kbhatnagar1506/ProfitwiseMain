@@ -413,7 +413,9 @@ export async function GET(req?: NextRequest) {
            llm_processing_complete = $3,
            updated_at = NOW()`,
         [user.id, "complete", true]
-      ).catch(() => {})
+      ).catch((err) => {
+        log("forecast.status_update.error", { userId: user.id, error: err instanceof Error ? err.message : String(err) }, "forecast")
+      })
       
       return NextResponse.json(cached.forecast_data)
     }
@@ -683,7 +685,9 @@ export async function GET(req?: NextRequest) {
              llm_processing_complete = $3,
              updated_at = NOW()`,
           [user.id, "error", false]
-        ).catch(() => {})
+        ).catch((err) => {
+          log("forecast.error_status_update.error", { userId: user.id, error: err instanceof Error ? err.message : String(err) }, "forecast")
+        })
       }
     } catch {}
 
