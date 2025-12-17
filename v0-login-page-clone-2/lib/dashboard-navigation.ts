@@ -11,7 +11,7 @@ import {
   CheckCircle,
   Users,
   UserCheck,
-  Contacts,
+  Phone,
   CreditCard,
   ArrowRightLeft,
   RotateCcw,
@@ -78,7 +78,7 @@ export const dashboardNavigation: NavGroup[] = [
     label: "Relationships",
     items: [
       { label: "Customers", href: "/dashboard/customers", icon: UserCheck },
-      { label: "Contacts", href: "/dashboard/contacts", icon: Contacts },
+      { label: "Contacts", href: "/dashboard/contacts", icon: Phone },
     ],
   },
   {
