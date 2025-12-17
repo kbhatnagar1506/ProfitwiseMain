@@ -14,7 +14,7 @@ type DbMovementRow = {
   user_id: string
   direction: string
   amount: number | string
-  date: string
+  date: string | Date
   movement_type: string
   pnl_eligible: boolean
   provenance: string
@@ -39,7 +39,7 @@ function isValidMovementRow(row: any): row is DbMovementRow {
     typeof row?.id === 'string' &&
     typeof row?.direction === 'string' &&
     (typeof row?.amount === 'string' || typeof row?.amount === 'number') &&
-    typeof row?.date === 'string' &&
+    (typeof row?.date === 'string' || row?.date instanceof Date || typeof row?.date === 'object') &&
     typeof row?.movement_type === 'string'
   )
 }
@@ -49,12 +49,15 @@ function toPublicMovement(row: DbMovementRow, userId: string): CanonicalMovement
   const reviewReasons = (Array.isArray(row.metadata?.review_reasons) ? row.metadata.review_reasons : []) as ReviewReason[]
   const meta = { ...(row.metadata ?? {}), counterparty: row.counterparty, linked_internal_account_id: row.linked_internal_account_id }
 
+  // Convert date to ISO string if it's a Date object
+  const dateStr = row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
+
   return {
     id: row.id,
     user_id: userId,
-    occurred_at: row.date,
+    occurred_at: dateStr,
     direction: row.direction as "inflow" | "outflow",
-    amount: (() => { const amt = parseFloat(row.amount); return isNaN(amt) ? 0 : amt })(),
+    amount: (() => { const amt = parseFloat(String(row.amount)); return isNaN(amt) ? 0 : amt })(),
     currency: row.currency ?? "USD",
     raw_description: row.raw_description,
     source_record_ids: obs.map((o) => o.source_id).filter(Boolean),
@@ -113,28 +116,8 @@ export async function GET(req?: NextRequest) {
     [userId]
   ).then((r) => r.rows)
 
-  logWithRequestId("movements.db_query.complete", requestId, { 
-    userId, 
-    dbRowCount: dbRows.length,
-    firstRowAmount: dbRows[0]?.amount,
-    firstRowAmountType: typeof dbRows[0]?.amount
-  })
-
   const movements: CanonicalMovement[] = dbRows
-    .filter((row) => {
-      const isValid = isValidMovementRow(row)
-      if (!isValid) {
-        logWithRequestId("movements.filter.invalid_row", requestId, {
-          rowId: row?.id,
-          hasId: typeof row?.id === 'string',
-          hasDirection: typeof row?.direction === 'string',
-          hasAmount: typeof row?.amount,
-          hasDate: typeof row?.date === 'string',
-          hasMovementType: typeof row?.movement_type === 'string',
-        })
-      }
-      return isValid
-    })
+    .filter(isValidMovementRow)
     .map((r) => toPublicMovement(r, userId))
 
   // Load tags (if they exist) and attach to movements
