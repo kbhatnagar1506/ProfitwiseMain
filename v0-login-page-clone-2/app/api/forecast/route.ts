@@ -18,6 +18,7 @@ import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movemen
 import type { OutstandingInvoice, OutstandingBill, ForecastContext, CashflowForecast } from "@/lib/state/types"
 import { fetchReconciledARMovements, fetchReconciledAPMovements, buildReconciledCustomerModels, buildReconciledVendorModels } from "@/lib/reconciled-models"
 import { calculateARSettlementTiming, calculateAPSettlementTiming, getSettlementTimingConfidence } from "@/lib/settlement-timing"
+import { ensureForecastStatusSchema } from "@/lib/forecast-status-schema"
 
 type TagRow = {
   movement_id: string
@@ -348,11 +349,39 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+    // Ensure status schema exists
+    await ensureForecastStatusSchema()
+
+    // Set status to computing
+    await query(
+      `INSERT INTO forecast_computation_status (user_id, status, llm_processing_complete, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET 
+         status = $2, 
+         llm_processing_complete = $3,
+         updated_at = NOW()`,
+      [user.id, "computing", false]
+    ).catch((err) => {
+      log("forecast.status.init.error", { error: String(err) })
+    })
+
     // Check for cached forecast first
     // Temporarily disable cache to debug reconciled models
     const cached = null // await getCachedForecast(user.id)
     if (cached) {
       log("forecast.cache.hit", { userId: user.id, computedAt: cached.computed_at })
+      
+      // Update status to complete
+      await query(
+        `INSERT INTO forecast_computation_status (user_id, status, llm_processing_complete, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (user_id) DO UPDATE SET 
+           status = $2, 
+           llm_processing_complete = $3,
+           updated_at = NOW()`,
+        [user.id, "complete", true]
+      ).catch(() => {})
+      
       return NextResponse.json(cached.forecast_data)
     }
 
@@ -525,9 +554,41 @@ export async function GET() {
       cached: true,
     }, "forecast")
 
+    // Update status to complete with LLM processing done
+    await query(
+      `INSERT INTO forecast_computation_status (user_id, status, llm_processing_complete, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET 
+         status = $2, 
+         llm_processing_complete = $3,
+         updated_at = NOW()`,
+      [user.id, "complete", true]
+    ).catch((err) => {
+      log("forecast.status.update.error", { error: String(err) })
+    })
+
     return NextResponse.json(result)
   } catch (err) {
     log("forecast.compute.error", { error: String(err) }, "error")
+    
+    // Update status to error
+    try {
+      const cookieStore = await cookies()
+      const sessionToken = cookieStore.get(getSessionCookieName())?.value
+      const user = await getUserBySessionToken(sessionToken ?? "")
+      if (user) {
+        await query(
+          `INSERT INTO forecast_computation_status (user_id, status, llm_processing_complete, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (user_id) DO UPDATE SET 
+             status = $2, 
+             llm_processing_complete = $3,
+             updated_at = NOW()`,
+          [user.id, "error", false]
+        ).catch(() => {})
+      }
+    } catch {}
+
     return NextResponse.json(
       { error: "Failed to compute cashflow forecast" },
       { status: 500 }
