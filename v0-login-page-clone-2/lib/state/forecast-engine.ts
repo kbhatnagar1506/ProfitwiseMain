@@ -50,6 +50,8 @@ import {
   computeCalibrationHash,
   type ForecastCalibrationParams,
 } from "./forecast-calibration"
+import { analyzeAllMovementPatterns, getHighConfidencePatterns } from "@/lib/movement-pattern-analysis"
+import { runMovementBacktest } from "@/lib/movement-backtest"
 import type {
   BacktestByHorizon,
   BacktestBySegment,
@@ -5361,6 +5363,35 @@ export async function computeCashflowForecast(
     })),
   })
   const backtest = runBacktest(movements, invoices, bills, cal, entityProfiles)
+
+  // Movement-based pattern analysis (ground truth from actual bank transactions)
+  const movementPatterns = analyzeAllMovementPatterns(
+    movements.map((m) => ({
+      entity_id: m.entity_id || "unknown",
+      entity_name: m.counterparty || "Unknown",
+      direction: m.direction,
+      amount: m.amount,
+      occurred_at: m.occurred_at,
+    }))
+  )
+
+  // Run movement-based backtest for real accuracy metrics
+  const movementBacktest = runMovementBacktest(
+    movements.map((m) => ({
+      entity_id: m.entity_id || "unknown",
+      entity_name: m.counterparty || "Unknown",
+      direction: m.direction,
+      amount: m.amount,
+      occurred_at: m.occurred_at,
+    }))
+  )
+
+  log("movement_analysis.complete", {
+    patterns_found: movementPatterns.size,
+    high_confidence_patterns: getHighConfidencePatterns(movementPatterns, 0.6, 5).length,
+    backtest_accuracy: movementBacktest.accuracy_rate,
+    backtest_entities_tested: movementBacktest.total_entities_tested,
+  })
 
   // Forecast confidence (8-component weighted, with backtest input)
   const forecast_confidence = computeForecastConfidence(behavioral_models, components, events_30d, dataSpanDays, backtest, movements, bills, cal, settlementTimingConfidence)

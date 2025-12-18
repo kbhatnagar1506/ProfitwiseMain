@@ -368,3 +368,47 @@ export async function applyComprehensiveConfidenceBoosts(
 
   return result
 }
+
+/**
+ * MOVEMENT-BASED BACKTEST BOOST
+ * Use actual bank transaction patterns to validate and boost confidence
+ */
+export function boostFromMovementBacktest(
+  movementBacktestResult: {
+    accuracy_rate: number
+    total_entities_tested: number
+    inflow_accuracy: number
+    outflow_accuracy: number
+    clockwork_accuracy: number
+    recurring_accuracy: number
+  }
+): { boost: number; reasoning: string } {
+  if (movementBacktestResult.total_entities_tested === 0) {
+    return { boost: 0, reasoning: "No movement patterns validated" }
+  }
+
+  // Base boost from overall accuracy
+  const baseBoost = movementBacktestResult.accuracy_rate * 0.35 // Up to 35% boost
+
+  // Additional boost for high-confidence patterns
+  const highConfidenceBoost = Math.min(
+    (movementBacktestResult.clockwork_accuracy + movementBacktestResult.recurring_accuracy) * 0.15,
+    0.15
+  )
+
+  const totalBoost = Math.min(baseBoost + highConfidenceBoost, 0.40) // Cap at 40%
+
+  log("confidence_boost.movement_backtest", {
+    accuracy_rate: movementBacktestResult.accuracy_rate,
+    entities_tested: movementBacktestResult.total_entities_tested,
+    boost: totalBoost,
+    inflow_accuracy: movementBacktestResult.inflow_accuracy,
+    outflow_accuracy: movementBacktestResult.outflow_accuracy,
+  })
+
+  return {
+    boost: totalBoost,
+    reasoning: `Movement validation: ${(movementBacktestResult.accuracy_rate * 100).toFixed(1)}% accuracy on ${movementBacktestResult.total_entities_tested} entities`,
+  }
+}
+
