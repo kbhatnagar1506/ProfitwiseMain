@@ -5371,7 +5371,7 @@ export async function computeCashflowForecast(
       entity_name: m.counterparty || "Unknown",
       direction: m.direction,
       amount: m.amount,
-      occurred_at: m.occurred_at,
+      occurred_at: typeof m.occurred_at === "string" ? m.occurred_at : new Date(m.occurred_at).toISOString(),
     }))
   )
 
@@ -5382,7 +5382,7 @@ export async function computeCashflowForecast(
       entity_name: m.counterparty || "Unknown",
       direction: m.direction,
       amount: m.amount,
-      occurred_at: m.occurred_at,
+      occurred_at: typeof m.occurred_at === "string" ? m.occurred_at : new Date(m.occurred_at).toISOString(),
     }))
   )
 
