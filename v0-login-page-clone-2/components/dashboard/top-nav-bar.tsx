@@ -21,7 +21,7 @@ interface TopNavBarProps {
   userEmail?: string
 }
 
-export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com" }: TopNavBarProps) {
+export function TopNavBar({ userName = "Test User", userEmail = "test@profitwise.dev" }: TopNavBarProps) {
   const router = useRouter()
   const [isLoggingOut, setIsLoggingOut] = useState(false)
 
