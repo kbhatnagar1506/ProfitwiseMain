@@ -122,4 +122,13 @@
   body {
     @apply bg-background text-foreground;
   }
+  
+  /* Dashboard sidebar - force black background */
+  [data-sidebar] {
+    @apply !bg-black !text-white;
+  }
+  
+  [data-sidebar] [data-sidebar-trigger] {
+    @apply !text-white;
+  }
 }
