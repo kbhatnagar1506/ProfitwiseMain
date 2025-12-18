@@ -5250,33 +5250,62 @@ export async function computeCashflowForecast(
   }
 
   // Apply AI-powered enhancements (entity inference, pattern learning)
-  // Wait for AI processing to complete before returning forecast
+  // Use timeout to ensure forecast returns within 25 seconds (leaving buffer for Heroku's 30s limit)
+  // If AI processing takes too long, it continues in background but forecast returns with current data
+  const AI_TIMEOUT_MS = 25000 // 25 seconds
+  
   if (behavioral_models.customers.length > 0 || behavioral_models.vendors.length > 0) {
+    // Helper function to race against timeout
+    const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number): Promise<T | null> => {
+      return Promise.race([
+        promise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs))
+      ])
+    }
+
     try {
-      // Await AI enhancement to complete
-      const aiResult = await enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
-      log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
+      // Try to complete AI enhancement within timeout
+      const aiResult = await withTimeout(
+        enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements),
+        AI_TIMEOUT_MS
+      )
+      if (aiResult) {
+        log("forecast.ai_enhancement.applied", aiResult.enhancement_result)
+      } else {
+        log("forecast.ai_enhancement.timeout", { timeout_ms: AI_TIMEOUT_MS })
+        // Continue in background
+        enhanceModelsWithAI(behavioral_models.customers, behavioral_models.vendors, reconciledARMovements)
+          .then((result) => log("forecast.ai_enhancement.background_complete", result.enhancement_result))
+          .catch((err) => log("forecast.ai_enhancement.background_error", { error: String(err) }))
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log("forecast.ai_enhancement.error", { error: message })
     }
 
-    // Apply comprehensive confidence boosts (also wait for completion)
+    // Apply comprehensive confidence boosts (also with timeout)
     // Use optional chaining to safely access entityGraph which may not be defined
     const graphRelationships = (entityGraph as any)?.relationships?.length || 0
     const graphBusinessEntities = (entityGraph as any)?.business_entities?.length || 0
     
     try {
-      const boostResult = await applyComprehensiveConfidenceBoosts(
-        behavioral_models.customers,
-        behavioral_models.vendors,
-        movements,
-        graphRelationships,
-        graphBusinessEntities,
-        behavioral_models.customers.length + behavioral_models.vendors.length,
-        dataSpanDays
+      const boostResult = await withTimeout(
+        applyComprehensiveConfidenceBoosts(
+          behavioral_models.customers,
+          behavioral_models.vendors,
+          movements,
+          graphRelationships,
+          graphBusinessEntities,
+          behavioral_models.customers.length + behavioral_models.vendors.length,
+          dataSpanDays
+        ),
+        AI_TIMEOUT_MS
       )
-      log("forecast.confidence_boost.applied", boostResult)
+      if (boostResult) {
+        log("forecast.confidence_boost.applied", boostResult)
+      } else {
+        log("forecast.confidence_boost.timeout", { timeout_ms: AI_TIMEOUT_MS })
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log("forecast.confidence_boost.error", { error: message })
