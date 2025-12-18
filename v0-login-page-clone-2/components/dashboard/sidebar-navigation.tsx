@@ -39,7 +39,7 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
 
   return (
     <>
-      <SidebarContent className="flex flex-col gap-1 px-1 py-2">
+      <SidebarContent className="flex flex-col gap-1 px-1 py-2 transition-all duration-300 ease-in-out">
         {dashboardNavigation.map((group) => (
           <NavigationGroup
             key={group.label}
@@ -50,7 +50,7 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
           />
         ))}
       </SidebarContent>
-      <SidebarFooter className="px-1 py-2">
+      <SidebarFooter className="px-1 py-2 transition-all duration-300 ease-in-out">
         <BottomBar isCollapsed={isCollapsed} />
       </SidebarFooter>
     </>

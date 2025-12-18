@@ -12,8 +12,8 @@ interface BottomBarProps {
 
 export function BottomBar({ isCollapsed }: BottomBarProps) {
   return (
-    <div className="border-t border-sidebar-accent/20">
-      <Separator className="my-2 bg-sidebar-accent/20" />
+    <div className="border-t border-white/10 transition-all duration-300 ease-in-out">
+      <Separator className="my-2 bg-white/10" />
       <div className="space-y-1 px-2 pb-2">
         {bottomBarItems.map((item) => {
           const Icon = item.icon
@@ -24,7 +24,7 @@ export function BottomBar({ isCollapsed }: BottomBarProps) {
               variant="ghost"
               size="sm"
               className={cn(
-                "w-full justify-start px-2 py-1.5 text-xs text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/30 transition-colors",
+                "w-full justify-start px-2 py-1.5 text-xs text-white/60 hover:text-white hover:bg-white/10 transition-all duration-200",
                 isCollapsed && "justify-center"
               )}
               title={isCollapsed ? item.label : undefined}
