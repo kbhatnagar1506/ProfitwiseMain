@@ -5261,12 +5261,16 @@ export async function computeCashflowForecast(
       })
 
     // Apply comprehensive confidence boosts (also in background)
+    // Use optional chaining to safely access entityGraph which may not be defined
+    const graphRelationships = (entityGraph as any)?.relationships?.length || 0
+    const graphBusinessEntities = (entityGraph as any)?.business_entities?.length || 0
+    
     applyComprehensiveConfidenceBoosts(
       behavioral_models.customers,
       behavioral_models.vendors,
       movements,
-      entityGraph?.relationships?.length || 0,
-      entityGraph?.business_entities?.length || 0,
+      graphRelationships,
+      graphBusinessEntities,
       behavioral_models.customers.length + behavioral_models.vendors.length,
       dataSpanDays
     )
