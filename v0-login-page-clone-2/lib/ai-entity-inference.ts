@@ -31,6 +31,92 @@ const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/c
 const API_KEY = process.env.OPENAI_API_KEY
 
 /**
+ * Robust JSON extraction and parsing from LLM responses
+ * Handles truncated, malformed, and escaped JSON
+ */
+function extractAndParseJSON(content: string): any {
+  if (!content) throw new Error("Empty content")
+
+  // Find the first opening brace
+  const startIdx = content.indexOf("{")
+  if (startIdx === -1) throw new Error("No JSON object found")
+
+  // Find matching closing brace with proper nesting
+  let braceCount = 0
+  let inString = false
+  let escapeNext = false
+  let endIdx = -1
+
+  for (let i = startIdx; i < content.length; i++) {
+    const char = content[i]
+
+    // Handle escape sequences
+    if (escapeNext) {
+      escapeNext = false
+      continue
+    }
+
+    if (char === "\\") {
+      escapeNext = true
+      continue
+    }
+
+    // Track string boundaries
+    if (char === '"' && !escapeNext) {
+      inString = !inString
+      continue
+    }
+
+    // Only count braces outside of strings
+    if (!inString) {
+      if (char === "{") braceCount++
+      if (char === "}") {
+        braceCount--
+        if (braceCount === 0) {
+          endIdx = i + 1
+          break
+        }
+      }
+    }
+  }
+
+  // If no matching brace found, use rest of content
+  if (endIdx === -1) {
+    endIdx = content.length
+  }
+
+  let jsonStr = content.substring(startIdx, endIdx)
+
+  // Clean up common JSON issues
+  jsonStr = jsonStr
+    // Fix unescaped newlines in strings
+    .replace(/\n/g, "\\n")
+    // Remove trailing commas before ] or }
+    .replace(/,(\s*[}\]])/g, "$1")
+    // Remove control characters except escaped ones
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ")
+    // Fix common quote issues - replace smart quotes with regular quotes
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'")
+    // Ensure it ends with }
+    .replace(/}\s*$/, "}")
+
+  // Try to parse
+  try {
+    return JSON.parse(jsonStr)
+  } catch (e) {
+    // If still failing, try more aggressive cleanup
+    jsonStr = jsonStr
+      // Remove any remaining invalid escape sequences
+      .replace(/\\(?!["\\/bfnrtu])/g, "")
+      // Fix incomplete strings at the end
+      .replace(/"([^"]*?)$/, '"$1"')
+
+    return JSON.parse(jsonStr)
+  }
+}
+
+/**
  * Analyze entity names and descriptions to infer payment patterns
  */
 export async function inferEntityPatterns(
@@ -111,50 +197,15 @@ Focus on:
       return []
     }
 
-    // Parse JSON from response - extract first valid JSON object
     let parsed
     try {
-      // Try to find and parse JSON object
-      const startIdx = content.indexOf("{")
-      if (startIdx === -1) {
-        log("ai_entity_inference.error", { error: "No JSON object found in response" })
-        return []
-      }
-
-      // Find matching closing brace, but be lenient with incomplete JSON
-      let braceCount = 0
-      let endIdx = -1
-      for (let i = startIdx; i < content.length; i++) {
-        if (content[i] === "{") braceCount++
-        if (content[i] === "}") {
-          braceCount--
-          if (braceCount === 0) {
-            endIdx = i + 1
-            break
-          }
-        }
-      }
-
-      // If no matching brace found, try to use the rest of the content
-      if (endIdx === -1) {
-        endIdx = content.length
-      }
-
-      let jsonStr = content.substring(startIdx, endIdx)
-      
-      // Clean up common JSON issues
-      const cleaned = jsonStr
-        .replace(/,\s*]/g, "]") // Remove trailing commas in arrays
-        .replace(/,\s*}/g, "}") // Remove trailing commas in objects
-        .replace(/[\x00-\x1F\x7F]/g, " ") // Remove control characters
-        .replace(/}\s*$/, "}") // Ensure ends with }
-
-      parsed = JSON.parse(cleaned)
+      parsed = extractAndParseJSON(content)
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr)
       log("ai_entity_inference.error", { error: `JSON parse failed: ${msg}` })
       return []
     }
+
     const inferences = parsed.inferences || []
 
     // Map back to entity IDs
@@ -253,39 +304,13 @@ Only include relationships with confidence > 0.7`
 
     let parsed
     try {
-      const startIdx = content.indexOf("{")
-      if (startIdx === -1) return []
-
-      let braceCount = 0
-      let endIdx = -1
-      for (let i = startIdx; i < content.length; i++) {
-        if (content[i] === "{") braceCount++
-        if (content[i] === "}") {
-          braceCount--
-          if (braceCount === 0) {
-            endIdx = i + 1
-            break
-          }
-        }
-      }
-
-      if (endIdx === -1) {
-        endIdx = content.length
-      }
-
-      let jsonStr = content.substring(startIdx, endIdx)
-      const cleaned = jsonStr
-        .replace(/,\s*]/g, "]")
-        .replace(/,\s*}/g, "}")
-        .replace(/[\x00-\x1F\x7F]/g, " ")
-        .replace(/}\s*$/, "}")
-
-      parsed = JSON.parse(cleaned)
+      parsed = extractAndParseJSON(content)
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr)
       log("ai_entity_relationships.error", { error: `JSON parse failed: ${msg}` })
       return []
     }
+
     const relationships = parsed.relationships || []
 
     log("ai_entity_relationships.inferred", {
@@ -372,37 +397,11 @@ Respond in JSON format:
 
     let parsed
     try {
-      const startIdx = content.indexOf("{")
-      if (startIdx === -1) return []
-
-      let braceCount = 0
-      let endIdx = -1
-      for (let i = startIdx; i < content.length; i++) {
-        if (content[i] === "{") braceCount++
-        if (content[i] === "}") {
-          braceCount--
-          if (braceCount === 0) {
-            endIdx = i + 1
-            break
-          }
-        }
-      }
-
-      if (endIdx === -1) {
-        endIdx = content.length
-      }
-
-      const jsonStr = content.substring(startIdx, endIdx)
-      const cleaned = jsonStr
-        .replace(/,\s*]/g, "]")
-        .replace(/,\s*}/g, "}")
-        .replace(/[\x00-\x1F\x7F]/g, " ")
-        .replace(/}\s*$/, "}")
-
-      parsed = JSON.parse(cleaned)
+      parsed = extractAndParseJSON(content)
     } catch (parseErr) {
       return []
     }
+
     const inferences = parsed.inferences || []
 
     // Map back to IDs
