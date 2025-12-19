@@ -920,26 +920,35 @@ function buildCustomerModels(
     )
     
     // For low_data customers, try to infer archetype from invoice patterns
-    if (archetype === "low_data" && customerInvoices.length >= 2) {
+    if (archetype === "low_data" && customerInvoices.length >= 1) {
       const invoicesWithDueDates = customerInvoices.filter((i) => i.due_date)
-      if (invoicesWithDueDates.length >= 2) {
-        // Calculate invoice due date intervals
-        const sortedByDue = invoicesWithDueDates.sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))
-        const dueIntervals: number[] = []
-        for (let i = 1; i < sortedByDue.length; i++) {
-          const days = daysBetween(sortedByDue[i - 1].due_date!, sortedByDue[i].due_date!)
-          if (days > 0 && days < 365) dueIntervals.push(days)
-        }
-        
-        if (dueIntervals.length > 0) {
-          const avgDueInterval = dueIntervals.reduce((a, b) => a + b, 0) / dueIntervals.length
-          const dueCv = dueIntervals.length > 1 ? std(dueIntervals) / avgDueInterval : 0
+      if (invoicesWithDueDates.length >= 1) {
+        // If we have just 1 invoice with due date, assume it's recurring (clockwork)
+        if (invoicesWithDueDates.length === 1) {
+          archetype = "clockwork"
+        } else {
+          // Calculate invoice due date intervals
+          const sortedByDue = invoicesWithDueDates.sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))
+          const dueIntervals: number[] = []
+          for (let i = 1; i < sortedByDue.length; i++) {
+            const days = daysBetween(sortedByDue[i - 1].due_date!, sortedByDue[i].due_date!)
+            if (days > 0 && days < 365) dueIntervals.push(days)
+          }
           
-          // If invoice due dates are regular, customer is likely clockwork
-          if (dueCv < 0.2 && avgDueInterval > 0) {
+          if (dueIntervals.length > 0) {
+            const avgDueInterval = dueIntervals.reduce((a, b) => a + b, 0) / dueIntervals.length
+            const dueCv = dueIntervals.length > 1 ? std(dueIntervals) / avgDueInterval : 0
+            
+            // If invoice due dates are regular, customer is likely clockwork
+            if (dueCv < 0.3 && avgDueInterval > 0) {
+              archetype = "clockwork"
+            } else if (dueCv < 0.5) {
+              archetype = "bursty"
+            } else {
+              archetype = "episodic"
+            }
+          } else {
             archetype = "clockwork"
-          } else if (dueCv < 0.4) {
-            archetype = "bursty"
           }
         }
       }
@@ -1614,23 +1623,32 @@ function buildVendorModels(
       }
       if (confidence === "low") confidence = "medium"
       
-      // Boost confidence further if we have multiple bills with regular due dates
+      // Boost confidence further if we have bills with due dates
       const billsWithDueDates = vendorBills.filter((b) => b.due_date)
-      if (billsWithDueDates.length >= 2 && confidence === "medium") {
-        const sortedByDue = billsWithDueDates.sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))
-        const dueIntervals: number[] = []
-        for (let i = 1; i < sortedByDue.length; i++) {
-          const days = daysBetween(sortedByDue[i - 1].due_date!, sortedByDue[i].due_date!)
-          if (days > 0 && days < 365) dueIntervals.push(days)
-        }
-        
-        if (dueIntervals.length > 0) {
-          const avgDueInterval = dueIntervals.reduce((a, b) => a + b, 0) / dueIntervals.length
-          const dueCv = dueIntervals.length > 1 ? std(dueIntervals) / avgDueInterval : 0
+      if (billsWithDueDates.length >= 1) {
+        if (billsWithDueDates.length === 1) {
+          // Even 1 bill with due date suggests recurring
+          confidence = "medium"
+        } else {
+          const sortedByDue = billsWithDueDates.sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""))
+          const dueIntervals: number[] = []
+          for (let i = 1; i < sortedByDue.length; i++) {
+            const days = daysBetween(sortedByDue[i - 1].due_date!, sortedByDue[i].due_date!)
+            if (days > 0 && days < 365) dueIntervals.push(days)
+          }
           
-          // If bill due dates are very regular, upgrade to high confidence
-          if (dueCv < 0.15 && avgDueInterval > 0) {
-            confidence = "high"
+          if (dueIntervals.length > 0) {
+            const avgDueInterval = dueIntervals.reduce((a, b) => a + b, 0) / dueIntervals.length
+            const dueCv = dueIntervals.length > 1 ? std(dueIntervals) / avgDueInterval : 0
+            
+            // If bill due dates are regular, upgrade confidence
+            if (dueCv < 0.25 && avgDueInterval > 0) {
+              confidence = "high"
+            } else if (dueCv < 0.4) {
+              confidence = "medium"
+            }
+          } else {
+            confidence = "medium"
           }
         }
       }
