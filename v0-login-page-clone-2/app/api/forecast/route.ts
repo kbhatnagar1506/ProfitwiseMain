@@ -72,8 +72,15 @@ async function fetchTaggedMovements(userId: string): Promise<TaggedMovement[]> {
       const md = (row.metadata ?? {}) as Record<string, unknown>
       const acctName = row.account_id ?? null
       const acctInfo = acctByName.get(acctName ?? "")
+      // Ensure occurred_at is a string (ISO format)
+      const occurred_at = row.occurred_at instanceof Date 
+        ? row.occurred_at.toISOString() 
+        : typeof row.occurred_at === "string" 
+          ? row.occurred_at 
+          : new Date().toISOString()
       return {
         ...row,
+        occurred_at,
         amount: typeof row.amount === "string" ? parseFloat(row.amount) : row.amount,
         movement_class: toMovementClass(row.movement_type ?? "unknown"),
         movement_type_detail: row.movement_type ?? "unknown",
