@@ -145,7 +145,7 @@ export function boostInflowOutflowModels(
 
     // Bonus for low variance (predictable)
     if (customer.archetype === "clockwork") boost += 0.20
-    else if (customer.archetype === "recurring") boost += 0.10
+    else if (customer.archetype === "slow_reliable") boost += 0.10
 
     // Bonus for recent activity
     const lastPaymentDays = customer.last_payment_days || 999
@@ -170,8 +170,8 @@ export function boostInflowOutflowModels(
     else if (vendor.payment_count >= 3) boost += 0.05
 
     // Bonus for predictable patterns
-    if (vendor.archetype === "hard") boost += 0.20
-    else if (vendor.archetype === "recurring") boost += 0.10
+    if (vendor.archetype === "hard_due_date") boost += 0.20
+    else if (vendor.archetype === "soft_recurring") boost += 0.10
 
     // Bonus for recent activity
     const lastPaymentDays = vendor.last_payment_days || 999
