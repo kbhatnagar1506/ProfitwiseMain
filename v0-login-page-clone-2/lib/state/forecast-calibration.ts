@@ -866,8 +866,8 @@ export const DEFAULT_FORECAST_CALIBRATION: ForecastCalibrationParams = {
   // Phase 7: Confidence Scoring, Backtest Scoring
   confidence_scoring: {
     archetype_bonus: { clockwork: 1.0, slow_reliable: 0.7, bursty: 0.5, episodic: 0.35, volatile: 0.2, low_data: 0.50 },
-    confidence_mult: { high: 1.0, medium: 0.75, low: 0.45 },
-    vendor_conf_mult: { high: 1.0, medium: 0.75, low: 0.45 },
+    confidence_mult: { high: 1.0, medium: 0.75, low: 0.50 },
+    vendor_conf_mult: { high: 1.0, medium: 0.75, low: 0.50 },
     settlement_score_map: { high: 0.9, medium: 0.65, low: 0.35, insufficient: 0.1 },
     data_span_target_months: 6,
     variance_penalty_base: 0.4, variance_penalty_scale: 0.3,
@@ -877,7 +877,7 @@ export const DEFAULT_FORECAST_CALIBRATION: ForecastCalibrationParams = {
     outflow_fallback_base: 0.28, outflow_fallback_comp_cap: 0.22, outflow_fallback_comp_divisor: 25,
     outflow_fallback_bill_cap: 0.12, outflow_fallback_bill_scale: 0.008, outflow_fallback_total_cap: 0.52,
     outflow_weak_threshold: 0.3, outflow_label_high: 0.7, outflow_label_medium: 0.4,
-    recurrence_fallback_base: 0.14, recurrence_fallback_cap: 0.38, recurrence_fallback_bill_scale: 0.006,
+    recurrence_fallback_base: 0.25, recurrence_fallback_cap: 0.50, recurrence_fallback_bill_scale: 0.010,
     recurrence_label_high: 0.6, recurrence_label_medium: 0.35,
   },
 
