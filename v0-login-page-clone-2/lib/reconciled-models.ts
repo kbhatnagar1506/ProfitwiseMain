@@ -66,14 +66,19 @@ export async function fetchReconciledARMovements(userId: string): Promise<Reconc
         m.amount::float,
         m.date::text,
         a.reference_id as invoice_id,
-        NULL::text as due_date,
-        NULL::int as days_overdue,
+        i.due_date::text as due_date,
+        CASE 
+          WHEN i.due_date IS NOT NULL 
+          THEN FLOOR(EXTRACT(DAY FROM m.date::timestamp - i.due_date::timestamp))::int
+          ELSE NULL::int
+        END as days_overdue,
         a.confidence::text,
         a.source,
         a.created_at::text
        FROM movement_attributions a
        JOIN movements m ON a.movement_id = m.id
        LEFT JOIN entities e ON a.entity_id = e.id::text
+       LEFT JOIN invoices i ON a.reference_id = i.id AND a.user_id = i.user_id
        WHERE a.user_id = $1::uuid
          AND a.component_type = 'ar'
          AND m.direction = 'inflow'
@@ -126,14 +131,19 @@ export async function fetchReconciledAPMovements(userId: string): Promise<Reconc
         m.amount::float,
         m.date::text,
         a.reference_id as bill_id,
-        NULL::text as due_date,
-        NULL::int as days_overdue,
+        b.due_date::text as due_date,
+        CASE 
+          WHEN b.due_date IS NOT NULL 
+          THEN FLOOR(EXTRACT(DAY FROM m.date::timestamp - b.due_date::timestamp))::int
+          ELSE NULL::int
+        END as days_overdue,
         a.confidence::text,
         a.source,
         a.created_at::text
        FROM movement_attributions a
        JOIN movements m ON a.movement_id = m.id
        LEFT JOIN entities e ON a.entity_id = e.id::text
+       LEFT JOIN bills b ON a.reference_id = b.id AND a.user_id = b.user_id
        WHERE a.user_id = $1::uuid
          AND a.component_type = 'ap'
          AND m.direction = 'outflow'
