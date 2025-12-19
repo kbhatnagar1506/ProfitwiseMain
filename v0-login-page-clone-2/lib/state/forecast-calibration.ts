@@ -780,12 +780,12 @@ export const DEFAULT_FORECAST_CALIBRATION: ForecastCalibrationParams = {
     component_weights: { interval: 0.35, amount: 0.25, counterparty: 0.15, due_date: 0.15, class_consistency: 0.1 },
     bill_soft_cap: 0.70, bill_soft_base: 0.9, bill_soft_floor: 0.25,
     bill_episodic_cap: 0.50, bill_episodic_base: 0.65, bill_episodic_floor: 0.15,
-    unknown_cap: 0.25, unknown_base: 0.4,
+    unknown_cap: 0.35, unknown_base: 0.5,
     seasonal_cap: 0.90, seasonal_mult: 1.2,
     hard_cap: 0.98, hard_mult: 1.2,
     soft_cap: 0.85,
-    episodic_cap: 0.60, episodic_mult: 0.8,
-    fallback_cap: 0.40, fallback_base: 0.6,
+    episodic_cap: 0.70, episodic_mult: 0.9,
+    fallback_cap: 0.50, fallback_base: 0.7,
     bill_only_base_conf: 0.20, bill_only_cv_mult: 0.9,
     bill_only_hard_cv: 0.2, bill_only_soft_cv: 0.5,
     bill_interval_soft_cap: 0.65, bill_interval_soft_base: 0.8,
@@ -865,9 +865,9 @@ export const DEFAULT_FORECAST_CALIBRATION: ForecastCalibrationParams = {
 
   // Phase 7: Confidence Scoring, Backtest Scoring
   confidence_scoring: {
-    archetype_bonus: { clockwork: 1.0, slow_reliable: 0.7, bursty: 0.5, episodic: 0.35, volatile: 0.2, low_data: 0.40 },
-    confidence_mult: { high: 1.0, medium: 0.75, low: 0.30 },
-    vendor_conf_mult: { high: 1.0, medium: 0.75, low: 0.30 },
+    archetype_bonus: { clockwork: 1.0, slow_reliable: 0.7, bursty: 0.5, episodic: 0.35, volatile: 0.2, low_data: 0.50 },
+    confidence_mult: { high: 1.0, medium: 0.75, low: 0.45 },
+    vendor_conf_mult: { high: 1.0, medium: 0.75, low: 0.45 },
     settlement_score_map: { high: 0.9, medium: 0.65, low: 0.35, insufficient: 0.1 },
     data_span_target_months: 6,
     variance_penalty_base: 0.4, variance_penalty_scale: 0.3,
