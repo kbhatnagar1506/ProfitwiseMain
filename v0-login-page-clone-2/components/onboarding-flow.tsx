@@ -6067,79 +6067,75 @@ export function OnboardingFlow({
 
                 {/* ─── Decision Layer: Top Actions (ranked by impact) ─── */}
                 {forecastData.interventions && forecastData.interventions.length > 0 && (
-                  <div className="bg-gradient-to-b from-cyan-500/5 to-transparent border border-cyan-500/20 rounded-2xl p-6">
-                    <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-widest mb-1">Top Actions (by risk reduction)</h3>
-                    <p className="text-xs text-gray-500 mb-5">If I do X, what happens to my cash distribution?</p>
+                  <div className="bg-gradient-to-br from-cyan-500/10 via-slate-900/50 to-slate-900/20 border border-cyan-500/30 rounded-3xl p-8 shadow-2xl">
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="w-1 h-6 bg-gradient-to-b from-cyan-400 to-cyan-600 rounded-full"></div>
+                      <h3 className="text-lg font-bold text-white uppercase tracking-widest">Top Actions</h3>
+                      <span className="text-[10px] text-cyan-400/70 font-semibold ml-auto">Ranked by Impact</span>
+                    </div>
+                    <p className="text-sm text-gray-400 mb-6 ml-4">What happens to your cash if you take action?</p>
                     <div className="space-y-3">
-                      {(forecastData.enriched_interventions ?? forecastData.interventions).slice(0, 5).map((iv) => {
+                      {(forecastData.enriched_interventions ?? forecastData.interventions).slice(0, 5).map((iv, idx) => {
                         const hasRange = iv.plausible_range_low != null && iv.plausible_range_high != null
                         const rangeStr = hasRange ? `${money(iv.plausible_range_low!)} – ${money(iv.plausible_range_high!)}` : money(iv.impact_cash_14d)
                         const confLabel = iv.confidence_band ? ` (${iv.confidence_band} confidence)` : ""
                         const sim = iv.simulation_impact
                         const enriched = iv as any
                         return (
-                          <div key={iv.id} className="bg-white/[0.03] rounded-xl px-4 py-3.5 border border-white/5 hover:border-cyan-500/20 transition-colors">
-                            <div className="flex items-center justify-between mb-1.5">
-                              <div className="flex items-center gap-2.5">
-                                {iv.rank != null && <span className="text-[10px] bg-cyan-500/20 text-cyan-400 font-bold w-5 h-5 rounded-full flex items-center justify-center">#{iv.rank}</span>}
-                                <div className="text-sm text-white font-medium">{iv.label}</div>
-                                {enriched.feasibility_score != null && (
-                                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${enriched.feasibility_score >= 0.7 ? "bg-emerald-500/20 text-emerald-400" : enriched.feasibility_score >= 0.4 ? "bg-amber-500/20 text-amber-400" : "bg-red-500/20 text-red-400"}`}>
-                                    {(enriched.feasibility_score * 100).toFixed(0)}% feasible
-                                  </span>
-                                )}
+                          <div key={iv.id} className="group relative bg-gradient-to-r from-slate-800/40 to-slate-900/20 rounded-2xl px-5 py-4 border border-cyan-500/20 hover:border-cyan-400/50 transition-all duration-300 hover:shadow-lg hover:shadow-cyan-500/10 hover:bg-gradient-to-r hover:from-slate-800/60 hover:to-slate-900/40">
+                            <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/0 via-cyan-500/0 to-cyan-500/0 group-hover:from-cyan-500/5 group-hover:via-cyan-500/5 group-hover:to-cyan-500/0 rounded-2xl transition-all duration-300 pointer-events-none"></div>
+                            <div className="relative">
+                              <div className="flex items-start justify-between mb-2">
+                                <div className="flex items-center gap-3">
+                                  <span className="text-xs bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-bold w-6 h-6 rounded-full flex items-center justify-center shadow-lg">#{idx + 1}</span>
+                                  <div>
+                                    <div className="text-sm font-bold text-white">{iv.label}</div>
+                                    {enriched.feasibility_score != null && (
+                                      <div className="flex items-center gap-2 mt-1">
+                                        <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                          <div className={`h-full rounded-full transition-all ${enriched.feasibility_score >= 0.7 ? "bg-gradient-to-r from-emerald-500 to-emerald-400" : enriched.feasibility_score >= 0.4 ? "bg-gradient-to-r from-amber-500 to-amber-400" : "bg-gradient-to-r from-red-500 to-red-400"}`} style={{width: `${enriched.feasibility_score * 100}%`}}></div>
+                                        </div>
+                                        <span className="text-[10px] text-gray-400">{(enriched.feasibility_score * 100).toFixed(0)}%</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-emerald-400 font-mono font-bold text-base">+{hasRange ? rangeStr : money(iv.impact_cash_14d)}</div>
+                                  <div className="text-[10px] text-gray-500 font-normal">@14d{confLabel}</div>
+                                </div>
                               </div>
-                              <div className="text-emerald-400 font-mono font-bold text-sm">
-                                +{hasRange ? rangeStr : money(iv.impact_cash_14d)}
-                                <span className="text-[10px] text-gray-500 font-normal ml-1">@14d{confLabel}</span>
-                              </div>
-                            </div>
-                            {enriched.ai_reasoning && (
-                              <div className="text-xs text-gray-300 mb-2 italic border-l-2 border-cyan-500/30 pl-2">{enriched.ai_reasoning}</div>
-                            )}
-                            {sim && (
-                              <div className="flex flex-wrap gap-3 text-[10px] text-gray-400 mb-2">
-                                <span>Low point: <span className={sim.low_point_before < 0 ? "text-red-400" : ""}>{cashDisplay(Math.round(sim.low_point_before))}</span> → <span className="text-emerald-400">{cashDisplay(Math.round(sim.low_point_after))}</span></span>
-                                <span>Stress prob: {(sim.stress_prob_before * 100).toFixed(0)}% → <span className="text-emerald-400">{(sim.stress_prob_after * 100).toFixed(0)}%</span></span>
-                                {sim.runway_months_change != null && sim.runway_months_change > 0 && (
-                                  <span>Runway: <span className="text-emerald-400">+{sim.runway_months_change.toFixed(1)} mo</span></span>
-                                )}
-                              </div>
-                            )}
-                            <div className="text-xs text-gray-400 mb-2">{iv.description}</div>
-                            {enriched.relationship_risk_explanation && (
-                              <div className="text-[10px] text-amber-600/80 mb-2">Relationship risk: {enriched.relationship_risk_explanation}</div>
-                            )}
-                            {enriched.failure_modes && enriched.failure_modes.length > 0 && (
-                              <div className="mb-2 p-2 bg-red-500/5 rounded border border-red-500/20">
-                                <div className="text-[10px] text-red-400/90 font-semibold mb-1">Failure modes</div>
-                                <ul className="space-y-0.5 text-[10px] text-gray-400">
-                                  {enriched.failure_modes.slice(0, 2).map((fm, idx) => (
-                                    <li key={idx}>• {fm}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                            {iv.assumptions && iv.assumptions.length > 0 && (
-                              <div className="text-[10px] text-amber-600/80 mb-2 italic">Assumes: {iv.assumptions.slice(0, 2).join("; ")}</div>
-                            )}
-                            {iv.second_order_risks && (iv.second_order_risks.late_fee || iv.second_order_risks.relationship || iv.second_order_risks.next_period) && (
-                              <div className="mb-2 p-2 bg-amber-500/5 rounded border border-amber-500/20">
-                                <div className="text-[10px] text-amber-400/90 font-semibold mb-1">Second-order effects</div>
-                                <ul className="space-y-0.5 text-[10px] text-gray-400">
-                                  {iv.second_order_risks.late_fee && <li>• {iv.second_order_risks.late_fee}</li>}
-                                  {iv.second_order_risks.relationship && <li>• {iv.second_order_risks.relationship}</li>}
-                                  {iv.second_order_risks.next_period && <li>• {iv.second_order_risks.next_period}</li>}
-                                </ul>
-                              </div>
-                            )}
-                            <div className="flex items-center gap-4 text-[10px] text-gray-500">
-                              <span>30d impact: <span className="text-emerald-400 font-mono">+{money(iv.impact_cash_30d)}</span></span>
-                              {iv.impact_risk_reduction > 0 && (
-                                <span>↓ downside risk: <span className="text-cyan-400 font-mono">~{iv.impact_risk_reduction.toFixed(0)}%</span></span>
+                              {enriched.ai_reasoning && (
+                                <div className="text-xs text-gray-300 mb-3 italic border-l-2 border-cyan-500/40 pl-3 py-1 bg-cyan-500/5 rounded-r">{enriched.ai_reasoning}</div>
                               )}
-                              {iv.parameter_days && <span>Shift: {iv.parameter_days}d</span>}
-                              {iv.parameter_pct && <span>Change: {iv.parameter_pct}%</span>}
+                              {sim && (
+                                <div className="grid grid-cols-3 gap-2 mb-3 text-[10px]">
+                                  <div className="bg-slate-700/30 rounded-lg px-2 py-1.5">
+                                    <div className="text-gray-500 mb-0.5">Low point</div>
+                                    <div className="text-white font-mono"><span className={sim.low_point_before < 0 ? "text-red-400" : ""}>{cashDisplay(Math.round(sim.low_point_before))}</span> → <span className="text-emerald-400">{cashDisplay(Math.round(sim.low_point_after))}</span></div>
+                                  </div>
+                                  <div className="bg-slate-700/30 rounded-lg px-2 py-1.5">
+                                    <div className="text-gray-500 mb-0.5">Stress prob</div>
+                                    <div className="text-white font-mono">{(sim.stress_prob_before * 100).toFixed(0)}% → <span className="text-emerald-400">{(sim.stress_prob_after * 100).toFixed(0)}%</span></div>
+                                  </div>
+                                  {sim.runway_months_change != null && sim.runway_months_change > 0 && (
+                                    <div className="bg-emerald-500/10 rounded-lg px-2 py-1.5 border border-emerald-500/20">
+                                      <div className="text-emerald-400/70 mb-0.5">Runway</div>
+                                      <div className="text-emerald-400 font-mono font-bold">+{sim.runway_months_change.toFixed(1)}mo</div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {enriched.failure_modes && enriched.failure_modes.length > 0 && (
+                                <div className="mb-2 p-2.5 bg-red-500/10 rounded-lg border border-red-500/20">
+                                  <div className="text-[10px] text-red-400 font-bold mb-1">⚠ Failure modes</div>
+                                  <ul className="space-y-0.5 text-[10px] text-gray-400">
+                                    {enriched.failure_modes.slice(0, 2).map((fm, i) => (
+                                      <li key={i}>• {fm}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
                             </div>
                           </div>
                         )
@@ -6148,29 +6144,43 @@ export function OnboardingFlow({
 
                     {/* Ranked Strategies */}
                     {forecastData.ranked_strategies && forecastData.ranked_strategies.length > 0 && (
-                      <div className="mt-6 pt-6 border-t border-white/10">
-                        <h4 className="text-xs font-semibold text-cyan-400/90 uppercase tracking-widest mb-3">Ranked Strategies</h4>
-                        <div className="space-y-2">
-                          {forecastData.ranked_strategies.slice(0, 3).map((s) => (
-                            <div key={s.id} className="bg-cyan-500/10 rounded-xl px-4 py-3 border border-cyan-500/20">
-                              <div className="flex items-center justify-between mb-1.5">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[10px] bg-cyan-500/30 text-cyan-400 font-bold px-2 py-0.5 rounded">Priority #{s.recommendation_priority}</span>
-                                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${s.urgency_level === "high" ? "bg-red-500/20 text-red-400" : s.urgency_level === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"}`}>
-                                    {s.urgency_level.toUpperCase()} urgency
-                                  </span>
-                                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${s.execution_difficulty === "easy" ? "bg-emerald-500/20 text-emerald-400" : s.execution_difficulty === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-red-500/20 text-red-400"}`}>
-                                    {s.execution_difficulty.toUpperCase()}
-                                  </span>
+                      <div className="mt-8 pt-8 border-t border-cyan-500/20">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className="w-1 h-6 bg-gradient-to-b from-emerald-400 to-emerald-600 rounded-full"></div>
+                          <h4 className="text-lg font-bold text-white uppercase tracking-widest">Ranked Strategies</h4>
+                          <span className="text-[10px] text-emerald-400/70 font-semibold ml-auto">Multi-action combos</span>
+                        </div>
+                        <div className="space-y-3">
+                          {forecastData.ranked_strategies.slice(0, 3).map((s, idx) => (
+                            <div key={s.id} className="group relative bg-gradient-to-r from-emerald-500/5 to-slate-900/20 rounded-2xl px-5 py-4 border border-emerald-500/30 hover:border-emerald-400/50 transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/10">
+                              <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/0 via-emerald-500/0 to-emerald-500/0 group-hover:from-emerald-500/5 group-hover:via-emerald-500/5 group-hover:to-emerald-500/0 rounded-2xl transition-all duration-300 pointer-events-none"></div>
+                              <div className="relative">
+                                <div className="flex items-start justify-between mb-2">
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-xs bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-bold px-2.5 py-1 rounded-full shadow-lg">Priority #{s.recommendation_priority}</span>
+                                    <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${s.urgency_level === "high" ? "bg-red-500/20 text-red-400" : s.urgency_level === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"}`}>
+                                      {s.urgency_level === "high" ? "🔴" : s.urgency_level === "medium" ? "🟡" : "🟢"} {s.urgency_level.toUpperCase()}
+                                    </span>
+                                    <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${s.execution_difficulty === "easy" ? "bg-emerald-500/20 text-emerald-400" : s.execution_difficulty === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-red-500/20 text-red-400"}`}>
+                                      {s.execution_difficulty.toUpperCase()}
+                                    </span>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="text-emerald-400 font-mono font-bold">{(s.feasibility_score * 100).toFixed(0)}% feasible</div>
+                                    <div className="text-[10px] text-gray-500">{s.risk_level.toUpperCase()} risk</div>
+                                  </div>
                                 </div>
-                                <span className={`text-[10px] font-mono ${s.risk_level === "low" ? "text-emerald-400" : s.risk_level === "medium" ? "text-amber-400" : "text-red-400"}`}>
-                                  {(s.feasibility_score * 100).toFixed(0)}% feasible
-                                </span>
-                              </div>
-                              <div className="text-xs text-white font-medium mb-1">{s.ai_summary}</div>
-                              <div className="flex gap-2 text-[10px] text-gray-500">
-                                <span className={s.low_point < 0 ? "text-red-400" : "text-gray-500"}>Low point: {cashDisplay(Math.round(s.low_point))}</span>
-                                <span>Stress prob: {(s.stress_prob * 100).toFixed(0)}%</span>
+                                <div className="text-sm text-gray-200 mb-2 font-medium">{s.ai_summary}</div>
+                                <div className="flex gap-3 text-[10px]">
+                                  <div className="flex-1 bg-slate-700/30 rounded-lg px-2.5 py-1.5">
+                                    <div className="text-gray-500 mb-0.5">Low point</div>
+                                    <div className={`font-mono font-bold ${s.low_point < 0 ? "text-red-400" : "text-emerald-400"}`}>{cashDisplay(Math.round(s.low_point))}</div>
+                                  </div>
+                                  <div className="flex-1 bg-slate-700/30 rounded-lg px-2.5 py-1.5">
+                                    <div className="text-gray-500 mb-0.5">Stress prob</div>
+                                    <div className="text-white font-mono font-bold">{(s.stress_prob * 100).toFixed(0)}%</div>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           ))}
@@ -6180,36 +6190,38 @@ export function OnboardingFlow({
 
                     {/* Execution Plans */}
                     {forecastData.execution_plans && forecastData.execution_plans.length > 0 && (
-                      <div className="mt-6 pt-6 border-t border-white/10">
-                        <h4 className="text-xs font-semibold text-cyan-400/90 uppercase tracking-widest mb-3">Execution Plans</h4>
-                        <div className="space-y-3">
+                      <div className="mt-8 pt-8 border-t border-cyan-500/20">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className="w-1 h-6 bg-gradient-to-b from-blue-400 to-blue-600 rounded-full"></div>
+                          <h4 className="text-lg font-bold text-white uppercase tracking-widest">Execution Plans</h4>
+                          <span className="text-[10px] text-blue-400/70 font-semibold ml-auto">Step-by-step guidance</span>
+                        </div>
+                        <div className="space-y-4">
                           {forecastData.execution_plans.slice(0, 2).map((plan) => (
-                            <div key={plan.action_id} className="bg-white/[0.02] rounded-xl px-4 py-3 border border-white/5">
-                              <div className="text-xs font-semibold text-white mb-2">{plan.action_label}</div>
-                              <div className="space-y-1.5 mb-2">
+                            <div key={plan.action_id} className="bg-gradient-to-r from-blue-500/5 to-slate-900/20 rounded-2xl px-5 py-4 border border-blue-500/30">
+                              <div className="text-sm font-bold text-white mb-3">{plan.action_label}</div>
+                              <div className="space-y-2 mb-3">
                                 {plan.steps.map((step) => (
-                                  <div key={step.step_number} className="text-[10px] text-gray-400 flex gap-2">
-                                    <span className="text-cyan-400 font-bold w-4 shrink-0">{step.step_number}.</span>
-                                    <span>
-                                      <span className="text-white">{step.action}</span>
-                                      {step.details && <span className="text-gray-500"> — {step.details}</span>}
-                                      {step.deadline && <span className="text-amber-400/70"> ({step.deadline})</span>}
-                                    </span>
+                                  <div key={step.step_number} className="flex gap-3 text-sm">
+                                    <div className="flex items-center justify-center w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 text-white font-bold text-xs shrink-0">{step.step_number}</div>
+                                    <div className="flex-1">
+                                      <div className="text-white font-medium">{step.action}</div>
+                                      {step.details && <div className="text-xs text-gray-400 mt-0.5">{step.details}</div>}
+                                      {step.deadline && <div className="text-[10px] text-blue-400/70 mt-0.5">⏰ {step.deadline}</div>}
+                                    </div>
                                   </div>
                                 ))}
                               </div>
                               {plan.email_draft && (
-                                <div className="mb-2 p-2 bg-emerald-500/5 rounded border border-emerald-500/20">
-                                  <div className="text-[10px] text-emerald-400/90 font-semibold mb-1">Email draft</div>
-                                  <div className="text-[10px] text-gray-400 italic">{plan.email_draft.slice(0, 100)}...</div>
+                                <div className="mb-3 p-3 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
+                                  <div className="text-[10px] text-emerald-400 font-bold mb-1">✉ Email draft</div>
+                                  <div className="text-xs text-gray-300 italic">{plan.email_draft.slice(0, 120)}...</div>
                                 </div>
                               )}
-                              {plan.trigger_condition && (
-                                <div className="text-[10px] text-gray-500">Trigger: {plan.trigger_condition}</div>
-                              )}
-                              {plan.success_metric && (
-                                <div className="text-[10px] text-gray-500">Success: {plan.success_metric}</div>
-                              )}
+                              <div className="flex gap-2 text-[10px]">
+                                {plan.trigger_condition && <div className="px-2 py-1 bg-slate-700/30 rounded text-gray-400">Trigger: {plan.trigger_condition}</div>}
+                                {plan.success_metric && <div className="px-2 py-1 bg-emerald-500/10 rounded text-emerald-400">Success: {plan.success_metric}</div>}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -6218,17 +6230,21 @@ export function OnboardingFlow({
 
                     {/* Anomalies & Warnings */}
                     {forecastData.intervention_anomalies && forecastData.intervention_anomalies.length > 0 && (
-                      <div className="mt-6 pt-6 border-t border-white/10">
-                        <h4 className="text-xs font-semibold text-amber-400/90 uppercase tracking-widest mb-3">Anomalies & Warnings</h4>
+                      <div className="mt-8 pt-8 border-t border-cyan-500/20">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className="w-1 h-6 bg-gradient-to-b from-amber-400 to-amber-600 rounded-full"></div>
+                          <h4 className="text-lg font-bold text-white uppercase tracking-widest">Anomalies & Warnings</h4>
+                          <span className="text-[10px] text-amber-400/70 font-semibold ml-auto">Quality checks</span>
+                        </div>
                         <div className="space-y-2">
                           {forecastData.intervention_anomalies.map((anomaly, idx) => (
-                            <div key={idx} className={`p-2 rounded border ${anomaly.severity === "critical" ? "bg-red-500/10 border-red-500/20" : anomaly.severity === "warning" ? "bg-amber-500/10 border-amber-500/20" : "bg-blue-500/10 border-blue-500/20"}`}>
-                              <div className={`text-[10px] font-semibold ${anomaly.severity === "critical" ? "text-red-400" : anomaly.severity === "warning" ? "text-amber-400" : "text-blue-400"}`}>
-                                {anomaly.anomaly_type.toUpperCase()}
+                            <div key={idx} className={`p-3 rounded-xl border transition-all ${anomaly.severity === "critical" ? "bg-red-500/10 border-red-500/30 hover:border-red-400/50" : anomaly.severity === "warning" ? "bg-amber-500/10 border-amber-500/30 hover:border-amber-400/50" : "bg-blue-500/10 border-blue-500/30 hover:border-blue-400/50"}`}>
+                              <div className={`text-sm font-bold flex items-center gap-2 ${anomaly.severity === "critical" ? "text-red-400" : anomaly.severity === "warning" ? "text-amber-400" : "text-blue-400"}`}>
+                                {anomaly.severity === "critical" ? "🔴" : anomaly.severity === "warning" ? "⚠️" : "ℹ️"} {anomaly.anomaly_type.toUpperCase()}
                               </div>
-                              <div className="text-[10px] text-gray-400 mt-0.5">{anomaly.message}</div>
+                              <div className="text-xs text-gray-300 mt-1">{anomaly.message}</div>
                               {anomaly.suggested_action && (
-                                <div className="text-[10px] text-gray-500 mt-1">Suggestion: {anomaly.suggested_action}</div>
+                                <div className="text-[10px] text-gray-400 mt-1.5 italic">💡 {anomaly.suggested_action}</div>
                               )}
                             </div>
                           ))}
