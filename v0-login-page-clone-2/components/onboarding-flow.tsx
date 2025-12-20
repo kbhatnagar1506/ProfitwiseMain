@@ -493,7 +493,7 @@ export function OnboardingFlow({
   type CalibrationResult = { total_events_evaluated: number; buckets: CalibrationBucket[]; calibration_error: number; is_overconfident: boolean; is_underconfident: boolean; details: string; suggested_interpretation?: string; probability_temperature?: number }
   type BacktestResult = { accuracy_score: number; days_tested: number; mean_absolute_error: number; direction_accuracy: number; details: string; calibration?: CalibrationResult | null }
   type SeparatedForecast = { days: { day: number; date: string; operating_in: number; operating_out: number; settlement_in: number; settlement_out: number; treasury_in: number; treasury_out: number; owner_in: number; owner_out: number }[]; operating_30d_in: number; operating_30d_out: number; settlement_30d_in: number; settlement_30d_out: number; treasury_30d_in: number; treasury_30d_out: number; owner_30d_in: number; owner_30d_out: number }
-  type CashflowForecast = { period_start: string; forecast_horizon_months: number; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[]; combined_strategies?: CombinedStrategy[]; execution_suggestions?: ExecutionSuggestion[]; context?: ForecastContext; backtest?: BacktestResult | null; separated_forecast?: SeparatedForecast }
+  type CashflowForecast = { period_start: string; forecast_horizon_months: number; horizon_capped?: boolean; horizon_cap_reason?: string; components: CashflowComponent[]; behavioral_models: BehavioralModels; events_30d: ForecastEvent[]; daily_simulation: DailySimulation; monte_carlo: MonteCarloResult; narrative: ForecastNarrative; scenarios: ScenarioResult[]; data_span_days: number; computed_at: string; forecast_confidence?: ForecastConfidence; cash_runway?: CashRunway; sensitivity?: SensitivityAnalysis; interventions?: Intervention[]; combined_strategies?: CombinedStrategy[]; execution_suggestions?: ExecutionSuggestion[]; context?: ForecastContext; backtest?: BacktestResult | null; separated_forecast?: SeparatedForecast }
   const [forecastData, setForecastData] = useState<CashflowForecast | null>(null)
   const [forecastLoading, setForecastLoading] = useState(false)
   const [forecastError, setForecastError] = useState<string | null>(null)
@@ -5116,7 +5116,7 @@ export function OnboardingFlow({
                   <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
                     <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Data span: {forecastData.data_span_days}d</span>
                     <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Components: {forecastData.components.length}</span>
-                    <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Horizon: {forecastData.forecast_horizon_months} months</span>
+                    <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Horizon: {forecastData.forecast_horizon_months} months{forecastData.horizon_capped && <span className="text-amber-400 ml-1">(capped)</span>}</span>
                     {forecastData.context && (
                       <span className="flex items-center gap-1.5">
                         <span className={`w-1.5 h-1.5 rounded-full ${forecastData.context.balance_source === "plaid" ? "bg-emerald-400" : "bg-amber-400"}`} />
@@ -5147,6 +5147,23 @@ export function OnboardingFlow({
                     )
                   })()}
                 </div>
+
+                {/* ─── Horizon Cap Warning ─── */}
+                {forecastData.horizon_capped && forecastData.horizon_cap_reason && (
+                  <div className="flex items-center gap-2.5 px-4 py-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-300">
+                    <span className="text-amber-400 text-sm">⚠</span>
+                    <span>{forecastData.horizon_cap_reason}</span>
+                  </div>
+                )}
+
+                {/* ─── MAE Buffer Warning ─── */}
+                {forecastData.backtest && forecastData.backtest.mean_absolute_error > 0 && forecastData.daily_simulation.min_cash > 0 && forecastData.daily_simulation.min_cash < forecastData.backtest.mean_absolute_error && (
+                  <div className="flex items-center gap-2.5 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-300">
+                    <span className="text-red-400 text-sm">⚠</span>
+                    <span>Projected cash low (${Math.round(forecastData.daily_simulation.min_cash).toLocaleString()}) is within forecast error margin (${Math.round(forecastData.backtest.mean_absolute_error).toLocaleString()}) — safety buffer may be insufficient</span>
+                  </div>
+                )}
+
                 {/* ─── Context: Risk & Account Balances ─── */}
                 {forecastData.context && (forecastData.context.risk_score > 0 || forecastData.context.account_balances.length > 0) && (
                   <div className="flex flex-col gap-1 text-[10px] text-gray-400 mt-1">

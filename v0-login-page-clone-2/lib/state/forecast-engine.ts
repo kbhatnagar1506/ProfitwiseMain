@@ -3781,6 +3781,7 @@ function generateNarrative(
   startingCash: number,
   ctx: ForecastContext | null = null,
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
+  maeBuffer: number = 0,
 ): ForecastNarrative {
   // Guard: if no events or no simulation data, return safe defaults
   if (events.length === 0 || mc.percentiles.length === 0) {
@@ -3934,6 +3935,18 @@ function generateNarrative(
     (startingCash > 0 && cash14 < startingCash * nr.severity_caution_14d)
   ) {
     severity = "caution"
+  }
+
+  // MAE buffer: if projected trough is positive but within our historical error margin,
+  // don't tell the founder they're safe — escalate to caution
+  if (maeBuffer > 0 && sim.min_cash > 0 && sim.min_cash < maeBuffer && severity === "healthy") {
+    severity = "caution"
+    risk += ` · Projected low ($${Math.round(sim.min_cash).toLocaleString()}) is within forecast error margin ($${Math.round(maeBuffer).toLocaleString()})`
+  }
+
+  // Also block "stable" action language when trough is inside MAE band
+  if (maeBuffer > 0 && sim.min_cash > 0 && sim.min_cash < maeBuffer && action.includes("stable")) {
+    action = `Cash buffer ($${Math.round(sim.min_cash).toLocaleString()}) is thinner than forecast error ($${Math.round(maeBuffer).toLocaleString()}) — build a reserve before assuming stability`
   }
 
   return { forecast, risk, insight, action, severity }
@@ -4474,13 +4487,16 @@ function computeInterventions(
   startingCash: number,
   dailySim?: DailySimulation,
   cal: ForecastCalibrationParams = DEFAULT_FORECAST_CALIBRATION,
+  maeBuffer: number = 0,
 ): Intervention[] {
   const iv = cal.interventions
   const interventions: Intervention[] = []
   const baseCash14 = mc.day_scenarios.find((s) => s.scenario === "base")?.cash_14d ?? mc.expected_cash_30d
   const baseCash30 = mc.expected_cash_30d
   const baseRisk30 = mc.prob_below_zero_30d
-  const baseLowPoint = dailySim?.min_cash ?? baseCash14 * iv.base_low_point_fallback
+  // Subtract MAE from low point — if our error is $16k and trough is $12k, effective trough is -$4k
+  const rawLowPoint = dailySim?.min_cash ?? baseCash14 * iv.base_low_point_fallback
+  const baseLowPoint = rawLowPoint - maeBuffer
   const stressProb = mc.prob_below_zero_14d > iv.stress_prob_threshold ? mc.prob_below_zero_14d : mc.prob_below_zero_30d
 
   // Accelerate top customer collections
@@ -5339,6 +5355,12 @@ export async function computeCashflowForecast(
     movementDates.length > 0 || invoiceDates.length > 0 || billDates.length > 0
   const dataSpanDays = rawSpan > 0 ? rawSpan : hasAnyDateSignal ? 1 : 0
 
+  // Hard-cap horizon: don't project further than T/2 unless we have 12+ months of data
+  const monthsOfData = dataSpanDays / 30
+  const maxAllowedHorizon = monthsOfData >= 12 ? horizonMonths : Math.max(1, Math.floor(monthsOfData / 2))
+  const effectiveHorizon = Math.max(1, Math.min(horizonMonths, maxAllowedHorizon))
+  const horizonWasCapped = effectiveHorizon < horizonMonths
+
   // Aggregate component models (for non-entity categories)
   const buckets = decomposeMovements(movements)
   let components = buckets.map((b) => buildComponent(b, dataSpanDays, cal))
@@ -5589,12 +5611,25 @@ export async function computeCashflowForecast(
   // Monte Carlo: simulations with payment delays, amount variance, missed payments
   const monte_carlo = runMonteCarlo(events_30d, startingCash, cal.monte_carlo_iterations, cal)
 
+  // Backtest: replay last 14 days to measure forecast accuracy (computed early so MAE can buffer downstream)
+  log("backtest.pre_call", {
+    movements_count: movements.length,
+    movements_with_dates: movements.filter((m) => m.occurred_at).length,
+    sample_movements: movements.slice(0, 3).map((m) => ({
+      id: m.id,
+      occurred_at: m.occurred_at,
+      direction: m.direction,
+    })),
+  })
+  const backtest = runBacktest(movements, invoices, bills, cal, entityProfiles)
+  const maeBuffer = backtest?.mean_absolute_error ?? 0
+
   // Narrative: deterministic Forecast / Risk / Insight / Action (enriched with state context)
-  const narrative = generateNarrative(monte_carlo, daily_simulation, behavioral_models, events_30d, startingCash, forecastCtx, cal)
+  const narrative = generateNarrative(monte_carlo, daily_simulation, behavioral_models, events_30d, startingCash, forecastCtx, cal, maeBuffer)
 
   // Run risk-aware scenarios
   const scenarios = buildScenarios(forecastCtx, cal).map((config) =>
-    runScenario(behavioral_models, components, horizonMonths, startingCash, config, cal)
+    runScenario(behavioral_models, components, effectiveHorizon, startingCash, config, cal)
   )
 
   // Cash runway
@@ -5604,7 +5639,7 @@ export async function computeCashflowForecast(
   const sensitivity = computeSensitivity(events_30d, behavioral_models, monte_carlo, startingCash)
 
   // Intervention engine
-  const interventions = computeInterventions(events_30d, behavioral_models, monte_carlo, startingCash, daily_simulation, cal)
+  const interventions = computeInterventions(events_30d, behavioral_models, monte_carlo, startingCash, daily_simulation, cal, maeBuffer)
   const combined_strategies = computeCombinedStrategies(
     interventions,
     daily_simulation.min_cash,
@@ -5632,18 +5667,6 @@ export async function computeCashflowForecast(
     recurring_spend_ratio: 0, liquidity_regime: "stable",
     transitions: [], balance_source: "derived", account_balances: [],
   }
-
-  // Backtest: replay last 14 days to measure forecast accuracy
-  log("backtest.pre_call", {
-    movements_count: movements.length,
-    movements_with_dates: movements.filter((m) => m.occurred_at).length,
-    sample_movements: movements.slice(0, 3).map((m) => ({
-      id: m.id,
-      occurred_at: m.occurred_at,
-      direction: m.direction,
-    })),
-  })
-  const backtest = runBacktest(movements, invoices, bills, cal, entityProfiles)
 
   // Movement-based pattern analysis (ground truth from actual bank transactions)
   const movementPatterns = analyzeAllMovementPatterns(
@@ -5732,7 +5755,9 @@ export async function computeCashflowForecast(
 
   return {
     period_start: periodStart,
-    forecast_horizon_months: horizonMonths,
+    forecast_horizon_months: effectiveHorizon,
+    horizon_capped: horizonWasCapped,
+    horizon_cap_reason: horizonWasCapped ? `Limited to ${effectiveHorizon}mo — need 12 months of data for full ${horizonMonths}mo projection (have ${monthsOfData.toFixed(1)}mo)` : undefined,
     metadata,
     components,
     behavioral_models,

@@ -791,6 +791,8 @@ export type ForecastMetadata = {
 export type CashflowForecast = {
   period_start: string
   forecast_horizon_months: number
+  horizon_capped?: boolean
+  horizon_cap_reason?: string
   metadata?: ForecastMetadata
   components: CashflowComponent[]
   behavioral_models: BehavioralModels
