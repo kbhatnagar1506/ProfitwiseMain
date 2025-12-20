@@ -5088,18 +5088,19 @@ export function OnboardingFlow({
         const scenarioBg = (s: string) => s === "optimistic" ? "bg-emerald-500/10" : s === "pessimistic" ? "bg-red-500/10" : "bg-blue-500/10"
 
         return (
-          <div className="space-y-6">
+          <div className="space-y-8">
             <div className="text-center mb-2">
-              <h2 className="text-2xl font-semibold text-white mb-1">{steps[13].title}</h2>
-              <p className="text-gray-400 text-lg mb-5">{steps[13].description}</p>
+              <h2 className="text-3xl font-bold text-white mb-2 tracking-tight">{steps[13].title}</h2>
+              <p className="text-gray-400 text-base max-w-xl mx-auto">{steps[13].description}</p>
 
               {forecastLoading && (
-                <div className="flex flex-col items-center justify-center gap-3 py-12">
-                  <div className="relative w-12 h-12">
-                    <div className="absolute inset-0 rounded-full border-2 border-white/10" />
+                <div className="flex flex-col items-center justify-center gap-4 py-16">
+                  <div className="relative w-16 h-16">
+                    <div className="absolute inset-0 rounded-full border-2 border-white/5" />
                     <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-blue-400 animate-spin" />
+                    <div className="absolute inset-[6px] rounded-full border-2 border-transparent border-b-blue-400/50 animate-spin" style={{ animationDirection: "reverse", animationDuration: "1.5s" }} />
                   </div>
-                  <span className="text-sm text-gray-400">Computing forecast…</span>
+                  <span className="text-sm text-gray-400 animate-pulse">Computing forecast…</span>
                 </div>
               )}
 
@@ -5109,7 +5110,7 @@ export function OnboardingFlow({
             </div>
 
             {!forecastLoading && forecastData && (
-              <div className="space-y-6">
+              <div className="space-y-8">
                 {/* ─── Data Quality + Forecast Confidence ─── */}
                 <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
                   <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
@@ -5261,13 +5262,13 @@ export function OnboardingFlow({
                       {/* Next 7 Days */}
                       {events7d.length > 0 && (
                         <>
-                          <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-2">Next 7 days</h3>
-                          <div className="space-y-1 mb-4">
+                          <h3 className="text-xs font-semibold text-white uppercase tracking-widest mb-3">Next 7 days</h3>
+                          <div className="space-y-1.5 mb-5">
                             {events7d.slice(0, 8).map((evt, i) => {
                               const typeColor = evt.direction === "in" ? "text-emerald-400" : "text-red-400"
                               const confDot = evt.confidence === "high" ? "bg-emerald-500" : evt.confidence === "medium" ? "bg-amber-500" : "bg-red-500"
                               return (
-                                <div key={`7d-${evt.date}-${evt.entity}-${i}`} className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02]">
+                                <div key={`7d-${evt.date}-${evt.entity}-${i}`} className="flex items-center gap-2.5 py-2 px-3 rounded-lg bg-white/[0.03] hover:bg-white/[0.06] transition-colors border border-transparent hover:border-white/5">
                                   <span className="text-xs font-mono text-gray-500 w-8 shrink-0">D+{evt.day_offset}</span>
                                   <span className={`w-1.5 h-1.5 rounded-full ${confDot} shrink-0`} title={`${evt.confidence} confidence (${evt.source_model})`} />
                                   <span className={`text-xs truncate flex-1 ${typeColor}`}>{evt.entity}</span>
@@ -5285,8 +5286,8 @@ export function OnboardingFlow({
                       )}
 
                       {/* Top 10 Drivers (by expected impact, grouped by entity) */}
-                      <h3 className="text-xs font-semibold text-white uppercase tracking-wider mb-2">Top 10 drivers (30d)</h3>
-                      <div className="space-y-1 mb-3">
+                      <h3 className="text-xs font-semibold text-white uppercase tracking-widest mb-3">Top 10 drivers (30d)</h3>
+                      <div className="space-y-1.5 mb-4">
                         {(() => {
                           const entityKey = (e: typeof allEvents[0]) => e.entity.trim().toLowerCase()
                           const byEntity = new Map<string, { entity: string; direction: "in" | "out"; events: typeof allEvents; expectedImpact: number }>()
@@ -5316,7 +5317,7 @@ export function OnboardingFlow({
                               : `D+${evt.day_offset}`
                             return (
                               <div key={`top-${g.entity}-${i}`}>
-                                <div className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/[0.02]" title={tooltip}>
+                                <div className="flex items-center gap-2.5 py-2 px-3 rounded-lg bg-white/[0.03] hover:bg-white/[0.06] transition-colors border border-transparent hover:border-white/5" title={tooltip}>
                                   <span className="text-xs font-mono text-gray-500 w-12 shrink-0">{dayRange}</span>
                                   <span className={`w-1.5 h-1.5 rounded-full ${cDot} shrink-0`} />
                                   <span className={`text-xs truncate flex-1 ${typeColor}`}>
@@ -5574,16 +5575,16 @@ export function OnboardingFlow({
                       {/* Day-level scenario comparison */}
                       {mc.day_scenarios.length > 0 && (
                         <div className="mt-5 pt-4 border-t border-white/10">
-                          <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Scenario Comparison</h4>
-                          <div className="grid grid-cols-3 gap-3">
+                          <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-4">Scenario Comparison</h4>
+                          <div className="grid grid-cols-3 gap-4">
                             {mc.day_scenarios.map((sc) => {
                               const color = sc.scenario === "aggressive" ? "emerald" : sc.scenario === "conservative" ? "red" : "blue"
                               const borderCls = `border-${color}-500/20`
                               const bgCls = `bg-${color}-500/10`
                               const textCls = `text-${color}-400`
                               return (
-                                <div key={sc.scenario} className={`border rounded-lg p-3 ${sc.scenario === "aggressive" ? "border-emerald-500/20 bg-emerald-500/10" : sc.scenario === "conservative" ? "border-red-500/20 bg-red-500/10" : "border-blue-500/20 bg-blue-500/10"}`}>
-                                  <div className={`text-xs font-bold uppercase mb-1 ${sc.scenario === "aggressive" ? "text-emerald-400" : sc.scenario === "conservative" ? "text-red-400" : "text-blue-400"}`}>
+                                <div key={sc.scenario} className={`border rounded-xl p-4 backdrop-blur-sm ${sc.scenario === "aggressive" ? "border-emerald-500/20 bg-emerald-500/10" : sc.scenario === "conservative" ? "border-red-500/20 bg-red-500/10" : "border-blue-500/20 bg-blue-500/10"}`}>
+                                  <div className={`text-[10px] font-bold uppercase tracking-wider mb-1.5 ${sc.scenario === "aggressive" ? "text-emerald-400" : sc.scenario === "conservative" ? "text-red-400" : "text-blue-400"}`}>
                                 {sc.scenario === "conservative" ? "Stress scenario" : sc.scenario === "base" ? "Expected path" : sc.scenario}
                               </div>
                                   <div className="text-[10px] text-gray-500 mb-2">{sc.label}</div>
@@ -6014,12 +6015,12 @@ export function OnboardingFlow({
 
                 {/* ─── Sensitivity Analysis ─── */}
                 {forecastData.sensitivity && forecastData.sensitivity.drivers.length > 0 && (
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-                    <h3 className="text-sm font-semibold text-white uppercase tracking-wider mb-1">Top Drivers of Cash Position</h3>
-                    <p className="text-xs text-gray-500 mb-4">Which entities move your cash the most</p>
-                    <div className="space-y-2">
+                  <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6">
+                    <h3 className="text-sm font-semibold text-white uppercase tracking-widest mb-1">Top Drivers of Cash Position</h3>
+                    <p className="text-xs text-gray-500 mb-5">Which entities move your cash the most</p>
+                    <div className="space-y-2.5">
                       {forecastData.sensitivity.drivers.map((d, i) => (
-                        <div key={i} className="flex items-center gap-3 bg-white/5 rounded-lg px-3 py-2.5">
+                        <div key={i} className="flex items-center gap-3 bg-white/[0.03] rounded-xl px-4 py-3 hover:bg-white/[0.06] transition-colors border border-transparent hover:border-white/5">
                           <div className="flex items-center gap-2 min-w-0 flex-1">
                             <span className={`text-sm font-bold ${d.direction === "positive" ? "text-emerald-400" : "text-red-400"}`}>
                               {d.direction === "positive" ? "↑" : "↓"}
@@ -6049,20 +6050,20 @@ export function OnboardingFlow({
 
                 {/* ─── Decision Layer: Top Actions (ranked by impact) ─── */}
                 {forecastData.interventions && forecastData.interventions.length > 0 && (
-                  <div className="bg-white/5 border border-cyan-500/20 rounded-xl p-5">
-                    <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wider mb-1">Top Actions (by risk reduction)</h3>
-                    <p className="text-xs text-gray-500 mb-4">If I do X, what happens to my cash distribution?</p>
-                    <div className="space-y-2">
+                  <div className="bg-gradient-to-b from-cyan-500/5 to-transparent border border-cyan-500/20 rounded-2xl p-6">
+                    <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-widest mb-1">Top Actions (by risk reduction)</h3>
+                    <p className="text-xs text-gray-500 mb-5">If I do X, what happens to my cash distribution?</p>
+                    <div className="space-y-3">
                       {forecastData.interventions.slice(0, 5).map((iv) => {
                         const hasRange = iv.plausible_range_low != null && iv.plausible_range_high != null
                         const rangeStr = hasRange ? `${money(iv.plausible_range_low!)} – ${money(iv.plausible_range_high!)}` : money(iv.impact_cash_14d)
                         const confLabel = iv.confidence_band ? ` (${iv.confidence_band} confidence)` : ""
                         const sim = iv.simulation_impact
                         return (
-                          <div key={iv.id} className="bg-white/5 rounded-lg px-4 py-3">
-                            <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-2">
-                                {iv.rank != null && <span className="text-[10px] text-cyan-400 font-bold">#{iv.rank}</span>}
+                          <div key={iv.id} className="bg-white/[0.03] rounded-xl px-4 py-3.5 border border-white/5 hover:border-cyan-500/20 transition-colors">
+                            <div className="flex items-center justify-between mb-1.5">
+                              <div className="flex items-center gap-2.5">
+                                {iv.rank != null && <span className="text-[10px] bg-cyan-500/20 text-cyan-400 font-bold w-5 h-5 rounded-full flex items-center justify-center">#{iv.rank}</span>}
                                 <div className="text-sm text-white font-medium">{iv.label}</div>
                               </div>
                               <div className="text-emerald-400 font-mono font-bold text-sm">
@@ -6155,30 +6156,30 @@ export function OnboardingFlow({
 
                 {/* ─── Forecast Confidence (Trust Engine) ─── */}
                 {forecastData.forecast_confidence && (
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-2">Forecast Confidence</h3>
-                    <p className="text-[10px] text-gray-500 mb-2">What would make this prediction wrong? How to improve trust.</p>
+                  <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6">
+                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-widest mb-1">Forecast Confidence</h3>
+                    <p className="text-[10px] text-gray-500 mb-4">What would make this prediction wrong? How to improve trust.</p>
 
                     {/* Diagnosis sentence */}
                     {forecastData.forecast_confidence.diagnosis && (
-                      <p className="text-xs text-gray-300 mb-3 italic">{forecastData.forecast_confidence.diagnosis}</p>
+                      <p className="text-xs text-gray-300 mb-4 italic border-l-2 border-white/10 pl-3">{forecastData.forecast_confidence.diagnosis}</p>
                     )}
 
                     {/* What would make wrong */}
                     {forecastData.forecast_confidence.what_would_make_wrong && (
-                      <div className="mb-3 p-2 bg-amber-500/10 rounded border border-amber-500/20">
-                        <div className="text-[10px] text-amber-400/90 font-semibold uppercase mb-1">What could make this wrong</div>
-                        <p className="text-xs text-gray-300">{forecastData.forecast_confidence.what_would_make_wrong}</p>
+                      <div className="mb-4 p-3 bg-amber-500/10 rounded-xl border border-amber-500/20">
+                        <div className="text-[10px] text-amber-400/90 font-semibold uppercase tracking-wider mb-1.5">What could make this wrong</div>
+                        <p className="text-xs text-gray-300 leading-relaxed">{forecastData.forecast_confidence.what_would_make_wrong}</p>
                       </div>
                     )}
 
                     {/* Why confidence is low */}
                     {forecastData.forecast_confidence.why_confidence_low && forecastData.forecast_confidence.why_confidence_low.length > 0 && (
-                      <div className="mb-3">
-                        <div className="text-[10px] text-gray-500 font-semibold uppercase mb-1">Why</div>
-                        <ul className="space-y-0.5 text-xs text-gray-400">
+                      <div className="mb-4">
+                        <div className="text-[10px] text-gray-500 font-semibold uppercase tracking-wider mb-2">Why</div>
+                        <ul className="space-y-1 text-xs text-gray-400">
                           {forecastData.forecast_confidence.why_confidence_low.map((r, i) => (
-                            <li key={i}>• {r}</li>
+                            <li key={i} className="flex items-start gap-2"><span className="text-gray-600 mt-0.5">•</span><span>{r}</span></li>
                           ))}
                         </ul>
                       </div>
@@ -6186,52 +6187,52 @@ export function OnboardingFlow({
 
                     {/* How to improve */}
                     {forecastData.forecast_confidence.how_to_improve && forecastData.forecast_confidence.how_to_improve.length > 0 && (
-                      <div className="mb-3 p-2 bg-emerald-500/10 rounded border border-emerald-500/20">
-                        <div className="text-[10px] text-emerald-400/90 font-semibold uppercase mb-1">How to improve</div>
-                        <ul className="space-y-0.5 text-xs text-gray-300">
+                      <div className="mb-4 p-3 bg-emerald-500/10 rounded-xl border border-emerald-500/20">
+                        <div className="text-[10px] text-emerald-400/90 font-semibold uppercase tracking-wider mb-1.5">How to improve</div>
+                        <ul className="space-y-1 text-xs text-gray-300">
                           {forecastData.forecast_confidence.how_to_improve.map((r, i) => (
-                            <li key={i}>• {r}</li>
+                            <li key={i} className="flex items-start gap-2"><span className="text-emerald-400/50 mt-0.5">•</span><span>{r}</span></li>
                           ))}
                         </ul>
                       </div>
                     )}
 
-                    {/* Identity breakdown (high / weak / unresolved) */}
+                    {/* Identity breakdown */}
                     {forecastData.forecast_confidence.identity_breakdown && (
-                      <div className="grid grid-cols-3 gap-2 mb-4 text-[10px]">
-                        <div className="bg-emerald-500/10 rounded px-2 py-1.5">
-                          <div className="text-gray-500">High-confidence canonical</div>
-                          <div className="font-mono text-emerald-400">{forecastData.forecast_confidence.identity_breakdown.high_confidence_canonical_pct}%</div>
+                      <div className="grid grid-cols-3 gap-3 mb-5 text-[10px]">
+                        <div className="bg-emerald-500/10 rounded-xl px-3 py-2.5 text-center">
+                          <div className="text-gray-500 mb-0.5">High-confidence canonical</div>
+                          <div className="font-mono text-lg font-bold text-emerald-400">{forecastData.forecast_confidence.identity_breakdown.high_confidence_canonical_pct}%</div>
                         </div>
-                        <div className="bg-amber-500/10 rounded px-2 py-1.5">
-                          <div className="text-gray-500">Weak / inferred</div>
-                          <div className="font-mono text-amber-400">{forecastData.forecast_confidence.identity_breakdown.weak_inferred_pct}%</div>
+                        <div className="bg-amber-500/10 rounded-xl px-3 py-2.5 text-center">
+                          <div className="text-gray-500 mb-0.5">Weak / inferred</div>
+                          <div className="font-mono text-lg font-bold text-amber-400">{forecastData.forecast_confidence.identity_breakdown.weak_inferred_pct}%</div>
                         </div>
-                        <div className="bg-red-500/10 rounded px-2 py-1.5">
-                          <div className="text-gray-500">Unresolved</div>
-                          <div className="font-mono text-red-400">{forecastData.forecast_confidence.identity_breakdown.unresolved_pct}%</div>
+                        <div className="bg-red-500/10 rounded-xl px-3 py-2.5 text-center">
+                          <div className="text-gray-500 mb-0.5">Unresolved</div>
+                          <div className="font-mono text-lg font-bold text-red-400">{forecastData.forecast_confidence.identity_breakdown.unresolved_pct}%</div>
                         </div>
                       </div>
                     )}
 
                     {/* 8-component confidence breakdown */}
                     {forecastData.forecast_confidence.by_component && forecastData.forecast_confidence.by_component.length > 0 && (
-                      <div className="space-y-2 mb-4">
+                      <div className="space-y-3 mb-5">
                         {forecastData.forecast_confidence.by_component.map((cc, i) => (
                           <div key={i}>
                             <div className="flex items-center gap-3">
-                              <div className="text-xs text-gray-400 w-36 shrink-0">{cc.area}</div>
-                              <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                              <div className="text-xs text-gray-400 w-36 shrink-0 font-medium">{cc.area}</div>
+                              <div className="flex-1 h-2.5 bg-white/5 rounded-full overflow-hidden">
                                 <div
-                                  className={`h-full rounded-full ${cc.label === "high" ? "bg-emerald-500" : cc.label === "medium" ? "bg-amber-500" : "bg-red-500"}`}
+                                  className={`h-full rounded-full transition-all ${cc.label === "high" ? "bg-gradient-to-r from-emerald-600 to-emerald-400" : cc.label === "medium" ? "bg-gradient-to-r from-amber-600 to-amber-400" : "bg-gradient-to-r from-red-600 to-red-400"}`}
                                   style={{ width: `${Math.round(cc.score * 100)}%` }}
                                 />
                               </div>
-                              <div className={`text-xs font-mono w-10 text-right ${cc.label === "high" ? "text-emerald-400" : cc.label === "medium" ? "text-amber-400" : "text-red-400"}`}>
+                              <div className={`text-xs font-mono font-bold w-10 text-right ${cc.label === "high" ? "text-emerald-400" : cc.label === "medium" ? "text-amber-400" : "text-red-400"}`}>
                                 {Math.round(cc.score * 100)}%
                               </div>
                             </div>
-                            <div className="text-[10px] text-gray-600 pl-[9.5rem]">{cc.reason}</div>
+                            <div className="text-[10px] text-gray-600 pl-[9.5rem] mt-0.5">{cc.reason}</div>
                           </div>
                         ))}
                       </div>
