@@ -6071,23 +6071,32 @@ export function OnboardingFlow({
                     <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-widest mb-1">Top Actions (by risk reduction)</h3>
                     <p className="text-xs text-gray-500 mb-5">If I do X, what happens to my cash distribution?</p>
                     <div className="space-y-3">
-                      {forecastData.interventions.slice(0, 5).map((iv) => {
+                      {(forecastData.enriched_interventions ?? forecastData.interventions).slice(0, 5).map((iv) => {
                         const hasRange = iv.plausible_range_low != null && iv.plausible_range_high != null
                         const rangeStr = hasRange ? `${money(iv.plausible_range_low!)} – ${money(iv.plausible_range_high!)}` : money(iv.impact_cash_14d)
                         const confLabel = iv.confidence_band ? ` (${iv.confidence_band} confidence)` : ""
                         const sim = iv.simulation_impact
+                        const enriched = iv as any
                         return (
                           <div key={iv.id} className="bg-white/[0.03] rounded-xl px-4 py-3.5 border border-white/5 hover:border-cyan-500/20 transition-colors">
                             <div className="flex items-center justify-between mb-1.5">
                               <div className="flex items-center gap-2.5">
                                 {iv.rank != null && <span className="text-[10px] bg-cyan-500/20 text-cyan-400 font-bold w-5 h-5 rounded-full flex items-center justify-center">#{iv.rank}</span>}
                                 <div className="text-sm text-white font-medium">{iv.label}</div>
+                                {enriched.feasibility_score != null && (
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${enriched.feasibility_score >= 0.7 ? "bg-emerald-500/20 text-emerald-400" : enriched.feasibility_score >= 0.4 ? "bg-amber-500/20 text-amber-400" : "bg-red-500/20 text-red-400"}`}>
+                                    {(enriched.feasibility_score * 100).toFixed(0)}% feasible
+                                  </span>
+                                )}
                               </div>
                               <div className="text-emerald-400 font-mono font-bold text-sm">
                                 +{hasRange ? rangeStr : money(iv.impact_cash_14d)}
                                 <span className="text-[10px] text-gray-500 font-normal ml-1">@14d{confLabel}</span>
                               </div>
                             </div>
+                            {enriched.ai_reasoning && (
+                              <div className="text-xs text-gray-300 mb-2 italic border-l-2 border-cyan-500/30 pl-2">{enriched.ai_reasoning}</div>
+                            )}
                             {sim && (
                               <div className="flex flex-wrap gap-3 text-[10px] text-gray-400 mb-2">
                                 <span>Low point: <span className={sim.low_point_before < 0 ? "text-red-400" : ""}>{cashDisplay(Math.round(sim.low_point_before))}</span> → <span className="text-emerald-400">{cashDisplay(Math.round(sim.low_point_after))}</span></span>
@@ -6098,6 +6107,19 @@ export function OnboardingFlow({
                               </div>
                             )}
                             <div className="text-xs text-gray-400 mb-2">{iv.description}</div>
+                            {enriched.relationship_risk_explanation && (
+                              <div className="text-[10px] text-amber-600/80 mb-2">Relationship risk: {enriched.relationship_risk_explanation}</div>
+                            )}
+                            {enriched.failure_modes && enriched.failure_modes.length > 0 && (
+                              <div className="mb-2 p-2 bg-red-500/5 rounded border border-red-500/20">
+                                <div className="text-[10px] text-red-400/90 font-semibold mb-1">Failure modes</div>
+                                <ul className="space-y-0.5 text-[10px] text-gray-400">
+                                  {enriched.failure_modes.slice(0, 2).map((fm, idx) => (
+                                    <li key={idx}>• {fm}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
                             {iv.assumptions && iv.assumptions.length > 0 && (
                               <div className="text-[10px] text-amber-600/80 mb-2 italic">Assumes: {iv.assumptions.slice(0, 2).join("; ")}</div>
                             )}
@@ -6124,21 +6146,90 @@ export function OnboardingFlow({
                       })}
                     </div>
 
-                    {/* Best 2-action strategy */}
-                    {forecastData.combined_strategies && forecastData.combined_strategies.length > 0 && (
-                      <div className="mt-4 pt-4 border-t border-white/10">
-                        <h4 className="text-xs font-semibold text-cyan-400/90 uppercase mb-2">Best 2-action strategy</h4>
+                    {/* Ranked Strategies */}
+                    {forecastData.ranked_strategies && forecastData.ranked_strategies.length > 0 && (
+                      <div className="mt-6 pt-6 border-t border-white/10">
+                        <h4 className="text-xs font-semibold text-cyan-400/90 uppercase tracking-widest mb-3">Ranked Strategies</h4>
                         <div className="space-y-2">
-                          {forecastData.combined_strategies.map((s) => (
-                            <div key={s.id} className="bg-cyan-500/10 rounded-lg px-3 py-2 border border-cyan-500/20">
-                              <div className="text-xs text-white font-medium mb-1">{s.summary}</div>
-                              <div className="flex gap-2 text-[10px]">
-                                <span className={`${s.risk_level === "low" ? "text-emerald-400" : s.risk_level === "medium" ? "text-amber-400" : "text-red-400"}`}>
-                                  Risk: {s.risk_level.toUpperCase()}
+                          {forecastData.ranked_strategies.slice(0, 3).map((s) => (
+                            <div key={s.id} className="bg-cyan-500/10 rounded-xl px-4 py-3 border border-cyan-500/20">
+                              <div className="flex items-center justify-between mb-1.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] bg-cyan-500/30 text-cyan-400 font-bold px-2 py-0.5 rounded">Priority #{s.recommendation_priority}</span>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${s.urgency_level === "high" ? "bg-red-500/20 text-red-400" : s.urgency_level === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"}`}>
+                                    {s.urgency_level.toUpperCase()} urgency
+                                  </span>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${s.execution_difficulty === "easy" ? "bg-emerald-500/20 text-emerald-400" : s.execution_difficulty === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-red-500/20 text-red-400"}`}>
+                                    {s.execution_difficulty.toUpperCase()}
+                                  </span>
+                                </div>
+                                <span className={`text-[10px] font-mono ${s.risk_level === "low" ? "text-emerald-400" : s.risk_level === "medium" ? "text-amber-400" : "text-red-400"}`}>
+                                  {(s.feasibility_score * 100).toFixed(0)}% feasible
                                 </span>
-                                <span className={s.low_point < 0 ? "text-red-400" : "text-gray-500"}>Low point: {cashDisplay(Math.round(s.low_point))}</span>
-                                <span className="text-gray-500">Stress prob: {(s.stress_prob * 100).toFixed(0)}%</span>
                               </div>
+                              <div className="text-xs text-white font-medium mb-1">{s.ai_summary}</div>
+                              <div className="flex gap-2 text-[10px] text-gray-500">
+                                <span className={s.low_point < 0 ? "text-red-400" : "text-gray-500"}>Low point: {cashDisplay(Math.round(s.low_point))}</span>
+                                <span>Stress prob: {(s.stress_prob * 100).toFixed(0)}%</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Execution Plans */}
+                    {forecastData.execution_plans && forecastData.execution_plans.length > 0 && (
+                      <div className="mt-6 pt-6 border-t border-white/10">
+                        <h4 className="text-xs font-semibold text-cyan-400/90 uppercase tracking-widest mb-3">Execution Plans</h4>
+                        <div className="space-y-3">
+                          {forecastData.execution_plans.slice(0, 2).map((plan) => (
+                            <div key={plan.action_id} className="bg-white/[0.02] rounded-xl px-4 py-3 border border-white/5">
+                              <div className="text-xs font-semibold text-white mb-2">{plan.action_label}</div>
+                              <div className="space-y-1.5 mb-2">
+                                {plan.steps.map((step) => (
+                                  <div key={step.step_number} className="text-[10px] text-gray-400 flex gap-2">
+                                    <span className="text-cyan-400 font-bold w-4 shrink-0">{step.step_number}.</span>
+                                    <span>
+                                      <span className="text-white">{step.action}</span>
+                                      {step.details && <span className="text-gray-500"> — {step.details}</span>}
+                                      {step.deadline && <span className="text-amber-400/70"> ({step.deadline})</span>}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                              {plan.email_draft && (
+                                <div className="mb-2 p-2 bg-emerald-500/5 rounded border border-emerald-500/20">
+                                  <div className="text-[10px] text-emerald-400/90 font-semibold mb-1">Email draft</div>
+                                  <div className="text-[10px] text-gray-400 italic">{plan.email_draft.slice(0, 100)}...</div>
+                                </div>
+                              )}
+                              {plan.trigger_condition && (
+                                <div className="text-[10px] text-gray-500">Trigger: {plan.trigger_condition}</div>
+                              )}
+                              {plan.success_metric && (
+                                <div className="text-[10px] text-gray-500">Success: {plan.success_metric}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Anomalies & Warnings */}
+                    {forecastData.intervention_anomalies && forecastData.intervention_anomalies.length > 0 && (
+                      <div className="mt-6 pt-6 border-t border-white/10">
+                        <h4 className="text-xs font-semibold text-amber-400/90 uppercase tracking-widest mb-3">Anomalies & Warnings</h4>
+                        <div className="space-y-2">
+                          {forecastData.intervention_anomalies.map((anomaly, idx) => (
+                            <div key={idx} className={`p-2 rounded border ${anomaly.severity === "critical" ? "bg-red-500/10 border-red-500/20" : anomaly.severity === "warning" ? "bg-amber-500/10 border-amber-500/20" : "bg-blue-500/10 border-blue-500/20"}`}>
+                              <div className={`text-[10px] font-semibold ${anomaly.severity === "critical" ? "text-red-400" : anomaly.severity === "warning" ? "text-amber-400" : "text-blue-400"}`}>
+                                {anomaly.anomaly_type.toUpperCase()}
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-0.5">{anomaly.message}</div>
+                              {anomaly.suggested_action && (
+                                <div className="text-[10px] text-gray-500 mt-1">Suggestion: {anomaly.suggested_action}</div>
+                              )}
                             </div>
                           ))}
                         </div>
