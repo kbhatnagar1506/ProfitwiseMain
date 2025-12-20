@@ -533,7 +533,7 @@ export async function GET() {
     // Reset PRNG after computation
     resetPrng()
 
-    const result = {
+    let result = {
       ...forecast,
       narrative: {
         ...forecast.narrative,
@@ -541,6 +541,28 @@ export async function GET() {
       },
       starting_cash: startingCashResult.cash,
       balance_source: startingCashResult.source,
+    }
+
+    // Try to retrieve enriched AI data if available
+    try {
+      const enrichedCacheKey = `forecast_enriched_${user.id}`
+      const enrichedResult = await query(
+        `SELECT data FROM forecast_cache WHERE user_id = $1 AND cache_key = $2 LIMIT 1`,
+        [user.id, enrichedCacheKey]
+      )
+      if (enrichedResult.rows.length > 0) {
+        const enrichedData = enrichedResult.rows[0].data
+        result = {
+          ...result,
+          enriched_interventions: enrichedData.enriched,
+          ranked_strategies: enrichedData.ranked,
+          execution_plans: enrichedData.plans,
+          intervention_anomalies: enrichedData.anomalies,
+        }
+        log("forecast.enriched_data.merged", { userId: user.id })
+      }
+    } catch (err) {
+      log("forecast.enriched_data.merge_error", { error: err.message })
     }
 
     // Cache the result for future requests
@@ -576,7 +598,7 @@ export async function GET() {
     })
 
     return NextResponse.json(result)
-      } catch (err) {
+  } catch (err) {
     log("forecast.compute.error", { error: String(err) }, "error")
     
     // Update status to error (fire and forget)
@@ -601,6 +623,39 @@ export async function GET() {
       { error: "Failed to compute cashflow forecast" },
       { status: 500 }
     )
+  }
+}
+
+export async function POST() {
+  try {
+    const user = await getUser()
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    // Check if enriched AI data is available
+    const enrichedCacheKey = `forecast_enriched_${user.id}`
+    const enrichedResult = await query(
+      `SELECT data FROM forecast_cache WHERE user_id = $1 AND cache_key = $2 LIMIT 1`,
+      [user.id, enrichedCacheKey]
+    )
+
+    if (enrichedResult.rows.length > 0) {
+      const enrichedData = enrichedResult.rows[0].data
+      log("forecast.enriched_data.available", { userId: user.id })
+      return NextResponse.json({
+        ready: true,
+        enriched_interventions: enrichedData.enriched,
+        ranked_strategies: enrichedData.ranked,
+        execution_plans: enrichedData.plans,
+        intervention_anomalies: enrichedData.anomalies,
+      })
+    }
+
+    return NextResponse.json({ ready: false })
+  } catch (err) {
+    log("forecast.enriched_data.check_error", { error: String(err) })
+    return NextResponse.json({ ready: false, error: String(err) }, { status: 500 })
   }
 }
 

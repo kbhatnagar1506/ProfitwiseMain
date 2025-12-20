@@ -5657,21 +5657,39 @@ export async function computeCashflowForecast(
   // AI Decision Layer: Enrich interventions, rerank strategies, generate execution plans
   // Run these in the background (non-blocking) to avoid timeout
   const founderProfile = inferFounderProfile(forecastCtx)
-  let enriched_interventions: any = undefined
-  let ranked_strategies: any = undefined
+  let enriched_interventions: any = interventions
+  let ranked_strategies: any = combined_strategies
   let execution_plans: any = undefined
   let intervention_anomalies: any = undefined
 
   // Fire off AI enrichment in background without awaiting
   if (process.env.FORECAST_LLM_ENABLED) {
-    Promise.all([
-      enrichInterventionsWithReasoning(interventions, behavioral_models, forecastCtx).then(r => { enriched_interventions = r }),
-      rerankStrategiesWithAI(combined_strategies, interventions, behavioral_models, forecastCtx, founderProfile).then(r => { ranked_strategies = r }),
-      generateExecutionPlans(interventions as any, combined_strategies as any, behavioral_models, forecastCtx).then(r => { execution_plans = r }),
-      detectInterventionAnomalies(interventions as any, ranked_strategies as any, behavioral_models).then(r => { intervention_anomalies = r }),
-    ]).catch(err => {
-      log("ai_decision_layer.background_error", { error: err.message })
-    })
+    (async () => {
+      try {
+        const enriched = await enrichInterventionsWithReasoning(interventions, behavioral_models, forecastCtx)
+        const ranked = await rerankStrategiesWithAI(combined_strategies, interventions, behavioral_models, forecastCtx, founderProfile)
+        const plans = await generateExecutionPlans(enriched, ranked, behavioral_models, forecastCtx)
+        const anomalies = await detectInterventionAnomalies(enriched, ranked, behavioral_models)
+        
+        // Store enriched data in cache for later retrieval
+        if (userId) {
+          try {
+            const cacheKey = `forecast_enriched_${userId}`
+            await db.query(
+              `INSERT INTO forecast_cache (user_id, cache_key, data, created_at, expires_at) 
+               VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '1 hour')
+               ON CONFLICT (user_id, cache_key) DO UPDATE SET data = $3, created_at = NOW()`,
+              [userId, cacheKey, JSON.stringify({ enriched, ranked, plans, anomalies })]
+            )
+            log("ai_decision_layer.enrichment_cached", { userId, enriched_count: enriched.length, ranked_count: ranked.length })
+          } catch (cacheErr) {
+            log("ai_decision_layer.cache_error", { error: cacheErr.message })
+          }
+        }
+      } catch (err) {
+        log("ai_decision_layer.background_error", { error: err.message })
+      }
+    })()
   }
 
   // Scenario drivers (WHY the pessimistic scenario is bad)
