@@ -140,7 +140,7 @@ export async function GET(
   const scrubbedBankText = scrubMovementText(rawBankText, row.counterparty)
 
   const policyStatus = (tagData.policy_status as string | undefined)
-    ?? (row.review_needed ? "excluded_for_review" : row.movement_type.startsWith("unknown") ? "unresolved" : "included")
+    ?? (row.review_needed ? "excluded_for_review" : (row.movement_type?.startsWith("unknown") ?? false) ? "unresolved" : "included")
   const hitsPnl = bool(tagData.hits_pnl) || row.pnl_eligible
   const statusBadge: MovementDetailResponse["headline"]["status_badge"] =
     policyStatus === "unresolved"

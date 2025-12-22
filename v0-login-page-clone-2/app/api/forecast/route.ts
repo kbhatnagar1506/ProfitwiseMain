@@ -381,8 +381,7 @@ export async function GET() {
     })
 
     // Check for cached forecast first
-    // Temporarily disable cache to debug reconciled models
-    const cached = null // await getCachedForecast(user.id)
+    const cached = await getCachedForecast(user.id)
     if (cached) {
       log("forecast.cache.hit", { userId: user.id, computedAt: cached.computed_at })
       
@@ -571,7 +570,8 @@ export async function GET() {
         }
       }
     } catch (err) {
-      log("forecast.enriched_data.merge_error", { error: err.message })
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      log("forecast.enriched_data.merge_error", { error: errorMsg })
     }
 
     // Trigger background AI enrichment if not already cached

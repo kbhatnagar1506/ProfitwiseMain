@@ -4,6 +4,7 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { buildEntityProfiles, getAllEntityProfiles } from "@/lib/entity-profiles"
 import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
+import { validateSortField, validateNumericParam, getErrorMessage } from "@/lib/api-utils"
 import type { EntityPaymentProfile, EntityType } from "@/lib/state/types"
 
 async function getUser() {
@@ -11,6 +12,8 @@ async function getUser() {
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   return getUserBySessionToken(sessionToken ?? "")
 }
+
+const ALLOWED_SORT_FIELDS = ["lifetime_value", "transaction_count", "last_transaction", "name"]
 
 export async function GET(request: Request) {
   const user = await getUser()
@@ -21,8 +24,8 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url)
   const type = searchParams.get("type") as EntityType | null
-  const sortBy = searchParams.get("sort") || "lifetime_value"
-  const minTransactions = parseInt(searchParams.get("min_transactions") || "1", 10)
+  const sortBy = validateSortField(searchParams.get("sort"), ALLOWED_SORT_FIELDS)
+  const minTransactions = validateNumericParam(searchParams.get("min_transactions"), 1, 1, 1000)
   const refresh = searchParams.get("refresh") === "true"
 
   try {
