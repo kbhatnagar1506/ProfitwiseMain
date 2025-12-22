@@ -13,17 +13,20 @@ import { computeAPStateFromBills } from "@/lib/state/ar-ap"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
+import { createErrorResponse, createSuccessResponse, log } from "@/lib/api-utils"
 
 export async function POST(req: Request) {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  if (!user) return NextResponse.json(createErrorResponse("Unauthorized"), { status: 401 })
 
   try {
     await ensureMovementsSchema()
-  } catch {
-    return NextResponse.json({ error: "Movements schema not available" }, { status: 500 })
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    log("brain.schema_error", { error: errorMsg, userId: user.id })
+    return NextResponse.json(createErrorResponse("Movements schema not available"), { status: 500 })
   }
 
   let arApOnly = true
@@ -58,7 +61,8 @@ export async function POST(req: Request) {
       ...(syncCashEvents ? { outstandingInvoices, apObligations } : {}),
     })
 
-    return NextResponse.json({
+    log("brain.success", { userId: user.id, operation: "financial_brain", arApOnly, merchantOnly, syncCashEvents })
+    return NextResponse.json(createSuccessResponse({
       ok: true,
       cash_events_synced: result.cash_events_synced,
       entity_profiles_refreshed: result.entity_profiles_refreshed,
@@ -74,10 +78,10 @@ export async function POST(req: Request) {
             },
           }
         : {}),
-    })
+    }, { operation: "financial_brain" }))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error("[brain] failed:", msg)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    log("brain.error", { userId: user.id, error: msg, operation: "financial_brain" })
+    return NextResponse.json(createErrorResponse("Financial brain failed", { details: msg }), { status: 500 })
   }
 }

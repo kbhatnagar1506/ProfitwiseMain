@@ -164,3 +164,100 @@ export function successResponse(data: any, message?: string) {
     timestamp: new Date().toISOString()
   }
 }
+
+/**
+ * Add timeout to a promise
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number = 25000,
+  timeoutMessage: string = 'Operation timeout'
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs)
+    )
+  ])
+}
+
+/**
+ * Validate metadata object structure
+ */
+export function validateMetadata(metadata: any): Record<string, any> {
+  if (!metadata || typeof metadata !== 'object') return {}
+  if (Array.isArray(metadata)) return {}
+  
+  // Filter out circular references and invalid values
+  const validated: Record<string, any> = {}
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof key !== 'string') continue
+    if (value === null || value === undefined) continue
+    if (typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+      // Skip nested objects to prevent circular references
+      continue
+    }
+    validated[key] = value
+  }
+  return validated
+}
+
+/**
+ * Create standardized error response with context
+ */
+export function createErrorResponse(
+  message: string,
+  context?: {
+    operation?: string
+    userId?: string
+    details?: any
+    statusCode?: number
+  }
+) {
+  return {
+    error: message,
+    ...(context?.operation && { operation: context.operation }),
+    ...(context?.details && { details: context.details }),
+    timestamp: new Date().toISOString()
+  }
+}
+
+/**
+ * Create standardized success response with context
+ */
+export function createSuccessResponse(
+  data: any,
+  context?: {
+    operation?: string
+    message?: string
+  }
+) {
+  return {
+    success: true,
+    data,
+    ...(context?.operation && { operation: context.operation }),
+    ...(context?.message && { message: context.message }),
+    timestamp: new Date().toISOString()
+  }
+}
+
+/**
+ * Type guard for database query results
+ */
+export function isValidQueryResult<T>(
+  result: any,
+  requiredFields: (keyof T)[]
+): result is T {
+  if (!result || typeof result !== 'object') return false
+  return requiredFields.every(field => field in result)
+}
+
+/**
+ * Safe numeric calculation with overflow check
+ */
+export function safeNumericAdd(a: number, b: number, max: number = Number.MAX_SAFE_INTEGER): number {
+  const result = a + b
+  if (result > max) return max
+  if (result < -max) return -max
+  return result
+}
