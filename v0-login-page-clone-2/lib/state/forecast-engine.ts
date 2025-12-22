@@ -5662,35 +5662,8 @@ export async function computeCashflowForecast(
   let execution_plans: any = undefined
   let intervention_anomalies: any = undefined
 
-  // Fire off AI enrichment in background without awaiting
-  if (process.env.FORECAST_LLM_ENABLED) {
-    (async () => {
-      try {
-        const enriched = await enrichInterventionsWithReasoning(interventions, behavioral_models, forecastCtx)
-        const ranked = await rerankStrategiesWithAI(combined_strategies, interventions, behavioral_models, forecastCtx, founderProfile)
-        const plans = await generateExecutionPlans(enriched, ranked, behavioral_models, forecastCtx)
-        const anomalies = await detectInterventionAnomalies(enriched, ranked, behavioral_models)
-        
-        // Store enriched data in cache for later retrieval
-        if (userId) {
-          try {
-            const cacheKey = `forecast_enriched_${userId}`
-            await db.query(
-              `INSERT INTO forecast_cache (user_id, cache_key, data, created_at, expires_at) 
-               VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '1 hour')
-               ON CONFLICT (user_id, cache_key) DO UPDATE SET data = $3, created_at = NOW()`,
-              [userId, cacheKey, JSON.stringify({ enriched, ranked, plans, anomalies })]
-            )
-            log("ai_decision_layer.enrichment_cached", { userId, enriched_count: enriched.length, ranked_count: ranked.length })
-          } catch (cacheErr) {
-            log("ai_decision_layer.cache_error", { error: cacheErr.message })
-          }
-        }
-      } catch (err) {
-        log("ai_decision_layer.background_error", { error: err.message })
-      }
-    })()
-  }
+  // Note: AI enrichment is now handled in the API route (forecast/route.ts)
+  // to avoid database dependencies in this engine module
 
   // Scenario drivers (WHY the pessimistic scenario is bad)
   const baseScenario = scenarios.find((s) => s.scenario === "base")
