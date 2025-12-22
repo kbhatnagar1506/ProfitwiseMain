@@ -55,10 +55,10 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
         {/* Search Bar */}
         <div className="flex-1 max-w-md hidden md:flex">
           <div className="relative w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/50" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/70" />
             <Input
               placeholder="Search transactions, accounts, reports..."
-              className="pl-10 bg-white/10 border-white/20 text-white placeholder:text-white/50 hover:bg-white/15 focus:bg-white/15 transition-colors"
+              className="pl-10 bg-white text-black placeholder:text-gray-500 border-white focus:border-white focus:ring-0 transition-colors"
             />
           </div>
         </div>
