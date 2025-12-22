@@ -18,11 +18,21 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
 
   // Load expanded groups from localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem(EXPANDED_GROUPS_KEY)
-    if (saved) {
-      setExpandedGroups(new Set(JSON.parse(saved)))
-    } else {
-      // Open all groups by default
+    try {
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem(EXPANDED_GROUPS_KEY)
+        if (saved) {
+          setExpandedGroups(new Set(JSON.parse(saved)))
+        } else {
+          // Open all groups by default
+          setExpandedGroups(new Set(dashboardNavigation.map(g => g.label)))
+        }
+      } else {
+        // Fallback: open all groups if localStorage not available
+        setExpandedGroups(new Set(dashboardNavigation.map(g => g.label)))
+      }
+    } catch (error) {
+      // Fallback: open all groups if localStorage access fails
       setExpandedGroups(new Set(dashboardNavigation.map(g => g.label)))
     }
     setMounted(true)
@@ -36,7 +46,14 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
       newExpanded.add(groupLabel)
     }
     setExpandedGroups(newExpanded)
-    localStorage.setItem(EXPANDED_GROUPS_KEY, JSON.stringify(Array.from(newExpanded)))
+    
+    try {
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        localStorage.setItem(EXPANDED_GROUPS_KEY, JSON.stringify(Array.from(newExpanded)))
+      }
+    } catch (error) {
+      // Silently fail if localStorage not available
+    }
   }
 
   if (!mounted) {
