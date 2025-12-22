@@ -25,9 +25,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Top Navigation - Fixed at top */}
       <TopNavBar />
 
-      {/* Main Layout - Below header */}
+      {/* Main Layout - Below header with proper spacing */}
       <SidebarProvider defaultOpen={true}>
-        <div className="flex h-[calc(100vh-64px)] w-full bg-background pt-0 mt-16">
+        <div className="flex w-full bg-background" style={{ height: 'calc(100vh - 64px)', marginTop: '64px' }}>
           {/* Sidebar - Black background with forced styles */}
           <Sidebar className="!bg-black !border-r !border-white/10 !text-white transition-all duration-300 ease-in-out">
             <SidebarNavigation isCollapsed={false} />
