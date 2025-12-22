@@ -554,19 +554,21 @@ export async function GET() {
     try {
       const enrichedCacheKey = `forecast_enriched_${user.id}`
       const enrichedResult = await query(
-        `SELECT data FROM forecast_cache WHERE user_id = $1 AND cache_key = $2 LIMIT 1`,
-        [user.id, enrichedCacheKey]
+        `SELECT forecast_data FROM forecast_cache WHERE user_id = $1 LIMIT 1`,
+        [user.id]
       )
       if (enrichedResult.rows.length > 0) {
-        const enrichedData = enrichedResult.rows[0].data
-        result = {
-          ...result,
-          enriched_interventions: enrichedData.enriched,
-          ranked_strategies: enrichedData.ranked,
-          execution_plans: enrichedData.plans,
-          intervention_anomalies: enrichedData.anomalies,
+        const cachedForecast = enrichedResult.rows[0].forecast_data
+        if (cachedForecast?.enriched_interventions) {
+          result = {
+            ...result,
+            enriched_interventions: cachedForecast.enriched_interventions,
+            ranked_strategies: cachedForecast.ranked_strategies,
+            execution_plans: cachedForecast.execution_plans,
+            intervention_anomalies: cachedForecast.intervention_anomalies,
+          }
+          log("forecast.enriched_data.merged", { userId: user.id })
         }
-        log("forecast.enriched_data.merged", { userId: user.id })
       }
     } catch (err) {
       log("forecast.enriched_data.merge_error", { error: err.message })
@@ -576,26 +578,31 @@ export async function GET() {
     if (process.env.FORECAST_LLM_ENABLED) {
       (async () => {
         try {
-          const enrichedCacheKey = `forecast_enriched_${user.id}`
-          const existingEnriched = await query(
-            `SELECT data FROM forecast_cache WHERE user_id = $1 AND cache_key = $2 LIMIT 1`,
-            [user.id, enrichedCacheKey]
+          const existingCache = await query(
+            `SELECT forecast_data FROM forecast_cache WHERE user_id = $1 LIMIT 1`,
+            [user.id]
           )
           
-          // Only run enrichment if not already cached
-          if (existingEnriched.rows.length === 0) {
+          // Only run enrichment if not already cached with enriched data
+          const hasEnrichedData = existingCache.rows.length > 0 && existingCache.rows[0].forecast_data?.enriched_interventions
+          if (!hasEnrichedData) {
             const founderProfile = inferFounderProfile(forecastCtx)
             const enriched = await enrichInterventionsWithReasoning(forecast.interventions, forecast.behavioral_models, forecastCtx)
             const ranked = await rerankStrategiesWithAI(forecast.combined_strategies, forecast.interventions, forecast.behavioral_models, forecastCtx, founderProfile)
             const plans = await generateExecutionPlans(enriched, ranked, forecast.behavioral_models, forecastCtx)
             const anomalies = await detectInterventionAnomalies(enriched, ranked, forecast.behavioral_models)
             
-            // Store enriched data in cache
+            // Update cache with enriched data
+            const enrichedForecast = {
+              ...result,
+              enriched_interventions: enriched,
+              ranked_strategies: ranked,
+              execution_plans: plans,
+              intervention_anomalies: anomalies,
+            }
             await query(
-              `INSERT INTO forecast_cache (user_id, cache_key, data, created_at, expires_at) 
-               VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '1 hour')
-               ON CONFLICT (user_id, cache_key) DO UPDATE SET data = $3, created_at = NOW()`,
-              [user.id, enrichedCacheKey, JSON.stringify({ enriched, ranked, plans, anomalies })]
+              `UPDATE forecast_cache SET forecast_data = $1 WHERE user_id = $2`,
+              [JSON.stringify(enrichedForecast), user.id]
             )
             log("ai_decision_layer.enrichment_cached", { userId: user.id, enriched_count: enriched.length, ranked_count: ranked.length })
           }
@@ -673,23 +680,24 @@ export async function POST() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Check if enriched AI data is available
-    const enrichedCacheKey = `forecast_enriched_${user.id}`
-    const enrichedResult = await query(
-      `SELECT data FROM forecast_cache WHERE user_id = $1 AND cache_key = $2 LIMIT 1`,
-      [user.id, enrichedCacheKey]
+    // Check if enriched AI data is available in cache
+    const cacheResult = await query(
+      `SELECT forecast_data FROM forecast_cache WHERE user_id = $1 LIMIT 1`,
+      [user.id]
     )
 
-    if (enrichedResult.rows.length > 0) {
-      const enrichedData = enrichedResult.rows[0].data
-      log("forecast.enriched_data.available", { userId: user.id })
-      return NextResponse.json({
-        ready: true,
-        enriched_interventions: enrichedData.enriched,
-        ranked_strategies: enrichedData.ranked,
-        execution_plans: enrichedData.plans,
-        intervention_anomalies: enrichedData.anomalies,
-      })
+    if (cacheResult.rows.length > 0) {
+      const cachedForecast = cacheResult.rows[0].forecast_data
+      if (cachedForecast?.enriched_interventions) {
+        log("forecast.enriched_data.available", { userId: user.id })
+        return NextResponse.json({
+          ready: true,
+          enriched_interventions: cachedForecast.enriched_interventions,
+          ranked_strategies: cachedForecast.ranked_strategies,
+          execution_plans: cachedForecast.execution_plans,
+          intervention_anomalies: cachedForecast.intervention_anomalies,
+        })
+      }
     }
 
     return NextResponse.json({ ready: false })
