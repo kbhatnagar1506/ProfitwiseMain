@@ -10,27 +10,33 @@ interface SidebarNavigationProps {
   isCollapsed: boolean
 }
 
-const EXPANDED_GROUP_KEY = "profitwise-expanded-group"
+const EXPANDED_GROUPS_KEY = "profitwise-expanded-groups"
 
 export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
-  const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [mounted, setMounted] = useState(false)
 
-  // Load expanded group from localStorage on mount
+  // Load expanded groups from localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem(EXPANDED_GROUP_KEY)
-    setExpandedGroup(saved || dashboardNavigation[0]?.label || null)
+    const saved = localStorage.getItem(EXPANDED_GROUPS_KEY)
+    if (saved) {
+      setExpandedGroups(new Set(JSON.parse(saved)))
+    } else {
+      // Open all groups by default
+      setExpandedGroups(new Set(dashboardNavigation.map(g => g.label)))
+    }
     setMounted(true)
   }, [])
 
   const handleToggleGroup = (groupLabel: string) => {
-    const newExpanded = expandedGroup === groupLabel ? null : groupLabel
-    setExpandedGroup(newExpanded)
-    if (newExpanded) {
-      localStorage.setItem(EXPANDED_GROUP_KEY, newExpanded)
+    const newExpanded = new Set(expandedGroups)
+    if (newExpanded.has(groupLabel)) {
+      newExpanded.delete(groupLabel)
     } else {
-      localStorage.removeItem(EXPANDED_GROUP_KEY)
+      newExpanded.add(groupLabel)
     }
+    setExpandedGroups(newExpanded)
+    localStorage.setItem(EXPANDED_GROUPS_KEY, JSON.stringify(Array.from(newExpanded)))
   }
 
   if (!mounted) {
@@ -39,12 +45,12 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
 
   return (
     <>
-      <SidebarContent className="flex flex-col gap-1 px-1 py-2 transition-all duration-300 ease-in-out">
+      <SidebarContent className="flex flex-col gap-1 px-1 py-2 transition-all duration-300 ease-in-out overflow-y-auto">
         {dashboardNavigation.map((group) => (
           <NavigationGroup
             key={group.label}
             group={group}
-            isExpanded={expandedGroup === group.label}
+            isExpanded={expandedGroups.has(group.label)}
             onToggle={() => handleToggleGroup(group.label)}
             isCollapsed={isCollapsed}
           />
