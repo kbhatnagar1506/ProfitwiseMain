@@ -6193,20 +6193,30 @@ export function OnboardingFlow({
                               <div className="relative">
                                 <div className="flex items-start justify-between mb-2">
                                   <div className="flex items-center gap-3">
-                                    <span className="text-xs bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-bold px-2.5 py-1 rounded-full shadow-lg">Priority #{s.recommendation_priority}</span>
-                                    <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${s.urgency_level === "high" ? "bg-red-500/20 text-red-400" : s.urgency_level === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"}`}>
-                                      {s.urgency_level === "high" ? "🔴" : s.urgency_level === "medium" ? "🟡" : "🟢"} {s.urgency_level.toUpperCase()}
-                                    </span>
-                                    <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${s.execution_difficulty === "easy" ? "bg-emerald-500/20 text-emerald-400" : s.execution_difficulty === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-red-500/20 text-red-400"}`}>
-                                      {s.execution_difficulty.toUpperCase()}
-                                    </span>
+                                    <span className="text-xs bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-bold px-2.5 py-1 rounded-full shadow-lg">Priority #{s.recommendation_priority ?? idx + 1}</span>
+                                    {s.urgency_level && (
+                                      <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${s.urgency_level === "high" ? "bg-red-500/20 text-red-400" : s.urgency_level === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"}`}>
+                                        {s.urgency_level === "high" ? "🔴" : s.urgency_level === "medium" ? "🟡" : "🟢"} {s.urgency_level.toUpperCase()}
+                                      </span>
+                                    )}
+                                    {s.execution_difficulty && (
+                                      <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold ${s.execution_difficulty === "easy" ? "bg-emerald-500/20 text-emerald-400" : s.execution_difficulty === "medium" ? "bg-amber-500/20 text-amber-400" : "bg-red-500/20 text-red-400"}`}>
+                                        {s.execution_difficulty.toUpperCase()}
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="text-right">
-                                    <div className="text-emerald-400 font-mono font-bold">{(s.feasibility_score * 100).toFixed(0)}% feasible</div>
-                                    <div className="text-[10px] text-gray-500">{s.risk_level.toUpperCase()} risk</div>
+                                    {s.feasibility_score != null && (
+                                      <div className="text-emerald-400 font-mono font-bold">{(s.feasibility_score * 100).toFixed(0)}% feasible</div>
+                                    )}
+                                    {s.risk_level && (
+                                      <div className="text-[10px] text-gray-500">{s.risk_level.toUpperCase()} risk</div>
+                                    )}
                                   </div>
                                 </div>
-                                <div className="text-sm text-gray-200 mb-2 font-medium">{s.ai_summary}</div>
+                                {s.ai_summary && (
+                                  <div className="text-sm text-gray-200 mb-2 font-medium">{s.ai_summary}</div>
+                                )}
                                 <div className="flex gap-3 text-[10px]">
                                   <div className="flex-1 bg-slate-700/30 rounded-lg px-2.5 py-1.5">
                                     <div className="text-gray-500 mb-0.5">Low point</div>
@@ -6276,7 +6286,7 @@ export function OnboardingFlow({
                           {forecastData.intervention_anomalies.map((anomaly, idx) => (
                             <div key={idx} className={`p-3 rounded-xl border transition-all ${anomaly.severity === "critical" ? "bg-red-500/10 border-red-500/30 hover:border-red-400/50" : anomaly.severity === "warning" ? "bg-amber-500/10 border-amber-500/30 hover:border-amber-400/50" : "bg-blue-500/10 border-blue-500/30 hover:border-blue-400/50"}`}>
                               <div className={`text-sm font-bold flex items-center gap-2 ${anomaly.severity === "critical" ? "text-red-400" : anomaly.severity === "warning" ? "text-amber-400" : "text-blue-400"}`}>
-                                {anomaly.severity === "critical" ? "🔴" : anomaly.severity === "warning" ? "⚠️" : "ℹ️"} {anomaly.anomaly_type.toUpperCase()}
+                                {anomaly.severity === "critical" ? "🔴" : anomaly.severity === "warning" ? "⚠️" : "ℹ️"} {anomaly.anomaly_type ? anomaly.anomaly_type.toUpperCase() : "ANOMALY"}
                               </div>
                               <div className="text-xs text-gray-300 mt-1">{anomaly.message}</div>
                               {anomaly.suggested_action && (
