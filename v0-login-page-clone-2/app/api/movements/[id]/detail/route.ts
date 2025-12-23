@@ -4,6 +4,7 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema, query } from "@/lib/db"
 import { resolveDisplayNames } from "@/lib/display-name-resolve"
 import { scrubMovementText } from "@/lib/text-cleaner"
+import { validateUUID, createErrorResponse, log } from "@/lib/api-utils"
 import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 
 type DbMovementDetailRow = {
@@ -54,10 +55,16 @@ export async function GET(
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  if (!user) return NextResponse.json(createErrorResponse("Unauthorized"), { status: 401 })
 
   const { id } = await context.params
-  if (!id) return NextResponse.json({ error: "movement id required" }, { status: 400 })
+  if (!id) return NextResponse.json(createErrorResponse("movement id required"), { status: 400 })
+
+  // Validate UUID format
+  if (!validateUUID(id)) {
+    log("movements.detail.invalid_uuid", { userId: user.id, movementId: id })
+    return NextResponse.json(createErrorResponse("Invalid movement ID format"), { status: 400 })
+  }
 
   await ensureMovementsSchema()
 

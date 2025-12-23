@@ -4,6 +4,7 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { getEntityProfile, aggregateEntityTransactions } from "@/lib/entity-profiles"
 import { generateEntityNarratives, updateEntityNarratives } from "@/lib/entity-profile-ai"
+import { validateUUID, createErrorResponse, log } from "@/lib/api-utils"
 import type { EntityTransaction, EntityNarratives, ForecastFeatures, EntityArchetype } from "@/lib/state/types"
 
 async function getUser() {
@@ -18,11 +19,18 @@ export async function GET(
 ) {
   const user = await getUser()
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json(createErrorResponse("Unauthorized"), { status: 401 })
   }
   const userId = user.id
 
   const { id: entityId } = await params
+  
+  // Validate UUID format
+  if (!validateUUID(entityId)) {
+    log("entities.get.invalid_uuid", { userId, entityId })
+    return NextResponse.json(createErrorResponse("Invalid entity ID format"), { status: 400 })
+  }
+
   const { searchParams } = new URL(request.url)
   const includeTransactions = searchParams.get("transactions") !== "false"
   const refreshNarratives = searchParams.get("refresh_narratives") === "true"
@@ -42,7 +50,7 @@ export async function GET(
     )
 
     if (entityResult.rows.length === 0) {
-      return NextResponse.json({ error: "Entity not found" }, { status: 404 })
+      return NextResponse.json(createErrorResponse("Entity not found"), { status: 404 })
     }
 
     const entity = entityResult.rows[0]
