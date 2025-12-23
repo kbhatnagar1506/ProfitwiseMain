@@ -18,6 +18,7 @@ import type { CanonicalMovement, MovementTag, ReviewReason } from "@/lib/movemen
 import type { OutstandingInvoice, OutstandingBill, ForecastContext, CashflowForecast } from "@/lib/state/types"
 import { fetchReconciledARMovements, fetchReconciledAPMovements, buildReconciledCustomerModels, buildReconciledVendorModels } from "@/lib/reconciled-models"
 import { calculateARSettlementTiming, calculateAPSettlementTiming, getSettlementTimingConfidence } from "@/lib/settlement-timing"
+import { withTimeout } from "@/lib/api-utils"
 import { ensureForecastStatusSchema } from "@/lib/forecast-status-schema"
 import {
   enrichInterventionsWithReasoning,
@@ -273,7 +274,7 @@ async function getStartingCash(userId: string): Promise<{ cash: number; source: 
       [userId]
     )
     const netCash = parseFloat(rows[0]?.net_cash ?? "0")
-    if (netCash > 0) {
+    if (!isNaN(netCash) && netCash > 0) {
       return { cash: netCash, source: "derived" }
     }
   } catch {
@@ -404,7 +405,7 @@ export async function GET() {
     // Seed PRNG for reproducible Monte Carlo results within the same day
     seedPrng(user.id)
 
-    // Fetch all required data in parallel
+    // Fetch all required data in parallel with timeout protection
     const [
       taggedMovements,
       invoices,
@@ -417,7 +418,7 @@ export async function GET() {
       arSettlementTiming,
       apSettlementTiming,
       settlementTimingConfidence,
-    ] = await Promise.all([
+    ] = await withTimeout(Promise.all([
       fetchTaggedMovements(user.id),
       fetchInvoicesForReconciliation(user.id),
       fetchBillsForReconciliation(user.id),
@@ -429,7 +430,7 @@ export async function GET() {
       calculateARSettlementTiming(user.id),
       calculateAPSettlementTiming(user.id),
       getSettlementTimingConfidence(user.id),
-    ])
+    ]), 25000, "Data fetch timeout")
 
     // Enrich movements with attribution timestamps for settlement timing
     const enrichedMovements = await enrichMovementsWithAttributionTimestamps(user.id, taggedMovements)
