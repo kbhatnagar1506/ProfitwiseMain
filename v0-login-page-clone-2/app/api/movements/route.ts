@@ -3,7 +3,7 @@ import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema } from "@/lib/db"
 import { toMovementClass } from "@/lib/movement-types"
-import { isValidQueryResult } from "@/lib/api-utils"
+import { isValidQueryResult, log } from "@/lib/api-utils"
 import type { CanonicalMovement, MovementClass, ReviewReason } from "@/lib/movement-types"
 import { resolveDisplayNames } from "@/lib/display-name-resolve"
 
@@ -250,5 +250,6 @@ export async function GET() {
     }
   }
 
+  log("movements.list.success", { userId, movementCount: movementsWithTags.length, operation: "list_movements" })
   return NextResponse.json({ movements: movementsWithTags, summary, summary_from_tags: summaryFromTags })
 }

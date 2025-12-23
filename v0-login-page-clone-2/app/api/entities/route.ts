@@ -4,7 +4,7 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { buildEntityProfiles, getAllEntityProfiles } from "@/lib/entity-profiles"
 import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
-import { validateSortField, validateNumericParam, getErrorMessage } from "@/lib/api-utils"
+import { validateSortField, validateNumericParam, getErrorMessage, log } from "@/lib/api-utils"
 import type { EntityPaymentProfile, EntityType } from "@/lib/state/types"
 
 async function getUser() {
@@ -87,9 +87,11 @@ export async function GET(request: Request) {
       at_risk_count: profiles.filter((p) => (p.risk_score || 0) > 0.5).length,
     }
 
+    log("entities.list.success", { userId, entityCount: entities.length, operation: "list_entities" })
     return NextResponse.json({ entities, summary })
   } catch (error) {
-    console.error("[api/entities] Error:", error)
+    const errorMsg = getErrorMessage(error)
+    log("entities.list.error", { userId, error: errorMsg, operation: "list_entities" })
     return NextResponse.json(
       { error: "Failed to fetch entities" },
       { status: 500 }
