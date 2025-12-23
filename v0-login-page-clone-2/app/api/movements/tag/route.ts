@@ -2,7 +2,8 @@ import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { tagMovements } from "@/lib/movement-tag-enrich"
-import { createErrorResponse, createSuccessResponse, log } from "@/lib/api-utils"
+import { createErrorResponse, createSuccessResponse } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 
 export async function POST() {
   const cookieStore = await cookies()

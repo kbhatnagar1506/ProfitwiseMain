@@ -3,7 +3,8 @@ import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 import { generateMovementExplanation } from "@/lib/movement-explain"
-import { createErrorResponse, createSuccessResponse, log } from "@/lib/api-utils"
+import { createErrorResponse, createSuccessResponse } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 
 export async function POST(req: Request) {
   try {

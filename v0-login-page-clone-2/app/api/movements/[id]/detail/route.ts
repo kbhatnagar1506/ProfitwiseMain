@@ -4,7 +4,8 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema, query } from "@/lib/db"
 import { resolveDisplayNames } from "@/lib/display-name-resolve"
 import { scrubMovementText } from "@/lib/text-cleaner"
-import { validateUUID, createErrorResponse, log } from "@/lib/api-utils"
+import { validateUUID, createErrorResponse } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 
 type DbMovementDetailRow = {

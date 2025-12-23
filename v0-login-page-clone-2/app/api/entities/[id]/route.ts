@@ -4,7 +4,8 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { getEntityProfile, aggregateEntityTransactions } from "@/lib/entity-profiles"
 import { generateEntityNarratives, updateEntityNarratives } from "@/lib/entity-profile-ai"
-import { validateUUID, createErrorResponse, log } from "@/lib/api-utils"
+import { validateUUID, createErrorResponse } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 import type { EntityTransaction, EntityNarratives, ForecastFeatures, EntityArchetype } from "@/lib/state/types"
 
 async function getUser() {

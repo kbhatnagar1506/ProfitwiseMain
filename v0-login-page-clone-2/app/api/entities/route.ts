@@ -4,7 +4,8 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query } from "@/lib/db"
 import { buildEntityProfiles, getAllEntityProfiles } from "@/lib/entity-profiles"
 import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
-import { validateSortField, validateNumericParam, getErrorMessage, log } from "@/lib/api-utils"
+import { validateSortField, validateNumericParam, getErrorMessage } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
 import type { EntityPaymentProfile, EntityType } from "@/lib/state/types"
 
 async function getUser() {
