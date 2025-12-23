@@ -3,7 +3,7 @@ import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema, query } from "@/lib/db"
 import { tagMovements } from "@/lib/movement-tag-enrich"
-import { validateEnumValue, validateString } from "@/lib/api-utils"
+import { validateEnumValue, validateString, validateRequiredFields, createErrorResponse, log } from "@/lib/api-utils"
 
 type Body = {
   movement_id?: string
@@ -17,18 +17,26 @@ export async function POST(req: NextRequest) {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  if (!user) return NextResponse.json(createErrorResponse("Unauthorized"), { status: 401 })
 
   let body: Body
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
+    return NextResponse.json(createErrorResponse("Invalid JSON body"), { status: 400 })
   }
+
+  // Validate required fields
+  const validation = validateRequiredFields(body, ["movement_id"])
+  if (!validation.valid) {
+    log("movements.override_policy.missing_fields", { userId: user.id, missingFields: validation.missingFields })
+    return NextResponse.json(createErrorResponse(`Missing required fields: ${validation.missingFields.join(", ")}`), { status: 400 })
+  }
+
   const movementId = validateString(body.movement_id, 1, 100)
   const override = validateEnumValue(body.override, ALLOWED_OVERRIDES, "include")
   const reason = validateString(body.reason, 1, 500) || "manual_override"
-  if (!movementId) return NextResponse.json({ error: "movement_id is required" }, { status: 400 })
+  if (!movementId) return NextResponse.json(createErrorResponse("movement_id is required and must be non-empty"), { status: 400 })
 
   await ensureMovementsSchema()
 
@@ -42,7 +50,7 @@ export async function POST(req: NextRequest) {
      WHERE m.id = $1 AND m.user_id = $2`,
     [movementId, user.id]
   )
-  if (rows.length === 0) return NextResponse.json({ error: "Movement tag not found" }, { status: 404 })
+  if (rows.length === 0) return NextResponse.json(createErrorResponse("Movement tag not found"), { status: 404 })
 
   const prev = (rows[0].tag_data ?? {}) as Record<string, unknown>
   let next = { ...prev }
@@ -79,6 +87,8 @@ export async function POST(req: NextRequest) {
 
   // Re-tag to refresh aggregates; engine now preserves overrides when lock is set.
   await tagMovements(user.id)
+
+  log("movements.override_policy.success", { userId: user.id, override, reason: reason.slice(0, 50) })
 
   return NextResponse.json({ ok: true, movement_id: movementId, override })
 }
