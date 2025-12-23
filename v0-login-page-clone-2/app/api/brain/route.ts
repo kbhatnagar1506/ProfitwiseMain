@@ -3,7 +3,7 @@
  * Optional query: arApOnly, merchantOnly (same as reconciliation).
  */
 
-import { NextResponse } from "next/server"
+import { NextResponse, NextRequest } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { ensureMovementsSchema } from "@/lib/db"
@@ -15,8 +15,24 @@ import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
 import { createErrorResponse, createSuccessResponse } from "@/lib/api-utils"
 import { log } from "@/lib/logger"
+import { rateLimiters, getRateLimitHeaders } from "@/lib/rate-limiter"
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const clientIp = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown'
+  const rateLimitCheck = rateLimiters.forecast.check({ ip: clientIp })
+  
+  if (!rateLimitCheck.allowed) {
+    const status = rateLimiters.forecast.getStatus({ ip: clientIp })
+    log("brain.rate_limited", { ip: clientIp, operation: "financial_brain" })
+    return NextResponse.json(
+      createErrorResponse("Too many brain requests. Please try again later."),
+      {
+        status: 429,
+        headers: getRateLimitHeaders(status),
+      }
+    )
+  }
+
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")

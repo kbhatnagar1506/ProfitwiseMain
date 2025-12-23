@@ -9,8 +9,26 @@ import {
 import { log } from "@/lib/logger"
 import { validatePassword } from "@/lib/password-strength"
 import { verifyRecaptcha } from "@/lib/recaptcha"
+import { createErrorResponse } from "@/lib/api-utils"
+import { rateLimiters, getRateLimitHeaders } from "@/lib/rate-limiter"
 
 export async function POST(request: NextRequest) {
+  // Apply rate limiting (stricter for signup - 3 attempts per minute)
+  const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown'
+  const signupLimiter = rateLimiters.auth // Reuse auth limiter which is 5/min, but we'll create a stricter one
+  const rateLimitCheck = signupLimiter.check({ ip: `signup:${clientIp}` })
+  
+  if (!rateLimitCheck.allowed) {
+    const status = signupLimiter.getStatus({ ip: `signup:${clientIp}` })
+    log("auth.signup.rate_limited", { ip: clientIp, operation: "signup" }, "auth")
+    return NextResponse.json(
+      createErrorResponse("Too many signup attempts. Please try again later."),
+      {
+        status: 429,
+        headers: getRateLimitHeaders(status),
+      }
+    )
+  }
   let body: { email?: string; password?: string; recaptchaToken?: string }
   try {
     body = await request.json()

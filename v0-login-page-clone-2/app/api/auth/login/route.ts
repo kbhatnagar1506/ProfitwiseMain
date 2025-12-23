@@ -9,8 +9,24 @@ import {
 import { log } from "@/lib/logger"
 import { verifyRecaptcha } from "@/lib/recaptcha"
 import { createErrorResponse } from "@/lib/api-utils"
+import { rateLimiters, getRateLimitHeaders } from "@/lib/rate-limiter"
 
 export async function POST(request: NextRequest) {
+  // Apply rate limiting
+  const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown'
+  const rateLimitCheck = rateLimiters.auth.check({ ip: clientIp })
+  
+  if (!rateLimitCheck.allowed) {
+    const status = rateLimiters.auth.getStatus({ ip: clientIp })
+    log("auth.login.rate_limited", { ip: clientIp, operation: "login" }, "auth")
+    return NextResponse.json(
+      createErrorResponse("Too many login attempts. Please try again later."),
+      {
+        status: 429,
+        headers: getRateLimitHeaders(status),
+      }
+    )
+  }
   let body: { email?: string; password?: string; recaptchaToken?: string }
   try {
     body = await request.json()
