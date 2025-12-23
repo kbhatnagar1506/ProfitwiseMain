@@ -9,13 +9,23 @@ import { listStripeAccountIdsByUserId } from "@/lib/stripe-token-store"
 import { getEntitiesFromDb as getQboEntities } from "@/lib/qbo-entity-store"
 import { getEntitiesFromDb as getXeroEntities } from "@/lib/xero-entity-store"
 import { getStripeEntitiesFromDb } from "@/lib/stripe-entity-store"
+import { createErrorResponse } from "@/lib/api-utils"
+
+// Type guards for query results
+function isValidPlaidAccount(row: any): boolean {
+  return typeof row?.item_id === 'string' && typeof row?.account_id === 'string'
+}
+
+function isValidPlaidTransaction(row: any): boolean {
+  return typeof row?.item_id === 'string' && typeof row?.date === 'string'
+}
 
 export async function GET() {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
   const user = await getUserBySessionToken(sessionToken ?? "")
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json(createErrorResponse("Unauthorized"), { status: 401 })
   }
 
   const userId = user.id
@@ -29,7 +39,7 @@ export async function GET() {
      WHERE pi.user_id = $1
      ORDER BY pa.item_id, pa.account_id`,
     [userId]
-  ).then((r) => r.rows)
+  ).then((r) => r.rows.filter(isValidPlaidAccount))
 
   const plaidTransactions = await query(
     `SELECT pt.*
@@ -40,7 +50,7 @@ export async function GET() {
      ORDER BY pt.date DESC, pt.amount DESC
      LIMIT 2000`,
     [userId]
-  ).then((r) => r.rows)
+  ).then((r) => r.rows.filter(isValidPlaidTransaction))
 
   // QBO / Xero / Stripe raw entities
   const realmIds = await listRealmIdsByUserId(userId)
