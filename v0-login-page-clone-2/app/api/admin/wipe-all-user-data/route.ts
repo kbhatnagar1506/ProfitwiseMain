@@ -11,6 +11,7 @@ import {
 } from "@/lib/db"
 import { gcpDeleteScope } from "@/lib/entity-store-gcp"
 import { log } from "@/lib/logger"
+import { createErrorResponse } from "@/lib/api-utils"
 
 /**
  * POST /api/admin/wipe-all-user-data
@@ -25,13 +26,13 @@ import { log } from "@/lib/logger"
  */
 export async function POST(req: NextRequest) {
   if (process.env.NODE_ENV !== "production") {
-    log("admin.wipe-all.rejected", { reason: "not_production" }, "db")
-    return NextResponse.json({ error: "Only available in production" }, { status: 403 })
+    log("admin.wipe-all.rejected", { reason: "not_production", operation: "wipe_all_data" }, "db")
+    return NextResponse.json(createErrorResponse("Only available in production"), { status: 403 })
   }
   if (req.nextUrl.searchParams.has("secret")) {
-    log("admin.wipe-all.rejected", { reason: "secret_in_url" }, "db")
+    log("admin.wipe-all.rejected", { reason: "secret_in_url", operation: "wipe_all_data" }, "db")
     return NextResponse.json(
-      { error: "Do not send the secret in the URL. Use the x-clean-db-secret header or JSON body." },
+      createErrorResponse("Do not send the secret in the URL. Use the x-clean-db-secret header or JSON body."),
       { status: 400 }
     )
   }
@@ -46,8 +47,8 @@ export async function POST(req: NextRequest) {
   }
   const expected = process.env.CLEAN_DB_SECRET
   if (!expected || secret !== expected) {
-    log("admin.wipe-all.unauthorized", { reason: expected ? "bad_secret" : "no_secret_configured" }, "db")
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    log("admin.wipe-all.unauthorized", { reason: expected ? "bad_secret" : "no_secret_configured", operation: "wipe_all_data" }, "db")
+    return NextResponse.json(createErrorResponse("Unauthorized"), { status: 401 })
   }
 
   try {
@@ -59,8 +60,9 @@ export async function POST(req: NextRequest) {
     await ensureWhatsAppSchema()
     await ensureSlackSchema()
   } catch (err) {
-    log("admin.wipe-all.schema_failed", { error: err instanceof Error ? err.message : String(err) }, "db")
-    return NextResponse.json({ error: "Schema setup failed" }, { status: 500 })
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    log("admin.wipe-all.schema_failed", { error: errorMsg, operation: "wipe_all_data" }, "db")
+    return NextResponse.json(createErrorResponse("Schema setup failed", { details: errorMsg }), { status: 500 })
   }
 
   // Delete GCP entity data before truncating (we need realm_id/user_id and tenant_id/user_id)
@@ -79,7 +81,8 @@ export async function POST(req: NextRequest) {
       bucketDeleted += await gcpDeleteScope("xero", r.tenant_id, r.user_id)
     }
   } catch (err) {
-    log("admin.wipe-all.gcp_failed", { error: String(err) }, "db")
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    log("admin.wipe-all.gcp_failed", { error: errorMsg, operation: "wipe_all_data" }, "db")
     // continue with DB truncate
   }
 
@@ -106,14 +109,15 @@ export async function POST(req: NextRequest) {
   `
   try {
     await query(truncateSql)
-    log("admin.wipe-all.done", { bucketDeleted }, "db")
+    log("admin.wipe-all.done", { bucketDeleted, operation: "wipe_all_data" }, "db")
     return NextResponse.json({
       ok: true,
       message: "All user data wiped. You can sign up again and test from a clean slate.",
       bucket_files_deleted: bucketDeleted,
     })
   } catch (err) {
-    log("admin.wipe-all.failed", { error: err instanceof Error ? err.message : String(err) }, "db")
-    return NextResponse.json({ error: "Wipe failed", details: String(err) }, { status: 500 })
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    log("admin.wipe-all.failed", { error: errorMsg, operation: "wipe_all_data" }, "db")
+    return NextResponse.json(createErrorResponse("Wipe failed", { details: errorMsg }), { status: 500 })
   }
 }
