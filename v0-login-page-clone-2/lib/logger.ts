@@ -109,6 +109,19 @@ export function log(
   }
 }
 
+/**
+ * Log with request ID context
+ */
+export function logWithRequestId(
+  message: string,
+  requestId: string,
+  meta?: Record<string, unknown>,
+  channel?: LogChannel
+): void {
+  const contextMeta = { ...meta, requestId }
+  log(message, contextMeta, channel)
+}
+
 export function error(
   message: string,
   err?: unknown,
