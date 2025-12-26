@@ -123,9 +123,9 @@
     @apply bg-background text-foreground;
   }
   
-  /* Dashboard sidebar - force black background and non-fixed positioning */
+  /* Dashboard sidebar */
   [data-sidebar] {
-    @apply !bg-black !text-white;
+    @apply !bg-[#0a0a0a] !text-white;
   }
   
   [data-sidebar="sidebar"] {

@@ -21,16 +21,16 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   }
 
   return (
-    <div className="flex flex-col h-screen w-full bg-background overflow-hidden">
+    <div className="flex flex-col h-screen w-full bg-[#0f0f0f] overflow-hidden">
       <TopNavBar />
 
       <SidebarProvider defaultOpen={true}>
         <div className="flex flex-1 w-full overflow-hidden">
-          <Sidebar className="!bg-black !border-r !border-white/10 !text-white !relative !h-full !inset-auto transition-all duration-300 ease-in-out">
+          <Sidebar className="!bg-[#0a0a0a] !border-r !border-white/[0.06] !text-white !relative !h-full !inset-auto">
             <SidebarNavigation isCollapsed={false} />
           </Sidebar>
 
-          <main className="flex-1 overflow-auto px-6 py-6">
+          <main className="flex-1 overflow-auto px-8 py-6">
             <div className="max-w-7xl mx-auto">
               {children}
             </div>

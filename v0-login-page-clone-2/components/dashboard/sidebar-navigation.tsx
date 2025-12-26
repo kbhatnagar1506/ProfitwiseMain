@@ -16,7 +16,6 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [mounted, setMounted] = useState(false)
 
-  // Load expanded groups from localStorage on mount
   useEffect(() => {
     try {
       if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
@@ -24,15 +23,12 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
         if (saved) {
           setExpandedGroups(new Set(JSON.parse(saved)))
         } else {
-          // Open all groups by default
           setExpandedGroups(new Set(dashboardNavigation.map(g => g.label)))
         }
       } else {
-        // Fallback: open all groups if localStorage not available
         setExpandedGroups(new Set(dashboardNavigation.map(g => g.label)))
       }
-    } catch (error) {
-      // Fallback: open all groups if localStorage access fails
+    } catch {
       setExpandedGroups(new Set(dashboardNavigation.map(g => g.label)))
     }
     setMounted(true)
@@ -51,7 +47,7 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
       if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
         localStorage.setItem(EXPANDED_GROUPS_KEY, JSON.stringify(Array.from(newExpanded)))
       }
-    } catch (error) {
+    } catch {
       // Silently fail if localStorage not available
     }
   }
@@ -62,7 +58,7 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
 
   return (
     <>
-      <SidebarContent className="flex flex-col gap-1 px-1 py-2 transition-all duration-300 ease-in-out overflow-y-auto">
+      <SidebarContent className="flex flex-col gap-0 pt-3 overflow-y-auto">
         {dashboardNavigation.map((group) => (
           <NavigationGroup
             key={group.label}
@@ -73,7 +69,7 @@ export function SidebarNavigation({ isCollapsed }: SidebarNavigationProps) {
           />
         ))}
       </SidebarContent>
-      <SidebarFooter className="px-1 py-2 transition-all duration-300 ease-in-out">
+      <SidebarFooter className="py-2 mt-auto">
         <BottomBar isCollapsed={isCollapsed} />
       </SidebarFooter>
     </>
