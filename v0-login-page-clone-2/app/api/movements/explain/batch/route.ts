@@ -6,6 +6,7 @@ import type { MovementDetailResponse } from "@/lib/movement-detail-types"
 import { generateMovementExplanation } from "@/lib/movement-explain"
 import { rateLimiters, getRateLimitHeaders } from "@/lib/rate-limiter"
 import { log } from "@/lib/logger"
+import { checkRequestSize, getSizeLimitHeaders } from "@/lib/request-size-limiter"
 
 type CacheRow = {
   movement_id: string
@@ -23,6 +24,22 @@ function parseMovementIds(value: string | null): string[] {
 }
 
 export async function GET(req: Request) {
+  // Check request size
+  const contentLength = req.headers.get("content-length")
+  const contentType = req.headers.get("content-type")
+  const sizeCheck = checkRequestSize(contentLength ? parseInt(contentLength) : null, contentType)
+  
+  if (!sizeCheck.allowed) {
+    log("movements.explain.batch.size_exceeded", { error: sizeCheck.error })
+    return NextResponse.json(
+      { error: sizeCheck.error },
+      {
+        status: 413,
+        headers: getSizeLimitHeaders(),
+      }
+    )
+  }
+
   const clientIp = (req as any).headers?.get('x-forwarded-for') || (req as any).headers?.get('x-real-ip') || 'unknown'
   const rateLimitCheck = rateLimiters.expensive.check({ ip: clientIp })
   
