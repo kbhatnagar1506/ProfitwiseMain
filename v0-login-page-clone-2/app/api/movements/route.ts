@@ -111,10 +111,27 @@ export async function GET(req?: NextRequest) {
      GROUP BY m.id
      ORDER BY m.date DESC, m.created_at DESC`,
     [userId]
-  ).then((r) => r.rows)
+  ).then((r) => {
+    logWithRequestId("movements.db_query.result", requestId, { userId, dbRowCount: r.rows.length, sampleRow: r.rows[0] ? { id: r.rows[0].id, direction: r.rows[0].direction, amount: r.rows[0].amount } : null })
+    return r.rows
+  })
 
   const movements: CanonicalMovement[] = dbRows
-    .filter(isValidMovementRow)
+    .filter((row) => {
+      const isValid = isValidMovementRow(row)
+      if (!isValid) {
+        logWithRequestId("movements.filter.invalid_row", requestId, { 
+          rowId: row?.id, 
+          hasId: typeof row?.id === 'string',
+          hasDirection: typeof row?.direction === 'string',
+          hasAmount: typeof row?.amount === 'string',
+          hasDate: typeof row?.date === 'string',
+          hasMovementType: typeof row?.movement_type === 'string',
+          rowKeys: Object.keys(row || {})
+        })
+      }
+      return isValid
+    })
     .map((r) => toPublicMovement(r, userId))
 
   // Load tags (if they exist) and attach to movements
