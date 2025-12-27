@@ -103,8 +103,6 @@ async function pretagInflows(
   }
 }
 
-const DAYS_WINDOW = 90
-
 async function generateFinancialNarrative(
   totalOut: number,
   totalIn: number,
