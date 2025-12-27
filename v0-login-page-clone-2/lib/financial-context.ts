@@ -48,6 +48,21 @@ async function pretagExpenses(
       ],
       max_tokens: LLM_MAX_TOKENS,
       temperature: LLM_TEMPERATURE,
+    }),
+  })
+  if (!res.ok) return []
+  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
+  const raw = data.choices?.[0]?.message?.content?.trim()
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw.replace(/```json\n?|\n?```/g, "").trim()) as { vendor: string; tag: string }[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+async function pretagInflows(
   inflows: { source: string; amount: number; count: number }[]
 ): Promise<{ source: string; tag: string }[]> {
   const apiKey = process.env.OPENAI_API_KEY
