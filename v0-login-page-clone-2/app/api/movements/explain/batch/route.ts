@@ -210,7 +210,10 @@ export async function POST(req: Request) {
   const user = await getUserBySessionToken(sessionToken ?? "")
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  const body = await req.json().catch(() => ({}))
+  const body = await req.json().catch((err) => {
+    log("movements.explain.batch.json_parse_error", { error: err instanceof Error ? err.message : String(err) })
+    return {}
+  })
   const movementIds = Array.isArray(body?.movement_ids) 
     ? (body.movement_ids as string[]).filter(Boolean).slice(0, 100)  // Max 100 items
     : []

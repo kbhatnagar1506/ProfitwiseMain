@@ -130,7 +130,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 })
   } catch (error) {
-    console.error("[api/entities] POST Error:", error)
+    const errorMsg = getErrorMessage(error)
+    log("entities.post.error", { error: errorMsg, operation: "rebuild_entities" })
     return NextResponse.json(
       { error: "Failed to process request" },
       { status: 500 }

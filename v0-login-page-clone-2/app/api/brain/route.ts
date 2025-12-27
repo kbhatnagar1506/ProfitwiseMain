@@ -52,7 +52,10 @@ export async function POST(req: NextRequest) {
   let merchantOnly = false
   let syncCashEvents = true
   try {
-    const body = await req.json().catch(() => ({}))
+    const body = await req.json().catch((err) => {
+      log("brain.json_parse_error", { error: err instanceof Error ? err.message : String(err), userId: user.id })
+      return {}
+    })
     if (typeof body.arApOnly === "boolean") arApOnly = body.arApOnly
     if (typeof body.merchantOnly === "boolean") merchantOnly = body.merchantOnly
     if (typeof body.syncCashEvents === "boolean") syncCashEvents = body.syncCashEvents
