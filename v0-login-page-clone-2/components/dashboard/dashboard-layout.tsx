@@ -23,8 +23,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex h-screen w-full bg-background">
-        {/* Sidebar - Black background */}
-        <Sidebar className="border-r border-border bg-black text-sidebar-foreground transition-all duration-300 ease-in-out">
+        {/* Sidebar - Black background with forced styles */}
+        <Sidebar className="!bg-black !border-r !border-white/10 !text-white transition-all duration-300 ease-in-out">
           <SidebarNavigation isCollapsed={false} />
         </Sidebar>
 
