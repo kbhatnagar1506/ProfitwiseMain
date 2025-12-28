@@ -375,9 +375,9 @@ export async function GET(req?: NextRequest) {
         headers: getRateLimitHeaders(status),
       }
     )
-  }
+    }
 
-  try {
+    try {
     const user = await getUser()
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })

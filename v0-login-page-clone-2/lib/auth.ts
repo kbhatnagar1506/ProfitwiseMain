@@ -34,6 +34,7 @@ export async function verifyPassword(
 }
 
 export async function findUserByEmail(email: string): Promise<{ id: string; password_hash: string } | null> {
+  if (!isProduction()) return null
   await ensureAuthSchema()
   const { rows } = await query<{ id: string; password_hash: string }>(
     "SELECT id, password_hash FROM users WHERE email = $1",
@@ -46,6 +47,7 @@ export async function createUser(
   email: string,
   password: string
 ): Promise<{ id: string }> {
+  if (!isProduction()) throw new Error("Signup is only available in production")
   await ensureAuthSchema()
   const passwordHash = await hashPassword(password)
   const { rows } = await query<{ id: string }>(
@@ -63,6 +65,7 @@ function generateSessionToken(): string {
 }
 
 export async function createSession(userId: string): Promise<{ token: string }> {
+  if (!isProduction()) throw new Error("Login is only available in production")
   await ensureAuthSchema()
   const token = generateSessionToken()
   const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SEC * 1000)
@@ -77,6 +80,7 @@ export async function createSession(userId: string): Promise<{ token: string }> 
 export async function getUserBySessionToken(
   token: string
 ): Promise<{ id: string; email: string } | null> {
+  if (!isProduction()) return null
   await ensureAuthSchema()
   const { rows } = await query<{ id: string; email: string }>(
     `SELECT u.id, u.email
@@ -89,5 +93,6 @@ export async function getUserBySessionToken(
 }
 
 export async function deleteSessionToken(token: string): Promise<void> {
+  if (!isProduction()) return
   await query("DELETE FROM sessions WHERE token = $1", [token])
 }
