@@ -27,7 +27,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       <SidebarProvider defaultOpen={true}>
         <div className="flex flex-1 w-full overflow-hidden">
           <Sidebar className="!bg-[#0a0a0a] !border-r !border-white/[0.06] !text-white !relative !h-full !inset-auto">
-            <SidebarNavigation isCollapsed={false} />
+            <SidebarNavigation />
           </Sidebar>
 
           <main className="flex-1 overflow-auto px-8 py-6">
