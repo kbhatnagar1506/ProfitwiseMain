@@ -43,23 +43,23 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
     .toUpperCase()
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <div className="fixed top-0 left-0 right-0 z-40 border-b border-white/10 bg-black">
       <div className="flex h-16 items-center justify-between px-6 gap-4">
         {/* Logo */}
         <Link href="/dashboard/home" className="flex items-center gap-2 font-bold text-lg flex-shrink-0">
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground text-sm font-bold">
             P
           </div>
-          <span className="hidden sm:inline text-foreground">ProfitWise</span>
+          <span className="hidden sm:inline text-white">ProfitWise</span>
         </Link>
 
         {/* Search Bar */}
         <div className="flex-1 max-w-md hidden md:flex">
           <div className="relative w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/50" />
             <Input
               placeholder="Search transactions, accounts, reports..."
-              className="pl-10 bg-accent/50 border-accent hover:bg-accent/70 focus:bg-accent/70 transition-colors"
+              className="pl-10 bg-white/10 border-white/20 text-white placeholder:text-white/50 hover:bg-white/15 focus:bg-white/15 transition-colors"
             />
           </div>
         </div>
@@ -70,17 +70,17 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
           <Button
             variant="ghost"
             size="icon"
-            className="relative hover:bg-accent"
+            className="relative hover:bg-white/10 text-white"
             title="Notifications"
           >
-            <Bell className="h-5 w-5 text-foreground" />
+            <Bell className="h-5 w-5" />
             <span className="absolute top-1 right-1 h-2 w-2 bg-destructive rounded-full" />
           </Button>
 
           {/* User Menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="rounded-full hover:bg-accent">
+              <Button variant="ghost" size="icon" className="rounded-full hover:bg-white/10">
                 <Avatar className="h-8 w-8">
                   <AvatarFallback className="bg-primary text-primary-foreground text-xs font-bold">
                     {initials}
