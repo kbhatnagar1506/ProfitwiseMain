@@ -66,7 +66,6 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
             title="Notifications"
           >
             <Bell className="h-[18px] w-[18px]" strokeWidth={1.75} />
-            <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 bg-red-500 rounded-full ring-2 ring-[#0c0c0c]" />
           </Button>
 
           <DropdownMenu>
