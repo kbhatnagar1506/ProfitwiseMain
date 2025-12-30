@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireSession } from '@/lib/require-session'
 import { query } from '@/lib/db'
-import { queues } from '@/lib/queue/bull-config'
-import { SyncInitialDataJob } from '@/lib/queue/job-types'
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,6 +29,10 @@ export async function POST(request: NextRequest) {
         { status: 200 }
       )
     }
+
+    // Dynamically import Bull to avoid bundling issues
+    const { queues } = await import('@/lib/queue/bull-config')
+    const { SyncInitialDataJob } = await import('@/lib/queue/job-types')
 
     // Queue sync-initial-data job
     const job = await queues.syncInitialData.add(
