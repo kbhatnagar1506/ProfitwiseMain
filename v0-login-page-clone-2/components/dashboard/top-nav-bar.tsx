@@ -46,10 +46,7 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
       <div className="flex h-full items-center justify-between px-6 gap-4">
         {/* Logo */}
         <Link href="/dashboard/home" className="flex items-center gap-2 font-bold text-lg flex-shrink-0">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground text-sm font-bold">
-            P
-          </div>
-          <span className="hidden sm:inline text-white font-semibold">ProfitWise</span>
+          <img src="/profitwise-logo.png" alt="ProfitWise" className="h-8 w-auto" />
         </Link>
 
         {/* Search Bar */}
