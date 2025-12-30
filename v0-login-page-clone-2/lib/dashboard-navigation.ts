@@ -47,7 +47,7 @@ export const dashboardNavigation: NavGroup[] = [
     label: "Overview",
     items: [
       { label: "Home", href: "/dashboard/home", icon: LayoutGrid },
-      { label: "Alerts", href: "/dashboard/alerts", icon: Bell, badge: 3, badgeColor: "red" },
+      { label: "Alerts", href: "/dashboard/alerts", icon: Bell },
       { label: "Activity Log", href: "/dashboard/activity-log", icon: Clock },
     ],
   },
@@ -64,8 +64,8 @@ export const dashboardNavigation: NavGroup[] = [
   {
     label: "Receivables (AR)",
     items: [
-      { label: "Invoices", href: "/dashboard/invoices", icon: FileText, badge: 5, badgeColor: "red" },
-      { label: "Chase queue", href: "/dashboard/chase-queue", icon: CheckCircle, badge: 2, badgeColor: "green" },
+      { label: "Invoices", href: "/dashboard/invoices", icon: FileText },
+      { label: "Chase queue", href: "/dashboard/chase-queue", icon: CheckCircle },
     ],
   },
   {
@@ -93,7 +93,7 @@ export const dashboardNavigation: NavGroup[] = [
   {
     label: "Accounting",
     items: [
-      { label: "Reconciliation", href: "/dashboard/reconciliation", icon: CheckCircle, badge: 1, badgeColor: "amber" },
+      { label: "Reconciliation", href: "/dashboard/reconciliation", icon: CheckCircle },
       { label: "Review queue", href: "/dashboard/review-queue", icon: Clock },
       { label: "Books", href: "/dashboard/books", icon: BookOpen },
       { label: "P&L", href: "/dashboard/p-and-l", icon: PieChart },
@@ -111,7 +111,7 @@ export const dashboardNavigation: NavGroup[] = [
     label: "Intelligence",
     items: [
       { label: "Entity profiles", href: "/dashboard/entity-profiles", icon: Sparkles },
-      { label: "Gmail intelligence", href: "/dashboard/gmail-intelligence", icon: Mail, badge: 1, badgeColor: "amber" },
+      { label: "Gmail intelligence", href: "/dashboard/gmail-intelligence", icon: Mail },
       { label: "Memory layer", href: "/dashboard/memory-layer", icon: Brain },
     ],
   },
