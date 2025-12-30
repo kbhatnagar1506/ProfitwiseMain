@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Sidebar, SidebarProvider } from "@/components/ui/sidebar"
 import { TopNavBar } from "./top-nav-bar"
 import { SidebarNavigation } from "./sidebar-navigation"
+import { SyncStatusPoller } from "./sync-status-poller"
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -11,6 +12,7 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const [mounted, setMounted] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
     setMounted(true)
@@ -37,6 +39,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </main>
         </div>
       </SidebarProvider>
+
+      <SyncStatusPoller key={refreshKey} onComplete={() => setRefreshKey(k => k + 1)} />
     </div>
   )
 }

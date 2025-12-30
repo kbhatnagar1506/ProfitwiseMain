@@ -2,18 +2,18 @@
  * POST /api/onboarding/after-identity
  * Called when user leaves Identity graph step (step 9).
  * 1. Sync entities to Supermemory
- * 2. Classify movements (background) + tag movements
- * Returns 202 immediately to avoid Heroku 30s timeout. Frontend polls /api/movements until done.
+ * 2. Queue sync-initial-data job for async processing
+ * Returns 202 immediately to avoid Heroku 30s timeout. Frontend polls /api/dashboard/sync-status until done.
  */
 
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { query, ensureMovementsSchema, ensureIdentitySchema } from "@/lib/db"
+import { query, ensureMovementsSchema, ensureIdentitySchema, ensureJobStatusSchema } from "@/lib/db"
 import { addEntitiesToSupermemory } from "@/lib/supermemory"
-import { classifyMovements } from "@/lib/movement-classify"
-import { tagMovements } from "@/lib/movement-tag-enrich"
 import { log } from "@/lib/logger"
+import { queues } from "@/lib/queue/bull-config"
+import { SyncInitialDataJob } from "@/lib/queue/job-types"
 
 export async function POST() {
   const cookieStore = await cookies()
@@ -24,6 +24,7 @@ export async function POST() {
   try {
     await ensureIdentitySchema()
     await ensureMovementsSchema()
+    await ensureJobStatusSchema()
 
     // 1. Load entities + aliases, sync to Supermemory
     const entities = (
@@ -53,17 +54,32 @@ export async function POST() {
       await addEntitiesToSupermemory(user.id, entityHints)
     }
 
-    // 2. Classify + tag in background (avoids Heroku 30s request timeout)
-    classifyMovements(user.id)
-      .then(() => tagMovements(user.id))
-      .then(() => log("onboarding.after_identity.classify_done", { userId: user.id }, "onboarding"))
-      .catch((err) =>
-        log("onboarding.after_identity.classify_error", { userId: user.id, error: err instanceof Error ? err.message : String(err) }, "onboarding")
-      )
+    // 2. Queue sync-initial-data job (CRITICAL: pass only userId, not data)
+    const job = await queues.syncInitialData.add(
+      { userId: user.id } as SyncInitialDataJob,
+      {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 2000,
+        },
+        removeOnComplete: true,
+      }
+    )
 
-    return NextResponse.json({ ok: true, status: "classifying" }, { status: 202 })
+    // Create initial job status record
+    await query(
+      `INSERT INTO job_status (job_id, user_id, status, step, progress, created_at, updated_at)
+       VALUES ($1, $2, 'queued', 'fetching', 0, NOW(), NOW())`,
+      [job.id, user.id]
+    )
+
+    log("onboarding.after_identity.sync_queued", { userId: user.id, jobId: job.id }, "onboarding")
+
+    return NextResponse.json({ ok: true, status: "syncing", jobId: job.id }, { status: 202 })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    log("onboarding.after_identity.error", { userId: user.id, error: msg }, "onboarding")
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }
