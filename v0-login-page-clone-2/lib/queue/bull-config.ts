@@ -21,6 +21,8 @@ export const QUEUE_NAMES = {
 } as const
 
 // Create queues with low concurrency to protect Postgres connection pool
+// NOTE: These are client-only instances for adding jobs
+// Actual processing happens in the background worker (worker.ts)
 export const queues = {
   syncInitialData: new Queue(QUEUE_NAMES.SYNC_INITIAL_DATA, redisConfig),
   classifyMovements: new Queue(QUEUE_NAMES.CLASSIFY_MOVEMENTS, redisConfig),
@@ -30,33 +32,5 @@ export const queues = {
   processWebhook: new Queue(QUEUE_NAMES.PROCESS_WEBHOOK, redisConfig),
 }
 
-// Configure concurrency for all queues
-// CRITICAL: Keep concurrency LOW (2) to protect Postgres connection pool
-Object.values(queues).forEach((queue) => {
-  queue.process(2, async (job) => {
-    // Processors will be registered separately
-    throw new Error('Processor not registered for this queue')
-  })
-
-  // Global error handler
-  queue.on('error', (err) => {
-    console.error(`Queue error in ${queue.name}:`, err)
-  })
-
-  queue.on('failed', (job, err) => {
-    console.error(`Job ${job.id} failed in ${queue.name}:`, err.message)
-  })
-
-  queue.on('completed', (job) => {
-    console.log(`Job ${job.id} completed in ${queue.name}`)
-  })
-})
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, closing queues...')
-  await Promise.all(Object.values(queues).map((q) => q.close()))
-  process.exit(0)
-})
-
 export default queues
+
