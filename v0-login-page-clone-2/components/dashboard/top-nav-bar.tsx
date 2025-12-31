@@ -46,7 +46,7 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
       <div className="flex h-full items-center justify-between px-6 gap-4">
         {/* Logo */}
         <Link href="/dashboard/home" className="flex items-center justify-center gap-2 font-bold text-lg flex-shrink-0 h-full">
-          <img src="/profitwise-logo.png" alt="ProfitWise" className="h-10 w-auto object-contain" />
+          <img src="/profitwise-logo.png" alt="ProfitWise" className="h-14 w-auto object-contain" />
         </Link>
 
         {/* Search Bar */}
