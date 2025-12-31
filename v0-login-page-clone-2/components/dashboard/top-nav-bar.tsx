@@ -42,7 +42,7 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
     .toUpperCase()
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-40 border-b border-white/10 bg-black h-16">
+    <header className="sticky top-0 z-50 border-b border-white/10 bg-black h-16 shrink-0">
       <div className="flex h-full items-center justify-between px-6 gap-4">
         {/* Logo */}
         <Link href="/dashboard/home" className="flex items-center justify-center gap-2 font-bold text-lg flex-shrink-0 h-full">
@@ -111,6 +111,6 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
           </DropdownMenu>
         </div>
       </div>
-    </div>
+    </header>
   )
 }

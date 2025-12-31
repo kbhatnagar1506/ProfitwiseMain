@@ -123,9 +123,20 @@
     @apply bg-background text-foreground;
   }
   
-  /* Dashboard sidebar - force black background */
+  /* Dashboard sidebar - force black background and non-fixed positioning */
   [data-sidebar] {
     @apply !bg-black !text-white;
+  }
+  
+  [data-sidebar="sidebar"] {
+    position: relative !important;
+    height: 100% !important;
+    inset: auto !important;
+  }
+  
+  .group\/sidebar-wrapper {
+    min-height: 0 !important;
+    height: 100% !important;
   }
   
   [data-sidebar] [data-sidebar-trigger] {
