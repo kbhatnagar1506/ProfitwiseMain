@@ -7,8 +7,6 @@
  * Run with: node lib/queue/worker.ts (or tsx lib/queue/worker.ts in development)
  */
 
-import Queue from 'bull'
-import Redis from 'redis'
 import { log } from '../logger'
 import { processSyncInitialData } from './processors/sync-initial-data'
 import { processClassifyMovements } from './processors/classify-movements'
@@ -17,25 +15,7 @@ import { processComputeState } from './processors/compute-state'
 import { processGenerateForecast } from './processors/generate-forecast'
 import { processProcessWebhook } from './processors/process-webhook'
 import { QUEUE_NAMES } from './bull-config'
-
-// Redis connection configuration
-const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  password: process.env.REDIS_PASSWORD,
-  maxRetriesPerRequest: null,
-  enableReadyCheck: false,
-}
-
-// Create queues
-const queues = {
-  syncInitialData: new Queue(QUEUE_NAMES.SYNC_INITIAL_DATA, redisConfig),
-  classifyMovements: new Queue(QUEUE_NAMES.CLASSIFY_MOVEMENTS, redisConfig),
-  tagMovements: new Queue(QUEUE_NAMES.TAG_MOVEMENTS, redisConfig),
-  computeState: new Queue(QUEUE_NAMES.COMPUTE_STATE, redisConfig),
-  generateForecast: new Queue(QUEUE_NAMES.GENERATE_FORECAST, redisConfig),
-  processWebhook: new Queue(QUEUE_NAMES.PROCESS_WEBHOOK, redisConfig),
-}
+import { queues } from './bull-client'
 
 // Register processors with CRITICAL: concurrency = 2 to protect Postgres
 async function startWorker() {
