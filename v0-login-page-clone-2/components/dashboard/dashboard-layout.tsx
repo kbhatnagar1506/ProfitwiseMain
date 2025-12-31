@@ -21,13 +21,13 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   }
 
   return (
-    <>
+    <div className="flex flex-col h-screen w-full bg-background">
       {/* Top Navigation - Fixed at top */}
       <TopNavBar />
 
-      {/* Main Layout - Below header with proper spacing */}
+      {/* Main Layout - Below header */}
       <SidebarProvider defaultOpen={true}>
-        <div className="flex w-full bg-background" style={{ height: 'calc(100vh - 64px)', marginTop: '64px' }}>
+        <div className="flex flex-1 w-full overflow-hidden">
           {/* Sidebar - Black background with forced styles */}
           <Sidebar className="!bg-black !border-r !border-white/10 !text-white transition-all duration-300 ease-in-out">
             <SidebarNavigation isCollapsed={false} />
@@ -44,6 +44,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </div>
         </div>
       </SidebarProvider>
-    </>
+    </div>
   )
 }
