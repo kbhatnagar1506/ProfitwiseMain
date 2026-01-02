@@ -12,8 +12,6 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema, ensureIdentitySchema, ensureJobStatusSchema } from "@/lib/db"
 import { addEntitiesToSupermemory } from "@/lib/supermemory"
 import { log } from "@/lib/logger"
-import { queues } from "@/lib/queue/bull-config"
-import { SyncInitialDataJob } from "@/lib/queue/job-types"
 
 export async function POST() {
   const cookieStore = await cookies()
@@ -55,6 +53,10 @@ export async function POST() {
     }
 
     // 2. Queue sync-initial-data job (CRITICAL: pass only userId, not data)
+    // Dynamically import Bull to avoid bundling issues
+    const { queues } = await import("@/lib/queue/bull-config")
+    const { SyncInitialDataJob } = await import("@/lib/queue/job-types")
+
     const job = await queues.syncInitialData.add(
       { userId: user.id } as SyncInitialDataJob,
       {
