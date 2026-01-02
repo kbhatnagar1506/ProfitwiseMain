@@ -1,8 +1,6 @@
 "use client"
 
 import Link from "next/link"
-import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
 import { bottomBarItems } from "@/lib/dashboard-navigation"
 import { cn } from "@/lib/utils"
 
@@ -12,41 +10,34 @@ interface BottomBarProps {
 
 export function BottomBar({ isCollapsed }: BottomBarProps) {
   return (
-    <div className="border-t border-white/10 transition-all duration-300 ease-in-out">
-      <Separator className="my-2 bg-white/10" />
-      <div className="space-y-1 px-2 pb-2">
+    <div className="border-t border-white/[0.06] pt-2">
+      <div className="space-y-0.5 px-1">
         {bottomBarItems.map((item) => {
           const Icon = item.icon
           const isLink = item.href.startsWith("/")
 
-          const buttonContent = (
-            <Button
-              variant="ghost"
-              size="sm"
+          const content = (
+            <div
               className={cn(
-                "w-full justify-start px-2 py-1.5 text-xs text-white/60 hover:text-white hover:bg-white/10 transition-all duration-200",
-                isCollapsed && "justify-center"
+                "group flex items-center gap-2.5 px-3 py-[6px] mx-0 rounded-md text-[13px] text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.05] transition-all duration-150 cursor-pointer",
+                isCollapsed && "justify-center px-2"
               )}
               title={isCollapsed ? item.label : undefined}
             >
-              <Icon className="h-4 w-4 flex-shrink-0" />
-              {!isCollapsed && <span className="ml-2">{item.label}</span>}
-            </Button>
+              <Icon className="h-4 w-4 flex-shrink-0 text-neutral-600 group-hover:text-neutral-400 transition-colors" />
+              {!isCollapsed && <span>{item.label}</span>}
+            </div>
           )
 
           if (isLink) {
             return (
               <Link key={item.label} href={item.href}>
-                {buttonContent}
+                {content}
               </Link>
             )
           }
 
-          return (
-            <div key={item.label}>
-              {buttonContent}
-            </div>
-          )
+          return <div key={item.label}>{content}</div>
         })}
       </div>
     </div>
