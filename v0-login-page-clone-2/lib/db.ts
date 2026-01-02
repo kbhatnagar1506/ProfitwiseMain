@@ -1307,6 +1307,29 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
   }
 }
 
+// ─── Job Queue Status Tracking ───
+export async function ensureJobStatusSchema(): Promise<void> {
+  const p = await getPoolAsync()
+  if (!p) return
+  await ensureAuthSchema()
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS job_status (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      job_id          TEXT NOT NULL UNIQUE,
+      user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status          TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'complete', 'failed')),
+      step            TEXT NOT NULL DEFAULT 'fetching' CHECK (step IN ('fetching', 'classifying', 'tagging', 'computing-state', 'generating-forecast', 'complete')),
+      progress        INTEGER NOT NULL DEFAULT 0,
+      error           TEXT,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_job_status_user ON job_status (user_id)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_job_status_job_id ON job_status (job_id)")
+  log("job_status.schema.ensured", undefined, "db")
+}
+
 // ─── User Decisions & Feedback (NEW) ───
 export async function ensureUserDecisionsSchema() {
   const p = await pool

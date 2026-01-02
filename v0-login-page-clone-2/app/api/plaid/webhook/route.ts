@@ -61,7 +61,7 @@ async function verifyPlaidWebhook(body: string, verificationHeader: string | nul
   }
 }
 
-async function runTransactionsSync(itemId: string): Promise<void> {
+async function runTransactionsSync(itemId: string, userId: string): Promise<void> {
   const client = getPlaidClient()
   try {
     let hasMore = true
@@ -97,15 +97,30 @@ async function runTransactionsSync(itemId: string): Promise<void> {
         log("webhook.balances.failed", { itemId, error: balanceErr instanceof Error ? balanceErr.message : String(balanceErr) }, "plaid")
       }
     }
-    const userId = await getPlaidItemUserId(itemId)
+    
+    // Queue process-webhook job instead of calling classifyMovements directly
     if (userId) {
-      void classifyMovements(userId).catch((err) => {
-        log(
-          "webhook.after_sync.classify_failed",
-          { itemId, userId, error: err instanceof Error ? err.message : String(err) },
-          "plaid",
+      try {
+        const { queues } = await import("@/lib/queue/bull-config")
+        const { ProcessWebhookJob } = await import("@/lib/queue/job-types")
+        
+        const job = await queues.processWebhook.add(
+          {
+            userId,
+            source: 'plaid',
+            webhookData: { itemId, added: added.length, modified: modified.length, removed: removed.length }
+          },
+          {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: true,
+          }
         )
-      })
+        
+        log("webhook.job_queued", { itemId, userId, jobId: job.id }, "plaid")
+      } catch (err) {
+        log("webhook.job_queue_failed", { itemId, userId, error: err instanceof Error ? err.message : String(err) }, "plaid")
+      }
     }
   } catch (err) {
     log("webhook.sync.failed", { itemId, error: err instanceof Error ? err.message : String(err) }, "plaid")
@@ -166,7 +181,8 @@ export async function POST(request: NextRequest) {
     webhookCode === "SYNC_UPDATES_AVAILABLE" &&
     typeof itemId === "string"
   ) {
-    runTransactionsSync(itemId).catch(() => {})
+    const userId = await getPlaidItemUserId(itemId)
+    runTransactionsSync(itemId, userId || "").catch(() => {})
   }
 
   return NextResponse.json({ received: true }, { status: 200 })
