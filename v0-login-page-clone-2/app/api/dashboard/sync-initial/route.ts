@@ -30,9 +30,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Dynamically import Bull client to avoid bundling issues
-    const { queues } = await import('@/lib/queue/bull-client')
-    const { SyncInitialDataJob } = await import('@/lib/queue/job-types')
+    // Use require to avoid bundling Bull at build time
+    const { queues } = require('@/lib/queue/bull-client')
+    const { SyncInitialDataJob } = require('@/lib/queue/job-types')
 
     // Queue sync-initial-data job
     const job = await queues.syncInitialData.add(
