@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireSession } from '@/lib/require-session'
 import { query } from '@/lib/db'
+import { addSyncInitialDataJob } from '@/lib/queue/queue-wrapper'
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,22 +31,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Use require to avoid bundling Bull at build time
-    const { queues } = require('@/lib/queue/bull-client')
-    const { SyncInitialDataJob } = require('@/lib/queue/job-types')
-
     // Queue sync-initial-data job
-    const job = await queues.syncInitialData.add(
-      { userId } as SyncInitialDataJob,
-      {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 2000,
-        },
-        removeOnComplete: true,
-      }
-    )
+    const job = await addSyncInitialDataJob(userId)
 
     // Create initial job status record
     await query(
