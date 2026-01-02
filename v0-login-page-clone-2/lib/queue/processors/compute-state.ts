@@ -3,6 +3,7 @@ import { ComputeStateJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
 import { query } from '../db'
 import { log } from '../logger'
+import { computeState } from '../state/compute'
 
 const QUEUE_NAME = 'compute-state'
 const SLOW_JOB_THRESHOLD = 30000 // 30 seconds
@@ -15,20 +16,34 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
     QueueLogger.logJobStart(job, QUEUE_NAME)
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'computing-state', 0)
 
-    // Fetch movements and tags from DB (not from job payload - CRITICAL!)
-    const { rows: movements } = await query<{
+    log('compute.start', { userId, jobId: job.id }, 'queue')
+
+    // Fetch tagged movements from DB
+    const { rows: taggedMovements } = await query<{
       id: string
-      amount: number
-      direction: string
+      user_id: string
       date: string
+      direction: string
+      amount: string
+      movement_type: string
+      counterparty_entity_id: string | null
+      counterparty_entity_type: string | null
+      economic_class: string
+      cashflow_bucket: string
+      counterparty_role: string
     }>(
-      `SELECT m.id, m.amount, m.direction, m.date FROM movements m
+      `SELECT 
+        m.id, m.user_id, m.date, m.direction, m.amount, m.movement_type,
+        m.counterparty_entity_id, m.counterparty_entity_type,
+        mt.economic_class, mt.cashflow_bucket, mt.counterparty_role
+       FROM movements m
+       LEFT JOIN movement_tags mt ON m.id = mt.movement_id
        WHERE m.user_id = $1
-       ORDER BY m.date DESC`,
+       ORDER BY m.date ASC`,
       [userId]
     )
 
-    if (movements.length === 0) {
+    if (taggedMovements.length === 0) {
       log('compute.no_movements', { userId }, 'queue')
       QueueLogger.logJobProgress(job, QUEUE_NAME, 'computing-state', 100)
       await updateJobStatus(job.id, userId, 'processing', 'computing-state', 100)
@@ -48,7 +63,11 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
     }
 
     // Compute RevenueState, SpendState, LiquidityState
-    const stateSnapshot = await computeStateLogic(userId, movements)
+    // This calls the existing computeState function which handles:
+    // - Compute financial state from tagged movements
+    // - Integrate with entity graph for entity-level analysis
+    // - Persist snapshot to state_snapshots table
+    const stateSnapshot = await computeState(userId, taggedMovements as any)
 
     // Persist snapshot to state_snapshots table
     await query(
@@ -57,7 +76,7 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
       [userId, JSON.stringify(stateSnapshot.revenue), JSON.stringify(stateSnapshot.spend), JSON.stringify(stateSnapshot.liquidity)]
     )
 
-    log('compute.complete', { userId, jobId: job.id, movementCount: movements.length }, 'queue')
+    log('compute.complete', { userId, jobId: job.id, movementCount: taggedMovements.length }, 'queue')
 
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'computing-state', 100)
     await updateJobStatus(job.id, userId, 'processing', 'computing-state', 100)
@@ -90,20 +109,6 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
 
     await updateJobStatus(job.id, userId, 'failed', 'computing-state', 0, errorMessage)
     throw error
-  }
-}
-
-async function computeStateLogic(
-  userId: string,
-  movements: Array<{ id: string; amount: number; direction: string; date: string }>
-): Promise<{ revenue: Record<string, any>; spend: Record<string, any>; liquidity: Record<string, any> }> {
-  // Placeholder: In production, this would call the actual state computation logic
-  // from lib/state/compute.ts or similar
-  // For now, return a basic structure
-  return {
-    revenue: { total: 0, trend: 'stable' },
-    spend: { total: 0, trend: 'stable' },
-    liquidity: { total: 0, trend: 'stable' },
   }
 }
 
