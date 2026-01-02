@@ -4,7 +4,6 @@ import {
   Clock,
   TrendingUp,
   BarChart3,
-  Zap,
   Calendar,
   Clock3,
   FileText,
@@ -17,23 +16,25 @@ import {
   RotateCcw,
   BookOpen,
   PieChart,
-  DollarSign,
   Calculator,
   FileBarChart,
   Sparkles,
   Mail,
   Brain,
   MessageSquare,
-  Database,
   Plug,
   Settings,
-  LucideIcon,
+  LayoutGrid,
+  Zap,
+  type LucideIcon,
 } from "lucide-react"
 
 export interface NavItem {
   label: string
   href: string
   icon: LucideIcon
+  badge?: number
+  badgeColor?: "red" | "green" | "amber"
 }
 
 export interface NavGroup {
@@ -45,8 +46,8 @@ export const dashboardNavigation: NavGroup[] = [
   {
     label: "Overview",
     items: [
-      { label: "Home", href: "/dashboard/home", icon: Home },
-      { label: "Alerts", href: "/dashboard/alerts", icon: Bell },
+      { label: "Home", href: "/dashboard/home", icon: LayoutGrid },
+      { label: "Alerts", href: "/dashboard/alerts", icon: Bell, badge: 3, badgeColor: "red" },
       { label: "Activity Log", href: "/dashboard/activity-log", icon: Clock },
     ],
   },
@@ -57,18 +58,18 @@ export const dashboardNavigation: NavGroup[] = [
       { label: "Forecast", href: "/dashboard/forecast", icon: BarChart3 },
       { label: "Scenarios", href: "/dashboard/scenarios", icon: Zap },
       { label: "Runway", href: "/dashboard/runway", icon: Calendar },
-      { label: "Payment Timing", href: "/dashboard/payment-timing", icon: Clock3 },
+      { label: "Payment timing", href: "/dashboard/payment-timing", icon: Clock3 },
     ],
   },
   {
-    label: "Receivables",
+    label: "Receivables (AR)",
     items: [
-      { label: "Invoices", href: "/dashboard/invoices", icon: FileText },
-      { label: "Chase Queue", href: "/dashboard/chase-queue", icon: CheckCircle },
+      { label: "Invoices", href: "/dashboard/invoices", icon: FileText, badge: 5, badgeColor: "red" },
+      { label: "Chase queue", href: "/dashboard/chase-queue", icon: CheckCircle, badge: 2, badgeColor: "green" },
     ],
   },
   {
-    label: "Payables",
+    label: "Payables (AP)",
     items: [
       { label: "Bills", href: "/dashboard/bills", icon: FileText },
       { label: "Vendors", href: "/dashboard/vendors", icon: Users },
@@ -84,7 +85,7 @@ export const dashboardNavigation: NavGroup[] = [
   {
     label: "Banking",
     items: [
-      { label: "Bank Accounts", href: "/dashboard/bank-accounts", icon: CreditCard },
+      { label: "Bank accounts", href: "/dashboard/bank-accounts", icon: CreditCard },
       { label: "Transactions", href: "/dashboard/transactions", icon: ArrowRightLeft },
       { label: "Transfers", href: "/dashboard/transfers", icon: RotateCcw },
     ],
@@ -92,33 +93,32 @@ export const dashboardNavigation: NavGroup[] = [
   {
     label: "Accounting",
     items: [
-      { label: "Reconciliation", href: "/dashboard/reconciliation", icon: CheckCircle },
-      { label: "Review Queue", href: "/dashboard/review-queue", icon: Clock },
+      { label: "Reconciliation", href: "/dashboard/reconciliation", icon: CheckCircle, badge: 1, badgeColor: "amber" },
+      { label: "Review queue", href: "/dashboard/review-queue", icon: Clock },
       { label: "Books", href: "/dashboard/books", icon: BookOpen },
       { label: "P&L", href: "/dashboard/p-and-l", icon: PieChart },
-      { label: "Spend Analysis", href: "/dashboard/spend-analysis", icon: BarChart3 },
-      { label: "Tax Prep", href: "/dashboard/tax-prep", icon: Calculator },
+      { label: "Spend analysis", href: "/dashboard/spend-analysis", icon: BarChart3 },
+      { label: "Tax prep", href: "/dashboard/tax-prep", icon: Calculator },
     ],
   },
   {
     label: "Reports",
     items: [
-      { label: "Generate Report", href: "/dashboard/generate-report", icon: FileBarChart },
+      { label: "Generate report", href: "/dashboard/generate-report", icon: FileBarChart },
     ],
   },
   {
     label: "Intelligence",
     items: [
-      { label: "Entity Profiles", href: "/dashboard/entity-profiles", icon: Sparkles },
-      { label: "Gmail Intelligence", href: "/dashboard/gmail-intelligence", icon: Mail },
-      { label: "Memory Layer", href: "/dashboard/memory-layer", icon: Brain },
+      { label: "Entity profiles", href: "/dashboard/entity-profiles", icon: Sparkles },
+      { label: "Gmail intelligence", href: "/dashboard/gmail-intelligence", icon: Mail, badge: 1, badgeColor: "amber" },
+      { label: "Memory layer", href: "/dashboard/memory-layer", icon: Brain },
     ],
   },
 ]
 
 export const bottomBarItems = [
   { label: "Ask ProfitWise", href: "#", icon: MessageSquare },
-  { label: "Data Sources", href: "#", icon: Database },
   { label: "Connectors", href: "#", icon: Plug },
   { label: "Settings", href: "/dashboard/settings", icon: Settings },
 ]
