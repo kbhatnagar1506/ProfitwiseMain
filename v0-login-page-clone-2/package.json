@@ -7,6 +7,7 @@
     "dev": "next dev",
     "lint": "eslint .",
     "start": "next start",
+    "worker": "tsx lib/queue/worker.ts",
     "seed:classification-signatures": "tsx scripts/seed-user-classification-signatures.ts"
   },
   "dependencies": {
