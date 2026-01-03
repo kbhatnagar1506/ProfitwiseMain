@@ -2,13 +2,13 @@
  * Bull Queue Client Wrapper
  * 
  * This file provides a runtime-only interface to Bull queues.
- * It uses require() to avoid being analyzed by Turbopack at build time.
+ * It uses dynamic import to avoid being analyzed by Turbopack at build time.
  */
 
 export async function getQueues() {
-  // Use require to avoid bundling Bull at build time
-  const { queues } = require('./bull-client')
-  return queues
+  // Use dynamic import to avoid bundling Bull at build time
+  const module = await import('./bull-client')
+  return module.queues
 }
 
 export async function addSyncInitialDataJob(userId: string) {
