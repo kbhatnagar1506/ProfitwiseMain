@@ -53,8 +53,8 @@ export async function POST() {
     }
 
     // 2. Queue sync-initial-data job (CRITICAL: pass only userId, not data)
-    // Dynamically import Bull to avoid bundling issues
-    const { queues } = await import("@/lib/queue/bull-config")
+    // Dynamically import Bull client to avoid bundling issues
+    const { queues } = await import("@/lib/queue/bull-client")
     const { SyncInitialDataJob } = await import("@/lib/queue/job-types")
 
     const job = await queues.syncInitialData.add(
