@@ -12,6 +12,7 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema, ensureIdentitySchema, ensureJobStatusSchema } from "@/lib/db"
 import { addEntitiesToSupermemory } from "@/lib/supermemory"
 import { log } from "@/lib/logger"
+import { addSyncInitialDataJob } from "@/lib/queue/queue-wrapper"
 
 export async function POST() {
   const cookieStore = await cookies()
@@ -53,21 +54,7 @@ export async function POST() {
     }
 
     // 2. Queue sync-initial-data job (CRITICAL: pass only userId, not data)
-    // Use require to avoid bundling Bull at build time
-    const { queues } = require("@/lib/queue/bull-client")
-    const { SyncInitialDataJob } = require("@/lib/queue/job-types")
-
-    const job = await queues.syncInitialData.add(
-      { userId: user.id } as SyncInitialDataJob,
-      {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 2000,
-        },
-        removeOnComplete: true,
-      }
-    )
+    const job = await addSyncInitialDataJob(user.id)
 
     // Create initial job status record
     await query(
