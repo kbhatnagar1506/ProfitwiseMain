@@ -54,8 +54,22 @@ export async function POST() {
 
     // 2. Queue sync-initial-data job (CRITICAL: pass only userId, not data)
     // Dynamically import at runtime to avoid Turbopack bundling
-    const { addSyncInitialDataJob } = await import('@/lib/queue/queue-wrapper')
-    const job = await addSyncInitialDataJob(user.id)
+    const queues = await (async () => {
+      const module = await import('@/lib/queue/bull-client')
+      return module.queues
+    })()
+    
+    const job = await queues.syncInitialData.add(
+      { userId: user.id },
+      {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 2000,
+        },
+        removeOnComplete: true,
+      }
+    )
 
     // Create initial job status record
     await query(
