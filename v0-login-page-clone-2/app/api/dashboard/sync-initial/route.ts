@@ -30,12 +30,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Dynamically import and call queue function at runtime
-    // This prevents Turbopack from analyzing bull-client at build time
-    const queues = await (async () => {
-      const module = await import('@/lib/queue/bull-client')
-      return module.queues
-    })()
+    // Use require with a computed path to prevent Turbopack analysis
+    const modulePath = './bull-client'
+    const { queues } = require(modulePath)
     
     // Queue sync-initial-data job
     const job = await queues.syncInitialData.add(

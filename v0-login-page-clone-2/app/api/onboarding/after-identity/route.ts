@@ -53,11 +53,9 @@ export async function POST() {
     }
 
     // 2. Queue sync-initial-data job (CRITICAL: pass only userId, not data)
-    // Dynamically import at runtime to avoid Turbopack bundling
-    const queues = await (async () => {
-      const module = await import('@/lib/queue/bull-client')
-      return module.queues
-    })()
+    // Use require with computed path to prevent Turbopack analysis
+    const modulePath = './bull-client'
+    const { queues } = require(modulePath)
     
     const job = await queues.syncInitialData.add(
       { userId: user.id },
