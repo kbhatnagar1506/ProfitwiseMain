@@ -3,9 +3,10 @@ import { ClassifyMovementsJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
 import { query } from '../db'
 import { log } from '../logger'
+import { classifyMovements } from '../movement-classify'
 
 const QUEUE_NAME = 'classify-movements'
-const SLOW_JOB_THRESHOLD = 30000 // 30 seconds
+const SLOW_JOB_THRESHOLD = 60000 // 60 seconds (classification can be slow)
 
 export async function processClassifyMovements(job: Job<ClassifyMovementsJob>) {
   const startTime = Date.now()
@@ -15,44 +16,18 @@ export async function processClassifyMovements(job: Job<ClassifyMovementsJob>) {
     QueueLogger.logJobStart(job, QUEUE_NAME)
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'classifying', 0)
 
-    // Fetch movements from DB (not from job payload - CRITICAL!)
-    const { rows: movements } = await query<{
-      id: string
-      amount: number
-      date: string
-      raw_description: string
-      counterparty: string
-    }>(
-      `SELECT id, amount, date, raw_description, counterparty FROM movements 
-       WHERE user_id = $1 AND movement_type IS NULL OR movement_type = ''
-       ORDER BY date DESC`,
-      [userId]
-    )
+    log('classify.start', { userId, jobId: job.id }, 'queue')
 
-    if (movements.length === 0) {
-      log('classify.no_movements', { userId }, 'queue')
-      QueueLogger.logJobProgress(job, QUEUE_NAME, 'classifying', 100)
-      await updateJobStatus(job.id, userId, 'processing', 'classifying', 100)
+    // Run the full classification pipeline
+    // This calls the existing classifyMovements function which handles:
+    // - Extract observations from all sources
+    // - Coalesce into canonical movements
+    // - Resolve counterparty identity with entity graph
+    // - Classify movement types
+    // - Persist to movements table
+    await classifyMovements(userId)
 
-      // Queue next job: tag-movements
-      const tagJob = await job.queue.add(
-        'tag-movements',
-        { userId },
-        {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 2000 },
-          removeOnComplete: true,
-        }
-      )
-
-      return { jobId: job.id, nextJobId: tagJob.id, status: 'queued' }
-    }
-
-    // Classify movements (placeholder - actual classification logic would go here)
-    // For now, just mark them as classified
-    const classifiedCount = await classifyMovementsLogic(userId, movements)
-
-    log('classify.complete', { userId, jobId: job.id, classifiedCount }, 'queue')
+    log('classify.complete', { userId, jobId: job.id }, 'queue')
 
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'classifying', 100)
     await updateJobStatus(job.id, userId, 'processing', 'classifying', 100)
@@ -86,16 +61,6 @@ export async function processClassifyMovements(job: Job<ClassifyMovementsJob>) {
     await updateJobStatus(job.id, userId, 'failed', 'classifying', 0, errorMessage)
     throw error
   }
-}
-
-async function classifyMovementsLogic(
-  userId: string,
-  movements: Array<{ id: string; amount: number; date: string; raw_description: string; counterparty: string }>
-): Promise<number> {
-  // Placeholder: In production, this would call the actual classification logic
-  // from lib/movement-classify.ts or similar
-  // For now, just return the count
-  return movements.length
 }
 
 async function updateJobStatus(

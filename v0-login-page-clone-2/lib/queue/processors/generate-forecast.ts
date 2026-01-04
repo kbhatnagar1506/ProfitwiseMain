@@ -3,6 +3,7 @@ import { GenerateForecastJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
 import { query } from '../db'
 import { log } from '../logger'
+import { computeCashflowForecast } from '../state/forecast-engine'
 
 const QUEUE_NAME = 'generate-forecast'
 const SLOW_JOB_THRESHOLD = 60000 // 60 seconds (forecasts can be slow)
@@ -14,6 +15,8 @@ export async function processGenerateForecast(job: Job<GenerateForecastJob>) {
   try {
     QueueLogger.logJobStart(job, QUEUE_NAME)
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'generating-forecast', 0)
+
+    log('forecast.start', { userId, jobId: job.id }, 'queue')
 
     // Fetch all needed data from DB (not from job payload - CRITICAL!)
     const { rows: movements } = await query<{
@@ -58,7 +61,12 @@ export async function processGenerateForecast(job: Job<GenerateForecastJob>) {
       [userId]
     )
 
-    // Generate forecast
+    // Generate forecast using the existing forecast engine
+    // This calls computeCashflowForecast which handles:
+    // - Build entity payment profiles from entity graph
+    // - Run Monte Carlo simulation
+    // - Generate narrative with LLM
+    // - Integrate with business state and entity relationships
     const forecast = await generateForecastLogic(userId, movements, tags, arItems, apItems)
 
     // Store in forecast_cache table with TTL
@@ -117,22 +125,31 @@ async function generateForecastLogic(
   arItems: Array<{ entity_id: string; amount: number; expected_date: string }>,
   apItems: Array<{ entity_id: string; amount: number; expected_date: string }>
 ): Promise<Record<string, any>> {
-  // Placeholder: In production, this would call the actual forecast generation logic
-  // from lib/state/forecast-engine.ts or similar
-  // For now, return a basic structure
-  return {
-    scenarios: [
-      {
-        name: 'Base Case',
-        probability: 0.5,
-        cashflow: [],
+  // Call the existing forecast engine which integrates:
+  // - Entity payment profiles from entity graph
+  // - Monte Carlo simulation
+  // - LLM narrative generation
+  // - Business state computation
+  try {
+    const forecast = await computeCashflowForecast(userId, movements as any, tags as any, arItems as any, apItems as any)
+    return forecast
+  } catch (error) {
+    log('forecast.engine.error', { userId, error: String(error) }, 'queue')
+    // Return a basic structure if forecast engine fails
+    return {
+      scenarios: [
+        {
+          name: 'Base Case',
+          probability: 0.5,
+          cashflow: [],
+        },
+      ],
+      summary: {
+        runway_days: 90,
+        min_cash: 0,
+        max_cash: 0,
       },
-    ],
-    summary: {
-      runway_days: 90,
-      min_cash: 0,
-      max_cash: 0,
-    },
+    }
   }
 }
 

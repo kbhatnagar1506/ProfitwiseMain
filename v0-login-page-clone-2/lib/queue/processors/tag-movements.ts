@@ -3,6 +3,7 @@ import { TagMovementsJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
 import { query } from '../db'
 import { log } from '../logger'
+import { tagMovements } from '../movement-tag-enrich'
 
 const QUEUE_NAME = 'tag-movements'
 const SLOW_JOB_THRESHOLD = 30000 // 30 seconds
@@ -15,41 +16,16 @@ export async function processTagMovements(job: Job<TagMovementsJob>) {
     QueueLogger.logJobStart(job, QUEUE_NAME)
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'tagging', 0)
 
-    // Fetch movements and tags from DB (not from job payload - CRITICAL!)
-    const { rows: movements } = await query<{
-      id: string
-      movement_type: string
-      direction: string
-    }>(
-      `SELECT id, movement_type, direction FROM movements 
-       WHERE user_id = $1
-       ORDER BY date DESC`,
-      [userId]
-    )
+    log('tag.start', { userId, jobId: job.id }, 'queue')
 
-    if (movements.length === 0) {
-      log('tag.no_movements', { userId }, 'queue')
-      QueueLogger.logJobProgress(job, QUEUE_NAME, 'tagging', 100)
-      await updateJobStatus(job.id, userId, 'processing', 'tagging', 100)
+    // Run the tagging pipeline
+    // This calls the existing tagMovements function which handles:
+    // - Tag each movement with economic_class, cashflow_bucket, counterparty_role
+    // - Persist to movement_tags table
+    // - Integrate with entity graph and business state
+    await tagMovements(userId)
 
-      // Queue next job: compute-state
-      const computeJob = await job.queue.add(
-        'compute-state',
-        { userId },
-        {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 2000 },
-          removeOnComplete: true,
-        }
-      )
-
-      return { jobId: job.id, nextJobId: computeJob.id, status: 'queued' }
-    }
-
-    // Tag movements with economic_class, cashflow_bucket, counterparty_role
-    const taggedCount = await tagMovementsLogic(userId, movements)
-
-    log('tag.complete', { userId, jobId: job.id, taggedCount }, 'queue')
+    log('tag.complete', { userId, jobId: job.id }, 'queue')
 
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'tagging', 100)
     await updateJobStatus(job.id, userId, 'processing', 'tagging', 100)
@@ -83,16 +59,6 @@ export async function processTagMovements(job: Job<TagMovementsJob>) {
     await updateJobStatus(job.id, userId, 'failed', 'tagging', 0, errorMessage)
     throw error
   }
-}
-
-async function tagMovementsLogic(
-  userId: string,
-  movements: Array<{ id: string; movement_type: string; direction: string }>
-): Promise<number> {
-  // Placeholder: In production, this would call the actual tagging logic
-  // from lib/movement-tag-enrich.ts or similar
-  // For now, just return the count
-  return movements.length
 }
 
 async function updateJobStatus(
