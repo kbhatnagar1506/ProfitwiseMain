@@ -8,6 +8,9 @@ const nextConfig = {
     }
     return config
   },
+  turbopack: {
+    // Empty turbopack config to allow webpack config to work
+  },
 }
 
 module.exports = nextConfig
