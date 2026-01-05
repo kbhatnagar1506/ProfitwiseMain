@@ -12,7 +12,6 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureMovementsSchema, ensureIdentitySchema, ensureJobStatusSchema } from "@/lib/db"
 import { addEntitiesToSupermemory } from "@/lib/supermemory"
 import { log } from "@/lib/logger"
-import { addSyncInitialDataJob } from "@/lib/queue/queue-wrapper"
 
 export async function POST() {
   const cookieStore = await cookies()
@@ -54,6 +53,8 @@ export async function POST() {
     }
 
     // 2. Queue sync-initial-data job (CRITICAL: pass only userId, not data)
+    // Dynamically import at runtime to avoid Turbopack bundling
+    const { addSyncInitialDataJob } = await import('@/lib/queue/queue-wrapper')
     const job = await addSyncInitialDataJob(user.id)
 
     // Create initial job status record

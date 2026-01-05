@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireSession } from '@/lib/require-session'
 import { query } from '@/lib/db'
-import { addSyncInitialDataJob } from '@/lib/queue/queue-wrapper'
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,6 +30,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Dynamically import queue wrapper at runtime to avoid Turbopack bundling
+    const { addSyncInitialDataJob } = await import('@/lib/queue/queue-wrapper')
+    
     // Queue sync-initial-data job
     const job = await addSyncInitialDataJob(userId)
 
