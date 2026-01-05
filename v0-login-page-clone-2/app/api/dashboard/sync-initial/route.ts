@@ -30,11 +30,25 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Dynamically import queue wrapper at runtime to avoid Turbopack bundling
-    const { addSyncInitialDataJob } = await import('@/lib/queue/queue-wrapper')
+    // Dynamically import and call queue function at runtime
+    // This prevents Turbopack from analyzing bull-client at build time
+    const queues = await (async () => {
+      const module = await import('@/lib/queue/bull-client')
+      return module.queues
+    })()
     
     // Queue sync-initial-data job
-    const job = await addSyncInitialDataJob(userId)
+    const job = await queues.syncInitialData.add(
+      { userId },
+      {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 2000,
+        },
+        removeOnComplete: true,
+      }
+    )
 
     // Create initial job status record
     await query(
