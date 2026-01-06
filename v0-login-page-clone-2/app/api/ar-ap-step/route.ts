@@ -622,6 +622,7 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     total_unmatched_outflows: lists.unmatched_outflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
     total_excluded_inflows: lists.excluded_inflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
     total_excluded_outflows: lists.excluded_outflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
+    total_fees_paid: totals.total_fees_paid || 0,
     matched_inflows: lists.matched_inflows.slice(0, MAX_MOVEMENT_ROWS),
     matched_outflows: lists.matched_outflows.slice(0, MAX_MOVEMENT_ROWS),
     unmatched_inflows: lists.unmatched_inflows.slice(0, MAX_MOVEMENT_ROWS),
