@@ -622,7 +622,7 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     unmatched_outflows: lists.unmatched_outflows.slice(0, MAX_MOVEMENT_ROWS),
     excluded_inflows: lists.excluded_inflows.slice(0, MAX_MOVEMENT_ROWS),
     excluded_outflows: lists.excluded_outflows.slice(0, MAX_MOVEMENT_ROWS),
-  }
+  } as ReconTotals
 }
 
 type ExcludedMovement = {
