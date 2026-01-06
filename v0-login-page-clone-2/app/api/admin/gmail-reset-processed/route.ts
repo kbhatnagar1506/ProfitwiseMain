@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-clean-db-secret") ?? ""
   const expected = process.env.CLEAN_DB_SECRET
   if (!expected || secret !== expected) {
-    log("admin.gmail-reset-processed.unauthorized", {}, "gmail")
+    log("admin.gmail-reset-processed.unauthorized", {}, "system")
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
