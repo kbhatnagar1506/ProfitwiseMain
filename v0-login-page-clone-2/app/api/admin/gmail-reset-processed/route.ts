@@ -31,10 +31,10 @@ export async function POST(req: NextRequest) {
       [days]
     )
     const count = rows.length
-    log("admin.gmail-reset-processed.done", { count, days }, "gmail")
+    log("admin.gmail-reset-processed.done", { count, days }, "system")
     return NextResponse.json({ ok: true, reset: count, days })
   } catch (err) {
-    log("admin.gmail-reset-processed.failed", { error: String(err) }, "gmail")
+    log("admin.gmail-reset-processed.failed", { error: String(err) }, "system")
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
 }
