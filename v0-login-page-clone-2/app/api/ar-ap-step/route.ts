@@ -616,12 +616,12 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
   const MAX_MOVEMENT_ROWS = 500
   return {
     ...totals,
-    total_matched_inflows: lists.matched_inflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
-    total_matched_outflows: lists.matched_outflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
-    total_unmatched_inflows: lists.unmatched_inflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
-    total_unmatched_outflows: lists.unmatched_outflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
-    total_excluded_inflows: lists.excluded_inflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
-    total_excluded_outflows: lists.excluded_outflows.reduce((sum, m) => sum + parseFloat(m.amount), 0),
+    total_matched_inflows: r2(lists.matched_inflows.reduce((sum, m) => sum + parseFloat(m.amount), 0)),
+    total_matched_outflows: r2(lists.matched_outflows.reduce((sum, m) => sum + parseFloat(m.amount), 0)),
+    total_unmatched_inflows: r2(lists.unmatched_inflows.reduce((sum, m) => sum + parseFloat(m.amount), 0)),
+    total_unmatched_outflows: r2(lists.unmatched_outflows.reduce((sum, m) => sum + parseFloat(m.amount), 0)),
+    total_excluded_inflows: r2(lists.excluded_inflows.reduce((sum, m) => sum + parseFloat(m.amount), 0)),
+    total_excluded_outflows: r2(lists.excluded_outflows.reduce((sum, m) => sum + parseFloat(m.amount), 0)),
     total_fees_paid: totals.total_fees_paid || 0,
     matched_inflows: lists.matched_inflows.slice(0, MAX_MOVEMENT_ROWS),
     matched_outflows: lists.matched_outflows.slice(0, MAX_MOVEMENT_ROWS),
