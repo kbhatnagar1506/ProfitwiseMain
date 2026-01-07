@@ -1,9 +1,9 @@
 import { Job } from 'bull'
 import { ClassifyMovementsJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
-import { query } from '../db'
-import { log } from '../logger'
-import { classifyMovements } from '../movement-classify'
+import { query } from '../../db'
+import { log } from '../../logger'
+import { classifyMovements } from '../../movement-classify'
 
 const QUEUE_NAME = 'classify-movements'
 const SLOW_JOB_THRESHOLD = 60000 // 60 seconds (classification can be slow)

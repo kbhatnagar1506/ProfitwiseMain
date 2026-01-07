@@ -1,8 +1,8 @@
 import { Job } from 'bull'
 import { ProcessWebhookJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
-import { query } from '../db'
-import { log } from '../logger'
+import { query } from '../../db'
+import { log } from '../../logger'
 
 const QUEUE_NAME = 'process-webhook'
 const SLOW_JOB_THRESHOLD = 30000 // 30 seconds

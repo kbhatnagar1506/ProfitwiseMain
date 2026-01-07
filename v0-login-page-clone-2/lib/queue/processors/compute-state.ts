@@ -1,12 +1,12 @@
 import { Job } from 'bull'
 import { ComputeStateJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
-import { query } from '../db'
-import { log } from '../logger'
-import { computeState } from '../state/compute'
+import { query } from '../../db'
+import { log } from '../../logger'
+import { computeRevenueState, computeSpendState, computeLiquidityState } from '../../state/compute'
 
 const QUEUE_NAME = 'compute-state'
-const SLOW_JOB_THRESHOLD = 30000 // 30 seconds
+const SLOW_JOB_THRESHOLD = 30000
 
 export async function processComputeState(job: Job<ComputeStateJob>) {
   const startTime = Date.now()
@@ -18,8 +18,7 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
 
     log('compute.start', { userId, jobId: job.id }, 'queue')
 
-    // Fetch tagged movements from DB
-    const { rows: taggedMovements } = await query<{
+    const { rows: rawMovements } = await query<{
       id: string
       user_id: string
       date: string
@@ -28,27 +27,27 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
       movement_type: string
       counterparty_entity_id: string | null
       counterparty_entity_type: string | null
-      economic_class: string
-      cashflow_bucket: string
-      counterparty_role: string
+      counterparty_name: string | null
+      source: string | null
+      source_tx_id: string | null
+      account_id: string | null
+      account_name: string | null
     }>(
-      `SELECT 
-        m.id, m.user_id, m.date, m.direction, m.amount, m.movement_type,
-        m.counterparty_entity_id, m.counterparty_entity_type,
-        mt.economic_class, mt.cashflow_bucket, mt.counterparty_role
+      `SELECT m.id, m.user_id, m.date, m.direction, m.amount, m.movement_type,
+              m.counterparty_entity_id, m.counterparty_entity_type,
+              m.counterparty_name, m.source, m.source_tx_id,
+              m.account_id, m.account_name
        FROM movements m
-       LEFT JOIN movement_tags mt ON m.id = mt.movement_id
        WHERE m.user_id = $1
        ORDER BY m.date ASC`,
       [userId]
     )
 
-    if (taggedMovements.length === 0) {
+    if (rawMovements.length === 0) {
       log('compute.no_movements', { userId }, 'queue')
       QueueLogger.logJobProgress(job, QUEUE_NAME, 'computing-state', 100)
       await updateJobStatus(job.id, userId, 'processing', 'computing-state', 100)
 
-      // Queue next job: generate-forecast
       const forecastJob = await job.queue.add(
         'generate-forecast',
         { userId },
@@ -62,18 +61,67 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
       return { jobId: job.id, nextJobId: forecastJob.id, status: 'queued' }
     }
 
-    // Compute RevenueState, SpendState, LiquidityState
-    // This calls the existing computeState function which handles:
-    // - Compute financial state from tagged movements
-    // - Integrate with entity graph for entity-level analysis
-    // - Persist snapshot to state_snapshots table
-    const stateSnapshot = await computeState(userId, taggedMovements as any)
+    const { rows: tags } = await query<{
+      movement_id: string
+      economic_class: string
+      cashflow_bucket: string
+      counterparty_role: string
+      tag_data: any
+    }>(
+      `SELECT movement_id, economic_class, cashflow_bucket, counterparty_role, tag_data
+       FROM movement_tags
+       WHERE movement_id = ANY($1::text[])`,
+      [rawMovements.map(m => m.id)]
+    )
 
-    // Persist snapshot to state_snapshots table
+    const tagMap = new Map(tags.map(t => [t.movement_id, t]))
+
+    const taggedMovements = rawMovements
+      .filter(m => tagMap.has(m.id))
+      .map(m => {
+        const t = tagMap.get(m.id)!
+        const td = typeof t.tag_data === 'string' ? JSON.parse(t.tag_data) : (t.tag_data || {})
+        return {
+          id: m.id,
+          user_id: m.user_id,
+          date: m.date,
+          direction: m.direction as 'in' | 'out',
+          amount: parseFloat(m.amount),
+          movement_type: m.movement_type,
+          counterparty_entity_id: m.counterparty_entity_id,
+          counterparty_entity_type: m.counterparty_entity_type,
+          counterparty_name: m.counterparty_name ?? '',
+          source: m.source ?? '',
+          source_tx_id: m.source_tx_id ?? '',
+          account_id: m.account_id ?? undefined,
+          account_name: m.account_name ?? undefined,
+          tag: {
+            economic_class: t.economic_class,
+            cashflow_bucket: t.cashflow_bucket,
+            counterparty_role: t.counterparty_role,
+            state_inclusion_policy: td.state_inclusion_policy ?? 'include',
+            confidence: td.confidence ?? 1,
+            state_scope: td.state_scope ?? {
+              affects_revenue: true,
+              affects_spend: true,
+              affects_liquidity: true,
+            },
+          },
+        }
+      }) as any[]
+
+    const dates = taggedMovements.map(m => m.date).sort()
+    const periodStart = dates[0]
+    const periodEnd = dates[dates.length - 1]
+
+    const revenue = computeRevenueState(taggedMovements, periodStart, periodEnd)
+    const spend = computeSpendState(taggedMovements, periodStart, periodEnd)
+    const liquidity = computeLiquidityState(taggedMovements, periodStart, periodEnd)
+
     await query(
       `INSERT INTO state_snapshots (user_id, snapshot_at, revenue_state, spend_state, liquidity_state, created_at)
        VALUES ($1, NOW(), $2, $3, $4, NOW())`,
-      [userId, JSON.stringify(stateSnapshot.revenue), JSON.stringify(stateSnapshot.spend), JSON.stringify(stateSnapshot.liquidity)]
+      [userId, JSON.stringify(revenue), JSON.stringify(spend), JSON.stringify(liquidity)]
     )
 
     log('compute.complete', { userId, jobId: job.id, movementCount: taggedMovements.length }, 'queue')
@@ -81,7 +129,6 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'computing-state', 100)
     await updateJobStatus(job.id, userId, 'processing', 'computing-state', 100)
 
-    // Queue next job: generate-forecast
     const forecastJob = await job.queue.add(
       'generate-forecast',
       { userId },
@@ -113,7 +160,7 @@ export async function processComputeState(job: Job<ComputeStateJob>) {
 }
 
 async function updateJobStatus(
-  jobId: string,
+  jobId: string | number,
   userId: string,
   status: 'queued' | 'processing' | 'complete' | 'failed',
   step: 'fetching' | 'classifying' | 'tagging' | 'computing-state' | 'generating-forecast' | 'complete',
@@ -130,7 +177,7 @@ async function updateJobStatus(
          progress = $5,
          error = $6,
          updated_at = NOW()`,
-      [jobId, userId, status, step, progress, error || null]
+      [String(jobId), userId, status, step, progress, error || null]
     )
   } catch (err) {
     log('job_status.update.error', { jobId, userId, error: String(err) }, 'queue')

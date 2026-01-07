@@ -1,9 +1,9 @@
 import { Job } from 'bull'
 import { TagMovementsJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
-import { query } from '../db'
-import { log } from '../logger'
-import { tagMovements } from '../movement-tag-enrich'
+import { query } from '../../db'
+import { log } from '../../logger'
+import { tagMovements } from '../../movement-tag-enrich'
 
 const QUEUE_NAME = 'tag-movements'
 const SLOW_JOB_THRESHOLD = 30000 // 30 seconds

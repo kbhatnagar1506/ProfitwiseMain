@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-clean-db-secret") ?? ""
   const expected = process.env.CLEAN_DB_SECRET
   if (!expected || secret !== expected) {
-    log("admin.gmail-reset-processed.unauthorized", {}, "system")
+    log("admin.gmail-reset-processed.unauthorized", {}, "gmail")
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -31,10 +31,10 @@ export async function POST(req: NextRequest) {
       [days]
     )
     const count = rows.length
-    log("admin.gmail-reset-processed.done", { count, days }, "system")
+    log("admin.gmail-reset-processed.done", { count, days }, "gmail")
     return NextResponse.json({ ok: true, reset: count, days })
   } catch (err) {
-    log("admin.gmail-reset-processed.failed", { error: String(err) }, "system")
+    log("admin.gmail-reset-processed.failed", { error: String(err) }, "gmail")
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
 }

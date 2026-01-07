@@ -1,9 +1,9 @@
 import { Job } from 'bull'
 import { GenerateForecastJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
-import { query } from '../db'
-import { log } from '../logger'
-import { computeCashflowForecast } from '../state/forecast-engine'
+import { query } from '../../db'
+import { log } from '../../logger'
+import { computeCashflowForecast } from '../../state/forecast-engine'
 
 const QUEUE_NAME = 'generate-forecast'
 const SLOW_JOB_THRESHOLD = 60000 // 60 seconds (forecasts can be slow)
@@ -125,17 +125,47 @@ async function generateForecastLogic(
   arItems: Array<{ entity_id: string; amount: number; expected_date: string }>,
   apItems: Array<{ entity_id: string; amount: number; expected_date: string }>
 ): Promise<Record<string, any>> {
-  // Call the existing forecast engine which integrates:
-  // - Entity payment profiles from entity graph
-  // - Monte Carlo simulation
-  // - LLM narrative generation
-  // - Business state computation
   try {
-    const forecast = await computeCashflowForecast(userId, movements as any, tags as any, arItems as any, apItems as any)
-    return forecast
+    const tagMap = new Map(tags.map(t => [t.movement_id, t]))
+    const taggedMovements = movements
+      .filter(m => tagMap.has(m.id))
+      .map(m => {
+        const t = tagMap.get(m.id)!
+        return {
+          ...m,
+          tag: {
+            economic_class: t.economic_class,
+            cashflow_bucket: t.cashflow_bucket,
+            counterparty_role: '',
+            state_inclusion_policy: 'include',
+            confidence: 1,
+            state_scope: { affects_revenue: true, affects_spend: true, affects_liquidity: true },
+          },
+        }
+      })
+
+    const startingCash = 0
+    const forecast = await computeCashflowForecast(
+      taggedMovements as any,
+      startingCash,
+      6,
+      arItems as any,
+      undefined,
+      apItems as any,
+      null,
+      null,
+      [],
+      {},
+      [],
+      [],
+      [],
+      [],
+      null,
+      userId,
+    )
+    return forecast as any
   } catch (error) {
     log('forecast.engine.error', { userId, error: String(error) }, 'queue')
-    // Return a basic structure if forecast engine fails
     return {
       scenarios: [
         {

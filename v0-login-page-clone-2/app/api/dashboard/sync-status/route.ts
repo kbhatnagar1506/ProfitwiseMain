@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const userId = session.userId
+    const userId = session.id
 
     // Get the latest job status for this user
     const { rows } = await query<{

@@ -16,15 +16,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Clear all forecast cache
-    const result = await query(`DELETE FROM forecast_cache`)
+    const result = await query(`DELETE FROM forecast_cache RETURNING id`)
     log("forecast.cache.cron_cleared", {
-      rows_deleted: result.rowCount,
+      rows_deleted: result.rows.length,
     })
 
     return NextResponse.json({
       ok: true,
       message: "Forecast cache cleared for all users",
-      rows_deleted: result.rowCount,
+      rows_deleted: result.rows.length,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
