@@ -1,16 +1,16 @@
 /**
  * POST /api/admin/run-full-pipeline
  * 
- * Runs the complete data processing pipeline for all users:
+ * Runs the complete data processing pipeline for all users in the BACKGROUND:
  * 1. Classify movements (entity resolution)
  * 2. Tag movements (economic classification)
  * 3. Seed identity graph (entity graphing)
- * 4. Reconciliation (AR/AP matching)
- * 5. Seed identity graph again (refresh)
+ * 4. Reconciliation (AR/AP matching) - populates cash_events
+ * 5. Seed identity graph again (refresh with reconciliation data)
  * 6. Compute state (revenue/spend/liquidity)
  * 7. Generate forecast
  * 
- * Logs detailed results at each step for debugging.
+ * Returns immediately. Pipeline runs in background and logs to Heroku logs.
  * Requires x-clean-db-secret header.
  */
 
@@ -22,41 +22,16 @@ import { tagMovements } from "@/lib/movement-tag-enrich"
 import { seedIdentityGraph } from "@/lib/identity-seed"
 import { computeRevenueState, computeSpendState, computeLiquidityState } from "@/lib/state/compute"
 
-export async function POST(req: NextRequest) {
-  if (process.env.NODE_ENV !== "production") {
-    return NextResponse.json({ error: "Only available in production" }, { status: 403 })
-  }
-
-  const secret = req.headers.get("x-clean-db-secret") ?? ""
-  const expected = process.env.CLEAN_DB_SECRET
-  if (!expected || secret !== expected) {
-    log("admin.run_full_pipeline.unauthorized", {}, "system")
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
-
+// Run pipeline in background without blocking the response
+async function runPipelineInBackground(users: Array<{ id: string; email: string }>) {
   try {
-    await ensureAuthSchema()
-
-    // Get all users
-    const { rows: users } = await query<{ id: string; email: string }>(
-      `SELECT id, email FROM users ORDER BY created_at DESC`
-    )
-
     console.log(`\n${"=".repeat(80)}`)
-    console.log(`FULL PIPELINE RUN: ${users.length} users`)
+    console.log(`FULL PIPELINE RUN (BACKGROUND): ${users.length} users`)
     console.log(`${"=".repeat(80)}\n`)
-
-    const results: Array<{
-      userId: string
-      email: string
-      steps: Record<string, any>
-      error?: string
-    }> = []
 
     for (const user of users) {
       const userId = user.id
       const email = user.email
-      const steps: Record<string, any> = {}
 
       console.log(`\n${"─".repeat(80)}`)
       console.log(`USER: ${email} (${userId})`)
@@ -68,10 +43,6 @@ export async function POST(req: NextRequest) {
         const classifyStart = Date.now()
         const classifyResult = await classifyMovements(userId)
         const classifyTime = Date.now() - classifyStart
-        steps.classify = {
-          ...classifyResult,
-          duration_ms: classifyTime,
-        }
         console.log(`✓ Classified in ${classifyTime}ms:`, {
           canonical_movements: classifyResult.canonical_movements,
           rule_classified: classifyResult.rule_classified,
@@ -85,11 +56,6 @@ export async function POST(req: NextRequest) {
         const tagStart = Date.now()
         const tagResult = await tagMovements(userId)
         const tagTime = Date.now() - tagStart
-        steps.tag = {
-          total_tags: tagResult.tags.length,
-          stats: tagResult.stats,
-          duration_ms: tagTime,
-        }
         console.log(`✓ Tagged in ${tagTime}ms:`, {
           total: tagResult.stats.total,
           deterministic: tagResult.stats.deterministic,
@@ -103,10 +69,6 @@ export async function POST(req: NextRequest) {
         const seedStart = Date.now()
         const seedResult = await seedIdentityGraph(userId)
         const seedTime = Date.now() - seedStart
-        steps.seed_identity_1 = {
-          ...seedResult,
-          duration_ms: seedTime,
-        }
         console.log(`✓ Seeded in ${seedTime}ms:`, {
           entitiesCreated: seedResult.entitiesCreated,
           entitiesUpdated: seedResult.entitiesUpdated,
@@ -115,7 +77,7 @@ export async function POST(req: NextRequest) {
         })
         log("admin.pipeline.seed_identity_1.complete", { userId, ...seedResult, duration_ms: seedTime }, "system")
 
-        // Step 4: Reconciliation (AR/AP matching) - MUST happen before 2nd identity seeding
+        // Step 4: Reconciliation (AR/AP matching) - MUST populate cash_events BEFORE 2nd seeding
         console.log(`\n[4/7] Running reconciliation (AR/AP matching)...`)
         const reconStart = Date.now()
         
@@ -174,13 +136,6 @@ export async function POST(req: NextRequest) {
         }
 
         const reconTime = Date.now() - reconStart
-        steps.reconciliation = {
-          ar_items: arCount,
-          ap_items: apCount,
-          qbo_invoices: qboInvoices.length,
-          qbo_bills: qboBills.length,
-          duration_ms: reconTime,
-        }
         console.log(`✓ Reconciliation in ${reconTime}ms:`, {
           ar_items: arCount,
           ap_items: apCount,
@@ -194,10 +149,6 @@ export async function POST(req: NextRequest) {
         const seed2Start = Date.now()
         const seed2Result = await seedIdentityGraph(userId)
         const seed2Time = Date.now() - seed2Start
-        steps.seed_identity_2 = {
-          ...seed2Result,
-          duration_ms: seed2Time,
-        }
         console.log(`✓ Seeded (2nd pass) in ${seed2Time}ms:`, {
           entitiesCreated: seed2Result.entitiesCreated,
           entitiesUpdated: seed2Result.entitiesUpdated,
@@ -236,7 +187,6 @@ export async function POST(req: NextRequest) {
 
         if (rawMovements.length === 0) {
           console.log(`⚠ No movements found, skipping state computation`)
-          steps.state = { skipped: true, reason: "no_movements" }
         } else {
           const { rows: tags } = await query<{
             movement_id: string
@@ -307,49 +257,18 @@ export async function POST(req: NextRequest) {
           )
 
           const stateTime = Date.now() - stateStart
-          steps.state = {
-            movements_processed: taggedMovements.length,
-            period_start: periodStart,
-            period_end: periodEnd,
-            revenue: {
-              gross_revenue: revenue.gross_revenue,
-              recurring_revenue: revenue.recurring_revenue,
-              net_revenue: revenue.net_revenue,
-            },
-            spend: {
-              total_opex: spend.total_opex,
-              total_cogs: spend.total_cogs,
-              payroll: spend.payroll,
-            },
-            liquidity: {
-              total_in: liquidity.total_in,
-              total_out: liquidity.total_out,
-              net_cash_flow: liquidity.total_in - liquidity.total_out,
-            },
-            duration_ms: stateTime,
-          }
           console.log(`✓ State computed in ${stateTime}ms:`, {
             movements: taggedMovements.length,
             gross_revenue: revenue.gross_revenue,
             total_opex: spend.total_opex,
             net_cash_flow: liquidity.total_in - liquidity.total_out,
           })
-          log("admin.pipeline.state.complete", { userId, ...steps.state }, "system")
+          log("admin.pipeline.state.complete", { userId, movements: taggedMovements.length, gross_revenue: revenue.gross_revenue, total_opex: spend.total_opex, duration_ms: stateTime }, "system")
         }
 
         // Step 7: Generate forecast (placeholder for now)
         console.log(`\n[7/7] Forecast generation...`)
-        steps.forecast = {
-          status: "queued",
-          note: "Forecast generation queued separately via Bull queue",
-        }
         console.log(`✓ Forecast queued for async processing`)
-
-        results.push({
-          userId,
-          email,
-          steps,
-        })
 
         console.log(`\n✅ COMPLETE for ${email}`)
       } catch (error) {
@@ -357,24 +276,50 @@ export async function POST(req: NextRequest) {
         console.error(`\n❌ ERROR for ${email}:`, errorMsg)
         console.error(error)
         log("admin.pipeline.user_error", { userId, email, error: errorMsg }, "system")
-        results.push({
-          userId,
-          email,
-          steps,
-          error: errorMsg,
-        })
       }
     }
 
     console.log(`\n${"=".repeat(80)}`)
-    console.log(`PIPELINE COMPLETE: ${results.length} users processed`)
+    console.log(`PIPELINE COMPLETE: ${users.length} users processed`)
     console.log(`${"=".repeat(80)}\n`)
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    log("admin.run_full_pipeline.failed", { error: errorMsg }, "system")
+    console.error("Pipeline error:", error)
+  }
+}
 
+export async function POST(req: NextRequest) {
+  if (process.env.NODE_ENV !== "production") {
+    return NextResponse.json({ error: "Only available in production" }, { status: 403 })
+  }
+
+  const secret = req.headers.get("x-clean-db-secret") ?? ""
+  const expected = process.env.CLEAN_DB_SECRET
+  if (!expected || secret !== expected) {
+    log("admin.run_full_pipeline.unauthorized", {}, "system")
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  try {
+    await ensureAuthSchema()
+
+    // Get all users
+    const { rows: users } = await query<{ id: string; email: string }>(
+      `SELECT id, email FROM users ORDER BY created_at DESC`
+    )
+
+    // Start pipeline in background (don't await)
+    runPipelineInBackground(users).catch(err => {
+      console.error("Background pipeline error:", err)
+      log("admin.pipeline.background_error", { error: String(err) }, "system")
+    })
+
+    // Return immediately
     return NextResponse.json({
       ok: true,
-      users_processed: results.length,
-      results,
-      message: "Check Heroku logs for detailed output",
+      users_queued: users.length,
+      message: "Pipeline started in background. Check Heroku logs for progress.",
     })
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
