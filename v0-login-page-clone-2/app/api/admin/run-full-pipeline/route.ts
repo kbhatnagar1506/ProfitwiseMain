@@ -88,27 +88,29 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         console.log(`\n[4/7] Running AR/AP reconciliation...`)
         const reconStart = Date.now()
         
-        // Fetch QBO invoices (AR)
+        // Fetch QBO invoices (AR) from qbo_entities table
         const { rows: qboInvoices } = await query<{
-          id: string
-          customer_id: string | null
-          total: number
-          due_date: string
+          entity_id: string
+          data: any
         }>(
-          `SELECT id, customer_id, total, due_date FROM qbo_invoices 
-           WHERE user_id = $1 AND status = 'Open'`,
+          `SELECT entity_id, data FROM qbo_entities 
+           WHERE realm_id IN (
+             SELECT realm_id FROM qbo_connections WHERE user_id = $1
+           )
+           AND entity_type = 'Invoice'`,
           [userId]
         )
 
-        // Fetch QBO bills (AP)
+        // Fetch QBO bills (AP) from qbo_entities table
         const { rows: qboBills } = await query<{
-          id: string
-          vendor_id: string | null
-          total: number
-          due_date: string
+          entity_id: string
+          data: any
         }>(
-          `SELECT id, vendor_id, total, due_date FROM qbo_bills 
-           WHERE user_id = $1 AND status = 'Open'`,
+          `SELECT entity_id, data FROM qbo_entities 
+           WHERE realm_id IN (
+             SELECT realm_id FROM qbo_connections WHERE user_id = $1
+           )
+           AND entity_type = 'Bill'`,
           [userId]
         )
 
@@ -117,27 +119,37 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         let apCount = 0
         
         for (const inv of qboInvoices) {
+          const invData = typeof inv.data === 'string' ? JSON.parse(inv.data) : inv.data
+          const dueDate = invData.DueDate || invData.due_date || new Date().toISOString().split('T')[0]
+          const totalAmount = invData.TotalAmt || invData.total || 0
+          
           await query(
-            `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, created_at)
-             VALUES ($1, 'ar', $2, $3, $4, 'open', NOW())
+            `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, metadata, created_at)
+             VALUES ($1, 'ar', $2, $3, $4, 'open', $5, NOW())
              ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
                amount = $3,
                expected_date = $4,
-               status = 'open'`,
-            [userId, inv.customer_id, inv.total, inv.due_date]
+               status = 'open',
+               metadata = $5`,
+            [userId, `ar://invoice/qbo/${inv.entity_id}`, totalAmount, dueDate, JSON.stringify({ invoice_id: inv.entity_id })]
           )
           arCount++
         }
 
         for (const bill of qboBills) {
+          const billData = typeof bill.data === 'string' ? JSON.parse(bill.data) : bill.data
+          const dueDate = billData.DueDate || billData.due_date || new Date().toISOString().split('T')[0]
+          const totalAmount = billData.TotalAmt || billData.total || 0
+          
           await query(
-            `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, created_at)
-             VALUES ($1, 'ap', $2, $3, $4, 'open', NOW())
+            `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, metadata, created_at)
+             VALUES ($1, 'ap', $2, $3, $4, 'open', $5, NOW())
              ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
                amount = $3,
                expected_date = $4,
-               status = 'open'`,
-            [userId, bill.vendor_id, bill.total, bill.due_date]
+               status = 'open',
+               metadata = $5`,
+            [userId, `ap://bill/qbo/${bill.entity_id}`, totalAmount, dueDate, JSON.stringify({ bill_id: bill.entity_id })]
           )
           apCount++
         }
