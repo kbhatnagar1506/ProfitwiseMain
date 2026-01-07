@@ -115,45 +115,79 @@ export async function POST(req: NextRequest) {
         })
         log("admin.pipeline.seed_identity_1.complete", { userId, ...seedResult, duration_ms: seedTime }, "system")
 
-        // Step 4: Reconciliation (AR/AP matching)
+        // Step 4: Reconciliation (AR/AP matching) - MUST happen before 2nd identity seeding
         console.log(`\n[4/7] Running reconciliation (AR/AP matching)...`)
         const reconStart = Date.now()
         
-        // Fetch AR items (invoices)
-        const { rows: arItems } = await query<{
+        // Fetch QBO invoices (AR)
+        const { rows: qboInvoices } = await query<{
           id: string
-          entity_id: string | null
-          amount: number
-          expected_date: string
+          customer_id: string | null
+          total: number
+          due_date: string
         }>(
-          `SELECT id, entity_id, amount, expected_date FROM cash_events 
-           WHERE user_id = $1 AND event_type = 'ar' AND status = 'open'`,
+          `SELECT id, customer_id, total, due_date FROM qbo_invoices 
+           WHERE user_id = $1 AND status = 'Open'`,
           [userId]
         )
 
-        // Fetch AP items (bills)
-        const { rows: apItems } = await query<{
+        // Fetch QBO bills (AP)
+        const { rows: qboBills } = await query<{
           id: string
-          entity_id: string | null
-          amount: number
-          expected_date: string
+          vendor_id: string | null
+          total: number
+          due_date: string
         }>(
-          `SELECT id, entity_id, amount, expected_date FROM cash_events 
-           WHERE user_id = $1 AND event_type = 'ap' AND status = 'open'`,
+          `SELECT id, vendor_id, total, due_date FROM qbo_bills 
+           WHERE user_id = $1 AND status = 'Open'`,
           [userId]
         )
+
+        // Create cash_events from invoices and bills for reconciliation
+        let arCount = 0
+        let apCount = 0
+        
+        for (const inv of qboInvoices) {
+          await query(
+            `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, created_at)
+             VALUES ($1, 'ar', $2, $3, $4, 'open', NOW())
+             ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
+               amount = $3,
+               expected_date = $4,
+               status = 'open'`,
+            [userId, inv.customer_id, inv.total, inv.due_date]
+          )
+          arCount++
+        }
+
+        for (const bill of qboBills) {
+          await query(
+            `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, created_at)
+             VALUES ($1, 'ap', $2, $3, $4, 'open', NOW())
+             ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
+               amount = $3,
+               expected_date = $4,
+               status = 'open'`,
+            [userId, bill.vendor_id, bill.total, bill.due_date]
+          )
+          apCount++
+        }
 
         const reconTime = Date.now() - reconStart
         steps.reconciliation = {
-          ar_items: arItems.length,
-          ap_items: apItems.length,
+          ar_items: arCount,
+          ap_items: apCount,
+          qbo_invoices: qboInvoices.length,
+          qbo_bills: qboBills.length,
           duration_ms: reconTime,
         }
         console.log(`✓ Reconciliation in ${reconTime}ms:`, {
-          ar_items: arItems.length,
-          ap_items: apItems.length,
+          ar_items: arCount,
+          ap_items: apCount,
+          qbo_invoices: qboInvoices.length,
+          qbo_bills: qboBills.length,
         })
-        log("admin.pipeline.reconciliation.complete", { userId, ar_items: arItems.length, ap_items: apItems.length, duration_ms: reconTime }, "system")
+        log("admin.pipeline.reconciliation.complete", { userId, ar_items: arCount, ap_items: apCount, qbo_invoices: qboInvoices.length, qbo_bills: qboBills.length, duration_ms: reconTime }, "system")
 
         // Step 5: Seed identity graph again (second pass with reconciliation data)
         console.log(`\n[5/7] Seeding identity graph (second pass - with reconciliation)...`)
