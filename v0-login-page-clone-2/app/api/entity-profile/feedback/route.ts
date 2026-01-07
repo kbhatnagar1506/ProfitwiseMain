@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Save entity profile feedback
-    const result = await query(
+    const result = await query<{ id: string }>(
       `INSERT INTO entity_profile_feedback (user_id, entity_id, feedback_type, feedback_value, notes)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,

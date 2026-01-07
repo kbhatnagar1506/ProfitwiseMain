@@ -1,9 +1,9 @@
 import { Job } from 'bull'
 import { SyncInitialDataJob } from '../job-types'
 import { QueueLogger } from '../queue-logger'
-import { query, withTransaction } from '../db'
-import { getPlaidClient } from '../plaid'
-import { log } from '../logger'
+import { query, withTransaction } from '../../db'
+import { getPlaidClient } from '../../plaid'
+import { log } from '../../logger'
 
 const QUEUE_NAME = 'sync-initial-data'
 const SLOW_JOB_THRESHOLD = 30000 // 30 seconds

@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const userId = session.userId
+    const userId = session.id
 
     // Check if user already has data (movements exist)
     const { rows } = await query<{ count: number }>(
@@ -30,9 +30,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Use require with a computed path to prevent Turbopack analysis
-    const modulePath = './bull-client'
-    const { queues } = require(modulePath)
+    // Use eval-based require to fully prevent Turbopack static analysis
+    const _require = eval('require') as NodeRequire
+    const path = eval('require')('path') as typeof import('path')
+    const clientPath = path.join(process.cwd(), 'lib', 'queue', 'bull-client')
+    const { queues } = _require(clientPath)
     
     // Queue sync-initial-data job
     const job = await queues.syncInitialData.add(

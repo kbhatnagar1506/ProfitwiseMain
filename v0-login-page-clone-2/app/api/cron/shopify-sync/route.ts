@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
     for (const userId of userIds) {
       try {
         const dedupStats = await autoResolveDuplicates(userId)
-        dedupResults.push({ userId, ...dedupStats })
+        dedupResults.push({ userId, resolved: dedupStats.resolved, candidates: dedupStats.candidates.length })
       } catch (e) {
         log("shopify.cron.dedup_error", { userId, error: String(e) }, "shopify")
       }

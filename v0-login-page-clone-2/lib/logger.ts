@@ -10,6 +10,14 @@ export type LogChannel =
   | "stripe"
   | "identity"
   | "movements"
+  | "gmail"
+  | "queue"
+  | "onboarding"
+  | "forecast"
+  | "state"
+  | "shopify"
+  | "dedup"
+  | "error"
 
 /**
  * Emoji for filtering in log viewers (e.g. Heroku):

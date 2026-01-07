@@ -31,7 +31,7 @@ export async function POST() {
     }
 
     // Save or update form draft
-    const result = await query(
+    const result = await query<{ id: string; saved_at: string }>(
       `INSERT INTO form_drafts (user_id, form_type, draft_data)
        VALUES ($1, $2, $3)
        ON CONFLICT (user_id, form_type) DO UPDATE SET
@@ -78,7 +78,7 @@ export async function GET(request: Request) {
     }
 
     // Get form draft
-    const result = await query(
+    const result = await query<{ draft_data: any; saved_at: string }>(
       `SELECT draft_data, saved_at
        FROM form_drafts
        WHERE user_id = $1 AND form_type = $2`,

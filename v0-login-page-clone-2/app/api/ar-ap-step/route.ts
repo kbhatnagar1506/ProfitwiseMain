@@ -562,7 +562,7 @@ function computeApReconciliationSummary(bills: OutstandingBill[]) {
 }
 
 async function fetchReconTotals(userId: string): Promise<ReconTotals> {
-  const totals: Record<string, number> = {
+  const totals: any = {
     total_matched_inflows: 0,
     total_matched_outflows: 0,
     total_unmatched_inflows: 0,
@@ -622,7 +622,7 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     unmatched_outflows: lists.unmatched_outflows.slice(0, MAX_MOVEMENT_ROWS),
     excluded_inflows: lists.excluded_inflows.slice(0, MAX_MOVEMENT_ROWS),
     excluded_outflows: lists.excluded_outflows.slice(0, MAX_MOVEMENT_ROWS),
-  } as ReconTotals
+  }
 }
 
 type ExcludedMovement = {

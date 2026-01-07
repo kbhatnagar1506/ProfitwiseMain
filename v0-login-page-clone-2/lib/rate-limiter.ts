@@ -149,7 +149,7 @@ export const rateLimiters = {
 /**
  * Helper to create rate limit response headers
  */
-export function getRateLimitHeaders(status: ReturnType<typeof createRateLimiter>['getStatus']): Record<string, string> {
+export function getRateLimitHeaders(status: { count: number; limit: number; remaining: number; resetTime: number }): Record<string, string> {
   return {
     'X-RateLimit-Limit': String(status.limit),
     'X-RateLimit-Remaining': String(status.remaining),
