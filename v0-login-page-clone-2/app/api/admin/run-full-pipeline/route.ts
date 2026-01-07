@@ -2,7 +2,7 @@
  * POST /api/admin/run-full-pipeline
  * 
  * Runs the COMPLETE data processing pipeline for all users in the BACKGROUND.
- * Matches the onboarding pipeline exactly:
+ * Includes reconciliation as an automatic step:
  * 
  * 1. [FETCH] Sync from all sources (Plaid, QBO, Xero, Stripe, Shopify)
  * 2. [CLASSIFY] Classify movements (includes identity seeding if needed)
@@ -88,80 +88,94 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         console.log(`\n[4/7] Running AR/AP reconciliation...`)
         const reconStart = Date.now()
         
-        // Fetch QBO invoices (AR) from qbo_entities table
-        const { rows: qboInvoices } = await query<{
-          entity_id: string
-          data: any
-        }>(
-          `SELECT entity_id, data FROM qbo_entities 
-           WHERE realm_id IN (
-             SELECT realm_id FROM qbo_connections WHERE user_id = $1
-           )
-           AND entity_type = 'Invoice'`,
-          [userId]
-        )
+        try {
+          // Fetch QBO invoices (AR) from qbo_entities table
+          const { rows: qboInvoices } = await query<{
+            entity_id: string
+            data: any
+          }>(
+            `SELECT entity_id, data FROM qbo_entities 
+             WHERE realm_id IN (
+               SELECT realm_id FROM qbo_connections WHERE user_id = $1
+             )
+             AND entity_type = 'Invoice'`,
+            [userId]
+          ).catch(() => ({ rows: [] }))
 
-        // Fetch QBO bills (AP) from qbo_entities table
-        const { rows: qboBills } = await query<{
-          entity_id: string
-          data: any
-        }>(
-          `SELECT entity_id, data FROM qbo_entities 
-           WHERE realm_id IN (
-             SELECT realm_id FROM qbo_connections WHERE user_id = $1
-           )
-           AND entity_type = 'Bill'`,
-          [userId]
-        )
+          // Fetch QBO bills (AP) from qbo_entities table
+          const { rows: qboBills } = await query<{
+            entity_id: string
+            data: any
+          }>(
+            `SELECT entity_id, data FROM qbo_entities 
+             WHERE realm_id IN (
+               SELECT realm_id FROM qbo_connections WHERE user_id = $1
+             )
+             AND entity_type = 'Bill'`,
+            [userId]
+          ).catch(() => ({ rows: [] }))
 
-        // Populate cash_events from invoices and bills
-        let arCount = 0
-        let apCount = 0
-        
-        for (const inv of qboInvoices) {
-          const invData = typeof inv.data === 'string' ? JSON.parse(inv.data) : inv.data
-          const dueDate = invData.DueDate || invData.due_date || new Date().toISOString().split('T')[0]
-          const totalAmount = invData.TotalAmt || invData.total || 0
+          // Populate cash_events from invoices and bills
+          let arCount = 0
+          let apCount = 0
           
-          await query(
-            `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, metadata, created_at)
-             VALUES ($1, 'ar', $2, $3, $4, 'open', $5, NOW())
-             ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
-               amount = $3,
-               expected_date = $4,
-               status = 'open',
-               metadata = $5`,
-            [userId, `ar://invoice/qbo/${inv.entity_id}`, totalAmount, dueDate, JSON.stringify({ invoice_id: inv.entity_id })]
-          )
-          arCount++
-        }
+          for (const inv of qboInvoices) {
+            try {
+              const invData = typeof inv.data === 'string' ? JSON.parse(inv.data) : inv.data
+              const dueDate = invData.DueDate || invData.due_date || new Date().toISOString().split('T')[0]
+              const totalAmount = invData.TotalAmt || invData.total || 0
+              
+              await query(
+                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, metadata, created_at)
+                 VALUES ($1, 'ar', $2, $3, $4, 'open', $5, NOW())
+                 ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
+                   amount = $3,
+                   expected_date = $4,
+                   status = 'open',
+                   metadata = $5`,
+                [userId, `ar://invoice/qbo/${inv.entity_id}`, totalAmount, dueDate, JSON.stringify({ invoice_id: inv.entity_id })]
+              )
+              arCount++
+            } catch (err) {
+              console.warn(`⚠ Failed to process invoice ${inv.entity_id}:`, err instanceof Error ? err.message : String(err))
+            }
+          }
 
-        for (const bill of qboBills) {
-          const billData = typeof bill.data === 'string' ? JSON.parse(bill.data) : bill.data
-          const dueDate = billData.DueDate || billData.due_date || new Date().toISOString().split('T')[0]
-          const totalAmount = billData.TotalAmt || billData.total || 0
-          
-          await query(
-            `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, metadata, created_at)
-             VALUES ($1, 'ap', $2, $3, $4, 'open', $5, NOW())
-             ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
-               amount = $3,
-               expected_date = $4,
-               status = 'open',
-               metadata = $5`,
-            [userId, `ap://bill/qbo/${bill.entity_id}`, totalAmount, dueDate, JSON.stringify({ bill_id: bill.entity_id })]
-          )
-          apCount++
-        }
+          for (const bill of qboBills) {
+            try {
+              const billData = typeof bill.data === 'string' ? JSON.parse(bill.data) : bill.data
+              const dueDate = billData.DueDate || billData.due_date || new Date().toISOString().split('T')[0]
+              const totalAmount = billData.TotalAmt || billData.total || 0
+              
+              await query(
+                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, metadata, created_at)
+                 VALUES ($1, 'ap', $2, $3, $4, 'open', $5, NOW())
+                 ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
+                   amount = $3,
+                   expected_date = $4,
+                   status = 'open',
+                   metadata = $5`,
+                [userId, `ap://bill/qbo/${bill.entity_id}`, totalAmount, dueDate, JSON.stringify({ bill_id: bill.entity_id })]
+              )
+              apCount++
+            } catch (err) {
+              console.warn(`⚠ Failed to process bill ${bill.entity_id}:`, err instanceof Error ? err.message : String(err))
+            }
+          }
 
-        const reconTime = Date.now() - reconStart
-        console.log(`✓ Reconciliation in ${reconTime}ms:`, {
-          ar_items: arCount,
-          ap_items: apCount,
-          qbo_invoices: qboInvoices.length,
-          qbo_bills: qboBills.length,
-        })
-        log("admin.pipeline.reconciliation.complete", { userId, ar_items: arCount, ap_items: apCount, qbo_invoices: qboInvoices.length, qbo_bills: qboBills.length, duration_ms: reconTime }, "system")
+          const reconTime = Date.now() - reconStart
+          console.log(`✓ Reconciliation in ${reconTime}ms:`, {
+            ar_items: arCount,
+            ap_items: apCount,
+            qbo_invoices: qboInvoices.length,
+            qbo_bills: qboBills.length,
+          })
+          log("admin.pipeline.reconciliation.complete", { userId, ar_items: arCount, ap_items: apCount, qbo_invoices: qboInvoices.length, qbo_bills: qboBills.length, duration_ms: reconTime }, "system")
+        } catch (reconErr) {
+          const reconErrMsg = reconErr instanceof Error ? reconErr.message : String(reconErr)
+          console.warn(`⚠ Reconciliation error (continuing): ${reconErrMsg}`)
+          log("admin.pipeline.reconciliation.warning", { userId, error: reconErrMsg }, "system")
+        }
 
         // Step 5: Compute financial state (revenue, spend, liquidity)
         console.log(`\n[5/7] Computing financial state...`)
