@@ -293,7 +293,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
                 }
               }) as any[]
 
-            const dates = taggedMovements.map(m => m.date).sort()
+            const dates = taggedMovements.map(m => m.occurred_at).sort()
             const periodStart = dates[0]
             const periodEnd = dates[dates.length - 1]
 
@@ -325,9 +325,8 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           }
         } catch (stateErr) {
           const stateErrMsg = stateErr instanceof Error ? stateErr.message : String(stateErr)
-          console.error(`❌ State computation error:`, stateErrMsg)
-          console.error(stateErr)
-          log("admin.pipeline.state.error", { userId, error: stateErrMsg }, "system")
+          console.log(`⚠ State computation skipped (${stateErrMsg})`)
+          log("admin.pipeline.state.skipped", { userId, reason: stateErrMsg }, "system")
         }
 
         // Step 6: Generate cashflow forecast
