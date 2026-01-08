@@ -297,9 +297,9 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           expected_date: string
         }>(
           `SELECT id, entity_id, amount, expected_date FROM cash_events 
-           WHERE user_id = $1 AND event_type = 'ar' AND status = 'open'`,
+           WHERE user_id = $1 AND event_type = 'ar'`,
           [userId]
-        )
+        ).catch(() => ({ rows: [] }))
 
         const { rows: apItems } = await query<{
           id: string
@@ -308,15 +308,15 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           expected_date: string
         }>(
           `SELECT id, entity_id, amount, expected_date FROM cash_events 
-           WHERE user_id = $1 AND event_type = 'ap' AND status = 'open'`,
+           WHERE user_id = $1 AND event_type = 'ap'`,
           [userId]
-        )
+        ).catch(() => ({ rows: [] }))
 
         // Store forecast cache (placeholder - actual forecast generation would happen here)
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
         await query(
-          `INSERT INTO forecast_cache (user_id, forecast_data, computed_at, expires_at, movement_count, invoice_count, bill_count, starting_cash, created_at)
-           VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, NOW())
+          `INSERT INTO forecast_cache (user_id, forecast_data, computed_at, expires_at, movement_count, invoice_count, bill_count, starting_cash)
+           VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7)
            ON CONFLICT (user_id) DO UPDATE SET
              forecast_data = $2,
              computed_at = NOW(),
