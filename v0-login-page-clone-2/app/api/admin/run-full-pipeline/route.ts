@@ -126,8 +126,8 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               const totalAmount = invData.TotalAmt || invData.total || 0
               
               await query(
-                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, metadata, created_at)
-                 VALUES ($1, 'ar', $2, $3, $4, 'open', $5, NOW())
+                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata, created_at)
+                 VALUES ($1, 'ar', $2, $3, $4, 'open', 'invoice', $5, NOW())
                  ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
                    amount = $3,
                    expected_date = $4,
@@ -148,8 +148,8 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               const totalAmount = billData.TotalAmt || billData.total || 0
               
               await query(
-                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, metadata, created_at)
-                 VALUES ($1, 'ap', $2, $3, $4, 'open', $5, NOW())
+                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata, created_at)
+                 VALUES ($1, 'ap', $2, $3, $4, 'open', 'invoice', $5, NOW())
                  ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
                    amount = $3,
                    expected_date = $4,
@@ -191,16 +191,13 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           movement_type: string
           counterparty_entity_id: string | null
           counterparty_entity_type: string | null
-          counterparty_name: string | null
-          source: string | null
-          source_tx_id: string | null
-          account_id: string | null
-          account_name: string | null
+          counterparty: string | null
+          provenance: string | null
+          cash_account_id: string | null
         }>(
           `SELECT m.id, m.user_id, m.date, m.direction, m.amount, m.movement_type,
                   m.counterparty_entity_id, m.counterparty_entity_type,
-                  m.counterparty_name, m.source, m.source_tx_id,
-                  m.account_id, m.account_name
+                  m.counterparty, m.provenance, m.cash_account_id
            FROM movements m
            WHERE m.user_id = $1
            ORDER BY m.date ASC`,
@@ -239,11 +236,11 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
                 movement_type: m.movement_type,
                 counterparty_entity_id: m.counterparty_entity_id,
                 counterparty_entity_type: m.counterparty_entity_type,
-                counterparty_name: m.counterparty_name ?? '',
-                source: m.source ?? '',
-                source_tx_id: m.source_tx_id ?? '',
-                account_id: m.account_id ?? undefined,
-                account_name: m.account_name ?? undefined,
+                counterparty_name: m.counterparty ?? '',
+                source: m.provenance ?? '',
+                source_tx_id: '',
+                account_id: m.cash_account_id ?? undefined,
+                account_name: undefined,
                 tag: {
                   economic_class: t.economic_class,
                   cashflow_bucket: t.cashflow_bucket,
