@@ -181,9 +181,10 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         console.log(`\n[5/7] Computing financial state...`)
         const stateStart = Date.now()
 
+        let rawMovements: any[] = []
         try {
           // Fetch tagged movements
-          const { rows: rawMovements } = await query<{
+          const result = await query<{
             id: string
             user_id: string
             date: string
@@ -204,8 +205,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
              ORDER BY m.date ASC`,
             [userId]
           )
-
-          if (rawMovements.length === 0) {
+          rawMovements = result.rows
             console.log(`⚠ No movements found, skipping state computation`)
           } else {
             const { rows: tags } = await query<{
