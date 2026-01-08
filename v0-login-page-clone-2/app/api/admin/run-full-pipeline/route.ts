@@ -206,6 +206,8 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
             [userId]
           )
           rawMovements = result.rows
+
+          if (rawMovements.length === 0) {
             console.log(`⚠ No movements found, skipping state computation`)
           } else {
             const { rows: tags } = await query<{
