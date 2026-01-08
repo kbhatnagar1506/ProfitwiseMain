@@ -308,9 +308,9 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               `INSERT INTO state_snapshots (user_id, snapshot_at, revenue_state, spend_state, liquidity_state, created_at)
                VALUES ($1, NOW(), $2, $3, $4, NOW())
                ON CONFLICT (user_id) DO UPDATE SET
-                 revenue_state = $2,
-                 spend_state = $3,
-                 liquidity_state = $4`,
+                 revenue_state = EXCLUDED.revenue_state,
+                 spend_state = EXCLUDED.spend_state,
+                 liquidity_state = EXCLUDED.liquidity_state`,
               [userId, JSON.stringify(revenue), JSON.stringify(spend), JSON.stringify(liquidity)]
             )
 
