@@ -297,7 +297,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         console.log(`\n[6/7] Generating cashflow forecast...`)
         const forecastStart = Date.now()
         
-        // Fetch AR/AP items for forecast
+        // Fetch AR/AP items for forecast (rawMovements available from state step)
         const { rows: arItems } = await query<{
           id: string
           entity_id: string | null
