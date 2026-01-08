@@ -181,108 +181,114 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         console.log(`\n[5/7] Computing financial state...`)
         const stateStart = Date.now()
 
-        // Fetch tagged movements
-        const { rows: rawMovements } = await query<{
-          id: string
-          user_id: string
-          date: string
-          direction: string
-          amount: string
-          movement_type: string
-          counterparty_entity_id: string | null
-          counterparty_entity_type: string | null
-          counterparty: string | null
-          provenance: string | null
-          cash_account_id: string | null
-        }>(
-          `SELECT m.id, m.user_id, m.date, m.direction, m.amount, m.movement_type,
-                  m.counterparty_entity_id, m.counterparty_entity_type,
-                  m.counterparty, m.provenance, m.cash_account_id
-           FROM movements m
-           WHERE m.user_id = $1
-           ORDER BY m.date ASC`,
-          [userId]
-        )
-
-        if (rawMovements.length === 0) {
-          console.log(`⚠ No movements found, skipping state computation`)
-        } else {
-          const { rows: tags } = await query<{
-            movement_id: string
-            economic_class: string
-            cashflow_bucket: string
-            counterparty_role: string
-            tag_data: any
+        try {
+          // Fetch tagged movements
+          const { rows: rawMovements } = await query<{
+            id: string
+            user_id: string
+            date: string
+            direction: string
+            amount: string
+            movement_type: string
+            counterparty_entity_id: string | null
+            counterparty_entity_type: string | null
+            counterparty: string | null
+            provenance: string | null
+            cash_account_id: string | null
           }>(
-            `SELECT movement_id, economic_class, cashflow_bucket, counterparty_role, tag_data
-             FROM movement_tags
-             WHERE movement_id = ANY($1::text[])`,
-            [rawMovements.map(m => m.id)]
+            `SELECT m.id, m.user_id, m.date, m.direction, m.amount, m.movement_type,
+                    m.counterparty_entity_id, m.counterparty_entity_type,
+                    m.counterparty, m.provenance, m.cash_account_id
+             FROM movements m
+             WHERE m.user_id = $1
+             ORDER BY m.date ASC`,
+            [userId]
           )
 
-          const tagMap = new Map(tags.map(t => [t.movement_id, t]))
+          if (rawMovements.length === 0) {
+            console.log(`⚠ No movements found, skipping state computation`)
+          } else {
+            const { rows: tags } = await query<{
+              movement_id: string
+              economic_class: string
+              cashflow_bucket: string
+              counterparty_role: string
+              tag_data: any
+            }>(
+              `SELECT movement_id, economic_class, cashflow_bucket, counterparty_role, tag_data
+               FROM movement_tags
+               WHERE movement_id = ANY($1::text[])`,
+              [rawMovements.map(m => m.id)]
+            )
 
-          const taggedMovements = rawMovements
-            .filter(m => tagMap.has(m.id))
-            .map(m => {
-              const t = tagMap.get(m.id)!
-              const td = typeof t.tag_data === 'string' ? JSON.parse(t.tag_data) : (t.tag_data || {})
-              return {
-                id: m.id,
-                user_id: m.user_id,
-                date: m.date,
-                direction: m.direction as 'in' | 'out',
-                amount: parseFloat(m.amount),
-                movement_type: m.movement_type,
-                counterparty_entity_id: m.counterparty_entity_id,
-                counterparty_entity_type: m.counterparty_entity_type,
-                counterparty_name: m.counterparty ?? '',
-                source: m.provenance ?? '',
-                source_tx_id: '',
-                account_id: m.cash_account_id ?? undefined,
-                account_name: undefined,
-                tag: {
-                  economic_class: t.economic_class,
-                  cashflow_bucket: t.cashflow_bucket,
-                  counterparty_role: t.counterparty_role,
-                  state_inclusion_policy: td.state_inclusion_policy ?? 'include',
-                  confidence: td.confidence ?? 1,
-                  state_scope: td.state_scope ?? {
-                    affects_revenue: true,
-                    affects_spend: true,
-                    affects_liquidity: true,
+            const tagMap = new Map(tags.map(t => [t.movement_id, t]))
+
+            const taggedMovements = rawMovements
+              .filter(m => tagMap.has(m.id))
+              .map(m => {
+                const t = tagMap.get(m.id)!
+                const td = typeof t.tag_data === 'string' ? JSON.parse(t.tag_data) : (t.tag_data || {})
+                return {
+                  id: m.id,
+                  user_id: m.user_id,
+                  date: m.date,
+                  direction: m.direction as 'in' | 'out',
+                  amount: parseFloat(m.amount),
+                  movement_type: m.movement_type,
+                  counterparty_entity_id: m.counterparty_entity_id,
+                  counterparty_entity_type: m.counterparty_entity_type,
+                  counterparty_name: m.counterparty ?? '',
+                  source: m.provenance ?? '',
+                  source_tx_id: '',
+                  account_id: m.cash_account_id ?? undefined,
+                  account_name: undefined,
+                  tag: {
+                    economic_class: t.economic_class,
+                    cashflow_bucket: t.cashflow_bucket,
+                    counterparty_role: t.counterparty_role,
+                    state_inclusion_policy: td.state_inclusion_policy ?? 'include',
+                    confidence: td.confidence ?? 1,
+                    state_scope: td.state_scope ?? {
+                      affects_revenue: true,
+                      affects_spend: true,
+                      affects_liquidity: true,
+                    },
                   },
-                },
-              }
-            }) as any[]
+                }
+              }) as any[]
 
-          const dates = taggedMovements.map(m => m.date).sort()
-          const periodStart = dates[0]
-          const periodEnd = dates[dates.length - 1]
+            const dates = taggedMovements.map(m => m.date).sort()
+            const periodStart = dates[0]
+            const periodEnd = dates[dates.length - 1]
 
-          const revenue = computeRevenueState(taggedMovements, periodStart, periodEnd)
-          const spend = computeSpendState(taggedMovements, periodStart, periodEnd)
-          const liquidity = computeLiquidityState(taggedMovements, periodStart, periodEnd)
+            const revenue = computeRevenueState(taggedMovements, periodStart, periodEnd)
+            const spend = computeSpendState(taggedMovements, periodStart, periodEnd)
+            const liquidity = computeLiquidityState(taggedMovements, periodStart, periodEnd)
 
-          // Persist state snapshot
-          await query(
-            `INSERT INTO state_snapshots (user_id, snapshot_at, revenue_state, spend_state, liquidity_state, created_at)
-             VALUES ($1, NOW(), $2, $3, $4, NOW())
-             ON CONFLICT (user_id) DO UPDATE SET
-               revenue_state = $2,
-               spend_state = $3,
-               liquidity_state = $4`,
-            [userId, JSON.stringify(revenue), JSON.stringify(spend), JSON.stringify(liquidity)]
-          )
+            // Persist state snapshot
+            await query(
+              `INSERT INTO state_snapshots (user_id, snapshot_at, revenue_state, spend_state, liquidity_state, created_at)
+               VALUES ($1, NOW(), $2, $3, $4, NOW())
+               ON CONFLICT (user_id) DO UPDATE SET
+                 revenue_state = $2,
+                 spend_state = $3,
+                 liquidity_state = $4`,
+              [userId, JSON.stringify(revenue), JSON.stringify(spend), JSON.stringify(liquidity)]
+            )
 
-          const stateTime = Date.now() - stateStart
-          console.log(`✓ State computed in ${stateTime}ms:`, {
-            movements: taggedMovements.length,
-            gross_revenue: revenue.gross_revenue,
-            total_opex: spend.total_opex,
-            net_cash_flow: liquidity.total_in - liquidity.total_out,
-          })
-          log("admin.pipeline.state.complete", { userId, movements: taggedMovements.length, gross_revenue: revenue.gross_revenue, total_opex: spend.total_opex, duration_ms: stateTime }, "system")
+            const stateTime = Date.now() - stateStart
+            console.log(`✓ State computed in ${stateTime}ms:`, {
+              movements: taggedMovements.length,
+              gross_revenue: revenue.gross_revenue,
+              total_opex: spend.total_opex,
+              net_cash_flow: liquidity.total_in - liquidity.total_out,
+            })
+            log("admin.pipeline.state.complete", { userId, movements: taggedMovements.length, gross_revenue: revenue.gross_revenue, total_opex: spend.total_opex, duration_ms: stateTime }, "system")
+          }
+        } catch (stateErr) {
+          const stateErrMsg = stateErr instanceof Error ? stateErr.message : String(stateErr)
+          console.warn(`⚠ State computation error (continuing): ${stateErrMsg}`)
+          log("admin.pipeline.state.warning", { userId, error: stateErrMsg }, "system")
         }
 
         // Step 6: Generate cashflow forecast
