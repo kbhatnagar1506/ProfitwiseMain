@@ -187,7 +187,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         }
 
         // Step 4.5: Seed identity graph AGAIN (second pass with reconciliation data)
-        console.log(`\n[4.5/7] Seeding identity graph again (with reconciliation data)...`)
+        console.log(`\n[4.5/7] 🔄 Seeding identity graph again (with reconciliation data)...`)
         const seedStart2 = Date.now()
         try {
           await seedIdentityGraph(userId)
