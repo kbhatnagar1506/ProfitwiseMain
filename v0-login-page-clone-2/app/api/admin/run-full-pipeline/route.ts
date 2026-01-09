@@ -244,7 +244,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
             }>(
               `SELECT movement_id, economic_class, cashflow_bucket, counterparty_role, tag_data
                FROM movement_tags
-               WHERE movement_id = ANY($1::text[])`,
+               WHERE movement_id = ANY($1::uuid[])`,
               [rawMovements.map(m => m.id)]
             )
 
