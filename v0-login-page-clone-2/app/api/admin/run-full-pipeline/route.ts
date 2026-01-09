@@ -89,6 +89,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         const reconStart = Date.now()
         
         try {
+          console.log(`  Fetching QBO invoices and bills...`)
           // Fetch QBO invoices (AR) from qbo_entities table
           const { rows: qboInvoices } = await query<{
             entity_id: string
@@ -100,7 +101,10 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
              )
              AND entity_type = 'Invoice'`,
             [userId]
-          ).catch(() => ({ rows: [] }))
+          ).catch(err => {
+            console.warn(`  ⚠ Failed to fetch invoices:`, err instanceof Error ? err.message : String(err))
+            return { rows: [] }
+          })
 
           // Fetch QBO bills (AP) from qbo_entities table
           const { rows: qboBills } = await query<{
@@ -113,7 +117,12 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
              )
              AND entity_type = 'Bill'`,
             [userId]
-          ).catch(() => ({ rows: [] }))
+          ).catch(err => {
+            console.warn(`  ⚠ Failed to fetch bills:`, err instanceof Error ? err.message : String(err))
+            return { rows: [] }
+          })
+
+          console.log(`  Found ${qboInvoices.length} invoices, ${qboBills.length} bills`)
 
           // Populate cash_events from invoices and bills
           let arCount = 0
@@ -126,8 +135,8 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               const totalAmount = invData.TotalAmt || invData.total || 0
               
               await query(
-                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata, created_at)
-                 VALUES ($1, 'ar', $2, $3, $4, 'open', 'invoice', $5, NOW())
+                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata)
+                 VALUES ($1, 'ar', $2, $3, $4, 'open', 'invoice', $5)
                  ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
                    amount = $3,
                    expected_date = $4,
@@ -137,7 +146,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               )
               arCount++
             } catch (err) {
-              console.warn(`⚠ Failed to process invoice ${inv.entity_id}:`, err instanceof Error ? err.message : String(err))
+              console.warn(`  ⚠ Failed to process invoice ${inv.entity_id}:`, err instanceof Error ? err.message : String(err))
             }
           }
 
@@ -148,8 +157,8 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               const totalAmount = billData.TotalAmt || billData.total || 0
               
               await query(
-                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata, created_at)
-                 VALUES ($1, 'ap', $2, $3, $4, 'open', 'invoice', $5, NOW())
+                `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata)
+                 VALUES ($1, 'ap', $2, $3, $4, 'open', 'invoice', $5)
                  ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
                    amount = $3,
                    expected_date = $4,
@@ -159,7 +168,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               )
               apCount++
             } catch (err) {
-              console.warn(`⚠ Failed to process bill ${bill.entity_id}:`, err instanceof Error ? err.message : String(err))
+              console.warn(`  ⚠ Failed to process bill ${bill.entity_id}:`, err instanceof Error ? err.message : String(err))
             }
           }
 
@@ -177,12 +186,27 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           log("admin.pipeline.reconciliation.warning", { userId, error: reconErrMsg }, "system")
         }
 
+        // Step 4.5: Seed identity graph AGAIN (second pass with reconciliation data)
+        console.log(`\n[4.5/7] Seeding identity graph again (with reconciliation data)...`)
+        const seedStart2 = Date.now()
+        try {
+          await seedIdentityGraph(userId)
+          const seedTime2 = Date.now() - seedStart2
+          console.log(`✓ Identity graph re-seeded in ${seedTime2}ms`)
+          log("admin.pipeline.identity_reseed.complete", { userId, duration_ms: seedTime2 }, "system")
+        } catch (seedErr) {
+          const seedErrMsg = seedErr instanceof Error ? seedErr.message : String(seedErr)
+          console.warn(`⚠ Identity re-seeding error (continuing): ${seedErrMsg}`)
+          log("admin.pipeline.identity_reseed.warning", { userId, error: seedErrMsg }, "system")
+        }
+
         // Step 5: Compute financial state (revenue, spend, liquidity)
         console.log(`\n[5/7] Computing financial state...`)
         const stateStart = Date.now()
 
         let rawMovements: any[] = []
         try {
+          console.log(`  Fetching movements and tags...`)
           // Fetch tagged movements
           const result = await query<{
             id: string
@@ -208,8 +232,9 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           rawMovements = result.rows
 
           if (rawMovements.length === 0) {
-            console.log(`⚠ No movements found, skipping state computation`)
+            console.log(`  ⚠ No movements found, skipping state computation`)
           } else {
+            console.log(`  Found ${rawMovements.length} movements, fetching tags...`)
             const { rows: tags } = await query<{
               movement_id: string
               economic_class: string
@@ -223,6 +248,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               [rawMovements.map(m => m.id)]
             )
 
+            console.log(`  Found ${tags.length} tags, computing state...`)
             const tagMap = new Map(tags.map(t => [t.movement_id, t]))
 
             const taggedMovements = rawMovements
@@ -263,10 +289,12 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
             const periodStart = dates[0]
             const periodEnd = dates[dates.length - 1]
 
+            console.log(`  Computing revenue, spend, liquidity states...`)
             const revenue = computeRevenueState(taggedMovements, periodStart, periodEnd)
             const spend = computeSpendState(taggedMovements, periodStart, periodEnd)
             const liquidity = computeLiquidityState(taggedMovements, periodStart, periodEnd)
 
+            console.log(`  Persisting state snapshot...`)
             // Persist state snapshot
             await query(
               `INSERT INTO state_snapshots (user_id, snapshot_at, revenue_state, spend_state, liquidity_state, created_at)
@@ -289,8 +317,9 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           }
         } catch (stateErr) {
           const stateErrMsg = stateErr instanceof Error ? stateErr.message : String(stateErr)
-          console.warn(`⚠ State computation error (continuing): ${stateErrMsg}`)
-          log("admin.pipeline.state.warning", { userId, error: stateErrMsg }, "system")
+          console.error(`❌ State computation error:`, stateErrMsg)
+          console.error(stateErr)
+          log("admin.pipeline.state.error", { userId, error: stateErrMsg }, "system")
         }
 
         // Step 6: Generate cashflow forecast
@@ -298,6 +327,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
         const forecastStart = Date.now()
         
         // Fetch AR/AP items for forecast (rawMovements available from state step)
+        console.log(`  Fetching AR/AP items...`)
         const { rows: arItems } = await query<{
           id: string
           entity_id: string | null
@@ -320,6 +350,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           [userId]
         ).catch(() => ({ rows: [] }))
 
+        console.log(`  Storing forecast cache (${rawMovements.length} movements, ${arItems.length} AR, ${apItems.length} AP)...`)
         // Store forecast cache (placeholder - actual forecast generation would happen here)
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
         await query(
