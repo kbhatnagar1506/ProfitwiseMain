@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search")
 
     // Build WHERE clause dynamically
-    const whereConditions = ["m.user_id = $1", "m.duplicate_of IS NULL"]
+    const whereConditions = ["m.user_id = $1", "m.duplicate_of IS NULL", "m.movement_type != 'internal_transfer'"]
     const params: unknown[] = [userId]
     let paramIndex = 2
 

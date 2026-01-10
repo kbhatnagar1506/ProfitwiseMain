@@ -50,7 +50,7 @@ export async function GET(request?: NextRequest) {
         MAX(m.date) AS last_txn_date
       FROM plaid_accounts pa
       JOIN plaid_items pi ON pi.item_id = pa.item_id
-      LEFT JOIN movements m ON m.cash_account_id = pa.account_id AND m.user_id = $1
+      LEFT JOIN movements m ON m.cash_account_id = pa.account_id AND m.user_id = $1 AND m.movement_type != 'internal_transfer' AND m.duplicate_of IS NULL
       WHERE pi.user_id = $1
       GROUP BY pa.id, pa.account_id, pa.name, pa.type, pa.subtype, pa.mask, pa.current_balance, pa.available_balance, pa.currency_code, pi.item_id
       ORDER BY pa.current_balance DESC NULLS LAST`,
