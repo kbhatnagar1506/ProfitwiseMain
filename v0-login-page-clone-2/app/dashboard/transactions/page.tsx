@@ -398,12 +398,12 @@ export default function TransactionsPage() {
 
       <div className="bg-[#141414] border border-white/[0.06] rounded-xl p-4 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          <Select value={accountId} onValueChange={(v) => { setAccountId(v); handleFilterChange() }}>
+          <Select value={accountId || "__all__"} onValueChange={(v) => { setAccountId(v === "__all__" ? "" : v); handleFilterChange() }}>
             <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
               <SelectValue placeholder="All accounts" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
-              <SelectItem value="">All accounts</SelectItem>
+              <SelectItem value="__all__">All accounts</SelectItem>
               {accounts.map((acc) => (
                 <SelectItem key={acc.account_id} value={acc.account_id}>
                   {acc.name || "Account"} {acc.mask && `...${acc.mask}`}
@@ -412,23 +412,23 @@ export default function TransactionsPage() {
             </SelectContent>
           </Select>
 
-          <Select value={direction} onValueChange={(v) => { setDirection(v); handleFilterChange() }}>
+          <Select value={direction || "__all__"} onValueChange={(v) => { setDirection(v === "__all__" ? "" : v); handleFilterChange() }}>
             <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
               <SelectValue placeholder="All directions" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
-              <SelectItem value="">All directions</SelectItem>
+              <SelectItem value="__all__">All directions</SelectItem>
               <SelectItem value="inflow">Inflows</SelectItem>
               <SelectItem value="outflow">Outflows</SelectItem>
             </SelectContent>
           </Select>
 
-          <Select value={economicClass} onValueChange={(v) => { setEconomicClass(v); handleFilterChange() }}>
+          <Select value={economicClass || "__all__"} onValueChange={(v) => { setEconomicClass(v === "__all__" ? "" : v); handleFilterChange() }}>
             <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
               <SelectValue placeholder="All classes" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
-              <SelectItem value="">All classes</SelectItem>
+              <SelectItem value="__all__">All classes</SelectItem>
               {summary && Object.keys(summary.by_economic_class).map((ec) => (
                 <SelectItem key={ec} value={ec}>
                   {ec} ({summary.by_economic_class[ec]})
@@ -437,12 +437,12 @@ export default function TransactionsPage() {
             </SelectContent>
           </Select>
 
-          <Select value={cashflowBucket} onValueChange={(v) => { setCashflowBucket(v); handleFilterChange() }}>
+          <Select value={cashflowBucket || "__all__"} onValueChange={(v) => { setCashflowBucket(v === "__all__" ? "" : v); handleFilterChange() }}>
             <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
               <SelectValue placeholder="All buckets" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
-              <SelectItem value="">All buckets</SelectItem>
+              <SelectItem value="__all__">All buckets</SelectItem>
               {summary && Object.keys(summary.by_cashflow_bucket).map((cb) => (
                 <SelectItem key={cb} value={cb}>
                   {cb} ({summary.by_cashflow_bucket[cb]})
