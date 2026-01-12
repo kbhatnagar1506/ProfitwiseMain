@@ -820,7 +820,7 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(`
     CREATE TABLE IF NOT EXISTS state_snapshots (
       id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id           UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
       snapshot_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       period_start      DATE,
       period_end        DATE,
