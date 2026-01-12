@@ -830,6 +830,7 @@ export async function ensureMovementsSchema(): Promise<void> {
       created_at       TIMESTAMPTZ DEFAULT NOW()
     )
   `)
+  await p.query("ALTER TABLE state_snapshots ADD CONSTRAINT IF NOT EXISTS state_snapshots_user_id_unique UNIQUE (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_state_snapshots_user ON state_snapshots (user_id, snapshot_at DESC)")
   // AR/AP/Fee/Transfer allocation records (1 movement → many allocations)
   await p.query(`
