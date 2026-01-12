@@ -8,6 +8,7 @@ import { TrendingUp, TrendingDown } from "lucide-react"
 interface BankAccount {
   account_id: string
   name: string | null
+  normalized_name: string | null
   type: string | null
   subtype: string | null
   mask: string | null
@@ -177,7 +178,7 @@ export default function BankAccountsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="text-[13px] font-semibold text-foreground truncate">
-                        {account.name || "Account"}
+                        {account.normalized_name || account.name || "Account"}
                       </h3>
                       {account.mask && (
                         <span className="text-[11px] text-neutral-600 flex-shrink-0">
@@ -185,6 +186,11 @@ export default function BankAccountsPage() {
                         </span>
                       )}
                     </div>
+                    {account.normalized_name && account.name && account.normalized_name !== account.name && (
+                      <p className="text-[11px] text-neutral-600 mb-2 truncate">
+                        {account.name}
+                      </p>
+                    )}
                     <Badge
                       variant="secondary"
                       className="bg-white/5 text-zinc-300 border-white/10 text-[11px] h-5"
