@@ -237,13 +237,11 @@ export default function BankAccountsPage() {
                   </div>
                 </div>
 
-                {account.internal_transfer_count > 0 && (
-                  <div className="mt-3 pt-3 border-t border-white/[0.06]">
-                    <p className="text-[11px] text-neutral-600 font-medium">
-                      Internal Transfers: <span className="text-neutral-400">{account.internal_transfer_count}</span>
-                    </p>
-                  </div>
-                )}
+                <div className="mt-3 pt-3 border-t border-white/[0.06]">
+                  <p className="text-[11px] text-neutral-600 font-medium">
+                    Internal Transfers: <span className="text-neutral-400">{account.internal_transfer_count}</span>
+                  </p>
+                </div>
 
                 {account.last_txn_date && (
                   <p className="text-[11px] text-neutral-600 mt-3">
