@@ -50,8 +50,8 @@ export async function GET(request?: NextRequest) {
         pa.available_balance,
         pa.currency_code,
         pi.item_id,
-        COUNT(CASE WHEN m.movement_type != 'internal_transfer' THEN 1 END)::int AS txn_count,
-        COUNT(CASE WHEN m.movement_type = 'internal_transfer' THEN 1 END)::int AS internal_transfer_count,
+        COALESCE(COUNT(CASE WHEN m.movement_type != 'internal_transfer' THEN 1 END), 0)::int AS txn_count,
+        COALESCE(COUNT(CASE WHEN m.movement_type = 'internal_transfer' THEN 1 END), 0)::int AS internal_transfer_count,
         COALESCE(SUM(CASE WHEN m.direction='inflow' AND m.movement_type != 'internal_transfer' THEN m.amount ELSE 0 END), 0)::numeric AS total_inflow,
         COALESCE(SUM(CASE WHEN m.direction='outflow' AND m.movement_type != 'internal_transfer' THEN m.amount ELSE 0 END), 0)::numeric AS total_outflow,
         MAX(m.date) AS last_txn_date
