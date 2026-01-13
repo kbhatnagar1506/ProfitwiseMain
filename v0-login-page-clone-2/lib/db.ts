@@ -830,9 +830,19 @@ export async function ensureMovementsSchema(): Promise<void> {
       created_at       TIMESTAMPTZ DEFAULT NOW()
     )
   `)
-  // Add unique constraint if it doesn't exist (for existing tables)
+  // Clean up duplicates and add unique constraint if it doesn't exist (for existing tables)
   await p.query(`
     DO $$ BEGIN
+      -- Delete old duplicate entries, keeping only the most recent one per user
+      DELETE FROM state_snapshots ss1
+      WHERE id NOT IN (
+        SELECT id FROM state_snapshots ss2
+        WHERE ss2.user_id = ss1.user_id
+        ORDER BY ss2.created_at DESC
+        LIMIT 1
+      );
+      
+      -- Add unique constraint if it doesn't exist
       IF NOT EXISTS (
         SELECT 1 FROM information_schema.table_constraints 
         WHERE table_name = 'state_snapshots' AND constraint_type = 'UNIQUE' AND constraint_name = 'state_snapshots_user_id_key'
