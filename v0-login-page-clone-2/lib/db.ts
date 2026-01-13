@@ -830,7 +830,17 @@ export async function ensureMovementsSchema(): Promise<void> {
       created_at       TIMESTAMPTZ DEFAULT NOW()
     )
   `)
-  await p.query("ALTER TABLE state_snapshots ADD CONSTRAINT IF NOT EXISTS state_snapshots_user_id_unique UNIQUE (user_id)")
+  // Add unique constraint if it doesn't exist (for existing tables)
+  await p.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE table_name = 'state_snapshots' AND constraint_type = 'UNIQUE' AND constraint_name = 'state_snapshots_user_id_key'
+      ) THEN
+        ALTER TABLE state_snapshots ADD UNIQUE (user_id);
+      END IF;
+    END $$;
+  `)
   await p.query("CREATE INDEX IF NOT EXISTS idx_state_snapshots_user ON state_snapshots (user_id, snapshot_at DESC)")
   // AR/AP/Fee/Transfer allocation records (1 movement → many allocations)
   await p.query(`
