@@ -68,7 +68,7 @@ export async function GET(request?: NextRequest) {
     // Fetch total count
     const countResult = await query<{ count: string }>(
       `SELECT COUNT(*) as count FROM cash_events ce
-       LEFT JOIN entities e ON e.id = ce.entity_id
+       LEFT JOIN entities e ON e.id = ce.entity_id::uuid
        WHERE ${whereClause}`,
       params
     ).then((r) => r.rows[0])
@@ -88,7 +88,7 @@ export async function GET(request?: NextRequest) {
         ce.metadata,
         e.canonical_name
        FROM cash_events ce
-       LEFT JOIN entities e ON e.id = ce.entity_id
+       LEFT JOIN entities e ON e.id = ce.entity_id::uuid
        WHERE ${whereClause}
        ORDER BY ce.expected_date ASC, ce.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
