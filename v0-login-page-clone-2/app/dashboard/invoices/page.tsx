@@ -1,10 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, ArrowUpDown } from "lucide-react"
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -43,16 +43,13 @@ interface ApiResponse {
     partially_paid: number
     paid: number
   }
-  pagination: {
-    page: number
-    limit: number
-    total: number
-    pages: number
-  }
 }
 
+type SortField = "amount" | "due_date" | "days_overdue"
+type SortOrder = "asc" | "desc"
+
 export default function InvoicesPage() {
-  const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [allInvoices, setAllInvoices] = useState<Invoice[]>([])
   const [totals, setTotals] = useState({
     total_outstanding: 0,
     total_overdue: 0,
@@ -66,50 +63,74 @@ export default function InvoicesPage() {
     paid: 0,
   })
   const [loading, setLoading] = useState(true)
-  const [page, setPage] = useState(1)
-  const [limit] = useState(20)
   const [status, setStatus] = useState("all")
   const [search, setSearch] = useState("")
-  const [debouncedSearch, setDebouncedSearch] = useState("")
+  const [sortField, setSortField] = useState<SortField>("due_date")
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc")
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
 
-  // Debounce search
+  // Fetch all invoices once on mount
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearch(search)
-      setPage(1)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [search])
+    const fetchInvoices = async () => {
+      try {
+        setLoading(true)
+        const response = await fetch(`/api/dashboard/invoices`)
+        if (!response.ok) throw new Error("Failed to fetch invoices")
 
-  // Fetch invoices
-  const fetchInvoices = async () => {
-    try {
-      setLoading(true)
-      const params = new URLSearchParams({
-        page: String(page),
-        limit: String(limit),
-        ...(status !== "all" && { status }),
-        ...(debouncedSearch && { search: debouncedSearch }),
-      })
-
-      const response = await fetch(`/api/dashboard/invoices?${params}`)
-      if (!response.ok) throw new Error("Failed to fetch invoices")
-
-      const data: ApiResponse = await response.json()
-      setInvoices(data.invoices)
-      setTotals(data.totals)
-      setSummaryByStatus(data.summary_by_status)
-    } catch (error) {
-      console.error("Error fetching invoices:", error)
-    } finally {
-      setLoading(false)
+        const data: ApiResponse = await response.json()
+        setAllInvoices(data.invoices)
+        setTotals(data.totals)
+        setSummaryByStatus(data.summary_by_status)
+      } catch (error) {
+        console.error("Error fetching invoices:", error)
+      } finally {
+        setLoading(false)
+      }
     }
-  }
 
-  useEffect(() => {
     fetchInvoices()
-  }, [page, status, debouncedSearch])
+  }, [])
+
+  // Client-side filtering and sorting
+  const displayedInvoices = useMemo(() => {
+    let filtered = allInvoices
+
+    // Filter by status
+    if (status !== "all") {
+      if (status === "overdue") {
+        filtered = filtered.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0))
+      } else {
+        filtered = filtered.filter((inv) => inv.status === status)
+      }
+    }
+
+    // Filter by search
+    if (search) {
+      filtered = filtered.filter((inv) => inv.customer_name.toLowerCase().includes(search.toLowerCase()))
+    }
+
+    // Sort
+    filtered.sort((a, b) => {
+      let aVal: number
+      let bVal: number
+
+      if (sortField === "amount") {
+        aVal = a.amount
+        bVal = b.amount
+      } else if (sortField === "due_date") {
+        aVal = new Date(a.due_date).getTime()
+        bVal = new Date(b.due_date).getTime()
+      } else {
+        // days_overdue
+        aVal = a.days_overdue ?? a.days_until_due
+        bVal = b.days_overdue ?? b.days_until_due
+      }
+
+      return sortOrder === "asc" ? aVal - bVal : bVal - aVal
+    })
+
+    return filtered
+  }, [allInvoices, status, search, sortField, sortOrder])
 
   const toggleExpandedRow = (id: string) => {
     const newExpanded = new Set(expandedRows)
@@ -119,6 +140,15 @@ export default function InvoicesPage() {
       newExpanded.add(id)
     }
     setExpandedRows(newExpanded)
+  }
+
+  const toggleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc")
+    } else {
+      setSortField(field)
+      setSortOrder("asc")
+    }
   }
 
   const getStatusColor = (status: string, daysOverdue: number | null) => {
@@ -134,6 +164,18 @@ export default function InvoicesPage() {
     if (status === "partially_paid") return "bg-amber-400/10 text-amber-300 border-amber-400/20"
     return "bg-white/5 text-zinc-300 border-white/10"
   }
+
+  const SortHeader = ({ field, label }: { field: SortField; label: string }) => (
+    <button
+      onClick={() => toggleSort(field)}
+      className="flex items-center gap-2 hover:text-neutral-100 transition-colors"
+    >
+      {label}
+      {sortField === field && (
+        <ArrowUpDown size={14} className={sortOrder === "desc" ? "rotate-180" : ""} />
+      )}
+    </button>
+  )
 
   return (
     <div className="min-h-screen bg-[#141414]">
@@ -170,7 +212,7 @@ export default function InvoicesPage() {
 
       {/* Filter Bar */}
       <div className="px-8 py-4 border-b border-white/[0.06] flex gap-4 items-center">
-        <Select value={status} onValueChange={(value) => { setStatus(value); setPage(1); }}>
+        <Select value={status} onValueChange={setStatus}>
           <SelectTrigger className="w-40 bg-white/[0.02] border-white/[0.06] text-neutral-300">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
@@ -198,7 +240,7 @@ export default function InvoicesPage() {
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-neutral-600 border-t-neutral-300"></div>
             <span className="ml-3 text-neutral-500">Loading invoices...</span>
           </div>
-        ) : invoices.length === 0 ? (
+        ) : displayedInvoices.length === 0 ? (
           <div className="text-center py-12">
             <p className="text-neutral-500">No invoices found</p>
           </div>
@@ -209,16 +251,22 @@ export default function InvoicesPage() {
                 <tr className="border-b border-white/[0.06] bg-white/[0.02]">
                   <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-600 uppercase tracking-wider"></th>
                   <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">Customer</th>
-                  <th className="px-4 py-3 text-right text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">Amount</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">
+                    <SortHeader field="amount" label="Amount" />
+                  </th>
                   <th className="px-4 py-3 text-right text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">Outstanding</th>
-                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">Due Date</th>
-                  <th className="px-4 py-3 text-right text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">Days</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">
+                    <SortHeader field="due_date" label="Due Date" />
+                  </th>
+                  <th className="px-4 py-3 text-right text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">
+                    <SortHeader field="days_overdue" label="Days" />
+                  </th>
                   <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">Status</th>
                   <th className="px-4 py-3 text-left text-[11px] font-semibold text-neutral-600 uppercase tracking-wider">Source</th>
                 </tr>
               </thead>
               <tbody>
-                {invoices.map((invoice) => (
+                {displayedInvoices.map((invoice) => (
                   <div key={invoice.id}>
                     <tr className="border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors">
                       <td className="px-4 py-3">
@@ -237,7 +285,7 @@ export default function InvoicesPage() {
                       <td className={`px-4 py-3 text-sm text-right tabular-nums ${getStatusColor(invoice.status, invoice.days_overdue)}`}>
                         {formatCurrency(invoice.outstanding_amount)}
                       </td>
-                      <td className="px-4 py-3 text-sm text-neutral-400">{invoice.due_date}</td>
+                      <td className="px-4 py-3 text-sm text-neutral-400">{invoice.due_date.split("T")[0]}</td>
                       <td className={`px-4 py-3 text-sm text-right tabular-nums ${getStatusColor(invoice.status, invoice.days_overdue)}`}>
                         {invoice.days_overdue !== null ? `-${invoice.days_overdue}` : `${invoice.days_until_due}`}
                       </td>
@@ -281,6 +329,13 @@ export default function InvoicesPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Results count */}
+        {!loading && displayedInvoices.length > 0 && (
+          <div className="mt-4 text-sm text-neutral-500">
+            Showing {displayedInvoices.length} of {allInvoices.length} invoices
           </div>
         )}
       </div>

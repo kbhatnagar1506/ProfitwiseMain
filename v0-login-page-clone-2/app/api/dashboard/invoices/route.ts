@@ -27,46 +27,14 @@ export async function GET(request?: NextRequest) {
 
   try {
     const userId = user.id
-    const url = new URL(request?.url ?? "")
-    const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10))
-    const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") ?? "20", 10)))
-    const status = url.searchParams.get("status") ?? "" // all, open, overdue, paid, partially_paid
-    const search = url.searchParams.get("search") ?? ""
-    const dateRange = url.searchParams.get("date_range") ?? "" // last_30_days, last_90_days, custom
-
-    const offset = (page - 1) * limit
 
     // Build WHERE conditions
     const whereConditions = ["ce.user_id = $1", "ce.event_type = 'ar'"]
     const params: unknown[] = [userId]
-    let paramIndex = 2
-
-    // Status filter
-    if (status && status !== "all") {
-      whereConditions.push(`ce.status = $${paramIndex}`)
-      params.push(status)
-      paramIndex++
-    }
-
-    // Date range filter
-    if (dateRange === "last_30_days") {
-      whereConditions.push(`ce.expected_date >= CURRENT_DATE - INTERVAL '30 days'`)
-    } else if (dateRange === "last_90_days") {
-      whereConditions.push(`ce.expected_date >= CURRENT_DATE - INTERVAL '90 days'`)
-    }
 
     const whereClause = whereConditions.join(" AND ")
 
-    // Fetch total count
-    const countResult = await query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM cash_events ce
-       WHERE ${whereClause}`,
-      params
-    ).then((r) => r.rows[0])
-
-    const totalCount = parseInt(countResult?.count ?? "0", 10)
-
-    // Fetch invoices
+    // Fetch ALL invoices (no pagination)
     const invoiceRows = await query<InvoiceRow>(
       `SELECT
         ce.id,
@@ -79,9 +47,8 @@ export async function GET(request?: NextRequest) {
         ce.metadata
        FROM cash_events ce
        WHERE ${whereClause}
-       ORDER BY ce.expected_date ASC, ce.created_at DESC
-       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-      [...params, limit, offset]
+       ORDER BY ce.expected_date ASC, ce.created_at DESC`,
+      params
     ).then((r) => r.rows)
 
     // Calculate days until/overdue
@@ -116,41 +83,30 @@ export async function GET(request?: NextRequest) {
       }
     })
 
-    // Apply search filter in memory (since entity_id is a URI, not a customer name)
-    const filteredInvoices = search
-      ? invoices.filter((inv) => inv.customer_name.toLowerCase().includes(search.toLowerCase()))
-      : invoices
-
     // Calculate totals
     const totals = {
-      total_outstanding: filteredInvoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
-      total_overdue: filteredInvoices
+      total_outstanding: invoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
+      total_overdue: invoices
         .filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0))
         .reduce((sum, inv) => sum + inv.outstanding_amount, 0),
-      invoice_count: filteredInvoices.length,
-      overdue_count: filteredInvoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
+      invoice_count: invoices.length,
+      overdue_count: invoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
     }
 
     // Summary by status
     const summaryByStatus = {
-      open: filteredInvoices.filter((inv) => inv.status === "open").length,
-      overdue: filteredInvoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
-      partially_paid: filteredInvoices.filter((inv) => inv.status === "partially_paid").length,
-      paid: filteredInvoices.filter((inv) => inv.status === "paid").length,
+      open: invoices.filter((inv) => inv.status === "open").length,
+      overdue: invoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
+      partially_paid: invoices.filter((inv) => inv.status === "partially_paid").length,
+      paid: invoices.filter((inv) => inv.status === "paid").length,
     }
 
-    log("dashboard.invoices.success", { userId, invoiceCount: filteredInvoices.length, totalCount })
+    log("dashboard.invoices.success", { userId, invoiceCount: invoices.length })
 
     return NextResponse.json({
-      invoices: filteredInvoices,
+      invoices,
       totals,
       summary_by_status: summaryByStatus,
-      pagination: {
-        page,
-        limit,
-        total: totalCount,
-        pages: Math.ceil(totalCount / limit),
-      },
     })
   } catch (error) {
     log("dashboard.invoices.error", { error: String(error) })
