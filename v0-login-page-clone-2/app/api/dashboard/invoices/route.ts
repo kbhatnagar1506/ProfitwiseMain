@@ -13,6 +13,7 @@ type InvoiceRow = {
   status: string
   source: string
   metadata: Record<string, unknown>
+  canonical_name: string | null
 }
 
 export async function GET(request?: NextRequest) {
@@ -34,7 +35,7 @@ export async function GET(request?: NextRequest) {
 
     const whereClause = whereConditions.join(" AND ")
 
-    // Fetch ALL invoices (no pagination)
+    // Fetch ALL invoices (no pagination) with entity canonical names
     const invoiceRows = await query<InvoiceRow>(
       `SELECT
         ce.id,
@@ -44,8 +45,10 @@ export async function GET(request?: NextRequest) {
         ce.expected_date,
         ce.status,
         ce.source,
-        ce.metadata
+        ce.metadata,
+        COALESCE(e.canonical_name, '') as canonical_name
        FROM cash_events ce
+       LEFT JOIN entities e ON e.id = ce.entity_id::uuid
        WHERE ${whereClause}
        ORDER BY ce.expected_date ASC, ce.created_at DESC`,
       params
@@ -59,9 +62,12 @@ export async function GET(request?: NextRequest) {
         (new Date(dueDate).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24)
       )
 
-      // Extract customer name from entity_id (format: ar://invoice/qbo/ID or ar://invoice/xero/ID)
-      const entityIdParts = String(row.entity_id).split("/")
-      const invoiceId = entityIdParts[entityIdParts.length - 1] || "Unknown"
+      // Use canonical_name from entities, fallback to metadata or invoice ID
+      const customerName = row.canonical_name 
+        ? row.canonical_name
+        : row.metadata?.customer_name 
+        ? String(row.metadata.customer_name)
+        : `Invoice ${String(row.entity_id).split("/").pop() || "Unknown"}`
 
       // Use amount as outstanding if outstanding_amount is 0 or null
       const outstandingAmt = row.outstanding_amount && parseFloat(String(row.outstanding_amount)) > 0 
@@ -71,7 +77,7 @@ export async function GET(request?: NextRequest) {
       return {
         id: row.id,
         entity_id: row.entity_id,
-        customer_name: row.metadata?.customer_name ? String(row.metadata.customer_name) : `Invoice ${invoiceId}`,
+        customer_name: customerName,
         amount: parseFloat(String(row.amount)),
         outstanding_amount: outstandingAmt,
         due_date: row.expected_date,
