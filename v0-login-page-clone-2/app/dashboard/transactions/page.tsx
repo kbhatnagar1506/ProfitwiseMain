@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -479,12 +478,11 @@ export default function TransactionsPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-2">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="bg-[#141414] border border-white/[0.06] rounded-lg p-3">
-              <Skeleton className="h-4 w-full" />
-            </div>
-          ))}
+        <div className="bg-[#141414] border border-white/[0.06] rounded-xl p-12 text-center">
+          <div className="inline-flex items-center justify-center">
+            <div className="h-5 w-5 border-2 border-neutral-600 border-t-neutral-300 rounded-full animate-spin" />
+            <span className="ml-3 text-neutral-400">Loading transactions...</span>
+          </div>
         </div>
       ) : data && data.transactions.length > 0 ? (
         <>
