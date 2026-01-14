@@ -297,6 +297,7 @@ export default function TransactionsPage() {
   const [cashflowBucket, setCashflowBucket] = useState(searchParams.get("cashflow_bucket") || "")
   const [reviewNeeded, setReviewNeeded] = useState(searchParams.get("review_needed") === "true")
   const [search, setSearch] = useState(searchParams.get("search") || "")
+  const [debouncedSearch, setDebouncedSearch] = useState(search)
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -312,7 +313,6 @@ export default function TransactionsPage() {
 
   const fetchTransactions = useCallback(async () => {
     try {
-      setLoading(true)
       const params = new URLSearchParams()
       params.set("page", String(page))
       params.set("limit", "50")
@@ -321,7 +321,7 @@ export default function TransactionsPage() {
       if (economicClass) params.set("economic_class", economicClass)
       if (cashflowBucket) params.set("cashflow_bucket", cashflowBucket)
       if (reviewNeeded) params.set("review_needed", "true")
-      if (search) params.set("search", search)
+      if (debouncedSearch) params.set("search", debouncedSearch)
 
       const response = await fetch(`/api/dashboard/transactions?${params}`)
       if (!response.ok) throw new Error("Failed to fetch transactions")
@@ -330,14 +330,20 @@ export default function TransactionsPage() {
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error")
-    } finally {
-      setLoading(false)
     }
-  }, [page, accountId, direction, economicClass, cashflowBucket, reviewNeeded, search])
+  }, [page, accountId, direction, economicClass, cashflowBucket, reviewNeeded, debouncedSearch])
 
   useEffect(() => {
     fetchAccounts()
   }, [fetchAccounts])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search)
+      setPage(1)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [search])
 
   useEffect(() => {
     fetchTransactions()
