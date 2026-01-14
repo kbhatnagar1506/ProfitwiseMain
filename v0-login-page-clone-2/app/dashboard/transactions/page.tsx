@@ -328,8 +328,10 @@ export default function TransactionsPage() {
       const json = await response.json()
       setData(json)
       setError(null)
+      setLoading(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error")
+      setLoading(false)
     }
   }, [page, accountId, direction, economicClass, cashflowBucket, reviewNeeded, debouncedSearch])
 
