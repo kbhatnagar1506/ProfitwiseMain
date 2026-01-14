@@ -15,6 +15,7 @@ type BankAccountRow = {
   currency_code: string | null
   item_id: string
   txn_count: number | string
+  internal_transfer_count: number | string
   total_inflow: number | string | null
   total_outflow: number | string | null
   last_txn_date: string | null
@@ -49,13 +50,14 @@ export async function GET(request?: NextRequest) {
         pa.available_balance,
         pa.currency_code,
         pi.item_id,
-        COUNT(m.id)::int AS txn_count,
-        COALESCE(SUM(CASE WHEN m.direction='inflow' THEN m.amount ELSE 0 END), 0)::numeric AS total_inflow,
-        COALESCE(SUM(CASE WHEN m.direction='outflow' THEN m.amount ELSE 0 END), 0)::numeric AS total_outflow,
+        COUNT(CASE WHEN m.movement_type != 'internal_transfer' THEN 1 END)::int AS txn_count,
+        COUNT(CASE WHEN m.movement_type = 'internal_transfer' THEN 1 END)::int AS internal_transfer_count,
+        COALESCE(SUM(CASE WHEN m.direction='inflow' AND m.movement_type != 'internal_transfer' THEN m.amount ELSE 0 END), 0)::numeric AS total_inflow,
+        COALESCE(SUM(CASE WHEN m.direction='outflow' AND m.movement_type != 'internal_transfer' THEN m.amount ELSE 0 END), 0)::numeric AS total_outflow,
         MAX(m.date) AS last_txn_date
       FROM plaid_accounts pa
       JOIN plaid_items pi ON pi.item_id = pa.item_id
-      LEFT JOIN movements m ON m.cash_account_id = pa.account_id AND m.user_id = $1 AND m.movement_type != 'internal_transfer' AND m.duplicate_of IS NULL
+      LEFT JOIN movements m ON m.cash_account_id = pa.account_id AND m.user_id = $1 AND m.duplicate_of IS NULL
       WHERE pi.user_id = $1
       GROUP BY pa.id, pa.account_id, pa.name, pa.type, pa.subtype, pa.mask, pa.current_balance, pa.available_balance, pa.currency_code, pi.item_id
       ORDER BY pa.current_balance DESC NULLS LAST`,
@@ -95,6 +97,7 @@ export async function GET(request?: NextRequest) {
       currency_code: row.currency_code || "USD",
       item_id: row.item_id,
       txn_count: parseInt(String(row.txn_count), 10),
+      internal_transfer_count: parseInt(String(row.internal_transfer_count), 10),
       total_inflow: row.total_inflow ? parseFloat(String(row.total_inflow)) : 0,
       total_outflow: row.total_outflow ? parseFloat(String(row.total_outflow)) : 0,
       last_txn_date: row.last_txn_date,
