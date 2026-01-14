@@ -206,6 +206,38 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           log("admin.pipeline.identity_reseed.warning", { userId, error: seedErrMsg }, "system")
         }
 
+        // Step 4.6: Run financial brain (reconciliation waterfall + attribution)
+        console.log(`\n[4.6/7] 🧠 Running financial brain (reconciliation waterfall)...`)
+        const brainStart = Date.now()
+        try {
+          const { runFinancialBrain } = await import("@/lib/financial-brain")
+          const { fetchInvoicesForReconciliation } = await import("@/lib/invoices-fetch")
+          const { fetchOutstandingBills } = await import("@/lib/bills-fetch")
+          const { computeAPStateFromBills } = await import("@/lib/state/ar-ap")
+          
+          const outstandingInvoices = await fetchInvoicesForReconciliation(userId)
+          const bills = await fetchOutstandingBills(userId)
+          const apObligations = computeAPStateFromBills(bills)
+          
+          const brainResult = await runFinancialBrain(userId, {
+            outstandingInvoices,
+            apObligations,
+            arApOnly: true,
+          })
+          
+          const brainTime = Date.now() - brainStart
+          console.log(`✓ Financial brain completed in ${brainTime}ms:`, {
+            attributions_created: brainResult.waterfall?.attributionsCreated ?? 0,
+            cash_events_updated: brainResult.waterfall?.cashEventsUpdated ?? 0,
+            stage4_queued: brainResult.waterfall?.stage4Queued ?? 0,
+          })
+          log("admin.pipeline.financial_brain.complete", { userId, attributions_created: brainResult.waterfall?.attributionsCreated ?? 0, cash_events_updated: brainResult.waterfall?.cashEventsUpdated ?? 0, duration_ms: brainTime }, "system")
+        } catch (brainErr) {
+          const brainErrMsg = brainErr instanceof Error ? brainErr.message : String(brainErr)
+          console.warn(`⚠ Financial brain error (continuing): ${brainErrMsg}`)
+          log("admin.pipeline.financial_brain.warning", { userId, error: brainErrMsg }, "system")
+        }
+
         // Step 5: Compute financial state (revenue, spend, liquidity)
         console.log(`\n[5/7] Computing financial state...`)
         const stateStart = Date.now()
