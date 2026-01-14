@@ -13,7 +13,6 @@ type InvoiceRow = {
   status: string
   source: string
   metadata: Record<string, unknown>
-  canonical_name: string | null
 }
 
 export async function GET(request?: NextRequest) {
@@ -56,19 +55,11 @@ export async function GET(request?: NextRequest) {
       whereConditions.push(`ce.expected_date >= CURRENT_DATE - INTERVAL '90 days'`)
     }
 
-    // Search filter (customer name)
-    if (search) {
-      whereConditions.push(`e.canonical_name ILIKE $${paramIndex}`)
-      params.push(`%${search}%`)
-      paramIndex++
-    }
-
     const whereClause = whereConditions.join(" AND ")
 
     // Fetch total count
     const countResult = await query<{ count: string }>(
       `SELECT COUNT(*) as count FROM cash_events ce
-       LEFT JOIN entities e ON e.id = ce.entity_id::uuid
        WHERE ${whereClause}`,
       params
     ).then((r) => r.rows[0])
@@ -85,10 +76,8 @@ export async function GET(request?: NextRequest) {
         ce.expected_date,
         ce.status,
         ce.source,
-        ce.metadata,
-        e.canonical_name
+        ce.metadata
        FROM cash_events ce
-       LEFT JOIN entities e ON e.id = ce.entity_id::uuid
        WHERE ${whereClause}
        ORDER BY ce.expected_date ASC, ce.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -103,10 +92,14 @@ export async function GET(request?: NextRequest) {
         (new Date(dueDate).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24)
       )
 
+      // Extract customer name from entity_id (format: ar://invoice/qbo/ID or ar://invoice/xero/ID)
+      const entityIdParts = String(row.entity_id).split("/")
+      const invoiceId = entityIdParts[entityIdParts.length - 1] || "Unknown"
+
       return {
         id: row.id,
         entity_id: row.entity_id,
-        customer_name: row.canonical_name || "Unknown Customer",
+        customer_name: row.metadata?.customer_name ? String(row.metadata.customer_name) : `Invoice ${invoiceId}`,
         amount: parseFloat(String(row.amount)),
         outstanding_amount: row.outstanding_amount ? parseFloat(String(row.outstanding_amount)) : parseFloat(String(row.amount)),
         due_date: row.expected_date,
@@ -118,28 +111,33 @@ export async function GET(request?: NextRequest) {
       }
     })
 
+    // Apply search filter in memory (since entity_id is a URI, not a customer name)
+    const filteredInvoices = search
+      ? invoices.filter((inv) => inv.customer_name.toLowerCase().includes(search.toLowerCase()))
+      : invoices
+
     // Calculate totals
     const totals = {
-      total_outstanding: invoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
-      total_overdue: invoices
+      total_outstanding: filteredInvoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
+      total_overdue: filteredInvoices
         .filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0))
         .reduce((sum, inv) => sum + inv.outstanding_amount, 0),
-      invoice_count: invoices.length,
-      overdue_count: invoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
+      invoice_count: filteredInvoices.length,
+      overdue_count: filteredInvoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
     }
 
     // Summary by status
     const summaryByStatus = {
-      open: invoices.filter((inv) => inv.status === "open").length,
-      overdue: invoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
-      partially_paid: invoices.filter((inv) => inv.status === "partially_paid").length,
-      paid: invoices.filter((inv) => inv.status === "paid").length,
+      open: filteredInvoices.filter((inv) => inv.status === "open").length,
+      overdue: filteredInvoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
+      partially_paid: filteredInvoices.filter((inv) => inv.status === "partially_paid").length,
+      paid: filteredInvoices.filter((inv) => inv.status === "paid").length,
     }
 
-    log("dashboard.invoices.success", { userId, invoiceCount: invoices.length, totalCount })
+    log("dashboard.invoices.success", { userId, invoiceCount: filteredInvoices.length, totalCount })
 
     return NextResponse.json({
-      invoices,
+      invoices: filteredInvoices,
       totals,
       summary_by_status: summaryByStatus,
       pagination: {
