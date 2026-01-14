@@ -20,6 +20,11 @@ type BankAccountRow = {
   last_txn_date: string | null
 }
 
+type AccountEntityRow = {
+  account_id: string
+  canonical_name: string | null
+}
+
 export async function GET(request?: NextRequest) {
   const cookieStore = await cookies()
   const sessionToken = cookieStore.get(getSessionCookieName())?.value
@@ -57,9 +62,31 @@ export async function GET(request?: NextRequest) {
       [userId]
     ).then((r) => r.rows)
 
+    // Fetch entity canonical names for accounts (if they've been linked/tagged)
+    const accountIds = accountRows.map((r) => r.account_id)
+    const entityNamesByAccount = new Map<string, string>()
+    
+    if (accountIds.length > 0) {
+      const entityRows = await query<AccountEntityRow>(
+        `SELECT DISTINCT m.cash_account_id AS account_id, e.canonical_name
+         FROM movements m
+         LEFT JOIN entities e ON e.id = m.counterparty_entity_id
+         WHERE m.user_id = $1 AND m.cash_account_id = ANY($2) AND e.canonical_name IS NOT NULL
+         ORDER BY m.cash_account_id, m.date DESC`,
+        [userId, accountIds]
+      ).then((r) => r.rows)
+      
+      for (const row of entityRows) {
+        if (row.account_id && row.canonical_name && !entityNamesByAccount.has(row.account_id)) {
+          entityNamesByAccount.set(row.account_id, row.canonical_name)
+        }
+      }
+    }
+
     const accounts = accountRows.map((row) => ({
       account_id: row.account_id,
       name: row.name,
+      normalized_name: entityNamesByAccount.get(row.account_id) || null,
       type: row.type,
       subtype: row.subtype,
       mask: row.mask,
