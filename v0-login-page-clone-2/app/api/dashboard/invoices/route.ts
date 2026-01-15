@@ -59,6 +59,19 @@ export async function GET(request?: NextRequest) {
       params
     ).then((r) => r.rows)
 
+    // Debug: log a sample of the data
+    if (invoiceRows.length > 0) {
+      const sample = invoiceRows.slice(0, 3)
+      log("dashboard.invoices.debug", { 
+        sample: sample.map(r => ({ 
+          entity_id: r.entity_id, 
+          amount: r.amount, 
+          outstanding: r.outstanding_amount,
+          total_matched: r.total_matched 
+        }))
+      })
+    }
+
     // Calculate days until/overdue and reconciled status
     const today = new Date().toISOString().split("T")[0]
     const invoices = invoiceRows.map((row) => {
