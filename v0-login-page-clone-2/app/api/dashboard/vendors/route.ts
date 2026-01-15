@@ -33,15 +33,9 @@ export async function GET(request?: NextRequest) {
         COALESCE(ce.metadata->>'vendor_name', 'Unknown Vendor') as vendor_name,
         COUNT(*) as total_bills,
         SUM(ce.outstanding_amount) as total_outstanding,
-        SUM(CASE WHEN ce.outstanding_amount > 0 AND (
-          (EXTRACT(DAY FROM (ce.expected_date::date - CURRENT_DATE)) < 0)
-        ) THEN ce.outstanding_amount ELSE 0 END) as total_overdue,
-        SUM(CASE WHEN ce.outstanding_amount > 0 AND (
-          (EXTRACT(DAY FROM (ce.expected_date::date - CURRENT_DATE)) < 0)
-        ) THEN 1 ELSE 0 END) as overdue_count,
-        SUM(CASE WHEN ce.outstanding_amount > 0 AND (
-          (EXTRACT(DAY FROM (ce.expected_date::date - CURRENT_DATE)) >= 0)
-        ) THEN 1 ELSE 0 END) as open_count,
+        SUM(CASE WHEN ce.outstanding_amount > 0 AND (ce.expected_date::date < CURRENT_DATE) THEN ce.outstanding_amount ELSE 0 END) as total_overdue,
+        SUM(CASE WHEN ce.outstanding_amount > 0 AND (ce.expected_date::date < CURRENT_DATE) THEN 1 ELSE 0 END) as overdue_count,
+        SUM(CASE WHEN ce.outstanding_amount > 0 AND (ce.expected_date::date >= CURRENT_DATE) THEN 1 ELSE 0 END) as open_count,
         SUM(CASE WHEN ce.outstanding_amount <= 0 THEN 1 ELSE 0 END) as paid_count
        FROM cash_events ce
        WHERE ce.user_id = $1 AND ce.event_type = 'ap'
