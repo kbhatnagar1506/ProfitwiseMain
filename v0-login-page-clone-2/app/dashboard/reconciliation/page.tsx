@@ -14,11 +14,13 @@ function formatCurrency(value: number): string {
 }
 
 interface ReconciliationSummary {
+  ar_total_invoiced: number
   ar_total_outstanding: number
   ar_total_matched: number
   ar_match_rate: number
   ar_suspicious_count: number
   ar_suspicious_amount: number
+  ap_total_billed: number
   ap_total_outstanding: number
   ap_total_matched: number
   ap_match_rate: number
@@ -27,10 +29,9 @@ interface ReconciliationSummary {
   net_outstanding: number
   overall_match_rate: number
   total_fees: number
-  internal_transfers_count: number
-  internal_transfers_amount: number
   bank_reconciled_count: number
   bank_unreconciled_count: number
+  bank_partial_count: number
 }
 
 interface ReconciliationDetail {
@@ -110,13 +111,13 @@ export default function ReconciliationPage() {
         <div className="grid grid-cols-6 gap-4">
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
             <p className="text-[11px] text-neutral-600 mb-1">Accounts Receivable</p>
-            <p className="text-lg font-semibold text-white tabular-nums">{formatCurrency(summary.ar_total_outstanding + summary.ar_total_matched)}</p>
+            <p className="text-lg font-semibold text-white tabular-nums">{formatCurrency(summary.ar_total_invoiced)}</p>
             <p className="text-[11px] text-neutral-600 mt-1">lifetime invoiced</p>
           </div>
 
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
             <p className="text-[11px] text-neutral-600 mb-1">Collected</p>
-            <p className="text-lg font-semibold text-emerald-400/90 tabular-nums">{formatCurrency(summary.ar_total_matched)}</p>
+            <p className="text-lg font-semibold text-emerald-400/90 tabular-nums">{formatCurrency(summary.ar_total_invoiced - summary.ar_total_outstanding)}</p>
           </div>
 
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
@@ -126,13 +127,13 @@ export default function ReconciliationPage() {
 
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
             <p className="text-[11px] text-neutral-600 mb-1">Accounts Payable</p>
-            <p className="text-lg font-semibold text-white tabular-nums">{formatCurrency(summary.ap_total_outstanding + summary.ap_total_matched)}</p>
+            <p className="text-lg font-semibold text-white tabular-nums">{formatCurrency(summary.ap_total_billed)}</p>
             <p className="text-[11px] text-neutral-600 mt-1">lifetime billed</p>
           </div>
 
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
             <p className="text-[11px] text-neutral-600 mb-1">Paid</p>
-            <p className="text-lg font-semibold text-emerald-400/90 tabular-nums">{formatCurrency(summary.ap_total_matched)}</p>
+            <p className="text-lg font-semibold text-emerald-400/90 tabular-nums">{formatCurrency(summary.ap_total_billed - summary.ap_total_outstanding)}</p>
           </div>
 
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
@@ -175,23 +176,29 @@ export default function ReconciliationPage() {
       {/* Bank Reconciliation */}
       <div className="px-8 py-6 border-b border-white/[0.06]">
         <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">Bank Transaction Reconciliation</h2>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-4 gap-4">
           <div className="bg-emerald-500/[0.06] border border-emerald-500/[0.15] rounded-lg p-4">
-            <p className="text-[11px] text-emerald-600 mb-2">Reconciled</p>
+            <p className="text-[11px] text-emerald-600 mb-2">Fully Matched</p>
             <p className="text-2xl font-bold text-emerald-400 tabular-nums">{summary.bank_reconciled_count}</p>
-            <p className="text-[11px] text-emerald-600 mt-2">linked to AR/AP</p>
+            <p className="text-[11px] text-emerald-600 mt-2">100% reconciled</p>
+          </div>
+
+          <div className="bg-amber-500/[0.06] border border-amber-500/[0.15] rounded-lg p-4">
+            <p className="text-[11px] text-amber-600 mb-2">Partially Matched</p>
+            <p className="text-2xl font-bold text-amber-400 tabular-nums">{summary.bank_partial_count}</p>
+            <p className="text-[11px] text-amber-600 mt-2">needs review</p>
           </div>
 
           <div className="bg-red-500/[0.06] border border-red-500/[0.15] rounded-lg p-4">
-            <p className="text-[11px] text-red-600 mb-2">Not Reconciled</p>
+            <p className="text-[11px] text-red-600 mb-2">Unmatched</p>
             <p className="text-2xl font-bold text-red-400 tabular-nums">{summary.bank_unreconciled_count}</p>
             <p className="text-[11px] text-red-600 mt-2">needs matching</p>
           </div>
 
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
-            <p className="text-[11px] text-neutral-600 mb-2">Total Transactions</p>
-            <p className="text-2xl font-bold text-white tabular-nums">{transactions.length}</p>
-            <p className="text-[11px] text-neutral-600 mt-2">bank movements</p>
+            <p className="text-[11px] text-neutral-600 mb-2">Total Fees</p>
+            <p className="text-2xl font-bold text-white tabular-nums">{formatCurrency(summary.total_fees)}</p>
+            <p className="text-[11px] text-neutral-600 mt-2">identified</p>
           </div>
         </div>
       </div>
@@ -217,7 +224,7 @@ export default function ReconciliationPage() {
                 : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
             }`}
           >
-            Reconciled ({summary.bank_reconciled_count})
+            Matched ({transactions.filter(t => t.match_type === "matched").length})
           </button>
           <button
             onClick={() => setFilter("not_reconciled")}
@@ -227,7 +234,7 @@ export default function ReconciliationPage() {
                 : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
             }`}
           >
-            Not Reconciled ({summary.bank_unreconciled_count})
+            Unmatched ({transactions.filter(t => t.match_type === "unmatched").length})
           </button>
         </div>
 
@@ -241,6 +248,7 @@ export default function ReconciliationPage() {
                 <th className="px-4 py-3 text-right text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Gross</th>
                 <th className="px-4 py-3 text-right text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Fee</th>
                 <th className="px-4 py-3 text-right text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Net</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Match Type</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Linked AR/AP</th>
               </tr>
             </thead>
@@ -262,6 +270,17 @@ export default function ReconciliationPage() {
                   <td className="px-4 py-3 text-sm text-right tabular-nums text-neutral-500">{tx.fee_amount > 0 ? formatCurrency(tx.fee_amount) : "—"}</td>
                   <td className={`px-4 py-3 text-sm text-right tabular-nums font-medium ${tx.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
                     {tx.direction === "inflow" ? "+" : "-"}{formatCurrency(tx.amount)}
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    {tx.match_type === "matched" && (
+                      <Badge className="bg-emerald-400/10 text-emerald-400 border-emerald-400/20 text-[11px]">Matched</Badge>
+                    )}
+                    {tx.match_type === "partial" && (
+                      <Badge className="bg-amber-400/10 text-amber-400 border-amber-400/20 text-[11px]">Partial</Badge>
+                    )}
+                    {tx.match_type === "unmatched" && (
+                      <Badge className="bg-red-400/10 text-red-400 border-red-400/20 text-[11px]">Unmatched</Badge>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-sm text-neutral-500">{tx.linked_ar_ap.length > 0 ? `${tx.linked_ar_ap.length} linked` : "—"}</td>
                 </tr>
