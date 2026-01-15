@@ -88,7 +88,7 @@ export async function GET(request?: NextRequest) {
     const bankTransactions = await query<ReconciliationDetail>(
       `SELECT
         m.id,
-        CASE WHEN ma.id IS NOT NULL THEN 'reconciled' ELSE 'not_reconciled' END as status,
+        CASE WHEN COUNT(ma.id) > 0 THEN 'reconciled' ELSE 'not_reconciled' END as status,
         m.direction,
         ABS(m.amount) as amount,
         ABS(m.amount) as gross_amount,
@@ -97,14 +97,14 @@ export async function GET(request?: NextRequest) {
         m.description,
         COALESCE(array_agg(DISTINCT ma.entity_id) FILTER (WHERE ma.entity_id IS NOT NULL), '{}') as linked_ar_ap,
         CASE 
-          WHEN ma.id IS NOT NULL AND ABS(m.amount) = ABS(ma.net_applied) THEN 'matched'
-          WHEN ma.id IS NOT NULL THEN 'partial'
+          WHEN COUNT(ma.id) > 0 AND ABS(m.amount) = SUM(ABS(COALESCE(ma.net_applied, 0))) THEN 'matched'
+          WHEN COUNT(ma.id) > 0 THEN 'partial'
           ELSE 'unmatched'
         END as match_type
        FROM movements m
        LEFT JOIN movement_allocations ma ON ma.movement_id = m.id AND ma.user_id = m.user_id
        WHERE m.user_id = $1 AND m.direction IN ('inflow', 'outflow')
-       GROUP BY m.id, m.direction, m.amount, m.date, m.description, ma.id
+       GROUP BY m.id, m.direction, m.amount, m.date, m.description
        ORDER BY m.date DESC
        LIMIT 500`,
       [userId]
