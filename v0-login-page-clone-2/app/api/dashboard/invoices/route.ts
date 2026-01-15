@@ -69,12 +69,17 @@ export async function GET(request?: NextRequest) {
       const invoiceAmount = parseFloat(String(row.amount))
       const outstandingAmount = parseFloat(String(row.outstanding_amount || 0))
 
-      // Determine status based on outstanding amount
-      let reconciled_status: "open" | "partially_paid" | "paid" = "open"
+      let reconciled_status: "open" | "overdue" | "partially_paid" | "paid"
       if (outstandingAmount <= 0) {
         reconciled_status = "paid"
+      } else if (outstandingAmount < invoiceAmount && daysDiff < 0) {
+        reconciled_status = "partially_paid"
       } else if (outstandingAmount < invoiceAmount) {
         reconciled_status = "partially_paid"
+      } else if (daysDiff < 0) {
+        reconciled_status = "overdue"
+      } else {
+        reconciled_status = "open"
       }
 
       return {
@@ -92,20 +97,18 @@ export async function GET(request?: NextRequest) {
       }
     })
 
-    // Calculate totals based on reconciled data
     const totals = {
       total_outstanding: invoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
       total_overdue: invoices
-        .filter((inv) => inv.days_overdue !== null && inv.days_overdue > 0)
+        .filter((inv) => inv.status === "overdue" || (inv.status === "partially_paid" && inv.days_overdue !== null))
         .reduce((sum, inv) => sum + inv.outstanding_amount, 0),
       invoice_count: invoices.length,
-      overdue_count: invoices.filter((inv) => inv.days_overdue !== null && inv.days_overdue > 0).length,
+      overdue_count: invoices.filter((inv) => inv.status === "overdue" || (inv.status === "partially_paid" && inv.days_overdue !== null)).length,
     }
 
-    // Summary by reconciled status
     const summaryByStatus = {
       open: invoices.filter((inv) => inv.status === "open").length,
-      overdue: invoices.filter((inv) => inv.days_overdue !== null && inv.days_overdue > 0).length,
+      overdue: invoices.filter((inv) => inv.status === "overdue").length,
       partially_paid: invoices.filter((inv) => inv.status === "partially_paid").length,
       paid: invoices.filter((inv) => inv.status === "paid").length,
     }
