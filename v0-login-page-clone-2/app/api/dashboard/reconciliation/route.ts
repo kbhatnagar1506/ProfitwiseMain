@@ -23,6 +23,30 @@ type ReconciliationSummary = {
   bank_reconciled_count: number
   bank_unreconciled_count: number
   bank_partial_count: number
+  ar_invoices: ARInvoice[]
+  ap_bills: APBill[]
+}
+
+type ARInvoice = {
+  id: string
+  customer_name: string
+  source: string
+  due_date: string
+  status: "open" | "paid" | "overdue"
+  bank_match: "matched" | "partial" | "unmatched"
+  amount: number
+  matched_amount: number
+}
+
+type APBill = {
+  id: string
+  vendor_name: string
+  source: string
+  due_date: string
+  status: "open" | "paid" | "overdue"
+  bank_match: "matched" | "partial" | "unmatched"
+  amount: number
+  matched_amount: number
 }
 
 type ReconciliationDetail = {
@@ -158,6 +182,64 @@ export async function GET(request?: NextRequest) {
       [userId]
     ).then((r) => r.rows)
 
+    // Get AR invoices with reconciliation status
+    const arInvoices = await query<ARInvoice>(
+      `SELECT
+        ce.id,
+        COALESCE(e.canonical_name, ce.entity_name, 'Unknown Customer') as customer_name,
+        'qbo' as source,
+        ce.due_date,
+        CASE 
+          WHEN ce.outstanding_amount <= 0 THEN 'paid'
+          WHEN ce.due_date < NOW() THEN 'overdue'
+          ELSE 'open'
+        END as status,
+        CASE 
+          WHEN COUNT(ma.id) > 0 AND ABS(ce.amount) = SUM(ABS(COALESCE(ma.net_amount::float, 0))) THEN 'matched'
+          WHEN COUNT(ma.id) > 0 THEN 'partial'
+          ELSE 'unmatched'
+        END as bank_match,
+        ABS(ce.amount)::float as amount,
+        SUM(ABS(COALESCE(ma.net_amount::float, 0)))::float as matched_amount
+       FROM cash_events ce
+       LEFT JOIN entities e ON e.id = ce.entity_id AND e.user_id = ce.user_id
+       LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ar'
+       WHERE ce.user_id = $1 AND ce.event_type = 'ar' AND ce.status NOT IN ('cancelled', 'voided')
+       GROUP BY ce.id, e.canonical_name, ce.entity_name, ce.due_date, ce.amount, ce.outstanding_amount
+       ORDER BY ce.due_date DESC
+       LIMIT 200`,
+      [userId]
+    ).then((r) => r.rows)
+
+    // Get AP bills with reconciliation status
+    const apBills = await query<APBill>(
+      `SELECT
+        ce.id,
+        COALESCE(e.canonical_name, ce.entity_name, 'Unknown Vendor') as vendor_name,
+        'qbo' as source,
+        ce.due_date,
+        CASE 
+          WHEN ce.outstanding_amount <= 0 THEN 'paid'
+          WHEN ce.due_date < NOW() THEN 'overdue'
+          ELSE 'open'
+        END as status,
+        CASE 
+          WHEN COUNT(ma.id) > 0 AND ABS(ce.amount) = SUM(ABS(COALESCE(ma.net_amount::float, 0))) THEN 'matched'
+          WHEN COUNT(ma.id) > 0 THEN 'partial'
+          ELSE 'unmatched'
+        END as bank_match,
+        ABS(ce.amount)::float as amount,
+        SUM(ABS(COALESCE(ma.net_amount::float, 0)))::float as matched_amount
+       FROM cash_events ce
+       LEFT JOIN entities e ON e.id = ce.entity_id AND e.user_id = ce.user_id
+       LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ap'
+       WHERE ce.user_id = $1 AND ce.event_type = 'ap' AND ce.status NOT IN ('cancelled', 'voided')
+       GROUP BY ce.id, e.canonical_name, ce.entity_name, ce.due_date, ce.amount, ce.outstanding_amount
+       ORDER BY ce.due_date DESC
+       LIMIT 200`,
+      [userId]
+    ).then((r) => r.rows)
+
     // Parse values with proper null handling
     const arInvoiced = arCashEvents?.total_invoiced ? parseFloat(String(arCashEvents.total_invoiced)) : 0
     const arOutstanding = arCashEvents?.total_outstanding ? parseFloat(String(arCashEvents.total_outstanding)) : 0
@@ -204,6 +286,8 @@ export async function GET(request?: NextRequest) {
       bank_reconciled_count: reconciled,
       bank_unreconciled_count: unreconciled,
       bank_partial_count: partial,
+      ar_invoices: arInvoices,
+      ap_bills: apBills,
     }
 
     log("dashboard.reconciliation.success", { userId, transactionCount: bankTransactions.length })
