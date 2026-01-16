@@ -167,7 +167,7 @@ export async function GET(request?: NextRequest) {
         SUM(CASE WHEN ma.component_type = 'fee' THEN ABS(ma.net_amount::float) ELSE 0 END)::float as fee_amount,
         m.date,
         COALESCE(m.counterparty, m.raw_description, 'Bank Transaction') as description,
-        COALESCE(array_agg(DISTINCT ma.entity_id) FILTER (WHERE ma.entity_id IS NOT NULL), '{}') as linked_ar_ap,
+        COALESCE(array_agg(DISTINCT ma.entity_id::text) FILTER (WHERE ma.entity_id IS NOT NULL), '{}') as linked_ar_ap,
         CASE 
           WHEN COUNT(ma.id) > 0 AND ABS(m.amount) = SUM(ABS(COALESCE(CASE WHEN ma.component_type != 'fee' THEN ma.net_amount::float ELSE 0 END, 0))) THEN 'matched'
           WHEN COUNT(ma.id) > 0 THEN 'partial'
