@@ -96,12 +96,17 @@ export async function GET(request?: NextRequest) {
       const entityIdParts = String(row.entity_id).split("/")
       const invoiceId = entityIdParts[entityIdParts.length - 1] || "Unknown"
 
+      // Use amount as outstanding if outstanding_amount is 0 or null
+      const outstandingAmt = row.outstanding_amount && parseFloat(String(row.outstanding_amount)) > 0 
+        ? parseFloat(String(row.outstanding_amount))
+        : parseFloat(String(row.amount))
+
       return {
         id: row.id,
         entity_id: row.entity_id,
         customer_name: row.metadata?.customer_name ? String(row.metadata.customer_name) : `Invoice ${invoiceId}`,
         amount: parseFloat(String(row.amount)),
-        outstanding_amount: row.outstanding_amount ? parseFloat(String(row.outstanding_amount)) : parseFloat(String(row.amount)),
+        outstanding_amount: outstandingAmt,
         due_date: row.expected_date,
         status: row.status,
         source: row.source,
