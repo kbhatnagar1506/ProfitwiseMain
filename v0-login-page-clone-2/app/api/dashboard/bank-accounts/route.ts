@@ -70,12 +70,11 @@ export async function GET(request?: NextRequest) {
     
     if (accountIds.length > 0) {
       const entityRows = await query<AccountEntityRow>(
-        `SELECT m.cash_account_id AS account_id, e.canonical_name
+        `SELECT DISTINCT ON (m.cash_account_id) m.cash_account_id AS account_id, e.canonical_name
          FROM movements m
          LEFT JOIN entities e ON e.id = m.counterparty_entity_id
          WHERE m.user_id = $1 AND m.cash_account_id = ANY($2) AND e.canonical_name IS NOT NULL
-         GROUP BY m.cash_account_id, e.canonical_name
-         LIMIT 1`,
+         ORDER BY m.cash_account_id, m.date DESC`,
         [userId, accountIds]
       ).then((r) => r.rows)
       
