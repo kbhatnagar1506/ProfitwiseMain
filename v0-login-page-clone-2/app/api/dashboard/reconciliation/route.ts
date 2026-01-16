@@ -87,7 +87,7 @@ export async function GET(request?: NextRequest) {
         SUM(ABS(ma.net_amount::float))::text as total_matched,
         COUNT(DISTINCT ma.entity_id)::text as count
        FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'ar' AND ma.duplicate_of IS NULL`,
+       WHERE ma.user_id = $1 AND ma.component_type = 'ar'`,
       [userId]
     ).then((r) => r.rows[0])
 
@@ -97,7 +97,7 @@ export async function GET(request?: NextRequest) {
         SUM(ABS(ma.net_amount::float))::text as total_matched,
         COUNT(DISTINCT ma.entity_id)::text as count
        FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'ap' AND ma.duplicate_of IS NULL`,
+       WHERE ma.user_id = $1 AND ma.component_type = 'ap'`,
       [userId]
     ).then((r) => r.rows[0])
 
@@ -106,7 +106,7 @@ export async function GET(request?: NextRequest) {
       `SELECT
         SUM(ABS(ma.net_amount::float))::text as total_fees
        FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'fee' AND ma.duplicate_of IS NULL`,
+       WHERE ma.user_id = $1 AND ma.component_type = 'fee'`,
       [userId]
     ).then((r) => r.rows[0])
 
@@ -150,7 +150,7 @@ export async function GET(request?: NextRequest) {
           ELSE 'unmatched'
         END as match_type
        FROM movements m
-       LEFT JOIN movement_attributions ma ON ma.movement_id = m.id AND ma.user_id = m.user_id AND ma.duplicate_of IS NULL
+       LEFT JOIN movement_attributions ma ON ma.movement_id = m.id AND ma.user_id = m.user_id
        WHERE m.user_id = $1 AND m.direction IN ('inflow', 'outflow') AND m.duplicate_of IS NULL
        GROUP BY m.id, m.direction, m.amount, m.date, m.counterparty, m.raw_description
        ORDER BY m.date DESC
