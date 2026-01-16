@@ -186,7 +186,7 @@ export async function GET(request?: NextRequest) {
     const arInvoices = await query<ARInvoice>(
       `SELECT
         ce.id,
-        COALESCE(e.canonical_name, 'Unknown Customer') as customer_name,
+        COALESCE(ce.metadata->>'canonical_name', ce.metadata->>'customer_name', 'Unknown Customer') as customer_name,
         'qbo' as source,
         ce.expected_date as due_date,
         CASE 
@@ -202,10 +202,9 @@ export async function GET(request?: NextRequest) {
         ABS(ce.amount)::float as amount,
         SUM(ABS(COALESCE(ma.net_amount::float, 0)))::float as matched_amount
        FROM cash_events ce
-       LEFT JOIN entities e ON e.id::text = ce.entity_id AND e.user_id = ce.user_id
        LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ar'
        WHERE ce.user_id = $1 AND ce.event_type = 'ar'
-       GROUP BY ce.id, e.canonical_name, ce.expected_date, ce.amount, ce.outstanding_amount
+       GROUP BY ce.id, ce.metadata, ce.expected_date, ce.amount, ce.outstanding_amount
        ORDER BY ce.expected_date DESC
        LIMIT 200`,
       [userId]
@@ -215,7 +214,7 @@ export async function GET(request?: NextRequest) {
     const apBills = await query<APBill>(
       `SELECT
         ce.id,
-        COALESCE(e.canonical_name, 'Unknown Vendor') as vendor_name,
+        COALESCE(ce.metadata->>'canonical_name', ce.metadata->>'vendor_name', 'Unknown Vendor') as vendor_name,
         'qbo' as source,
         ce.expected_date as due_date,
         CASE 
@@ -231,10 +230,9 @@ export async function GET(request?: NextRequest) {
         ABS(ce.amount)::float as amount,
         SUM(ABS(COALESCE(ma.net_amount::float, 0)))::float as matched_amount
        FROM cash_events ce
-       LEFT JOIN entities e ON e.id::text = ce.entity_id AND e.user_id = ce.user_id
        LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ap'
        WHERE ce.user_id = $1 AND ce.event_type = 'ap'
-       GROUP BY ce.id, e.canonical_name, ce.expected_date, ce.amount, ce.outstanding_amount
+       GROUP BY ce.id, ce.metadata, ce.expected_date, ce.amount, ce.outstanding_amount
        ORDER BY ce.expected_date DESC
        LIMIT 200`,
       [userId]
