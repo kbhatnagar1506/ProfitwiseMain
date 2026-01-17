@@ -214,7 +214,7 @@ export async function GET(request?: NextRequest) {
        FROM cash_events ce
        LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ar'
        WHERE ce.user_id = $1 AND ce.event_type = 'ar'
-       GROUP BY ce.id, ce.metadata, ce.expected_date, ce.amount, ce.outstanding_amount
+       GROUP BY ce.id, ce.expected_date, ce.amount, ce.outstanding_amount, ce.metadata->>'canonical_name', ce.metadata->>'customer_name'
        ORDER BY ce.expected_date DESC
        LIMIT 200`,
       [userId]
@@ -242,7 +242,7 @@ export async function GET(request?: NextRequest) {
        FROM cash_events ce
        LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ap'
        WHERE ce.user_id = $1 AND ce.event_type = 'ap'
-       GROUP BY ce.id, ce.metadata, ce.expected_date, ce.amount, ce.outstanding_amount
+       GROUP BY ce.id, ce.expected_date, ce.amount, ce.outstanding_amount, ce.metadata->>'canonical_name', ce.metadata->>'vendor_name'
        ORDER BY ce.expected_date DESC
        LIMIT 200`,
       [userId]
