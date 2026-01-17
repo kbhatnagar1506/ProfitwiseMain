@@ -26,6 +26,30 @@ function getDaysOverdue(dueDate: string): number {
   return diffDays
 }
 
+function exportToCSV(data: any[], filename: string) {
+  const headers = Object.keys(data[0] || {})
+  const csv = [
+    headers.join(","),
+    ...data.map(row =>
+      headers.map(header => {
+        const value = row[header]
+        if (typeof value === "string" && value.includes(",")) {
+          return `"${value}"`
+        }
+        return value
+      }).join(",")
+    )
+  ].join("\n")
+
+  const blob = new Blob([csv], { type: "text/csv" })
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  a.click()
+  window.URL.revokeObjectURL(url)
+}
+
 interface ReconciliationSummary {
   ar_total_invoiced: number
   ar_total_outstanding: number
@@ -510,36 +534,57 @@ export default function ReconciliationPage() {
 
       {/* Bank Transactions */}
       <div className="px-8 py-6">
-        <div className="flex gap-2 mb-4">
+        <div className="flex gap-2 mb-4 justify-between items-center">
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setFilter("all"); setCurrentPage(1) }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                filter === "all"
+                  ? "bg-white/[0.1] text-white border border-white/[0.2]"
+                  : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+              }`}
+            >
+              All ({transactions.length})
+            </button>
+            <button
+              onClick={() => { setFilter("reconciled"); setCurrentPage(1) }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                filter === "reconciled"
+                  ? "bg-emerald-400/[0.15] text-emerald-300 border border-emerald-400/[0.3]"
+                  : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+              }`}
+            >
+              Matched ({transactions.filter(t => t.match_type === "matched").length})
+            </button>
+            <button
+              onClick={() => { setFilter("not_reconciled"); setCurrentPage(1) }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                filter === "not_reconciled"
+                  ? "bg-red-400/[0.15] text-red-300 border border-red-400/[0.3]"
+                  : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+              }`}
+            >
+              Unmatched ({transactions.filter(t => t.match_type === "unmatched").length})
+            </button>
+          </div>
           <button
-            onClick={() => { setFilter("all"); setCurrentPage(1) }}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-              filter === "all"
-                ? "bg-white/[0.1] text-white border border-white/[0.2]"
-                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
-            }`}
+            onClick={() => {
+              const exportData = filteredTransactions.map(tx => ({
+                Date: new Date(tx.date).toLocaleDateString(),
+                Description: tx.description,
+                Status: tx.status,
+                Direction: tx.direction,
+                Gross: formatCurrency(tx.gross_amount),
+                Fee: tx.fee_amount > 0 ? formatCurrency(tx.fee_amount) : "—",
+                Net: formatCurrency(tx.amount),
+                "Match Type": tx.match_type,
+                "Linked AR/AP": tx.linked_ar_ap.length > 0 ? `${tx.linked_ar_ap.length} linked` : "—"
+              }))
+              exportToCSV(exportData, `reconciliation-transactions-${new Date().toISOString().split("T")[0]}.csv`)
+            }}
+            className="px-3 py-1.5 rounded-lg text-sm font-medium bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05] transition-all"
           >
-            All ({transactions.length})
-          </button>
-          <button
-            onClick={() => { setFilter("reconciled"); setCurrentPage(1) }}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-              filter === "reconciled"
-                ? "bg-emerald-400/[0.15] text-emerald-300 border border-emerald-400/[0.3]"
-                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
-            }`}
-          >
-            Matched ({transactions.filter(t => t.match_type === "matched").length})
-          </button>
-          <button
-            onClick={() => { setFilter("not_reconciled"); setCurrentPage(1) }}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-              filter === "not_reconciled"
-                ? "bg-red-400/[0.15] text-red-300 border border-red-400/[0.3]"
-                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
-            }`}
-          >
-            Unmatched ({transactions.filter(t => t.match_type === "unmatched").length})
+            Export CSV
           </button>
         </div>
 
