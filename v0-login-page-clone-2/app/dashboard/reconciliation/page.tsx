@@ -145,7 +145,7 @@ export default function ReconciliationPage() {
   const runReconciliation = async () => {
     try {
       setIsRunning(true)
-      const response = await fetch(`/api/ar-ap-step`, { method: "POST" })
+      const response = await fetch(`/api/ar-ap-step?run=true`)
       if (!response.ok) throw new Error("Failed to run reconciliation")
       
       await new Promise(resolve => setTimeout(resolve, 2000))
