@@ -120,7 +120,12 @@ export default function ReconciliationPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-[#141414] flex items-center justify-center">
-        <div className="text-neutral-400">Loading reconciliation data...</div>
+        <div className="text-center">
+          <div className="inline-block">
+            <div className="w-8 h-8 border-2 border-neutral-600 border-t-white rounded-full animate-spin mb-4"></div>
+            <p className="text-neutral-400 text-sm">Loading reconciliation data...</p>
+          </div>
+        </div>
       </div>
     )
   }
@@ -128,7 +133,10 @@ export default function ReconciliationPage() {
   if (!data) {
     return (
       <div className="min-h-screen bg-[#141414] flex items-center justify-center">
-        <div className="text-neutral-400">Failed to load reconciliation data</div>
+        <div className="text-center">
+          <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-4" />
+          <p className="text-neutral-400 text-sm">Failed to load reconciliation data</p>
+        </div>
       </div>
     )
   }
@@ -151,9 +159,9 @@ export default function ReconciliationPage() {
 
   return (
     <div className="min-h-screen bg-[#141414]">
-      <div className="border-b border-white/[0.06] px-8 py-8">
-        <h1 className="text-2xl font-semibold text-white tracking-tight">Reconciliation</h1>
-        <p className="text-sm text-neutral-500 mt-1">Bank payments matched to invoices &middot; Gross − Fee = Net</p>
+      <div className="border-b border-white/[0.06] px-8 py-8 bg-white/[0.01]">
+        <h1 className="text-3xl font-bold text-white tracking-tight">Reconciliation</h1>
+        <p className="text-sm text-neutral-500 mt-2">Bank payments matched to invoices &middot; Gross − Fee = Net</p>
       </div>
 
       {/* Lifetime Overview */}
