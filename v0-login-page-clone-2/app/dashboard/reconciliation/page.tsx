@@ -95,6 +95,8 @@ export default function ReconciliationPage() {
   const [filter, setFilter] = useState<"all" | "reconciled" | "not_reconciled">("all")
   const [arFilter, setArFilter] = useState<"all" | "open" | "overdue" | "paid">("all")
   const [apFilter, setApFilter] = useState<"all" | "open" | "overdue" | "paid">("all")
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 25
 
   useEffect(() => {
     const fetchData = async () => {
@@ -502,7 +504,7 @@ export default function ReconciliationPage() {
       <div className="px-8 py-6">
         <div className="flex gap-2 mb-4">
           <button
-            onClick={() => setFilter("all")}
+            onClick={() => { setFilter("all"); setCurrentPage(1) }}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
               filter === "all"
                 ? "bg-white/[0.1] text-white border border-white/[0.2]"
@@ -512,7 +514,7 @@ export default function ReconciliationPage() {
             All ({transactions.length})
           </button>
           <button
-            onClick={() => setFilter("reconciled")}
+            onClick={() => { setFilter("reconciled"); setCurrentPage(1) }}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
               filter === "reconciled"
                 ? "bg-emerald-400/[0.15] text-emerald-300 border border-emerald-400/[0.3]"
@@ -522,7 +524,7 @@ export default function ReconciliationPage() {
             Matched ({transactions.filter(t => t.match_type === "matched").length})
           </button>
           <button
-            onClick={() => setFilter("not_reconciled")}
+            onClick={() => { setFilter("not_reconciled"); setCurrentPage(1) }}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
               filter === "not_reconciled"
                 ? "bg-red-400/[0.15] text-red-300 border border-red-400/[0.3]"
@@ -548,7 +550,7 @@ export default function ReconciliationPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredTransactions.map((tx) => (
+              {filteredTransactions.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((tx) => (
                 <tr key={tx.id} className="border-b border-white/[0.04] hover:bg-white/[0.03] transition-colors">
                   <td className="px-4 py-3">
                     {tx.status === "reconciled" ? (
@@ -584,7 +586,42 @@ export default function ReconciliationPage() {
           </table>
         </div>
 
-        <p className="mt-4 text-[12px] text-neutral-600">Showing {filteredTransactions.length} of {transactions.length} bank transactions</p>
+        <div className="mt-4 flex items-center justify-between">
+          <p className="text-[12px] text-neutral-600">
+            Showing {Math.min((currentPage - 1) * itemsPerPage + 1, filteredTransactions.length)}–{Math.min(currentPage * itemsPerPage, filteredTransactions.length)} of {filteredTransactions.length} transactions
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            >
+              Previous
+            </button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: Math.ceil(filteredTransactions.length / itemsPerPage) }).map((_, i) => (
+                <button
+                  key={i + 1}
+                  onClick={() => setCurrentPage(i + 1)}
+                  className={`px-2 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    currentPage === i + 1
+                      ? "bg-white/[0.1] text-white border border-white/[0.2]"
+                      : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+                  }`}
+                >
+                  {i + 1}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setCurrentPage(Math.min(Math.ceil(filteredTransactions.length / itemsPerPage), currentPage + 1))}
+              disabled={currentPage === Math.ceil(filteredTransactions.length / itemsPerPage)}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
