@@ -106,32 +106,24 @@ export async function GET(request?: NextRequest) {
     ).then((r) => r.rows[0])
 
     // Get AR matched amounts from movement_attributions (reconciliation output)
-    // Use MIN(matched_amount) per entity to avoid double-counting duplicate matches
+    // Sum all matched amounts across all AR attributions
     const arMatched = await query<{ total_matched: string; count: string }>(
       `SELECT
-        SUM(matched_amount)::text as total_matched,
-        COUNT(DISTINCT entity_id)::text as count
-       FROM (
-         SELECT DISTINCT ON (entity_id) entity_id, ABS(net_amount::float) as matched_amount
-         FROM movement_attributions ma
-         WHERE ma.user_id = $1 AND ma.component_type = 'ar'
-         ORDER BY entity_id, created_at DESC
-       ) subq`,
+        SUM(ABS(ma.net_amount::float))::text as total_matched,
+        COUNT(DISTINCT ma.entity_id)::text as count
+       FROM movement_attributions ma
+       WHERE ma.user_id = $1 AND ma.component_type = 'ar'`,
       [userId]
     ).then((r) => r.rows[0])
 
     // Get AP matched amounts from movement_attributions (reconciliation output)
-    // Use MIN(matched_amount) per entity to avoid double-counting duplicate matches
+    // Sum all matched amounts across all AP attributions
     const apMatched = await query<{ total_matched: string; count: string }>(
       `SELECT
-        SUM(matched_amount)::text as total_matched,
-        COUNT(DISTINCT entity_id)::text as count
-       FROM (
-         SELECT DISTINCT ON (entity_id) entity_id, ABS(net_amount::float) as matched_amount
-         FROM movement_attributions ma
-         WHERE ma.user_id = $1 AND ma.component_type = 'ap'
-         ORDER BY entity_id, created_at DESC
-       ) subq`,
+        SUM(ABS(ma.net_amount::float))::text as total_matched,
+        COUNT(DISTINCT ma.entity_id)::text as count
+       FROM movement_attributions ma
+       WHERE ma.user_id = $1 AND ma.component_type = 'ap'`,
       [userId]
     ).then((r) => r.rows[0])
 
