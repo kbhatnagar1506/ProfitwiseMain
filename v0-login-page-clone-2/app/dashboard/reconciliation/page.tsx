@@ -120,6 +120,7 @@ export default function ReconciliationPage() {
   const [arFilter, setArFilter] = useState<"all" | "open" | "overdue" | "paid">("all")
   const [apFilter, setApFilter] = useState<"all" | "open" | "overdue" | "paid">("all")
   const [currentPage, setCurrentPage] = useState(1)
+  const [isRunning, setIsRunning] = useState(false)
   const itemsPerPage = 25
 
   useEffect(() => {
@@ -140,6 +141,26 @@ export default function ReconciliationPage() {
 
     fetchData()
   }, [])
+
+  const runReconciliation = async () => {
+    try {
+      setIsRunning(true)
+      const response = await fetch(`/api/ar-ap-step`, { method: "POST" })
+      if (!response.ok) throw new Error("Failed to run reconciliation")
+      
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      
+      const reconciliationResponse = await fetch(`/api/dashboard/reconciliation`)
+      if (!reconciliationResponse.ok) throw new Error("Failed to fetch updated data")
+      
+      const result: ApiResponse = await reconciliationResponse.json()
+      setData(result)
+    } catch (error) {
+      console.error("Error running reconciliation:", error)
+    } finally {
+      setIsRunning(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -184,8 +205,29 @@ export default function ReconciliationPage() {
   return (
     <div className="min-h-screen bg-[#141414]">
       <div className="border-b border-white/[0.06] px-8 py-8 bg-white/[0.01]">
-        <h1 className="text-3xl font-bold text-white tracking-tight">Reconciliation</h1>
-        <p className="text-sm text-neutral-500 mt-2">Bank payments matched to invoices &middot; Gross − Fee = Net</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-white tracking-tight">Reconciliation</h1>
+            <p className="text-sm text-neutral-500 mt-2">Bank payments matched to invoices &middot; Gross − Fee = Net</p>
+          </div>
+          <button
+            onClick={runReconciliation}
+            disabled={isRunning}
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/[0.15] text-emerald-300 border border-emerald-500/[0.3] hover:bg-emerald-500/[0.25] disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+          >
+            {isRunning ? (
+              <>
+                <div className="w-4 h-4 border-2 border-emerald-300 border-t-transparent rounded-full animate-spin"></div>
+                Running...
+              </>
+            ) : (
+              <>
+                <CheckCircle2 className="w-4 h-4" />
+                Run Reconciliation
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Lifetime Overview */}
