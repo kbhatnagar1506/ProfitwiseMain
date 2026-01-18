@@ -13,7 +13,6 @@ type InvoiceRow = {
   status: string
   source: string
   metadata: Record<string, unknown>
-  canonical_name: string | null
 }
 
 export async function GET(request?: NextRequest) {
@@ -35,7 +34,7 @@ export async function GET(request?: NextRequest) {
 
     const whereClause = whereConditions.join(" AND ")
 
-    // Fetch ALL invoices (no pagination) with entity canonical names
+    // Fetch ALL invoices (no pagination) - use metadata for customer names
     const invoiceRows = await query<InvoiceRow>(
       `SELECT
         ce.id,
@@ -45,10 +44,8 @@ export async function GET(request?: NextRequest) {
         ce.expected_date,
         ce.status,
         ce.source,
-        ce.metadata,
-        COALESCE(e.canonical_name, '') as canonical_name
+        ce.metadata
        FROM cash_events ce
-       LEFT JOIN entities e ON e.id = ce.entity_id::uuid
        WHERE ${whereClause}
        ORDER BY ce.expected_date ASC, ce.created_at DESC`,
       params
@@ -62,10 +59,8 @@ export async function GET(request?: NextRequest) {
         (new Date(dueDate).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24)
       )
 
-      // Use canonical_name from entities, fallback to metadata or invoice ID
-      const customerName = row.canonical_name 
-        ? row.canonical_name
-        : row.metadata?.customer_name 
+      // Use customer_name from metadata (set during reconciliation)
+      const customerName = row.metadata?.customer_name 
         ? String(row.metadata.customer_name)
         : `Invoice ${String(row.entity_id).split("/").pop() || "Unknown"}`
 
