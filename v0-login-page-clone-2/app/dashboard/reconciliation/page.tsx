@@ -148,9 +148,12 @@ export default function ReconciliationPage() {
       const response = await fetch(`/api/ar-ap-step?run=true`)
       if (!response.ok) throw new Error("Failed to run reconciliation")
       
-      // Wait for reconciliation to complete (up to 2 minutes with polling)
+      // Wait for reconciliation to complete (up to 3 minutes with polling)
+      // Initial wait of 30 seconds before polling starts (reconciliation takes time)
+      await new Promise(resolve => setTimeout(resolve, 30000))
+      
       let attempts = 0
-      const maxAttempts = 120 // 2 minutes with 1-second intervals
+      const maxAttempts = 180 // 3 minutes total with 1-second intervals
       let reconciliationComplete = false
       
       while (attempts < maxAttempts && !reconciliationComplete) {
