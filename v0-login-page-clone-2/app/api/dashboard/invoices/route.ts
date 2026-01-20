@@ -13,7 +13,6 @@ type InvoiceRow = {
   status: string
   source: string
   metadata: Record<string, unknown>
-  total_matched: number | string
 }
 
 export async function GET(request?: NextRequest) {
@@ -36,7 +35,7 @@ export async function GET(request?: NextRequest) {
     const whereClause = whereConditions.join(" AND ")
 
     // Fetch ALL invoices with reconciliation data
-    // Join with movement_allocations to get matched payment amounts
+    // The waterfall already updated cash_events.outstanding_amount, so we use that directly
     const invoiceRows = await query<InvoiceRow>(
       `SELECT
         ce.id,
@@ -46,31 +45,12 @@ export async function GET(request?: NextRequest) {
         ce.expected_date,
         ce.status,
         ce.source,
-        ce.metadata,
-        COALESCE(SUM(ma.net_applied), 0) as total_matched
+        ce.metadata
        FROM cash_events ce
-       LEFT JOIN movement_allocations ma ON 
-         ma.user_id = ce.user_id AND 
-         ma.entity_type = 'ar' AND 
-         ma.entity_id = ce.entity_id
        WHERE ${whereClause}
-       GROUP BY ce.id, ce.entity_id, ce.amount, ce.outstanding_amount, ce.expected_date, ce.status, ce.source, ce.metadata
        ORDER BY ce.expected_date ASC, ce.created_at DESC`,
       params
     ).then((r) => r.rows)
-
-    // Debug: log a sample of the data
-    if (invoiceRows.length > 0) {
-      const sample = invoiceRows.slice(0, 3)
-      log("dashboard.invoices.debug", { 
-        sample: sample.map(r => ({ 
-          entity_id: r.entity_id, 
-          amount: r.amount, 
-          outstanding: r.outstanding_amount,
-          total_matched: r.total_matched 
-        }))
-      })
-    }
 
     // Calculate days until/overdue and reconciled status
     const today = new Date().toISOString().split("T")[0]
@@ -85,16 +65,15 @@ export async function GET(request?: NextRequest) {
         ? String(row.metadata.customer_name)
         : `Invoice ${String(row.entity_id).split("/").pop() || "Unknown"}`
 
-      // Calculate true reconciled outstanding amount
+      // Use the waterfall-calculated outstanding_amount and status directly
       const invoiceAmount = parseFloat(String(row.amount))
-      const totalMatched = parseFloat(String(row.total_matched || 0))
-      const reconciled_outstanding = Math.max(0, invoiceAmount - totalMatched)
+      const outstandingAmount = parseFloat(String(row.outstanding_amount || 0))
 
-      // Determine reconciled status based on matched amounts
+      // Determine status based on outstanding amount
       let reconciled_status: "open" | "partially_paid" | "paid" = "open"
-      if (reconciled_outstanding <= 0) {
+      if (outstandingAmount <= 0) {
         reconciled_status = "paid"
-      } else if (totalMatched > 0) {
+      } else if (outstandingAmount < invoiceAmount) {
         reconciled_status = "partially_paid"
       }
 
@@ -103,7 +82,7 @@ export async function GET(request?: NextRequest) {
         entity_id: row.entity_id,
         customer_name: customerName,
         amount: invoiceAmount,
-        outstanding_amount: reconciled_outstanding,
+        outstanding_amount: outstandingAmount,
         due_date: row.expected_date,
         status: reconciled_status,
         source: row.source,
