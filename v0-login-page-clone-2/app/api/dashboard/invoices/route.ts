@@ -13,6 +13,7 @@ type InvoiceRow = {
   status: string
   source: string
   metadata: Record<string, unknown>
+  total_matched: number | string
 }
 
 export async function GET(request?: NextRequest) {
@@ -34,7 +35,8 @@ export async function GET(request?: NextRequest) {
 
     const whereClause = whereConditions.join(" AND ")
 
-    // Fetch ALL invoices (no pagination) - use metadata for customer names
+    // Fetch ALL invoices with reconciliation data
+    // Join with movement_allocations to get matched payment amounts
     const invoiceRows = await query<InvoiceRow>(
       `SELECT
         ce.id,
@@ -44,14 +46,20 @@ export async function GET(request?: NextRequest) {
         ce.expected_date,
         ce.status,
         ce.source,
-        ce.metadata
+        ce.metadata,
+        COALESCE(SUM(ma.net_applied), 0) as total_matched
        FROM cash_events ce
+       LEFT JOIN movement_allocations ma ON 
+         ma.user_id = ce.user_id AND 
+         ma.entity_type = 'ar' AND 
+         ma.entity_id = ce.entity_id
        WHERE ${whereClause}
+       GROUP BY ce.id, ce.entity_id, ce.amount, ce.outstanding_amount, ce.expected_date, ce.status, ce.source, ce.metadata
        ORDER BY ce.expected_date ASC, ce.created_at DESC`,
       params
     ).then((r) => r.rows)
 
-    // Calculate days until/overdue
+    // Calculate days until/overdue and reconciled status
     const today = new Date().toISOString().split("T")[0]
     const invoices = invoiceRows.map((row) => {
       const dueDate = row.expected_date
@@ -64,19 +72,27 @@ export async function GET(request?: NextRequest) {
         ? String(row.metadata.customer_name)
         : `Invoice ${String(row.entity_id).split("/").pop() || "Unknown"}`
 
-      // Use amount as outstanding if outstanding_amount is 0 or null
-      const outstandingAmt = row.outstanding_amount && parseFloat(String(row.outstanding_amount)) > 0 
-        ? parseFloat(String(row.outstanding_amount))
-        : parseFloat(String(row.amount))
+      // Calculate true reconciled outstanding amount
+      const invoiceAmount = parseFloat(String(row.amount))
+      const totalMatched = parseFloat(String(row.total_matched || 0))
+      const reconciled_outstanding = Math.max(0, invoiceAmount - totalMatched)
+
+      // Determine reconciled status based on matched amounts
+      let reconciled_status: "open" | "partially_paid" | "paid" = "open"
+      if (reconciled_outstanding <= 0) {
+        reconciled_status = "paid"
+      } else if (totalMatched > 0) {
+        reconciled_status = "partially_paid"
+      }
 
       return {
         id: row.id,
         entity_id: row.entity_id,
         customer_name: customerName,
-        amount: parseFloat(String(row.amount)),
-        outstanding_amount: outstandingAmt,
+        amount: invoiceAmount,
+        outstanding_amount: reconciled_outstanding,
         due_date: row.expected_date,
-        status: row.status,
+        status: reconciled_status,
         source: row.source,
         days_until_due: daysDiff,
         days_overdue: daysDiff < 0 ? Math.abs(daysDiff) : null,
@@ -84,20 +100,20 @@ export async function GET(request?: NextRequest) {
       }
     })
 
-    // Calculate totals
+    // Calculate totals based on reconciled data
     const totals = {
       total_outstanding: invoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
       total_overdue: invoices
-        .filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0))
+        .filter((inv) => inv.days_overdue !== null && inv.days_overdue > 0)
         .reduce((sum, inv) => sum + inv.outstanding_amount, 0),
       invoice_count: invoices.length,
-      overdue_count: invoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
+      overdue_count: invoices.filter((inv) => inv.days_overdue !== null && inv.days_overdue > 0).length,
     }
 
-    // Summary by status
+    // Summary by reconciled status
     const summaryByStatus = {
       open: invoices.filter((inv) => inv.status === "open").length,
-      overdue: invoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
+      overdue: invoices.filter((inv) => inv.days_overdue !== null && inv.days_overdue > 0).length,
       partially_paid: invoices.filter((inv) => inv.status === "partially_paid").length,
       paid: invoices.filter((inv) => inv.status === "paid").length,
     }
