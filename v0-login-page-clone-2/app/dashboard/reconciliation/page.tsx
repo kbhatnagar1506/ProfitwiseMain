@@ -69,6 +69,11 @@ interface ReconciliationSummary {
   bank_reconciled_count: number
   bank_unreconciled_count: number
   bank_partial_count: number
+  transfer_count: number
+  fee_count: number
+  operational_expense_count: number
+  adjustment_count: number
+  unclassified_count: number
   ar_invoices: ARInvoice[]
   ap_bills: APBill[]
 }
@@ -106,6 +111,7 @@ interface ReconciliationDetail {
   description: string
   linked_ar_ap: string[]
   match_type: "matched" | "partial" | "unmatched"
+  classification: "ar_invoice" | "ap_bill" | "internal_transfer" | "fee" | "operational_expense" | "adjustment" | "unclassified"
 }
 
 interface ApiResponse {
@@ -346,6 +352,43 @@ export default function ReconciliationPage() {
             <p className="text-2xl font-bold text-white tabular-nums">{formatCurrency(summary.total_fees)}</p>
             <p className="text-[11px] text-neutral-600 mt-2">identified</p>
           </div>
+        </div>
+      </div>
+
+      {/* Transaction Classification Breakdown */}
+      <div className="px-8 py-6 border-b border-white/[0.06]">
+        <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">Transaction Classification</h2>
+        <div className="grid grid-cols-5 gap-4">
+          {summary.transfer_count > 0 && (
+            <div className="bg-slate-500/[0.06] border border-slate-500/[0.15] rounded-lg p-4">
+              <p className="text-[11px] text-slate-600 mb-2">Internal Transfers</p>
+              <p className="text-2xl font-bold text-slate-400 tabular-nums">{summary.transfer_count}</p>
+            </div>
+          )}
+          {summary.fee_count > 0 && (
+            <div className="bg-orange-500/[0.06] border border-orange-500/[0.15] rounded-lg p-4">
+              <p className="text-[11px] text-orange-600 mb-2">Fees</p>
+              <p className="text-2xl font-bold text-orange-400 tabular-nums">{summary.fee_count}</p>
+            </div>
+          )}
+          {summary.operational_expense_count > 0 && (
+            <div className="bg-blue-500/[0.06] border border-blue-500/[0.15] rounded-lg p-4">
+              <p className="text-[11px] text-blue-600 mb-2">Operational</p>
+              <p className="text-2xl font-bold text-blue-400 tabular-nums">{summary.operational_expense_count}</p>
+            </div>
+          )}
+          {summary.adjustment_count > 0 && (
+            <div className="bg-yellow-500/[0.06] border border-yellow-500/[0.15] rounded-lg p-4">
+              <p className="text-[11px] text-yellow-600 mb-2">Adjustments</p>
+              <p className="text-2xl font-bold text-yellow-400 tabular-nums">{summary.adjustment_count}</p>
+            </div>
+          )}
+          {summary.unclassified_count > 0 && (
+            <div className="bg-red-500/[0.06] border border-red-500/[0.15] rounded-lg p-4">
+              <p className="text-[11px] text-red-600 mb-2">Unclassified</p>
+              <p className="text-2xl font-bold text-red-400 tabular-nums">{summary.unclassified_count}</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -662,6 +705,7 @@ export default function ReconciliationPage() {
                 <th className="px-4 py-3 text-right text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Fee</th>
                 <th className="px-4 py-3 text-right text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Net</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Match Type</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Classification</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Linked AR/AP</th>
               </tr>
             </thead>
@@ -693,6 +737,29 @@ export default function ReconciliationPage() {
                     )}
                     {tx.match_type === "unmatched" && (
                       <Badge className="bg-red-400/10 text-red-400 border-red-400/20 text-[11px]">Unmatched</Badge>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    {tx.classification === "internal_transfer" && (
+                      <Badge className="bg-slate-400/10 text-slate-400 border-slate-400/20 text-[11px]">Transfer</Badge>
+                    )}
+                    {tx.classification === "fee" && (
+                      <Badge className="bg-orange-400/10 text-orange-400 border-orange-400/20 text-[11px]">Fee</Badge>
+                    )}
+                    {tx.classification === "operational_expense" && (
+                      <Badge className="bg-blue-400/10 text-blue-400 border-blue-400/20 text-[11px]">Operational</Badge>
+                    )}
+                    {tx.classification === "ar_invoice" && (
+                      <Badge className="bg-emerald-400/10 text-emerald-400 border-emerald-400/20 text-[11px]">AR Invoice</Badge>
+                    )}
+                    {tx.classification === "ap_bill" && (
+                      <Badge className="bg-purple-400/10 text-purple-400 border-purple-400/20 text-[11px]">AP Bill</Badge>
+                    )}
+                    {tx.classification === "adjustment" && (
+                      <Badge className="bg-yellow-400/10 text-yellow-400 border-yellow-400/20 text-[11px]">Adjustment</Badge>
+                    )}
+                    {tx.classification === "unclassified" && (
+                      <Badge className="bg-red-400/10 text-red-400 border-red-400/20 text-[11px]">Unclassified</Badge>
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-neutral-500">{tx.linked_ar_ap.length > 0 ? `${tx.linked_ar_ap.length} linked` : "—"}</td>
