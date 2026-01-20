@@ -127,6 +127,19 @@ export default function ReconciliationPage() {
   const [apFilter, setApFilter] = useState<"all" | "open" | "overdue" | "paid">("all")
   const [currentPage, setCurrentPage] = useState(1)
   const [isRunning, setIsRunning] = useState(false)
+  const [markModalOpen, setMarkModalOpen] = useState(false)
+  const [selectedTransaction, setSelectedTransaction] = useState<ReconciliationDetail | null>(null)
+  const [selectedARAPIds, setSelectedARAPIds] = useState<string[]>([])
+  const [isMarking, setIsMarking] = useState(false)
+  const [markStatus, setMarkStatus] = useState<"paid" | "unpaid">("paid")
+  const [searchQuery, setSearchQuery] = useState("")
+  const [classificationFilter, setClassificationFilter] = useState<string | null>(null)
+  const [sortBy, setSortBy] = useState<"date" | "amount" | "status">("date")
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc")
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [auditOpen, setAuditOpen] = useState(false)
+  const [selectedAuditTransaction, setSelectedAuditTransaction] = useState<string | null>(null)
+  const [dataQualityDetails, setDataQualityDetails] = useState<any>(null)
   const itemsPerPage = 25
 
   useEffect(() => {
@@ -138,6 +151,13 @@ export default function ReconciliationPage() {
 
         const result: ApiResponse = await response.json()
         setData(result)
+
+        // Fetch data quality details
+        const qualityResponse = await fetch(`/api/dashboard/reconciliation/data-quality`)
+        if (qualityResponse.ok) {
+          const qualityData = await qualityResponse.json()
+          setDataQualityDetails(qualityData)
+        }
       } catch (error) {
         console.error("Error fetching reconciliation data:", error)
       } finally {
@@ -189,6 +209,48 @@ export default function ReconciliationPage() {
     }
   }
 
+  const handleMarkTransaction = async () => {
+    if (!selectedTransaction) return
+    
+    try {
+      setIsMarking(true)
+      const response = await fetch(`/api/dashboard/reconciliation/mark-transaction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transaction_id: selectedTransaction.id,
+          status: markStatus,
+          linked_ar_ap_ids: markStatus === "paid" ? selectedARAPIds : undefined,
+        }),
+      })
+      
+      if (!response.ok) throw new Error("Failed to mark transaction")
+      
+      // Refresh data
+      const reconciliationResponse = await fetch(`/api/dashboard/reconciliation`)
+      if (reconciliationResponse.ok) {
+        const result: ApiResponse = await reconciliationResponse.json()
+        setData(result)
+      }
+      
+      setMarkModalOpen(false)
+      setSelectedTransaction(null)
+      setSelectedARAPIds([])
+    } catch (error) {
+      console.error("Error marking transaction:", error)
+      alert("Failed to mark transaction")
+    } finally {
+      setIsMarking(false)
+    }
+  }
+
+  const openMarkModal = (tx: ReconciliationDetail, status: "paid" | "unpaid") => {
+    setSelectedTransaction(tx)
+    setMarkStatus(status)
+    setSelectedARAPIds([])
+    setMarkModalOpen(true)
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#141414] flex items-center justify-center">
@@ -214,10 +276,32 @@ export default function ReconciliationPage() {
   }
 
   const { summary, transactions } = data
-  const filteredTransactions = transactions.filter((t) => {
-    if (filter === "all") return true
-    return t.status === filter
-  })
+  const filteredTransactions = transactions
+    .filter((t) => {
+      // Status filter
+      if (filter !== "all" && t.status !== filter) return false
+      
+      // Classification filter
+      if (classificationFilter && t.classification !== classificationFilter) return false
+      
+      // Search filter
+      if (searchQuery && !t.description.toLowerCase().includes(searchQuery.toLowerCase())) return false
+      
+      return true
+    })
+    .sort((a, b) => {
+      let compareValue = 0
+      
+      if (sortBy === "date") {
+        compareValue = new Date(a.date).getTime() - new Date(b.date).getTime()
+      } else if (sortBy === "amount") {
+        compareValue = a.amount - b.amount
+      } else if (sortBy === "status") {
+        compareValue = a.status.localeCompare(b.status)
+      }
+      
+      return sortOrder === "asc" ? compareValue : -compareValue
+    })
 
   const filteredARInvoices = (summary.ar_invoices || []).filter((inv) => {
     if (arFilter === "all") return true
@@ -231,35 +315,69 @@ export default function ReconciliationPage() {
 
   return (
     <div className="min-h-screen bg-[#141414]">
-      <div className="border-b border-white/[0.06] px-8 py-8 bg-white/[0.01]">
+      {/* Sticky Header with Key Metrics */}
+      <div className="sticky top-0 z-40 border-b border-white/[0.06] bg-[#141414]/95 backdrop-blur-sm px-8 py-4">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">Reconciliation</h1>
-            <p className="text-sm text-neutral-500 mt-2">Bank payments matched to invoices &middot; Gross − Fee = Net</p>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Reconciliation</h1>
+            <p className="text-xs text-neutral-500 mt-1">Bank payments matched to invoices &middot; Gross − Fee = Net</p>
           </div>
-          <button
-            onClick={runReconciliation}
-            disabled={isRunning}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/[0.15] text-emerald-300 border border-emerald-500/[0.3] hover:bg-emerald-500/[0.25] disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
-          >
-            {isRunning ? (
-              <>
-                <div className="w-4 h-4 border-2 border-emerald-300 border-t-transparent rounded-full animate-spin"></div>
-                Running...
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="w-4 h-4" />
-                Run Reconciliation
-              </>
-            )}
-          </button>
+          <div className="flex items-center gap-6">
+            {/* Data Quality Score */}
+            <div className="text-right">
+              <p className="text-xs text-neutral-600 mb-1">Data Quality</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xl font-bold text-white tabular-nums">{summary.data_quality_score.toFixed(1)}/10</p>
+                {summary.data_quality_score < 7 && (
+                  <AlertCircle className="w-4 h-4 text-amber-400" />
+                )}
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-neutral-600 mb-1">AR Match Rate</p>
+              <p className="text-xl font-bold text-emerald-400 tabular-nums">{summary.ar_match_rate}%</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-neutral-600 mb-1">AP Match Rate</p>
+              <p className="text-xl font-bold text-purple-400 tabular-nums">{summary.ap_match_rate}%</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-neutral-600 mb-1">Overall</p>
+              <p className="text-xl font-bold text-white tabular-nums">{summary.overall_match_rate}%</p>
+            </div>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="px-3 py-2 rounded-lg text-sm font-medium bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05] transition-all"
+              title="Settings"
+            >
+              ⚙️
+            </button>
+            <button
+              onClick={runReconciliation}
+              disabled={isRunning}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/[0.15] text-emerald-300 border border-emerald-500/[0.3] hover:bg-emerald-500/[0.25] disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 whitespace-nowrap"
+            >
+              {isRunning ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-emerald-300 border-t-transparent rounded-full animate-spin"></div>
+                  Running...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  Run Reconciliation
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Lifetime Overview */}
-      <div className="px-8 py-6 border-b border-white/[0.06]">
-        <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">Lifetime Overview</h2>
+      {/* Main Content */}
+      <div className="px-8 py-6">
+        {/* Lifetime Overview */}
+        <div className="mb-6 border border-white/[0.06] rounded-lg p-6 bg-white/[0.01]">
+          <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">Lifetime Overview</h2>
         <div className="grid grid-cols-6 gap-4">
           <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
             <p className="text-[11px] text-neutral-600 mb-1">Accounts Receivable</p>
@@ -296,18 +414,24 @@ export default function ReconciliationPage() {
       </div>
 
       {/* Match Rates */}
-      <div className="px-8 py-6 border-b border-white/[0.06]">
+      <div className="mb-6 border border-white/[0.06] rounded-lg p-6 bg-white/[0.01]">
         <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">Reconciliation Overview</h2>
         <div className="grid grid-cols-4 gap-4">
-          <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
-            <p className="text-[11px] text-neutral-600 mb-2">AR Match Rate</p>
-            <p className="text-2xl font-bold text-white tabular-nums">{summary.ar_match_rate}%</p>
+          <div className="bg-gradient-to-br from-emerald-500/[0.1] to-emerald-500/[0.05] border border-emerald-500/[0.15] rounded-lg p-4">
+            <p className="text-[11px] text-emerald-600 mb-2">AR Match Rate</p>
+            <p className="text-2xl font-bold text-emerald-400 tabular-nums">{summary.ar_match_rate}%</p>
+            <div className="w-full bg-white/[0.05] rounded-full h-1.5 mt-3">
+              <div className="bg-emerald-400 h-1.5 rounded-full" style={{ width: `${Math.min(summary.ar_match_rate, 100)}%` }}></div>
+            </div>
             <p className="text-[11px] text-neutral-600 mt-2">{formatCurrency(summary.ar_total_matched)} matched</p>
           </div>
 
-          <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
-            <p className="text-[11px] text-neutral-600 mb-2">AP Match Rate</p>
-            <p className="text-2xl font-bold text-white tabular-nums">{summary.ap_match_rate}%</p>
+          <div className="bg-gradient-to-br from-purple-500/[0.1] to-purple-500/[0.05] border border-purple-500/[0.15] rounded-lg p-4">
+            <p className="text-[11px] text-purple-600 mb-2">AP Match Rate</p>
+            <p className="text-2xl font-bold text-purple-400 tabular-nums">{summary.ap_match_rate}%</p>
+            <div className="w-full bg-white/[0.05] rounded-full h-1.5 mt-3">
+              <div className="bg-purple-400 h-1.5 rounded-full" style={{ width: `${Math.min(summary.ap_match_rate, 100)}%` }}></div>
+            </div>
             <p className="text-[11px] text-neutral-600 mt-2">{formatCurrency(summary.ap_total_matched)} matched</p>
           </div>
 
@@ -326,7 +450,7 @@ export default function ReconciliationPage() {
       </div>
 
       {/* Bank Reconciliation */}
-      <div className="px-8 py-6 border-b border-white/[0.06]">
+      <div className="mb-6 border border-white/[0.06] rounded-lg p-6 bg-white/[0.01]">
         <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">Bank Transaction Reconciliation</h2>
         <div className="grid grid-cols-4 gap-4">
           <div className="bg-emerald-500/[0.06] border border-emerald-500/[0.15] rounded-lg p-4">
@@ -356,7 +480,7 @@ export default function ReconciliationPage() {
       </div>
 
       {/* Transaction Classification Breakdown */}
-      <div className="px-8 py-6 border-b border-white/[0.06]">
+      <div className="mb-6 border border-white/[0.06] rounded-lg p-6 bg-white/[0.01]">
         <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">Transaction Classification</h2>
         <div className="grid grid-cols-5 gap-4">
           {summary.transfer_count > 0 && (
@@ -393,8 +517,8 @@ export default function ReconciliationPage() {
       </div>
 
       {/* AR (Accounts Receivable) Section */}
-      <div className="px-8 py-6 border-b border-white/[0.06]">
-        <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">AR (Accounts Receivable)</h2>
+      <div className="mb-6 border border-white/[0.06] rounded-lg p-6 bg-white/[0.01]">
+        <h2 className="text-sm font-semibold text-white mb-2 uppercase tracking-wider">AR (Accounts Receivable)</h2>
         <p className="text-xs text-neutral-500 mb-4">Expected inflow — money you are owed. From invoices (QBO, Xero, Stripe, Gmail).</p>
         
         <div className="grid grid-cols-3 gap-4 mb-6">
@@ -516,8 +640,8 @@ export default function ReconciliationPage() {
       </div>
 
       {/* AP (Accounts Payable) Section */}
-      <div className="px-8 py-6 border-b border-white/[0.06]">
-        <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">AP (Accounts Payable)</h2>
+      <div className="mb-6 border border-white/[0.06] rounded-lg p-6 bg-white/[0.01]">
+        <h2 className="text-sm font-semibold text-white mb-2 uppercase tracking-wider">AP (Accounts Payable)</h2>
         <p className="text-xs text-neutral-500 mb-4">Expected outflow — money you are expected to pay.</p>
         
         <div className="grid grid-cols-3 gap-4 mb-6">
@@ -639,7 +763,86 @@ export default function ReconciliationPage() {
       </div>
 
       {/* Bank Transactions */}
-      <div className="px-8 py-6">
+      <div className="border border-white/[0.06] rounded-lg p-6 bg-white/[0.01]">
+        <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">All Bank Transactions</h2>
+        <div className="flex gap-2 mb-4 justify-between items-center">
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setFilter("all"); setCurrentPage(1) }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                filter === "all"
+                  ? "bg-white/[0.1] text-white border border-white/[0.2]"
+                  : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+              }`}
+            >
+              All ({transactions.length})
+            </button>
+            <button
+              onClick={() => { setFilter("reconciled"); setCurrentPage(1) }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                filter === "reconciled"
+                  ? "bg-emerald-400/[0.15] text-emerald-300 border border-emerald-400/[0.3]"
+                  : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+              }`}
+            >
+              Matched ({transactions.filter(t => t.match_type === "matched").length})
+            </button>
+            <button
+              onClick={() => { setFilter("not_reconciled"); setCurrentPage(1) }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                filter === "not_reconciled"
+                  ? "bg-red-400/[0.15] text-red-300 border border-red-400/[0.3]"
+                  : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+              }`}
+            >
+              Unmatched ({transactions.filter(t => t.match_type === "unmatched").length})
+            </button>
+          </div>
+          <div className="flex gap-2 items-center">
+            <input
+              type="text"
+              placeholder="Search transactions..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
+                setCurrentPage(1)
+              }}
+              className="px-3 py-1.5 rounded-lg text-sm bg-white/[0.02] text-white border border-white/[0.06] placeholder-neutral-600 focus:outline-none focus:border-white/[0.2] transition-all"
+            />
+            <select
+              value={classificationFilter || ""}
+              onChange={(e) => {
+                setClassificationFilter(e.target.value || null)
+                setCurrentPage(1)
+              }}
+              className="px-3 py-1.5 rounded-lg text-sm bg-white/[0.02] text-white border border-white/[0.06] focus:outline-none focus:border-white/[0.2] transition-all"
+            >
+              <option value="">All Classifications</option>
+              <option value="ar_invoice">AR Invoice</option>
+              <option value="ap_bill">AP Bill</option>
+              <option value="internal_transfer">Transfer</option>
+              <option value="fee">Fee</option>
+              <option value="operational_expense">Operational</option>
+              <option value="adjustment">Adjustment</option>
+              <option value="unclassified">Unclassified</option>
+            </select>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as "date" | "amount" | "status")}
+              className="px-3 py-1.5 rounded-lg text-sm bg-white/[0.02] text-white border border-white/[0.06] focus:outline-none focus:border-white/[0.2] transition-all"
+            >
+              <option value="date">Sort by Date</option>
+              <option value="amount">Sort by Amount</option>
+              <option value="status">Sort by Status</option>
+            </select>
+            <button
+              onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
+              className="px-3 py-1.5 rounded-lg text-sm bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05] transition-all"
+            >
+              {sortOrder === "asc" ? "↑" : "↓"}
+            </button>
+          </div>
+        </div>
         <div className="flex gap-2 mb-4 justify-between items-center">
           <div className="flex gap-2">
             <button
@@ -707,6 +910,7 @@ export default function ReconciliationPage() {
                 <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Match Type</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Classification</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Linked AR/AP</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -763,6 +967,26 @@ export default function ReconciliationPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-neutral-500">{tx.linked_ar_ap.length > 0 ? `${tx.linked_ar_ap.length} linked` : "—"}</td>
+                  <td className="px-4 py-3 text-sm">
+                    <div className="flex gap-2">
+                      {tx.status === "not_reconciled" && (
+                        <button
+                          onClick={() => openMarkModal(tx, "paid")}
+                          className="px-2 py-1 rounded text-[11px] bg-emerald-400/10 text-emerald-400 border border-emerald-400/20 hover:bg-emerald-400/20 transition-all"
+                        >
+                          Mark Paid
+                        </button>
+                      )}
+                      {tx.status === "reconciled" && (
+                        <button
+                          onClick={() => openMarkModal(tx, "unpaid")}
+                          className="px-2 py-1 rounded text-[11px] bg-red-400/10 text-red-400 border border-red-400/20 hover:bg-red-400/20 transition-all"
+                        >
+                          Mark Unpaid
+                        </button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -806,6 +1030,189 @@ export default function ReconciliationPage() {
           </div>
         </div>
       </div>
+    </div>
+
+      {/* Mark Transaction Modal */}
+      {markModalOpen && selectedTransaction && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a1a] border border-white/[0.06] rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 className="text-lg font-semibold text-white mb-4">
+              Mark Transaction as {markStatus === "paid" ? "Paid" : "Unpaid"}
+            </h2>
+            
+            <div className="mb-4 p-3 bg-white/[0.02] border border-white/[0.06] rounded">
+              <p className="text-sm text-neutral-400 mb-2">Transaction:</p>
+              <p className="text-sm text-white font-medium">{selectedTransaction.description}</p>
+              <p className="text-sm text-neutral-500 mt-1">
+                {selectedTransaction.direction === "inflow" ? "+" : "-"}{formatCurrency(selectedTransaction.amount)}
+              </p>
+            </div>
+
+            {markStatus === "paid" && (
+              <div className="mb-4">
+                <p className="text-sm text-neutral-400 mb-2">Link to AR/AP items (optional):</p>
+                <div className="max-h-48 overflow-y-auto space-y-2">
+                  {data?.summary.ar_invoices.map((inv) => (
+                    <label key={inv.id} className="flex items-center gap-2 p-2 hover:bg-white/[0.02] rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedARAPIds.includes(inv.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedARAPIds([...selectedARAPIds, inv.id])
+                          } else {
+                            setSelectedARAPIds(selectedARAPIds.filter(id => id !== inv.id))
+                          }
+                        }}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm text-neutral-300">{inv.customer_name}</span>
+                      <span className="text-sm text-neutral-500 ml-auto">{formatCurrency(inv.amount)}</span>
+                    </label>
+                  ))}
+                  {data?.summary.ap_bills.map((bill) => (
+                    <label key={bill.id} className="flex items-center gap-2 p-2 hover:bg-white/[0.02] rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedARAPIds.includes(bill.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedARAPIds([...selectedARAPIds, bill.id])
+                          } else {
+                            setSelectedARAPIds(selectedARAPIds.filter(id => id !== bill.id))
+                          }
+                        }}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm text-neutral-300">{bill.vendor_name}</span>
+                      <span className="text-sm text-neutral-500 ml-auto">{formatCurrency(bill.amount)}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setMarkModalOpen(false)
+                  setSelectedTransaction(null)
+                  setSelectedARAPIds([])
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05] transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleMarkTransaction}
+                disabled={isMarking}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-400/10 text-emerald-400 border border-emerald-400/20 hover:bg-emerald-400/20 disabled:opacity-50 transition-all"
+              >
+                {isMarking ? "Marking..." : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {settingsOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a1a] border border-white/[0.06] rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 className="text-lg font-semibold text-white mb-4">Reconciliation Settings</h2>
+            
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="text-sm text-neutral-400 mb-2 block">Stage 4 Review Threshold ($)</label>
+                <input
+                  type="number"
+                  defaultValue="1000"
+                  className="w-full px-3 py-2 rounded-lg bg-white/[0.05] border border-white/[0.1] text-white text-sm"
+                  placeholder="1000"
+                />
+              </div>
+              
+              <div>
+                <label className="text-sm text-neutral-400 mb-2 block">Processor Fee Tolerance (0-1)</label>
+                <input
+                  type="number"
+                  defaultValue="0.08"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  className="w-full px-3 py-2 rounded-lg bg-white/[0.05] border border-white/[0.1] text-white text-sm"
+                  placeholder="0.08"
+                />
+              </div>
+              
+              <div>
+                <label className="text-sm text-neutral-400 mb-2 block">Minimum Confidence (0-1)</label>
+                <input
+                  type="number"
+                  defaultValue="0.80"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  className="w-full px-3 py-2 rounded-lg bg-white/[0.05] border border-white/[0.1] text-white text-sm"
+                  placeholder="0.80"
+                />
+              </div>
+              
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" defaultChecked className="w-4 h-4" />
+                <span className="text-sm text-neutral-400">Auto-reconcile exact matches</span>
+              </label>
+            </div>
+
+            {/* Data Quality Issues */}
+            {dataQualityDetails && (
+              <div className="mb-6 p-3 bg-white/[0.02] border border-white/[0.06] rounded">
+                <p className="text-sm font-medium text-white mb-2">Data Quality Issues:</p>
+                {dataQualityDetails.duplicates?.length > 0 && (
+                  <p className="text-xs text-amber-400 mb-1">• {dataQualityDetails.duplicates.length} duplicate groups</p>
+                )}
+                {dataQualityDetails.over_matched?.length > 0 && (
+                  <p className="text-xs text-amber-400 mb-1">• {dataQualityDetails.over_matched.length} over-matched items</p>
+                )}
+                {dataQualityDetails.status_anomalies?.length > 0 && (
+                  <p className="text-xs text-amber-400">• {dataQualityDetails.status_anomalies.length} status anomalies</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05] transition-all"
+              >
+                Close
+              </button>
+              <button
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-400/10 text-emerald-400 border border-emerald-400/20 hover:bg-emerald-400/20 transition-all"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Data Quality Warnings */}
+      {data && (data.summary.duplicate_count > 0 || data.summary.over_matched_count > 0 || data.summary.status_anomaly_count > 0) && (
+        <div className="fixed bottom-4 right-4 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 max-w-sm">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-amber-400 mb-2">Data Quality Issues Detected</p>
+              <ul className="text-xs text-amber-300 space-y-1">
+                {data.summary.duplicate_count > 0 && <li>• {data.summary.duplicate_count} duplicate transactions</li>}
+                {data.summary.over_matched_count > 0 && <li>• {data.summary.over_matched_count} over-matched items</li>}
+                {data.summary.status_anomaly_count > 0 && <li>• {data.summary.status_anomaly_count} status anomalies</li>}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
