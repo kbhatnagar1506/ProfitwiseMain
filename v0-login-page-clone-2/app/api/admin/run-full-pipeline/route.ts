@@ -134,6 +134,9 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               const dueDate = invData.DueDate || invData.due_date || new Date().toISOString().split('T')[0]
               const totalAmount = invData.TotalAmt || invData.total || 0
               
+              // Extract customer name from QBO invoice data
+              const customerName = invData.CustomerRef?.name || invData.customer_name || "Unknown Customer"
+              
               await query(
                 `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata)
                  VALUES ($1, 'ar', $2, $3, $4, 'open', 'invoice', $5)
@@ -142,7 +145,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
                    expected_date = $4,
                    status = 'open',
                    metadata = $5`,
-                [userId, `ar://invoice/qbo/${inv.entity_id}`, totalAmount, dueDate, JSON.stringify({ invoice_id: inv.entity_id })]
+                [userId, `ar://invoice/qbo/${inv.entity_id}`, totalAmount, dueDate, JSON.stringify({ invoice_id: inv.entity_id, customer_name: customerName })]
               )
               arCount++
             } catch (err) {
@@ -156,6 +159,9 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               const dueDate = billData.DueDate || billData.due_date || new Date().toISOString().split('T')[0]
               const totalAmount = billData.TotalAmt || billData.total || 0
               
+              // Extract vendor name from QBO bill data
+              const vendorName = billData.VendorRef?.name || billData.vendor_name || "Unknown Vendor"
+              
               await query(
                 `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata)
                  VALUES ($1, 'ap', $2, $3, $4, 'open', 'invoice', $5)
@@ -164,7 +170,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
                    expected_date = $4,
                    status = 'open',
                    metadata = $5`,
-                [userId, `ap://bill/qbo/${bill.entity_id}`, totalAmount, dueDate, JSON.stringify({ bill_id: bill.entity_id })]
+                [userId, `ap://bill/qbo/${bill.entity_id}`, totalAmount, dueDate, JSON.stringify({ bill_id: bill.entity_id, vendor_name: vendorName })]
               )
               apCount++
             } catch (err) {
