@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
         ce.entity_id,
         COALESCE(ce.metadata->>'canonical_name', ce.metadata->>'customer_name', ce.metadata->>'vendor_name', 'Unknown') as entity_name,
         ABS(ce.amount)::text as invoice_amount,
-        SUM(ABS(ma.net_amount::float))::text as matched_amount
+        ma.total_matched::text as matched_amount
        FROM cash_events ce
        JOIN (
          SELECT entity_id, SUM(ABS(net_amount::float)) as total_matched
@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
        WHERE ce.user_id = $1 
          AND ce.event_type IN ('ar', 'ap')
          AND ma.total_matched > ABS(ce.amount)
-       GROUP BY ce.id, ce.entity_id, ce.amount, ce.metadata->>'canonical_name', ce.metadata->>'customer_name', ce.metadata->>'vendor_name'`,
+       GROUP BY ce.id, ce.entity_id, ce.amount, ma.total_matched, ce.metadata->>'canonical_name', ce.metadata->>'customer_name', ce.metadata->>'vendor_name'`,
       [userId]
     ).then((r) => r.rows)
 

@@ -281,6 +281,13 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url)
   const runRecon = url.searchParams.get("run") === "true"
+  const getStatus = url.searchParams.get("status") === "true"
+
+  // Handle status check request
+  if (getStatus) {
+    const reconciliationStatus = await getReconciliationLockStatus(user.id)
+    return NextResponse.json(reconciliationStatus)
+  }
 
   if (runRecon) {
     // Try to acquire database lock - this works across multiple dynos

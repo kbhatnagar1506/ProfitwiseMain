@@ -174,25 +174,33 @@ export default function ReconciliationPage() {
       const response = await fetch(`/api/ar-ap-step?run=true`)
       if (!response.ok) throw new Error("Failed to run reconciliation")
       
-      // Wait for reconciliation to complete (up to 3 minutes with polling)
-      // Initial wait of 30 seconds before polling starts (reconciliation takes time)
-      await new Promise(resolve => setTimeout(resolve, 30000))
+      // Wait for reconciliation to complete by polling the lock status
+      // Initial wait of 5 seconds before polling starts
+      await new Promise(resolve => setTimeout(resolve, 5000))
       
       let attempts = 0
-      const maxAttempts = 180 // 3 minutes total with 1-second intervals
+      const maxAttempts = 360 // 6 minutes total with 1-second intervals
       let reconciliationComplete = false
       
       while (attempts < maxAttempts && !reconciliationComplete) {
         await new Promise(resolve => setTimeout(resolve, 1000))
         attempts++
         
-        // Check if reconciliation is done by fetching data
+        // Check if reconciliation is done by checking lock status
         try {
-          const reconciliationResponse = await fetch(`/api/dashboard/reconciliation`)
-          if (reconciliationResponse.ok) {
-            const result: ApiResponse = await reconciliationResponse.json()
-            setData(result)
-            reconciliationComplete = true
+          const lockResponse = await fetch(`/api/ar-ap-step?status=true`)
+          if (lockResponse.ok) {
+            const lockStatus = await lockResponse.json()
+            // If not running and last status is completed, we're done
+            if (!lockStatus.is_running && lockStatus.last_status === "completed") {
+              // Now fetch the updated data
+              const reconciliationResponse = await fetch(`/api/dashboard/reconciliation`)
+              if (reconciliationResponse.ok) {
+                const result: ApiResponse = await reconciliationResponse.json()
+                setData(result)
+                reconciliationComplete = true
+              }
+            }
           }
         } catch (e) {
           // Continue polling
@@ -201,6 +209,16 @@ export default function ReconciliationPage() {
       
       if (!reconciliationComplete) {
         console.warn("Reconciliation polling timeout - displaying latest data")
+        // Fetch data anyway after timeout
+        try {
+          const reconciliationResponse = await fetch(`/api/dashboard/reconciliation`)
+          if (reconciliationResponse.ok) {
+            const result: ApiResponse = await reconciliationResponse.json()
+            setData(result)
+          }
+        } catch (e) {
+          console.error("Error fetching reconciliation data after timeout:", e)
+        }
       }
     } catch (error) {
       console.error("Error running reconciliation:", error)
