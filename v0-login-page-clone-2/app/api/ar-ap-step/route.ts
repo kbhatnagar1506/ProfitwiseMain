@@ -23,7 +23,6 @@ import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
 
 const WATERFALL_REVIEW_PREVIEW = 15
 const LOCK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - consider stale locks as failed
-const MIN_RECONCILIATION_INTERVAL_MS = 60 * 1000 // Minimum 60 seconds between reconciliation runs
 
 type ReconTotals = {
   total_matched_inflows: number
@@ -53,11 +52,11 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 
 /**
  * Attempt to acquire a reconciliation lock for the user.
- * Returns true if lock acquired, false if already running or too soon after last run.
+ * Returns true if lock acquired, false if already running.
  * Uses a single atomic query to clean up stale locks and acquire in one operation.
  */
 async function acquireReconciliationLock(userId: string): Promise<boolean> {
-  // Atomic lock acquisition: clean up stale locks, check minimum interval, and try to acquire in one query
+  // Atomic lock acquisition: clean up stale locks and try to acquire in one query
   // This prevents TOCTOU race conditions between cleanup and acquisition
   const { rows } = await query<{ acquired: boolean }>(
     `WITH cleanup AS (
@@ -78,8 +77,6 @@ async function acquireReconciliationLock(userId: string): Promise<boolean> {
            error_message = NULL,
            completed_at = NULL
        WHERE reconciliation_locks.status != 'running'
-         AND (reconciliation_locks.completed_at IS NULL 
-              OR reconciliation_locks.completed_at < NOW() - INTERVAL '${MIN_RECONCILIATION_INTERVAL_MS} milliseconds')
      RETURNING true AS acquired`,
     [userId]
   )
@@ -240,26 +237,26 @@ async function runReconciliationInBackground(userId: string) {
       console.log("[ar-ap-step] No unreconciled movements for LLM Stage 4")
     }
     
-    // Build entity profiles and narratives in background (non-blocking)
-    // These are AI operations that can take time, so we don't wait for them
-    // to complete before marking reconciliation as done
-    setImmediate(async () => {
+    // Build entity profiles after reconciliation completes
+    let profilesBuilt = 0
+    let narrativesRefreshed = 0
+    try {
+      console.log("[ar-ap-step] Building entity profiles for user:", userId)
+      profilesBuilt = await buildEntityProfiles(userId)
+      console.log("[ar-ap-step] Entity profiles built:", profilesBuilt)
+      
+      // Generate AI narratives for top entities - await to ensure completion before lock release
       try {
-        console.log("[ar-ap-step] Building entity profiles for user:", userId)
-        const profilesBuilt = await buildEntityProfiles(userId)
-        console.log("[ar-ap-step] Entity profiles built:", profilesBuilt)
-        
-        try {
-          console.log("[ar-ap-step] Refreshing entity narratives for user:", userId)
-          const narrativesRefreshed = await refreshEntityNarratives(userId, { maxEntities: 25 })
-          console.log("[ar-ap-step] Entity narratives refreshed:", narrativesRefreshed)
-        } catch (narrativeErr) {
-          console.warn("[ar-ap-step] Failed to refresh entity narratives:", narrativeErr)
-        }
-      } catch (e) {
-        console.warn("[ar-ap-step] Failed to build entity profiles:", e)
+        narrativesRefreshed = await refreshEntityNarratives(userId, { maxEntities: 25 })
+        console.log("[ar-ap-step] Entity narratives refreshed:", narrativesRefreshed)
+      } catch (narrativeErr) {
+        console.warn("[ar-ap-step] Failed to refresh entity narratives:", narrativeErr)
+        warnings.push("Failed to refresh entity narratives")
       }
-    })
+    } catch (e) {
+      console.warn("[ar-ap-step] Failed to build entity profiles:", e)
+      warnings.push("Failed to build entity profiles")
+    }
     
     console.log("[ar-ap-step] Background reconciliation completed for user:", userId)
     const finalStatus = warnings.length > 0 ? "completed_with_warnings" : "completed"
@@ -281,13 +278,6 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url)
   const runRecon = url.searchParams.get("run") === "true"
-  const getStatus = url.searchParams.get("status") === "true"
-
-  // Handle status check request
-  if (getStatus) {
-    const reconciliationStatus = await getReconciliationLockStatus(user.id)
-    return NextResponse.json(reconciliationStatus)
-  }
 
   if (runRecon) {
     // Try to acquire database lock - this works across multiple dynos

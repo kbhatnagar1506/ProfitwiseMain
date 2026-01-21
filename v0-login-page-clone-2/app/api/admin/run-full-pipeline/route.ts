@@ -134,9 +134,6 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               const dueDate = invData.DueDate || invData.due_date || new Date().toISOString().split('T')[0]
               const totalAmount = invData.TotalAmt || invData.total || 0
               
-              // Extract customer name from QBO invoice data
-              const customerName = invData.CustomerRef?.name || invData.customer_name || "Unknown Customer"
-              
               await query(
                 `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata)
                  VALUES ($1, 'ar', $2, $3, $4, 'open', 'invoice', $5)
@@ -145,7 +142,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
                    expected_date = $4,
                    status = 'open',
                    metadata = $5`,
-                [userId, `ar://invoice/qbo/${inv.entity_id}`, totalAmount, dueDate, JSON.stringify({ invoice_id: inv.entity_id, customer_name: customerName })]
+                [userId, `ar://invoice/qbo/${inv.entity_id}`, totalAmount, dueDate, JSON.stringify({ invoice_id: inv.entity_id })]
               )
               arCount++
             } catch (err) {
@@ -159,9 +156,6 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
               const dueDate = billData.DueDate || billData.due_date || new Date().toISOString().split('T')[0]
               const totalAmount = billData.TotalAmt || billData.total || 0
               
-              // Extract vendor name from QBO bill data
-              const vendorName = billData.VendorRef?.name || billData.vendor_name || "Unknown Vendor"
-              
               await query(
                 `INSERT INTO cash_events (user_id, event_type, entity_id, amount, expected_date, status, source, metadata)
                  VALUES ($1, 'ap', $2, $3, $4, 'open', 'invoice', $5)
@@ -170,7 +164,7 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
                    expected_date = $4,
                    status = 'open',
                    metadata = $5`,
-                [userId, `ap://bill/qbo/${bill.entity_id}`, totalAmount, dueDate, JSON.stringify({ bill_id: bill.entity_id, vendor_name: vendorName })]
+                [userId, `ap://bill/qbo/${bill.entity_id}`, totalAmount, dueDate, JSON.stringify({ bill_id: bill.entity_id })]
               )
               apCount++
             } catch (err) {
@@ -204,38 +198,6 @@ async function runPipelineInBackground(users: Array<{ id: string; email: string 
           const seedErrMsg = seedErr instanceof Error ? seedErr.message : String(seedErr)
           console.warn(`⚠ Identity re-seeding error (continuing): ${seedErrMsg}`)
           log("admin.pipeline.identity_reseed.warning", { userId, error: seedErrMsg }, "system")
-        }
-
-        // Step 4.6: Run financial brain (reconciliation waterfall + attribution)
-        console.log(`\n[4.6/7] 🧠 Running financial brain (reconciliation waterfall)...`)
-        const brainStart = Date.now()
-        try {
-          const { runFinancialBrain } = await import("@/lib/financial-brain")
-          const { fetchInvoicesForReconciliation } = await import("@/lib/invoices-fetch")
-          const { fetchOutstandingBills } = await import("@/lib/bills-fetch")
-          const { computeAPStateFromBills } = await import("@/lib/state/ar-ap")
-          
-          const outstandingInvoices = await fetchInvoicesForReconciliation(userId)
-          const bills = await fetchOutstandingBills(userId)
-          const apObligations = computeAPStateFromBills(bills)
-          
-          const brainResult = await runFinancialBrain(userId, {
-            outstandingInvoices,
-            apObligations,
-            arApOnly: true,
-          })
-          
-          const brainTime = Date.now() - brainStart
-          console.log(`✓ Financial brain completed in ${brainTime}ms:`, {
-            attributions_created: brainResult.waterfall?.attributionsCreated ?? 0,
-            cash_events_updated: brainResult.waterfall?.cashEventsUpdated ?? 0,
-            stage4_queued: brainResult.waterfall?.stage4Queued ?? 0,
-          })
-          log("admin.pipeline.financial_brain.complete", { userId, attributions_created: brainResult.waterfall?.attributionsCreated ?? 0, cash_events_updated: brainResult.waterfall?.cashEventsUpdated ?? 0, duration_ms: brainTime }, "system")
-        } catch (brainErr) {
-          const brainErrMsg = brainErr instanceof Error ? brainErr.message : String(brainErr)
-          console.warn(`⚠ Financial brain error (continuing): ${brainErrMsg}`)
-          log("admin.pipeline.financial_brain.warning", { userId, error: brainErrMsg }, "system")
         }
 
         // Step 5: Compute financial state (revenue, spend, liquidity)
