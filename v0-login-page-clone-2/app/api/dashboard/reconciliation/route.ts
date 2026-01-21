@@ -5,11 +5,13 @@ import { query } from "@/lib/db"
 import { log } from "@/lib/logger"
 
 type ReconciliationSummary = {
+  ar_total_invoiced: number
   ar_total_outstanding: number
   ar_total_matched: number
   ar_match_rate: number
   ar_suspicious_count: number
   ar_suspicious_amount: number
+  ap_total_billed: number
   ap_total_outstanding: number
   ap_total_matched: number
   ap_match_rate: number
@@ -18,10 +20,9 @@ type ReconciliationSummary = {
   net_outstanding: number
   overall_match_rate: number
   total_fees: number
-  internal_transfers_count: number
-  internal_transfers_amount: number
   bank_reconciled_count: number
   bank_unreconciled_count: number
+  bank_partial_count: number
 }
 
 type ReconciliationDetail = {
@@ -50,37 +51,81 @@ export async function GET(request?: NextRequest) {
   try {
     const userId = user.id
 
-    // Get AR summary from movement_attributions (actual reconciliation data)
-    const arSummary = await query<{
+    // Get AR totals from cash_events (source of truth for invoices)
+    const arCashEvents = await query<{
       total_invoiced: string
-      total_matched: string
-      suspicious_count: string
-      suspicious_amount: string
+      total_outstanding: string
+      total_paid: string
     }>(
       `SELECT
-        COUNT(DISTINCT ma.entity_id) as total_invoiced,
-        SUM(CASE WHEN ma.component_type = 'ar' THEN ABS(ma.net_amount::float) ELSE 0 END)::text as total_matched,
-        COUNT(CASE WHEN ma.component_type = 'ar' AND ABS(ma.net_amount::float) > 1000 THEN 1 END)::text as suspicious_count,
-        SUM(CASE WHEN ma.component_type = 'ar' AND ABS(ma.net_amount::float) > 1000 THEN ABS(ma.net_amount::float) ELSE 0 END)::text as suspicious_amount
-       FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'ar'`,
+        SUM(ce.amount)::text as total_invoiced,
+        SUM(ce.outstanding_amount)::text as total_outstanding,
+        SUM(CASE WHEN ce.outstanding_amount <= 0 THEN ce.amount ELSE 0 END)::text as total_paid
+       FROM cash_events ce
+       WHERE ce.user_id = $1 AND ce.event_type = 'ar' AND ce.status NOT IN ('cancelled', 'voided')`,
       [userId]
     ).then((r) => r.rows[0])
 
-    // Get AP summary from movement_attributions (actual reconciliation data)
-    const apSummary = await query<{
+    // Get AP totals from cash_events (source of truth for bills)
+    const apCashEvents = await query<{
       total_billed: string
-      total_matched: string
-      suspicious_count: string
-      suspicious_amount: string
+      total_outstanding: string
+      total_paid: string
     }>(
       `SELECT
-        COUNT(DISTINCT ma.entity_id) as total_billed,
-        SUM(CASE WHEN ma.component_type = 'ap' THEN ABS(ma.net_amount::float) ELSE 0 END)::text as total_matched,
-        COUNT(CASE WHEN ma.component_type = 'ap' AND ABS(ma.net_amount::float) > 1000 THEN 1 END)::text as suspicious_count,
-        SUM(CASE WHEN ma.component_type = 'ap' AND ABS(ma.net_amount::float) > 1000 THEN ABS(ma.net_amount::float) ELSE 0 END)::text as suspicious_amount
+        SUM(ce.amount)::text as total_billed,
+        SUM(ce.outstanding_amount)::text as total_outstanding,
+        SUM(CASE WHEN ce.outstanding_amount <= 0 THEN ce.amount ELSE 0 END)::text as total_paid
+       FROM cash_events ce
+       WHERE ce.user_id = $1 AND ce.event_type = 'ap' AND ce.status NOT IN ('cancelled', 'voided')`,
+      [userId]
+    ).then((r) => r.rows[0])
+
+    // Get AR matched amounts from movement_attributions (reconciliation output)
+    const arMatched = await query<{ total_matched: string; count: string }>(
+      `SELECT
+        SUM(ABS(ma.net_amount::float))::text as total_matched,
+        COUNT(DISTINCT ma.entity_id)::text as count
        FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'ap'`,
+       WHERE ma.user_id = $1 AND ma.component_type = 'ar' AND ma.duplicate_of IS NULL`,
+      [userId]
+    ).then((r) => r.rows[0])
+
+    // Get AP matched amounts from movement_attributions (reconciliation output)
+    const apMatched = await query<{ total_matched: string; count: string }>(
+      `SELECT
+        SUM(ABS(ma.net_amount::float))::text as total_matched,
+        COUNT(DISTINCT ma.entity_id)::text as count
+       FROM movement_attributions ma
+       WHERE ma.user_id = $1 AND ma.component_type = 'ap' AND ma.duplicate_of IS NULL`,
+      [userId]
+    ).then((r) => r.rows[0])
+
+    // Get fee data
+    const feeData = await query<{ total_fees: string }>(
+      `SELECT
+        SUM(ABS(ma.net_amount::float))::text as total_fees
+       FROM movement_attributions ma
+       WHERE ma.user_id = $1 AND ma.component_type = 'fee' AND ma.duplicate_of IS NULL`,
+      [userId]
+    ).then((r) => r.rows[0])
+
+    // Get suspicious activity (large unmatched amounts)
+    const suspiciousAR = await query<{ count: string; amount: string }>(
+      `SELECT
+        COUNT(*)::text as count,
+        SUM(ce.outstanding_amount)::text as amount
+       FROM cash_events ce
+       WHERE ce.user_id = $1 AND ce.event_type = 'ar' AND ce.outstanding_amount > 1000`,
+      [userId]
+    ).then((r) => r.rows[0])
+
+    const suspiciousAP = await query<{ count: string; amount: string }>(
+      `SELECT
+        COUNT(*)::text as count,
+        SUM(ce.outstanding_amount)::text as amount
+       FROM cash_events ce
+       WHERE ce.user_id = $1 AND ce.event_type = 'ap' AND ce.outstanding_amount > 1000`,
       [userId]
     ).then((r) => r.rows[0])
 
@@ -88,7 +133,10 @@ export async function GET(request?: NextRequest) {
     const bankTransactions = await query<ReconciliationDetail>(
       `SELECT
         m.id,
-        CASE WHEN COUNT(ma.id) > 0 THEN 'reconciled' ELSE 'not_reconciled' END as status,
+        CASE 
+          WHEN COUNT(ma.id) > 0 AND ABS(m.amount) = SUM(ABS(COALESCE(CASE WHEN ma.component_type != 'fee' THEN ma.net_amount::float ELSE 0 END, 0))) THEN 'reconciled'
+          ELSE 'not_reconciled'
+        END as status,
         m.direction,
         ABS(m.amount) as amount,
         ABS(m.amount) as gross_amount,
@@ -97,12 +145,12 @@ export async function GET(request?: NextRequest) {
         COALESCE(m.counterparty, m.raw_description, 'Bank Transaction') as description,
         COALESCE(array_agg(DISTINCT ma.entity_id) FILTER (WHERE ma.entity_id IS NOT NULL), '{}') as linked_ar_ap,
         CASE 
-          WHEN COUNT(ma.id) > 0 AND ABS(m.amount) = SUM(ABS(COALESCE(ma.net_amount::float, 0))) THEN 'matched'
+          WHEN COUNT(ma.id) > 0 AND ABS(m.amount) = SUM(ABS(COALESCE(CASE WHEN ma.component_type != 'fee' THEN ma.net_amount::float ELSE 0 END, 0))) THEN 'matched'
           WHEN COUNT(ma.id) > 0 THEN 'partial'
           ELSE 'unmatched'
         END as match_type
        FROM movements m
-       LEFT JOIN movement_attributions ma ON ma.movement_id = m.id AND ma.user_id = m.user_id
+       LEFT JOIN movement_attributions ma ON ma.movement_id = m.id AND ma.user_id = m.user_id AND ma.duplicate_of IS NULL
        WHERE m.user_id = $1 AND m.direction IN ('inflow', 'outflow') AND m.duplicate_of IS NULL
        GROUP BY m.id, m.direction, m.amount, m.date, m.counterparty, m.raw_description
        ORDER BY m.date DESC
@@ -110,65 +158,52 @@ export async function GET(request?: NextRequest) {
       [userId]
     ).then((r) => r.rows)
 
-    // Get total AR/AP from cash_events for outstanding amounts
-    const arCashEvents = await query<{ total_outstanding: string; total_amount: string }>(
-      `SELECT
-        SUM(ce.outstanding_amount)::text as total_outstanding,
-        SUM(ce.amount)::text as total_amount
-       FROM cash_events ce
-       WHERE ce.user_id = $1 AND ce.event_type = 'ar'`,
-      [userId]
-    ).then((r) => r.rows[0])
+    // Parse values with proper null handling
+    const arInvoiced = arCashEvents?.total_invoiced ? parseFloat(String(arCashEvents.total_invoiced)) : 0
+    const arOutstanding = arCashEvents?.total_outstanding ? parseFloat(String(arCashEvents.total_outstanding)) : 0
+    const arPaid = arCashEvents?.total_paid ? parseFloat(String(arCashEvents.total_paid)) : 0
+    const arMatchedAmount = arMatched?.total_matched ? parseFloat(String(arMatched.total_matched)) : 0
 
-    const apCashEvents = await query<{ total_outstanding: string; total_amount: string }>(
-      `SELECT
-        SUM(ce.outstanding_amount)::text as total_outstanding,
-        SUM(ce.amount)::text as total_amount
-       FROM cash_events ce
-       WHERE ce.user_id = $1 AND ce.event_type = 'ap'`,
-      [userId]
-    ).then((r) => r.rows[0])
+    const apBilled = apCashEvents?.total_billed ? parseFloat(String(apCashEvents.total_billed)) : 0
+    const apOutstanding = apCashEvents?.total_outstanding ? parseFloat(String(apCashEvents.total_outstanding)) : 0
+    const apPaid = apCashEvents?.total_paid ? parseFloat(String(apCashEvents.total_paid)) : 0
+    const apMatchedAmount = apMatched?.total_matched ? parseFloat(String(apMatched.total_matched)) : 0
 
-    // Get fee data
-    const feeData = await query<{ total_fees: string; fee_count: string }>(
-      `SELECT
-        SUM(ABS(ma.net_amount::float))::text as total_fees,
-        COUNT(*)::text as fee_count
-       FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'fee'`,
-      [userId]
-    ).then((r) => r.rows[0])
+    const totalFees = feeData?.total_fees ? parseFloat(String(feeData.total_fees)) : 0
+    const arSuspiciousCount = suspiciousAR?.count ? parseInt(String(suspiciousAR.count), 10) : 0
+    const arSuspiciousAmount = suspiciousAR?.amount ? parseFloat(String(suspiciousAR.amount)) : 0
+    const apSuspiciousCount = suspiciousAP?.count ? parseInt(String(suspiciousAP.count), 10) : 0
+    const apSuspiciousAmount = suspiciousAP?.amount ? parseFloat(String(suspiciousAP.amount)) : 0
 
-    const arMatched = parseFloat(String(arSummary?.total_matched || 0))
-    const apMatched = parseFloat(String(apSummary?.total_matched || 0))
-    const arOutstanding = parseFloat(String(arCashEvents?.total_outstanding || 0))
-    const apOutstanding = parseFloat(String(apCashEvents?.total_outstanding || 0))
-    const arTotal = parseFloat(String(arCashEvents?.total_amount || 0))
-    const apTotal = parseFloat(String(apCashEvents?.total_amount || 0))
-    const totalFees = parseFloat(String(feeData?.total_fees || 0))
+    // Calculate match rates
+    const arMatchRate = arInvoiced > 0 ? Math.round((arMatchedAmount / arInvoiced) * 100) : 0
+    const apMatchRate = apBilled > 0 ? Math.round((apMatchedAmount / apBilled) * 100) : 0
+    const overallMatchRate = (arInvoiced + apBilled) > 0 ? Math.round(((arMatchedAmount + apMatchedAmount) / (arInvoiced + apBilled)) * 100) : 0
 
-    const totalOutstanding = arOutstanding + apOutstanding
-    const totalMatched = arMatched + apMatched
-    const totalAmount = arTotal + apTotal
+    // Count transaction statuses
+    const reconciled = bankTransactions.filter((t) => t.status === "reconciled").length
+    const partial = bankTransactions.filter((t) => t.match_type === "partial").length
+    const unreconciled = bankTransactions.filter((t) => t.status === "not_reconciled").length
 
     const summary: ReconciliationSummary = {
+      ar_total_invoiced: arInvoiced,
       ar_total_outstanding: arOutstanding,
-      ar_total_matched: arMatched,
-      ar_match_rate: arTotal > 0 ? Math.round((arMatched / arTotal) * 100) : 0,
-      ar_suspicious_count: parseInt(String(arSummary?.suspicious_count || 0), 10),
-      ar_suspicious_amount: parseFloat(String(arSummary?.suspicious_amount || 0)),
+      ar_total_matched: arMatchedAmount,
+      ar_match_rate: arMatchRate,
+      ar_suspicious_count: arSuspiciousCount,
+      ar_suspicious_amount: arSuspiciousAmount,
+      ap_total_billed: apBilled,
       ap_total_outstanding: apOutstanding,
-      ap_total_matched: apMatched,
-      ap_match_rate: apTotal > 0 ? Math.round((apMatched / apTotal) * 100) : 0,
-      ap_suspicious_count: parseInt(String(apSummary?.suspicious_count || 0), 10),
-      ap_suspicious_amount: parseFloat(String(apSummary?.suspicious_amount || 0)),
+      ap_total_matched: apMatchedAmount,
+      ap_match_rate: apMatchRate,
+      ap_suspicious_count: apSuspiciousCount,
+      ap_suspicious_amount: apSuspiciousAmount,
       net_outstanding: arOutstanding - apOutstanding,
-      overall_match_rate: totalAmount > 0 ? Math.round(((arMatched + apMatched) / totalAmount) * 100) : 0,
+      overall_match_rate: overallMatchRate,
       total_fees: totalFees,
-      internal_transfers_count: 0,
-      internal_transfers_amount: 0,
-      bank_reconciled_count: bankTransactions.filter((t) => t.status === "reconciled").length,
-      bank_unreconciled_count: bankTransactions.filter((t) => t.status === "not_reconciled").length,
+      bank_reconciled_count: reconciled,
+      bank_unreconciled_count: unreconciled,
+      bank_partial_count: partial,
     }
 
     log("dashboard.reconciliation.success", { userId, transactionCount: bankTransactions.length })
