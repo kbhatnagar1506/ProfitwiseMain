@@ -13,6 +13,19 @@ function formatCurrency(value: number): string {
   }).format(value)
 }
 
+function formatDate(dateString: string): string {
+  const date = new Date(dateString)
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+}
+
+function getDaysOverdue(dueDate: string): number {
+  const due = new Date(dueDate)
+  const today = new Date()
+  const diffTime = today.getTime() - due.getTime()
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+  return diffDays
+}
+
 interface ReconciliationSummary {
   ar_total_invoiced: number
   ar_total_outstanding: number
@@ -32,6 +45,30 @@ interface ReconciliationSummary {
   bank_reconciled_count: number
   bank_unreconciled_count: number
   bank_partial_count: number
+  ar_invoices: ARInvoice[]
+  ap_bills: APBill[]
+}
+
+interface ARInvoice {
+  id: string
+  customer_name: string
+  source: string
+  due_date: string
+  status: "open" | "paid" | "overdue"
+  bank_match: "matched" | "partial" | "unmatched"
+  amount: number
+  matched_amount: number
+}
+
+interface APBill {
+  id: string
+  vendor_name: string
+  source: string
+  due_date: string
+  status: "open" | "paid" | "overdue"
+  bank_match: "matched" | "partial" | "unmatched"
+  amount: number
+  matched_amount: number
 }
 
 interface ReconciliationDetail {
@@ -56,6 +93,8 @@ export default function ReconciliationPage() {
   const [data, setData] = useState<ApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<"all" | "reconciled" | "not_reconciled">("all")
+  const [arFilter, setArFilter] = useState<"all" | "open" | "overdue" | "paid">("all")
+  const [apFilter, setApFilter] = useState<"all" | "open" | "overdue" | "paid">("all")
 
   useEffect(() => {
     const fetchData = async () => {
@@ -96,6 +135,16 @@ export default function ReconciliationPage() {
   const filteredTransactions = transactions.filter((t) => {
     if (filter === "all") return true
     return t.status === filter
+  })
+
+  const filteredARInvoices = (summary.ar_invoices || []).filter((inv) => {
+    if (arFilter === "all") return true
+    return inv.status === arFilter
+  })
+
+  const filteredAPBills = (summary.ap_bills || []).filter((bill) => {
+    if (apFilter === "all") return true
+    return bill.status === apFilter
   })
 
   return (
@@ -203,7 +252,253 @@ export default function ReconciliationPage() {
         </div>
       </div>
 
-      {/* Transactions Table */}
+      {/* AR (Accounts Receivable) Section */}
+      <div className="px-8 py-6 border-b border-white/[0.06]">
+        <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">AR (Accounts Receivable)</h2>
+        <p className="text-xs text-neutral-500 mb-4">Expected inflow — money you are owed. From invoices (QBO, Xero, Stripe, Gmail).</p>
+        
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
+            <p className="text-[11px] text-neutral-600 mb-1">Total Outstanding</p>
+            <p className="text-lg font-semibold text-white tabular-nums">{formatCurrency(summary.ar_total_outstanding)}</p>
+          </div>
+          <div className="bg-red-500/[0.06] border border-red-500/[0.15] rounded-lg p-4">
+            <p className="text-[11px] text-red-600 mb-1">Overdue</p>
+            <p className="text-lg font-semibold text-red-400 tabular-nums">{formatCurrency(summary.ar_suspicious_amount)}</p>
+            <p className="text-[11px] text-red-600 mt-1">({summary.ar_suspicious_count})</p>
+          </div>
+          <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
+            <p className="text-[11px] text-neutral-600 mb-1">Match Rate</p>
+            <p className="text-lg font-semibold text-white tabular-nums">{summary.ar_match_rate}%</p>
+          </div>
+        </div>
+
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setArFilter("all")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              arFilter === "all"
+                ? "bg-white/[0.1] text-white border border-white/[0.2]"
+                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+            }`}
+          >
+            All ({(summary.ar_invoices || []).length})
+          </button>
+          <button
+            onClick={() => setArFilter("open")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              arFilter === "open"
+                ? "bg-blue-400/[0.15] text-blue-300 border border-blue-400/[0.3]"
+                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+            }`}
+          >
+            Open ({(summary.ar_invoices || []).filter(i => i.status === "open").length})
+          </button>
+          <button
+            onClick={() => setArFilter("overdue")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              arFilter === "overdue"
+                ? "bg-red-400/[0.15] text-red-300 border border-red-400/[0.3]"
+                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+            }`}
+          >
+            Overdue ({(summary.ar_invoices || []).filter(i => i.status === "overdue").length})
+          </button>
+          <button
+            onClick={() => setArFilter("paid")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              arFilter === "paid"
+                ? "bg-emerald-400/[0.15] text-emerald-300 border border-emerald-400/[0.3]"
+                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+            }`}
+          >
+            Paid ({(summary.ar_invoices || []).filter(i => i.status === "paid").length})
+          </button>
+        </div>
+
+        <div className="border border-white/[0.06] rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-white/[0.06] bg-white/[0.02]">
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Customer</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Source</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Due Date</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Bank Match</th>
+                <th className="px-4 py-3 text-right text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredARInvoices.slice(0, 20).map((inv) => (
+                <tr key={inv.id} className="border-b border-white/[0.04] hover:bg-white/[0.03] transition-colors">
+                  <td className="px-4 py-3 text-neutral-300">{inv.customer_name}</td>
+                  <td className="px-4 py-3 text-neutral-500 text-xs">{inv.source}</td>
+                  <td className="px-4 py-3 text-neutral-400 text-xs">
+                    {formatDate(inv.due_date)}
+                    {inv.status === "overdue" && (
+                      <span className="ml-2 text-red-500 text-[10px]">{getDaysOverdue(inv.due_date)}d overdue</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {inv.status === "paid" && (
+                      <Badge className="bg-emerald-400/10 text-emerald-400 border-emerald-400/20 text-[11px]">Paid</Badge>
+                    )}
+                    {inv.status === "overdue" && (
+                      <Badge className="bg-red-400/10 text-red-400 border-red-400/20 text-[11px]">Overdue</Badge>
+                    )}
+                    {inv.status === "open" && (
+                      <Badge className="bg-blue-400/10 text-blue-400 border-blue-400/20 text-[11px]">Open</Badge>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {inv.bank_match === "matched" && (
+                      <Badge className="bg-emerald-400/10 text-emerald-400 border-emerald-400/20 text-[11px]">Matched</Badge>
+                    )}
+                    {inv.bank_match === "partial" && (
+                      <Badge className="bg-amber-400/10 text-amber-400 border-amber-400/20 text-[11px]">Partial</Badge>
+                    )}
+                    {inv.bank_match === "unmatched" && (
+                      <Badge className="bg-red-400/10 text-red-400 border-red-400/20 text-[11px]">Unmatched</Badge>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-emerald-400/90">
+                    {formatCurrency(inv.amount)}
+                    {inv.matched_amount > 0 && (
+                      <div className="text-[11px] text-neutral-500">matched: {formatCurrency(inv.matched_amount)}</div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-2 text-[12px] text-neutral-600">{filteredARInvoices.length} invoices total</p>
+      </div>
+
+      {/* AP (Accounts Payable) Section */}
+      <div className="px-8 py-6 border-b border-white/[0.06]">
+        <h2 className="text-sm font-semibold text-white mb-4 uppercase tracking-wider">AP (Accounts Payable)</h2>
+        <p className="text-xs text-neutral-500 mb-4">Expected outflow — money you are expected to pay.</p>
+        
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
+            <p className="text-[11px] text-neutral-600 mb-1">Next 30 Days</p>
+            <p className="text-lg font-semibold text-white tabular-nums">{formatCurrency(summary.ap_total_outstanding)}</p>
+          </div>
+          <div className="bg-red-500/[0.06] border border-red-500/[0.15] rounded-lg p-4">
+            <p className="text-[11px] text-red-600 mb-1">Overdue</p>
+            <p className="text-lg font-semibold text-red-400 tabular-nums">{formatCurrency(summary.ap_suspicious_amount)}</p>
+            <p className="text-[11px] text-red-600 mt-1">({summary.ap_suspicious_count})</p>
+          </div>
+          <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
+            <p className="text-[11px] text-neutral-600 mb-1">Match Rate</p>
+            <p className="text-lg font-semibold text-white tabular-nums">{summary.ap_match_rate}%</p>
+          </div>
+        </div>
+
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setApFilter("all")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              apFilter === "all"
+                ? "bg-white/[0.1] text-white border border-white/[0.2]"
+                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+            }`}
+          >
+            All ({(summary.ap_bills || []).length})
+          </button>
+          <button
+            onClick={() => setApFilter("open")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              apFilter === "open"
+                ? "bg-blue-400/[0.15] text-blue-300 border border-blue-400/[0.3]"
+                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+            }`}
+          >
+            Open ({(summary.ap_bills || []).filter(b => b.status === "open").length})
+          </button>
+          <button
+            onClick={() => setApFilter("overdue")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              apFilter === "overdue"
+                ? "bg-red-400/[0.15] text-red-300 border border-red-400/[0.3]"
+                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+            }`}
+          >
+            Overdue ({(summary.ap_bills || []).filter(b => b.status === "overdue").length})
+          </button>
+          <button
+            onClick={() => setApFilter("paid")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+              apFilter === "paid"
+                ? "bg-emerald-400/[0.15] text-emerald-300 border border-emerald-400/[0.3]"
+                : "bg-white/[0.02] text-neutral-400 border border-white/[0.06] hover:bg-white/[0.05]"
+            }`}
+          >
+            Paid ({(summary.ap_bills || []).filter(b => b.status === "paid").length})
+          </button>
+        </div>
+
+        <div className="border border-white/[0.06] rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-white/[0.06] bg-white/[0.02]">
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Vendor</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Source</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Due Date</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Bank Match</th>
+                <th className="px-4 py-3 text-right text-[11px] font-medium text-neutral-600 uppercase tracking-wider">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredAPBills.slice(0, 20).map((bill) => (
+                <tr key={bill.id} className="border-b border-white/[0.04] hover:bg-white/[0.03] transition-colors">
+                  <td className="px-4 py-3 text-neutral-300">{bill.vendor_name}</td>
+                  <td className="px-4 py-3 text-neutral-500 text-xs">{bill.source}</td>
+                  <td className="px-4 py-3 text-neutral-400 text-xs">
+                    {formatDate(bill.due_date)}
+                    {bill.status === "overdue" && (
+                      <span className="ml-2 text-red-500 text-[10px]">{getDaysOverdue(bill.due_date)}d overdue</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {bill.status === "paid" && (
+                      <Badge className="bg-emerald-400/10 text-emerald-400 border-emerald-400/20 text-[11px]">Paid</Badge>
+                    )}
+                    {bill.status === "overdue" && (
+                      <Badge className="bg-red-400/10 text-red-400 border-red-400/20 text-[11px]">Overdue</Badge>
+                    )}
+                    {bill.status === "open" && (
+                      <Badge className="bg-blue-400/10 text-blue-400 border-blue-400/20 text-[11px]">Open</Badge>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {bill.bank_match === "matched" && (
+                      <Badge className="bg-emerald-400/10 text-emerald-400 border-emerald-400/20 text-[11px]">Matched</Badge>
+                    )}
+                    {bill.bank_match === "partial" && (
+                      <Badge className="bg-amber-400/10 text-amber-400 border-amber-400/20 text-[11px]">Partial</Badge>
+                    )}
+                    {bill.bank_match === "unmatched" && (
+                      <Badge className="bg-red-400/10 text-red-400 border-red-400/20 text-[11px]">Unmatched</Badge>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-zinc-400">
+                    {formatCurrency(bill.amount)}
+                    {bill.matched_amount > 0 && (
+                      <div className="text-[11px] text-neutral-500">matched: {formatCurrency(bill.matched_amount)}</div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-2 text-[12px] text-neutral-600">{filteredAPBills.length} bills outstanding</p>
+      </div>
+
+      {/* Bank Transactions */}
       <div className="px-8 py-6">
         <div className="flex gap-2 mb-4">
           <button
