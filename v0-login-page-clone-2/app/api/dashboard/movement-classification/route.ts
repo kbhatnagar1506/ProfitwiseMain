@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     }>(
       `SELECT 
         m.id,
-        m.occurred_at,
+        m.date as occurred_at,
         m.direction,
         m.amount,
         m.raw_description,
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
         COALESCE(m.needs_review, false) as needs_review
       FROM movements m
       WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'
-      ORDER BY m.occurred_at DESC
+      ORDER BY m.date DESC
       LIMIT 100`,
       [userId]
     )

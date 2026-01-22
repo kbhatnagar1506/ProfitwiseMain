@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
         75000 as scenario_base_30d,
         -25000 as scenario_conservative_30d
       FROM movements
-      WHERE user_id = $1 AND occurred_at >= NOW() - INTERVAL '30 days'`,
+      WHERE user_id = $1 AND date >= NOW() - INTERVAL '30 days'`,
       [userId]
     )
 
