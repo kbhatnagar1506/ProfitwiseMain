@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
         0 as top_customer_pct,
         0 as repeat_revenue_ratio
       FROM movements m
-      LEFT JOIN movement_tags mt ON m.id = mt.movement_id
+      LEFT JOIN movement_tags mt ON m.id = mt.movement_id AND mt.user_id = m.user_id
       WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'`,
       [userId]
     )
@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
         0 as top_vendor_pct,
         COUNT(DISTINCT CASE WHEN m.direction = 'out' AND mt.economic_class = 'vendor_cash_out' THEN m.counterparty_entity_id END) as vendor_count
       FROM movements m
-      LEFT JOIN movement_tags mt ON m.id = mt.movement_id
+      LEFT JOIN movement_tags mt ON m.id = mt.movement_id AND mt.user_id = m.user_id
       WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'`,
       [userId]
     )
@@ -104,7 +104,7 @@ export async function GET(request: NextRequest) {
         0 as burn_rate,
         EXTRACT(DAY FROM MAX(m.date) - MIN(m.date))::int as period_days
       FROM movements m
-      LEFT JOIN movement_tags mt ON m.id = mt.movement_id
+      LEFT JOIN movement_tags mt ON m.id = mt.movement_id AND mt.user_id = m.user_id
       WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'`,
       [userId]
     )
