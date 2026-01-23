@@ -106,22 +106,32 @@ export async function GET(request?: NextRequest) {
     ).then((r) => r.rows[0])
 
     // Get AR matched amounts from movement_attributions (reconciliation output)
+    // Use MIN(matched_amount) per entity to avoid double-counting duplicate matches
     const arMatched = await query<{ total_matched: string; count: string }>(
       `SELECT
-        SUM(ABS(ma.net_amount::float))::text as total_matched,
-        COUNT(DISTINCT ma.entity_id)::text as count
-       FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'ar'`,
+        SUM(matched_amount)::text as total_matched,
+        COUNT(DISTINCT entity_id)::text as count
+       FROM (
+         SELECT DISTINCT ON (entity_id) entity_id, ABS(net_amount::float) as matched_amount
+         FROM movement_attributions ma
+         WHERE ma.user_id = $1 AND ma.component_type = 'ar'
+         ORDER BY entity_id, created_at DESC
+       ) subq`,
       [userId]
     ).then((r) => r.rows[0])
 
     // Get AP matched amounts from movement_attributions (reconciliation output)
+    // Use MIN(matched_amount) per entity to avoid double-counting duplicate matches
     const apMatched = await query<{ total_matched: string; count: string }>(
       `SELECT
-        SUM(ABS(ma.net_amount::float))::text as total_matched,
-        COUNT(DISTINCT ma.entity_id)::text as count
-       FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'ap'`,
+        SUM(matched_amount)::text as total_matched,
+        COUNT(DISTINCT entity_id)::text as count
+       FROM (
+         SELECT DISTINCT ON (entity_id) entity_id, ABS(net_amount::float) as matched_amount
+         FROM movement_attributions ma
+         WHERE ma.user_id = $1 AND ma.component_type = 'ap'
+         ORDER BY entity_id, created_at DESC
+       ) subq`,
       [userId]
     ).then((r) => r.rows[0])
 
@@ -255,10 +265,10 @@ export async function GET(request?: NextRequest) {
     const apSuspiciousCount = suspiciousAP?.count ? parseInt(String(suspiciousAP.count), 10) : 0
     const apSuspiciousAmount = suspiciousAP?.amount ? parseFloat(String(suspiciousAP.amount)) : 0
 
-    // Calculate match rates
-    const arMatchRate = arInvoiced > 0 ? Math.round((arMatchedAmount / arInvoiced) * 100) : 0
-    const apMatchRate = apBilled > 0 ? Math.round((apMatchedAmount / apBilled) * 100) : 0
-    const overallMatchRate = (arInvoiced + apBilled) > 0 ? Math.round(((arMatchedAmount + apMatchedAmount) / (arInvoiced + apBilled)) * 100) : 0
+    // Calculate match rates (cap at 100% to indicate full reconciliation)
+    const arMatchRate = arInvoiced > 0 ? Math.min(100, Math.round((arMatchedAmount / arInvoiced) * 100)) : 0
+    const apMatchRate = apBilled > 0 ? Math.min(100, Math.round((apMatchedAmount / apBilled) * 100)) : 0
+    const overallMatchRate = (arInvoiced + apBilled) > 0 ? Math.min(100, Math.round(((arMatchedAmount + apMatchedAmount) / (arInvoiced + apBilled)) * 100)) : 0
 
     // Count transaction statuses
     const reconciled = bankTransactions.filter((t) => t.status === "reconciled").length
