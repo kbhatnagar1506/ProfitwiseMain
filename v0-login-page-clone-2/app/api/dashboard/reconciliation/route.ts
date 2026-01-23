@@ -203,7 +203,7 @@ export async function GET(request?: NextRequest) {
         SUM(ABS(COALESCE(ma.net_amount::float, 0)))::float as matched_amount
        FROM cash_events ce
        LEFT JOIN entities e ON e.id = ce.entity_id AND e.user_id = ce.user_id
-       LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ar'
+       LEFT JOIN movement_attributions ma ON ma.entity_id::uuid = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ar'
        WHERE ce.user_id = $1 AND ce.event_type = 'ar' AND ce.status NOT IN ('cancelled', 'voided')
        GROUP BY ce.id, e.canonical_name, ce.entity_name, ce.due_date, ce.amount, ce.outstanding_amount
        ORDER BY ce.due_date DESC
@@ -232,7 +232,7 @@ export async function GET(request?: NextRequest) {
         SUM(ABS(COALESCE(ma.net_amount::float, 0)))::float as matched_amount
        FROM cash_events ce
        LEFT JOIN entities e ON e.id = ce.entity_id AND e.user_id = ce.user_id
-       LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ap'
+       LEFT JOIN movement_attributions ma ON ma.entity_id::uuid = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ap'
        WHERE ce.user_id = $1 AND ce.event_type = 'ap' AND ce.status NOT IN ('cancelled', 'voided')
        GROUP BY ce.id, e.canonical_name, ce.entity_name, ce.due_date, ce.amount, ce.outstanding_amount
        ORDER BY ce.due_date DESC
