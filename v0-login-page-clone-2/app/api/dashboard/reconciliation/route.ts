@@ -186,12 +186,12 @@ export async function GET(request?: NextRequest) {
     const arInvoices = await query<ARInvoice>(
       `SELECT
         ce.id,
-        COALESCE(e.canonical_name, ce.entity_name, 'Unknown Customer') as customer_name,
+        COALESCE(e.canonical_name, 'Unknown Customer') as customer_name,
         'qbo' as source,
-        ce.due_date,
+        ce.expected_date as due_date,
         CASE 
           WHEN ce.outstanding_amount <= 0 THEN 'paid'
-          WHEN ce.due_date < NOW() THEN 'overdue'
+          WHEN ce.expected_date < NOW()::date THEN 'overdue'
           ELSE 'open'
         END as status,
         CASE 
@@ -204,9 +204,9 @@ export async function GET(request?: NextRequest) {
        FROM cash_events ce
        LEFT JOIN entities e ON e.id::text = ce.entity_id AND e.user_id = ce.user_id
        LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ar'
-       WHERE ce.user_id = $1 AND ce.event_type = 'ar' AND ce.status NOT IN ('cancelled', 'voided')
-       GROUP BY ce.id, e.canonical_name, ce.entity_name, ce.due_date, ce.amount, ce.outstanding_amount
-       ORDER BY ce.due_date DESC
+       WHERE ce.user_id = $1 AND ce.event_type = 'ar'
+       GROUP BY ce.id, e.canonical_name, ce.expected_date, ce.amount, ce.outstanding_amount
+       ORDER BY ce.expected_date DESC
        LIMIT 200`,
       [userId]
     ).then((r) => r.rows)
@@ -215,12 +215,12 @@ export async function GET(request?: NextRequest) {
     const apBills = await query<APBill>(
       `SELECT
         ce.id,
-        COALESCE(e.canonical_name, ce.entity_name, 'Unknown Vendor') as vendor_name,
+        COALESCE(e.canonical_name, 'Unknown Vendor') as vendor_name,
         'qbo' as source,
-        ce.due_date,
+        ce.expected_date as due_date,
         CASE 
           WHEN ce.outstanding_amount <= 0 THEN 'paid'
-          WHEN ce.due_date < NOW() THEN 'overdue'
+          WHEN ce.expected_date < NOW()::date THEN 'overdue'
           ELSE 'open'
         END as status,
         CASE 
@@ -233,9 +233,9 @@ export async function GET(request?: NextRequest) {
        FROM cash_events ce
        LEFT JOIN entities e ON e.id::text = ce.entity_id AND e.user_id = ce.user_id
        LEFT JOIN movement_attributions ma ON ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ap'
-       WHERE ce.user_id = $1 AND ce.event_type = 'ap' AND ce.status NOT IN ('cancelled', 'voided')
-       GROUP BY ce.id, e.canonical_name, ce.entity_name, ce.due_date, ce.amount, ce.outstanding_amount
-       ORDER BY ce.due_date DESC
+       WHERE ce.user_id = $1 AND ce.event_type = 'ap'
+       GROUP BY ce.id, e.canonical_name, ce.expected_date, ce.amount, ce.outstanding_amount
+       ORDER BY ce.expected_date DESC
        LIMIT 200`,
       [userId]
     ).then((r) => r.rows)
