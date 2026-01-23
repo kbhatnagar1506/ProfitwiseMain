@@ -23,22 +23,25 @@ export async function GET(request: NextRequest) {
       top_customer_pct: number
       repeat_revenue_ratio: number
     }>(
-      `SELECT 
-        MIN(m.date)::date as period_start,
-        MAX(m.date)::date as period_end,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN m.amount ELSE 0 END), 0) as gross_revenue,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class = 'refund' THEN m.amount ELSE 0 END), 0) as contra_revenue,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class IN ('customer_cash_in', 'refund') THEN m.amount ELSE 0 END), 0) as net_revenue,
-        COUNT(DISTINCT CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN m.counterparty_entity_id END) as customer_count,
-        CASE WHEN COUNT(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN 1 END) > 0 
-          THEN COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN m.amount ELSE 0 END), 0) / 
-               COUNT(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN 1 END)
+      `WITH filtered_movements AS (
+        SELECT m.* FROM movements m
+        WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'
+      )
+      SELECT 
+        MIN(fm.date)::date as period_start,
+        MAX(fm.date)::date as period_end,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN fm.amount ELSE 0 END), 0) as gross_revenue,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.economic_class = 'refund' THEN fm.amount ELSE 0 END), 0) as contra_revenue,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.economic_class IN ('customer_cash_in', 'refund') THEN fm.amount ELSE 0 END), 0) as net_revenue,
+        COUNT(DISTINCT CASE WHEN fm.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN fm.counterparty_entity_id END) as customer_count,
+        CASE WHEN COUNT(CASE WHEN fm.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN 1 END) > 0 
+          THEN COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN fm.amount ELSE 0 END), 0) / 
+               COUNT(CASE WHEN fm.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN 1 END)
           ELSE 0 END as avg_receipt,
         0 as top_customer_pct,
         0 as repeat_revenue_ratio
-      FROM movements m
-      LEFT JOIN movement_tags mt ON m.id = mt.movement_id
-      WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer' AND (mt.user_id = $1 OR mt.user_id IS NULL)`,
+      FROM filtered_movements fm
+      LEFT JOIN movement_tags mt ON fm.id = mt.movement_id AND mt.user_id = $1`,
       [userId]
     )
 
@@ -52,17 +55,20 @@ export async function GET(request: NextRequest) {
       top_vendor_pct: number
       vendor_count: number
     }>(
-      `SELECT 
-        COALESCE(SUM(CASE WHEN m.direction = 'out' AND mt.economic_class NOT IN ('vendor_cash_out', 'bank_fee', 'processor_fee') THEN m.amount ELSE 0 END), 0) as total_opex,
-        COALESCE(SUM(CASE WHEN m.direction = 'out' AND mt.economic_class = 'vendor_cash_out' THEN m.amount ELSE 0 END), 0) as total_cogs,
-        COALESCE(SUM(CASE WHEN m.direction = 'out' THEN m.amount ELSE 0 END), 0) as total_spend,
+      `WITH filtered_movements AS (
+        SELECT m.* FROM movements m
+        WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'
+      )
+      SELECT 
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.economic_class NOT IN ('vendor_cash_out', 'bank_fee', 'processor_fee') THEN fm.amount ELSE 0 END), 0) as total_opex,
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.economic_class = 'vendor_cash_out' THEN fm.amount ELSE 0 END), 0) as total_cogs,
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' THEN fm.amount ELSE 0 END), 0) as total_spend,
         0 as payroll,
         0 as recurring_obligations,
         0 as top_vendor_pct,
-        COUNT(DISTINCT CASE WHEN m.direction = 'out' AND mt.economic_class = 'vendor_cash_out' THEN m.counterparty_entity_id END) as vendor_count
-      FROM movements m
-      LEFT JOIN movement_tags mt ON m.id = mt.movement_id
-      WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer' AND (mt.user_id = $1 OR mt.user_id IS NULL)`,
+        COUNT(DISTINCT CASE WHEN fm.direction = 'out' AND mt.economic_class = 'vendor_cash_out' THEN fm.counterparty_entity_id END) as vendor_count
+      FROM filtered_movements fm
+      LEFT JOIN movement_tags mt ON fm.id = mt.movement_id AND mt.user_id = $1`,
       [userId]
     )
 
@@ -84,28 +90,31 @@ export async function GET(request: NextRequest) {
       burn_rate: number
       period_days: number
     }>(
-      `SELECT 
+      `WITH filtered_movements AS (
+        SELECT m.* FROM movements m
+        WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'
+      )
+      SELECT 
         COALESCE((SELECT current_balance FROM plaid_accounts WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1), 0) as ending_cash,
-        COALESCE(SUM(m.amount), 0) as period_net_cash_flow,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.cashflow_bucket = 'operating' THEN m.amount ELSE 0 END), 0) as operating_inflows,
-        COALESCE(SUM(CASE WHEN m.direction = 'out' AND mt.cashflow_bucket = 'operating' THEN m.amount ELSE 0 END), 0) as operating_outflows,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.cashflow_bucket = 'operating' THEN m.amount ELSE 0 END), 0) - 
-        COALESCE(SUM(CASE WHEN m.direction = 'out' AND mt.cashflow_bucket = 'operating' THEN m.amount ELSE 0 END), 0) as net_operating,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.cashflow_bucket = 'financing' THEN m.amount ELSE 0 END), 0) as financing_inflows,
-        COALESCE(SUM(CASE WHEN m.direction = 'out' AND mt.cashflow_bucket = 'financing' THEN m.amount ELSE 0 END), 0) as financing_outflows,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.cashflow_bucket = 'financing' THEN m.amount ELSE 0 END), 0) - 
-        COALESCE(SUM(CASE WHEN m.direction = 'out' AND mt.cashflow_bucket = 'financing' THEN m.amount ELSE 0 END), 0) as net_financing,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.cashflow_bucket = 'owner_activity' THEN m.amount ELSE 0 END), 0) as owner_inflows,
-        COALESCE(SUM(CASE WHEN m.direction = 'out' AND mt.cashflow_bucket = 'owner_activity' THEN m.amount ELSE 0 END), 0) as owner_outflows,
-        COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.cashflow_bucket = 'owner_activity' THEN m.amount ELSE 0 END), 0) - 
-        COALESCE(SUM(CASE WHEN m.direction = 'out' AND mt.cashflow_bucket = 'owner_activity' THEN m.amount ELSE 0 END), 0) as net_owner,
+        COALESCE(SUM(fm.amount), 0) as period_net_cash_flow,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.cashflow_bucket = 'operating' THEN fm.amount ELSE 0 END), 0) as operating_inflows,
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.cashflow_bucket = 'operating' THEN fm.amount ELSE 0 END), 0) as operating_outflows,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.cashflow_bucket = 'operating' THEN fm.amount ELSE 0 END), 0) - 
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.cashflow_bucket = 'operating' THEN fm.amount ELSE 0 END), 0) as net_operating,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.cashflow_bucket = 'financing' THEN fm.amount ELSE 0 END), 0) as financing_inflows,
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.cashflow_bucket = 'financing' THEN fm.amount ELSE 0 END), 0) as financing_outflows,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.cashflow_bucket = 'financing' THEN fm.amount ELSE 0 END), 0) - 
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.cashflow_bucket = 'financing' THEN fm.amount ELSE 0 END), 0) as net_financing,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.cashflow_bucket = 'owner_activity' THEN fm.amount ELSE 0 END), 0) as owner_inflows,
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.cashflow_bucket = 'owner_activity' THEN fm.amount ELSE 0 END), 0) as owner_outflows,
+        COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.cashflow_bucket = 'owner_activity' THEN fm.amount ELSE 0 END), 0) - 
+        COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.cashflow_bucket = 'owner_activity' THEN fm.amount ELSE 0 END), 0) as net_owner,
         'stable' as liquidity_regime,
         NULL as runway_days,
         0 as burn_rate,
-        EXTRACT(DAY FROM MAX(m.date) - MIN(m.date))::int as period_days
-      FROM movements m
-      LEFT JOIN movement_tags mt ON m.id = mt.movement_id
-      WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer' AND (mt.user_id = $1 OR mt.user_id IS NULL)`,
+        EXTRACT(DAY FROM MAX(fm.date) - MIN(fm.date))::int as period_days
+      FROM filtered_movements fm
+      LEFT JOIN movement_tags mt ON fm.id = mt.movement_id AND mt.user_id = $1`,
       [userId]
     )
 
