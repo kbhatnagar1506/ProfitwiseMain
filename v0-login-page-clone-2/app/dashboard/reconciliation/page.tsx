@@ -148,13 +148,31 @@ export default function ReconciliationPage() {
       const response = await fetch(`/api/ar-ap-step?run=true`)
       if (!response.ok) throw new Error("Failed to run reconciliation")
       
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      // Wait for reconciliation to complete (up to 2 minutes with polling)
+      let attempts = 0
+      const maxAttempts = 120 // 2 minutes with 1-second intervals
+      let reconciliationComplete = false
       
-      const reconciliationResponse = await fetch(`/api/dashboard/reconciliation`)
-      if (!reconciliationResponse.ok) throw new Error("Failed to fetch updated data")
+      while (attempts < maxAttempts && !reconciliationComplete) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        attempts++
+        
+        // Check if reconciliation is done by fetching data
+        try {
+          const reconciliationResponse = await fetch(`/api/dashboard/reconciliation`)
+          if (reconciliationResponse.ok) {
+            const result: ApiResponse = await reconciliationResponse.json()
+            setData(result)
+            reconciliationComplete = true
+          }
+        } catch (e) {
+          // Continue polling
+        }
+      }
       
-      const result: ApiResponse = await reconciliationResponse.json()
-      setData(result)
+      if (!reconciliationComplete) {
+        console.warn("Reconciliation polling timeout - displaying latest data")
+      }
     } catch (error) {
       console.error("Error running reconciliation:", error)
     } finally {
