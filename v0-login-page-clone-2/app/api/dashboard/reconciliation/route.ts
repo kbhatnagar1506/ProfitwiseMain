@@ -23,6 +23,11 @@ type ReconciliationSummary = {
   bank_reconciled_count: number
   bank_unreconciled_count: number
   bank_partial_count: number
+  transfer_count: number
+  fee_count: number
+  operational_expense_count: number
+  adjustment_count: number
+  unclassified_count: number
   ar_invoices: ARInvoice[]
   ap_bills: APBill[]
 }
@@ -60,6 +65,7 @@ type ReconciliationDetail = {
   description: string
   linked_ar_ap: string[]
   match_type: "matched" | "partial" | "unmatched"
+  classification: "ar_invoice" | "ap_bill" | "internal_transfer" | "fee" | "operational_expense" | "adjustment" | "unclassified"
 }
 
 export async function GET(request?: NextRequest) {
@@ -80,11 +86,13 @@ export async function GET(request?: NextRequest) {
       total_invoiced: string
       total_outstanding: string
       total_paid: string
+      total_count: string
     }>(
       `SELECT
         SUM(ce.amount)::text as total_invoiced,
         SUM(ce.outstanding_amount)::text as total_outstanding,
-        SUM(CASE WHEN ce.outstanding_amount <= 0 THEN ce.amount ELSE 0 END)::text as total_paid
+        SUM(CASE WHEN ce.outstanding_amount <= 0 THEN ce.amount ELSE 0 END)::text as total_paid,
+        COUNT(*)::text as total_count
        FROM cash_events ce
        WHERE ce.user_id = $1 AND ce.event_type = 'ar' AND ce.status NOT IN ('cancelled', 'voided')`,
       [userId]
@@ -95,35 +103,43 @@ export async function GET(request?: NextRequest) {
       total_billed: string
       total_outstanding: string
       total_paid: string
+      total_count: string
     }>(
       `SELECT
         SUM(ce.amount)::text as total_billed,
         SUM(ce.outstanding_amount)::text as total_outstanding,
-        SUM(CASE WHEN ce.outstanding_amount <= 0 THEN ce.amount ELSE 0 END)::text as total_paid
+        SUM(CASE WHEN ce.outstanding_amount <= 0 THEN ce.amount ELSE 0 END)::text as total_paid,
+        COUNT(*)::text as total_count
        FROM cash_events ce
        WHERE ce.user_id = $1 AND ce.event_type = 'ap' AND ce.status NOT IN ('cancelled', 'voided')`,
       [userId]
     ).then((r) => r.rows[0])
 
     // Get AR matched amounts from movement_attributions (reconciliation output)
-    // Sum all matched amounts across all AR attributions
+    // Count distinct invoices that have at least one match
     const arMatched = await query<{ total_matched: string; count: string }>(
       `SELECT
-        SUM(ABS(ma.net_amount::float))::text as total_matched,
-        COUNT(DISTINCT ma.entity_id)::text as count
-       FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'ar'`,
+        COUNT(DISTINCT ce.id)::text as count,
+        SUM(ABS(ce.amount))::text as total_matched
+       FROM cash_events ce
+       WHERE ce.user_id = $1 AND ce.event_type = 'ar' AND EXISTS (
+         SELECT 1 FROM movement_attributions ma 
+         WHERE ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ar'
+       )`,
       [userId]
     ).then((r) => r.rows[0])
 
     // Get AP matched amounts from movement_attributions (reconciliation output)
-    // Sum all matched amounts across all AP attributions
+    // Count distinct bills that have at least one match
     const apMatched = await query<{ total_matched: string; count: string }>(
       `SELECT
-        SUM(ABS(ma.net_amount::float))::text as total_matched,
-        COUNT(DISTINCT ma.entity_id)::text as count
-       FROM movement_attributions ma
-       WHERE ma.user_id = $1 AND ma.component_type = 'ap'`,
+        COUNT(DISTINCT ce.id)::text as count,
+        SUM(ABS(ce.amount))::text as total_matched
+       FROM cash_events ce
+       WHERE ce.user_id = $1 AND ce.event_type = 'ap' AND EXISTS (
+         SELECT 1 FROM movement_attributions ma 
+         WHERE ma.entity_id = ce.entity_id AND ma.user_id = ce.user_id AND ma.component_type = 'ap'
+       )`,
       [userId]
     ).then((r) => r.rows[0])
 
@@ -155,6 +171,25 @@ export async function GET(request?: NextRequest) {
       [userId]
     ).then((r) => r.rows[0])
 
+    // Get classification counts from bank transactions
+    const classificationCounts = await query<{
+      transfer_count: string
+      fee_count: string
+      operational_expense_count: string
+      adjustment_count: string
+      unclassified_count: string
+    }>(
+      `SELECT
+        SUM(CASE WHEN (COALESCE(m.raw_description, '') ILIKE '%TRANSFER DEBIT%' OR COALESCE(m.raw_description, '') ILIKE '%TRANSFER CREDIT%') THEN 1 ELSE 0 END)::text as transfer_count,
+        SUM(CASE WHEN (COALESCE(m.raw_description, '') ILIKE '%FEE%' OR COALESCE(m.raw_description, '') ILIKE '%CHARGE%' OR COALESCE(m.raw_description, '') ILIKE '%MERCHANT BANKCD%') THEN 1 ELSE 0 END)::text as fee_count,
+        SUM(CASE WHEN (COALESCE(m.raw_description, '') ILIKE '%Shopify%' OR COALESCE(m.raw_description, '') ILIKE '%Amazon%' OR COALESCE(m.raw_description, '') ILIKE '%Stripe%') THEN 1 ELSE 0 END)::text as operational_expense_count,
+        0::text as adjustment_count,
+        0::text as unclassified_count
+       FROM movements m
+       WHERE m.user_id = $1 AND m.direction IN ('inflow', 'outflow') AND m.duplicate_of IS NULL`,
+      [userId]
+    ).then((r) => r.rows[0])
+
     // Get bank transactions with reconciliation status from movement_attributions
     const bankTransactions = await query<ReconciliationDetail>(
       `SELECT
@@ -174,7 +209,15 @@ export async function GET(request?: NextRequest) {
           WHEN COUNT(ma.id) > 0 AND ABS(m.amount) = SUM(ABS(COALESCE(CASE WHEN ma.component_type != 'fee' THEN ma.net_amount::float ELSE 0 END, 0))) THEN 'matched'
           WHEN COUNT(ma.id) > 0 THEN 'partial'
           ELSE 'unmatched'
-        END as match_type
+        END as match_type,
+        CASE
+          WHEN COALESCE(m.raw_description, '') ILIKE '%TRANSFER DEBIT%' OR COALESCE(m.raw_description, '') ILIKE '%TRANSFER CREDIT%' THEN 'internal_transfer'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%FEE%' OR COALESCE(m.raw_description, '') ILIKE '%CHARGE%' OR COALESCE(m.raw_description, '') ILIKE '%MERCHANT BANKCD%' THEN 'fee'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%Shopify%' OR COALESCE(m.raw_description, '') ILIKE '%Amazon%' OR COALESCE(m.raw_description, '') ILIKE '%Stripe%' THEN 'operational_expense'
+          WHEN COUNT(ma.id) > 0 AND MAX(CASE WHEN ma.component_type = 'ar' THEN 1 ELSE 0 END) = 1 THEN 'ar_invoice'
+          WHEN COUNT(ma.id) > 0 AND MAX(CASE WHEN ma.component_type = 'ap' THEN 1 ELSE 0 END) = 1 THEN 'ap_bill'
+          ELSE 'unclassified'
+        END as classification
        FROM movements m
        LEFT JOIN movement_attributions ma ON ma.movement_id = m.id AND ma.user_id = m.user_id
        WHERE m.user_id = $1 AND m.direction IN ('inflow', 'outflow') AND m.duplicate_of IS NULL
@@ -244,11 +287,15 @@ export async function GET(request?: NextRequest) {
     const arInvoiced = arCashEvents?.total_invoiced ? parseFloat(String(arCashEvents.total_invoiced)) : 0
     const arOutstanding = arCashEvents?.total_outstanding ? parseFloat(String(arCashEvents.total_outstanding)) : 0
     const arPaid = arCashEvents?.total_paid ? parseFloat(String(arCashEvents.total_paid)) : 0
+    const arTotalCount = arCashEvents?.total_count ? parseInt(String(arCashEvents.total_count), 10) : 0
+    const arMatchedCount = arMatched?.count ? parseInt(String(arMatched.count), 10) : 0
     const arMatchedAmount = arMatched?.total_matched ? parseFloat(String(arMatched.total_matched)) : 0
 
     const apBilled = apCashEvents?.total_billed ? parseFloat(String(apCashEvents.total_billed)) : 0
     const apOutstanding = apCashEvents?.total_outstanding ? parseFloat(String(apCashEvents.total_outstanding)) : 0
     const apPaid = apCashEvents?.total_paid ? parseFloat(String(apCashEvents.total_paid)) : 0
+    const apTotalCount = apCashEvents?.total_count ? parseInt(String(apCashEvents.total_count), 10) : 0
+    const apMatchedCount = apMatched?.count ? parseInt(String(apMatched.count), 10) : 0
     const apMatchedAmount = apMatched?.total_matched ? parseFloat(String(apMatched.total_matched)) : 0
 
     const totalFees = feeData?.total_fees ? parseFloat(String(feeData.total_fees)) : 0
@@ -257,10 +304,16 @@ export async function GET(request?: NextRequest) {
     const apSuspiciousCount = suspiciousAP?.count ? parseInt(String(suspiciousAP.count), 10) : 0
     const apSuspiciousAmount = suspiciousAP?.amount ? parseFloat(String(suspiciousAP.amount)) : 0
 
-    // Calculate match rates (cap at 100% to indicate full reconciliation)
-    const arMatchRate = arInvoiced > 0 ? Math.min(100, Math.round((arMatchedAmount / arInvoiced) * 100)) : 0
-    const apMatchRate = apBilled > 0 ? Math.min(100, Math.round((apMatchedAmount / apBilled) * 100)) : 0
-    const overallMatchRate = (arInvoiced + apBilled) > 0 ? Math.min(100, Math.round(((arMatchedAmount + apMatchedAmount) / (arInvoiced + apBilled)) * 100)) : 0
+    const transferCount = classificationCounts?.transfer_count ? parseInt(String(classificationCounts.transfer_count), 10) : 0
+    const feeCount = classificationCounts?.fee_count ? parseInt(String(classificationCounts.fee_count), 10) : 0
+    const operationalExpenseCount = classificationCounts?.operational_expense_count ? parseInt(String(classificationCounts.operational_expense_count), 10) : 0
+    const adjustmentCount = classificationCounts?.adjustment_count ? parseInt(String(classificationCounts.adjustment_count), 10) : 0
+    const unclassifiedCount = bankTransactions.length - transferCount - feeCount - operationalExpenseCount - adjustmentCount
+
+    // Calculate match rates based on invoice/bill count (percentage of invoices/bills that have at least one match)
+    const arMatchRate = arTotalCount > 0 ? Math.round((arMatchedCount / arTotalCount) * 100) : 0
+    const apMatchRate = apTotalCount > 0 ? Math.round((apMatchedCount / apTotalCount) * 100) : 0
+    const overallMatchRate = (arTotalCount + apTotalCount) > 0 ? Math.round(((arMatchedCount + apMatchedCount) / (arTotalCount + apTotalCount)) * 100) : 0
 
     // Count transaction statuses
     const reconciled = bankTransactions.filter((t) => t.status === "reconciled").length
@@ -286,6 +339,11 @@ export async function GET(request?: NextRequest) {
       bank_reconciled_count: reconciled,
       bank_unreconciled_count: unreconciled,
       bank_partial_count: partial,
+      transfer_count: transferCount,
+      fee_count: feeCount,
+      operational_expense_count: operationalExpenseCount,
+      adjustment_count: adjustmentCount,
+      unclassified_count: unclassifiedCount,
       ar_invoices: arInvoices,
       ap_bills: apBills,
     }
