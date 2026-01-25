@@ -175,6 +175,7 @@ export function OnboardingFlow({
   qboError?: string | null
   initialStep?: number
 }) {
+  const [isMounted, setIsMounted] = useState(false)
   const [currentStep, setCurrentStep] = useState(
     Math.min(Math.max(initialStep, 1), steps.length)
   )
@@ -530,6 +531,10 @@ export function OnboardingFlow({
   ]
 
   const showQboError = qboError && QBO_ERROR_MESSAGES[qboError] && !dismissedError
+
+  useEffect(() => {
+    setIsMounted(true)
+  }, [])
 
   useEffect(() => {
     if (qboError) setDismissedError(false)
@@ -6682,6 +6687,10 @@ export function OnboardingFlow({
 
   const isStep6 = currentStep === 6
   const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14
+  if (!isMounted) {
+    return null
+  }
+
   return (
     <div
       className={
