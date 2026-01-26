@@ -1587,8 +1587,8 @@ export function OnboardingFlow({
           (sum, a) => sum + (a.current_balance != null && !Number.isNaN(a.current_balance) ? a.current_balance : 0),
           0
         )
-        const hasAccounts = connectedAccounts.length > 0
-        const hasItemsOnly = !hasAccounts && connectedItemIds.length > 0
+        const hasAccounts = (connectedAccounts?.length ?? 0) > 0
+        const hasItemsOnly = !hasAccounts && (connectedItemIds?.length ?? 0) > 0
         return (
           <div className="my-0 py-9">
             <div className="flex flex-col items-center mb-6">
@@ -1667,7 +1667,7 @@ export function OnboardingFlow({
                 <div className="rounded-lg border border-white/20 bg-white/5 p-4">
                   <p className="text-sm font-medium text-white mb-2">Connected</p>
                   <p className="text-gray-400 text-sm">
-                    {connectedItemIds.length} account{connectedItemIds.length !== 1 ? "s" : ""} linked. Balances will appear in the table once synced.
+                    {connectedItemIds?.length ?? 0} account{(connectedItemIds?.length ?? 0) !== 1 ? "s" : ""} linked. Balances will appear in the table once synced.
                   </p>
                 </div>
               ) : (
@@ -6687,10 +6687,6 @@ export function OnboardingFlow({
 
   const isStep6 = currentStep === 6
   const isWideStep = currentStep === 8 || currentStep === 9 || currentStep === 10 || currentStep === 11 || currentStep === 12 || currentStep === 13 || currentStep === 14
-  if (!isMounted) {
-    return null
-  }
-
   return (
     <div
       className={
