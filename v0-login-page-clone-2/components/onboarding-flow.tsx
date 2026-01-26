@@ -1813,7 +1813,7 @@ export function OnboardingFlow({
                     </div>
                     
                     {/* Show existing connections */}
-                    {shopifyConnections.length > 0 && (
+                    {(shopifyConnections?.length ?? 0) > 0 && (
                       <div className="border-t border-white/10 pt-4">
                         <div className="flex items-center justify-between mb-2">
                           <p className="text-xs text-gray-400">Connected stores:</p>
@@ -2257,7 +2257,7 @@ export function OnboardingFlow({
             </div>
             <div className="space-y-5">
               {COMPANY_FORM_FIELDS.map(({ key, label, placeholder }) => {
-                if (key === "primaryBanks" && step7BankAccounts.length > 0) {
+                if (key === "primaryBanks" && (step7BankAccounts?.length ?? 0) > 0) {
                   const selected = (companyForm.primaryBanks ?? "").split(",").map((s) => s.trim()).filter(Boolean)
                   const toggle = (accountLabel: string) => {
                     const next = selected.includes(accountLabel)
@@ -5056,10 +5056,10 @@ export function OnboardingFlow({
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Key Insights</div>
                     <div className="space-y-2">
-                      {stateData.insights.slice(0, 5).map((ins) => (
-                        <div key={ins.id} className="flex items-start gap-2.5">
-                          <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${ins.severity === "high" ? "bg-red-400" : ins.severity === "medium" ? "bg-amber-400" : "bg-blue-400"}`} />
-                          <span className="text-sm text-gray-200">{ins.message}</span>
+                      {(stateData?.insights ?? []).slice(0, 5).map((ins) => (
+                        <div key={ins?.id} className="flex items-start gap-2.5">
+                          <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${(ins?.severity === "high") ? "bg-red-400" : (ins?.severity === "medium") ? "bg-amber-400" : "bg-blue-400"}`} />
+                          <span className="text-sm text-gray-200">{ins?.message}</span>
                         </div>
                       ))}
                     </div>
@@ -5071,14 +5071,14 @@ export function OnboardingFlow({
                   <div className="bg-gradient-to-r from-amber-500/5 via-transparent to-red-500/5 border border-white/10 rounded-xl p-4">
                     <div className="text-xs uppercase tracking-wider text-amber-400 mb-3">Regime Changes Detected</div>
                     <div className="space-y-2">
-                      {stateData.transitions.slice(0, 4).map((t, i) => (
+                      {(stateData?.transitions ?? []).slice(0, 4).map((t, i) => (
                         <div key={i} className="flex items-start gap-2.5">
-                          <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${t.severity === "critical" ? "bg-red-400 animate-pulse" : t.severity === "warning" ? "bg-amber-400" : "bg-blue-400"}`} />
+                          <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${(t?.severity === "critical") ? "bg-red-400 animate-pulse" : (t?.severity === "warning") ? "bg-amber-400" : "bg-blue-400"}`} />
                           <div className="flex-1">
-                            <span className="text-sm text-gray-200">{t.description}</span>
-                            {t.previous_state && (
+                            <span className="text-sm text-gray-200">{t?.description}</span>
+                            {t?.previous_state && (
                               <div className="text-[10px] text-gray-500 mt-0.5">
-                                {t.previous_state} → {t.current_state}
+                                {t?.previous_state} → {t?.current_state}
                               </div>
                             )}
                           </div>
@@ -6280,7 +6280,7 @@ export function OnboardingFlow({
                     )}
 
                     {/* Anomalies & Warnings */}
-                    {forecastData.intervention_anomalies && forecastData.intervention_anomalies.length > 0 && (
+                    {(forecastData?.intervention_anomalies?.length ?? 0) > 0 && (
                       <div className="mt-8 pt-8 border-t border-cyan-500/20">
                         <div className="flex items-center gap-3 mb-4">
                           <div className="w-1 h-6 bg-gradient-to-b from-amber-400 to-amber-600 rounded-full"></div>
@@ -6288,13 +6288,13 @@ export function OnboardingFlow({
                           <span className="text-[10px] text-amber-400/70 font-semibold ml-auto">Quality checks</span>
                         </div>
                         <div className="space-y-2">
-                          {forecastData.intervention_anomalies.map((anomaly, idx) => (
-                            <div key={idx} className={`p-3 rounded-xl border transition-all ${anomaly.severity === "critical" ? "bg-red-500/10 border-red-500/30 hover:border-red-400/50" : anomaly.severity === "warning" ? "bg-amber-500/10 border-amber-500/30 hover:border-amber-400/50" : "bg-blue-500/10 border-blue-500/30 hover:border-blue-400/50"}`}>
-                              <div className={`text-sm font-bold flex items-center gap-2 ${anomaly.severity === "critical" ? "text-red-400" : anomaly.severity === "warning" ? "text-amber-400" : "text-blue-400"}`}>
-                                {anomaly.severity === "critical" ? "🔴" : anomaly.severity === "warning" ? "⚠️" : "ℹ️"} {anomaly.anomaly_type ? anomaly.anomaly_type.toUpperCase() : "ANOMALY"}
+                          {(forecastData?.intervention_anomalies ?? []).map((anomaly, idx) => (
+                            <div key={idx} className={`p-3 rounded-xl border transition-all ${(anomaly?.severity === "critical") ? "bg-red-500/10 border-red-500/30 hover:border-red-400/50" : (anomaly?.severity === "warning") ? "bg-amber-500/10 border-amber-500/30 hover:border-amber-400/50" : "bg-blue-500/10 border-blue-500/30 hover:border-blue-400/50"}`}>
+                              <div className={`text-sm font-bold flex items-center gap-2 ${(anomaly?.severity === "critical") ? "text-red-400" : (anomaly?.severity === "warning") ? "text-amber-400" : "text-blue-400"}`}>
+                                {(anomaly?.severity === "critical") ? "🔴" : (anomaly?.severity === "warning") ? "⚠️" : "ℹ️"} {(anomaly?.anomaly_type) ? anomaly.anomaly_type.toUpperCase() : "ANOMALY"}
                               </div>
-                              <div className="text-xs text-gray-300 mt-1">{anomaly.message}</div>
-                              {anomaly.suggested_action && (
+                              <div className="text-xs text-gray-300 mt-1">{anomaly?.message}</div>
+                              {anomaly?.suggested_action && (
                                 <div className="text-[10px] text-gray-400 mt-1.5 italic">💡 {anomaly.suggested_action}</div>
                               )}
                             </div>
