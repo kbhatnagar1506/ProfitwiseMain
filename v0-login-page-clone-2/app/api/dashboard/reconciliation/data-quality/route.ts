@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
        JOIN movements m2 ON m1.user_id = m2.user_id 
          AND m1.counterparty = m2.counterparty 
          AND ABS(m1.amount - m2.amount) < 0.01
-         AND ABS(EXTRACT(EPOCH FROM (m1.date - m2.date))) < 86400
+         AND ABS(m1.date::date - m2.date::date) <= 1
          AND m1.id < m2.id
          AND m1.duplicate_of IS NULL
          AND m2.duplicate_of IS NULL
