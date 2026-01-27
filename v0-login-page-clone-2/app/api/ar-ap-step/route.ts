@@ -23,6 +23,7 @@ import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
 
 const WATERFALL_REVIEW_PREVIEW = 15
 const LOCK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - consider stale locks as failed
+const MIN_RECONCILIATION_INTERVAL_MS = 60 * 1000 // Minimum 60 seconds between reconciliation runs
 
 type ReconTotals = {
   total_matched_inflows: number
@@ -52,11 +53,11 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 
 /**
  * Attempt to acquire a reconciliation lock for the user.
- * Returns true if lock acquired, false if already running.
+ * Returns true if lock acquired, false if already running or too soon after last run.
  * Uses a single atomic query to clean up stale locks and acquire in one operation.
  */
 async function acquireReconciliationLock(userId: string): Promise<boolean> {
-  // Atomic lock acquisition: clean up stale locks and try to acquire in one query
+  // Atomic lock acquisition: clean up stale locks, check minimum interval, and try to acquire in one query
   // This prevents TOCTOU race conditions between cleanup and acquisition
   const { rows } = await query<{ acquired: boolean }>(
     `WITH cleanup AS (
@@ -77,6 +78,8 @@ async function acquireReconciliationLock(userId: string): Promise<boolean> {
            error_message = NULL,
            completed_at = NULL
        WHERE reconciliation_locks.status != 'running'
+         AND (reconciliation_locks.completed_at IS NULL 
+              OR reconciliation_locks.completed_at < NOW() - INTERVAL '${MIN_RECONCILIATION_INTERVAL_MS} milliseconds')
      RETURNING true AS acquired`,
     [userId]
   )
