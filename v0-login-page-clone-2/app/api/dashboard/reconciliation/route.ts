@@ -28,6 +28,10 @@ type ReconciliationSummary = {
   operational_expense_count: number
   adjustment_count: number
   unclassified_count: number
+  data_quality_score: number
+  duplicate_count: number
+  over_matched_count: number
+  status_anomaly_count: number
   ar_invoices: ARInvoice[]
   ap_bills: APBill[]
 }
@@ -171,6 +175,52 @@ export async function GET(request?: NextRequest) {
       [userId]
     ).then((r) => r.rows[0])
 
+    // Phase 1: Data Quality Detection
+    // 1.2 Detect duplicate transactions (same counterparty, amount, date within 24 hours)
+    const duplicateDetection = await query<{ duplicate_count: string }>(
+      `SELECT COUNT(*)::text as duplicate_count
+       FROM (
+         SELECT m1.id
+         FROM movements m1
+         JOIN movements m2 ON m1.user_id = m2.user_id 
+           AND m1.counterparty = m2.counterparty 
+           AND ABS(m1.amount - m2.amount) < 0.01
+           AND ABS(EXTRACT(EPOCH FROM (m1.date - m2.date))) < 86400
+           AND m1.id < m2.id
+           AND m1.duplicate_of IS NULL
+           AND m2.duplicate_of IS NULL
+         WHERE m1.user_id = $1
+       ) duplicates`,
+      [userId]
+    ).then((r) => r.rows[0])
+
+    // 1.3 Detect over-matching (matched amount > invoice/bill amount)
+    const overMatchedDetection = await query<{ over_matched_count: string }>(
+      `SELECT COUNT(DISTINCT ce.id)::text as over_matched_count
+       FROM cash_events ce
+       JOIN (
+         SELECT entity_id, SUM(ABS(net_amount::float)) as total_matched
+         FROM movement_attributions
+         WHERE user_id = $1 AND component_type IN ('ar', 'ap')
+         GROUP BY entity_id
+       ) ma ON ce.entity_id = ma.entity_id
+       WHERE ce.user_id = $1 
+         AND ce.event_type IN ('ar', 'ap')
+         AND ma.total_matched > ABS(ce.amount)`,
+      [userId]
+    ).then((r) => r.rows[0])
+
+    // 1.1 Detect status anomalies (marked paid but has outstanding amount)
+    const statusAnomalyDetection = await query<{ status_anomaly_count: string }>(
+      `SELECT COUNT(*)::text as status_anomaly_count
+       FROM cash_events ce
+       WHERE ce.user_id = $1 
+         AND ce.event_type IN ('ar', 'ap')
+         AND ce.status = 'paid'
+         AND ce.outstanding_amount > 0`,
+      [userId]
+    ).then((r) => r.rows[0])
+
     // Get classification counts from bank transactions
     const classificationCounts = await query<{
       transfer_count: string
@@ -182,7 +232,18 @@ export async function GET(request?: NextRequest) {
       `SELECT
         SUM(CASE WHEN (COALESCE(m.raw_description, '') ILIKE '%TRANSFER DEBIT%' OR COALESCE(m.raw_description, '') ILIKE '%TRANSFER CREDIT%') THEN 1 ELSE 0 END)::text as transfer_count,
         SUM(CASE WHEN (COALESCE(m.raw_description, '') ILIKE '%FEE%' OR COALESCE(m.raw_description, '') ILIKE '%CHARGE%' OR COALESCE(m.raw_description, '') ILIKE '%MERCHANT BANKCD%') THEN 1 ELSE 0 END)::text as fee_count,
-        SUM(CASE WHEN (COALESCE(m.raw_description, '') ILIKE '%Shopify%' OR COALESCE(m.raw_description, '') ILIKE '%Amazon%' OR COALESCE(m.raw_description, '') ILIKE '%Stripe%') THEN 1 ELSE 0 END)::text as operational_expense_count,
+        SUM(CASE WHEN (
+          COALESCE(m.raw_description, '') ILIKE '%Shopify%' OR COALESCE(m.raw_description, '') ILIKE '%Amazon%' OR COALESCE(m.raw_description, '') ILIKE '%Stripe%' OR
+          COALESCE(m.raw_description, '') ILIKE '%SUBSCRIPTION%' OR COALESCE(m.raw_description, '') ILIKE '%MONTHLY%' OR COALESCE(m.raw_description, '') ILIKE '%ANNUAL%' OR
+          COALESCE(m.raw_description, '') ILIKE '%AWS%' OR COALESCE(m.raw_description, '') ILIKE '%AZURE%' OR COALESCE(m.raw_description, '') ILIKE '%GOOGLE CLOUD%' OR
+          COALESCE(m.raw_description, '') ILIKE '%WHOLESALE%' OR COALESCE(m.raw_description, '') ILIKE '%DISTRIBUTOR%' OR COALESCE(m.raw_description, '') ILIKE '%SUPPLIER%' OR
+          COALESCE(m.raw_description, '') ILIKE '%RESTAURANT%' OR COALESCE(m.raw_description, '') ILIKE '%CAFE%' OR COALESCE(m.raw_description, '') ILIKE '%BAKERY%' OR
+          COALESCE(m.raw_description, '') ILIKE '%CONSULTING%' OR COALESCE(m.raw_description, '') ILIKE '%ADVISORY%' OR COALESCE(m.raw_description, '') ILIKE '%LEGAL%' OR
+          COALESCE(m.raw_description, '') ILIKE '%ACCOUNTING%' OR COALESCE(m.raw_description, '') ILIKE '%AUDIT%' OR COALESCE(m.raw_description, '') ILIKE '%TAX%' OR
+          COALESCE(m.raw_description, '') ILIKE '%ELECTRIC%' OR COALESCE(m.raw_description, '') ILIKE '%GAS%' OR COALESCE(m.raw_description, '') ILIKE '%WATER%' OR
+          COALESCE(m.raw_description, '') ILIKE '%PHONE%' OR COALESCE(m.raw_description, '') ILIKE '%MOBILE%' OR COALESCE(m.raw_description, '') ILIKE '%CARRIER%' OR
+          COALESCE(m.raw_description, '') ILIKE '%INSURANCE%' OR COALESCE(m.raw_description, '') ILIKE '%PREMIUM%' OR COALESCE(m.raw_description, '') ILIKE '%POLICY%'
+        ) THEN 1 ELSE 0 END)::text as operational_expense_count,
         0::text as adjustment_count,
         0::text as unclassified_count
        FROM movements m
@@ -214,6 +275,16 @@ export async function GET(request?: NextRequest) {
           WHEN COALESCE(m.raw_description, '') ILIKE '%TRANSFER DEBIT%' OR COALESCE(m.raw_description, '') ILIKE '%TRANSFER CREDIT%' THEN 'internal_transfer'
           WHEN COALESCE(m.raw_description, '') ILIKE '%FEE%' OR COALESCE(m.raw_description, '') ILIKE '%CHARGE%' OR COALESCE(m.raw_description, '') ILIKE '%MERCHANT BANKCD%' THEN 'fee'
           WHEN COALESCE(m.raw_description, '') ILIKE '%Shopify%' OR COALESCE(m.raw_description, '') ILIKE '%Amazon%' OR COALESCE(m.raw_description, '') ILIKE '%Stripe%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%SUBSCRIPTION%' OR COALESCE(m.raw_description, '') ILIKE '%MONTHLY%' OR COALESCE(m.raw_description, '') ILIKE '%ANNUAL%' OR COALESCE(m.raw_description, '') ILIKE '%RECURRING%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%AWS%' OR COALESCE(m.raw_description, '') ILIKE '%AZURE%' OR COALESCE(m.raw_description, '') ILIKE '%GOOGLE CLOUD%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%WHOLESALE%' OR COALESCE(m.raw_description, '') ILIKE '%DISTRIBUTOR%' OR COALESCE(m.raw_description, '') ILIKE '%SUPPLIER%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%RESTAURANT%' OR COALESCE(m.raw_description, '') ILIKE '%CAFE%' OR COALESCE(m.raw_description, '') ILIKE '%BAKERY%' OR COALESCE(m.raw_description, '') ILIKE '%GROCERY%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%CONSULTING%' OR COALESCE(m.raw_description, '') ILIKE '%ADVISORY%' OR COALESCE(m.raw_description, '') ILIKE '%STRATEGY%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%LAW FIRM%' OR COALESCE(m.raw_description, '') ILIKE '%ATTORNEY%' OR COALESCE(m.raw_description, '') ILIKE '%LEGAL%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%ACCOUNTING%' OR COALESCE(m.raw_description, '') ILIKE '%AUDIT%' OR COALESCE(m.raw_description, '') ILIKE '%TAX%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%ELECTRIC%' OR COALESCE(m.raw_description, '') ILIKE '%GAS%' OR COALESCE(m.raw_description, '') ILIKE '%WATER%' OR COALESCE(m.raw_description, '') ILIKE '%INTERNET%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%PHONE%' OR COALESCE(m.raw_description, '') ILIKE '%MOBILE%' OR COALESCE(m.raw_description, '') ILIKE '%CARRIER%' THEN 'operational_expense'
+          WHEN COALESCE(m.raw_description, '') ILIKE '%INSURANCE%' OR COALESCE(m.raw_description, '') ILIKE '%PREMIUM%' OR COALESCE(m.raw_description, '') ILIKE '%POLICY%' THEN 'operational_expense'
           WHEN COUNT(ma.id) > 0 AND MAX(CASE WHEN ma.component_type = 'ar' THEN 1 ELSE 0 END) = 1 THEN 'ar_invoice'
           WHEN COUNT(ma.id) > 0 AND MAX(CASE WHEN ma.component_type = 'ap' THEN 1 ELSE 0 END) = 1 THEN 'ap_bill'
           ELSE 'unclassified'
@@ -310,6 +381,16 @@ export async function GET(request?: NextRequest) {
     const adjustmentCount = classificationCounts?.adjustment_count ? parseInt(String(classificationCounts.adjustment_count), 10) : 0
     const unclassifiedCount = bankTransactions.length - transferCount - feeCount - operationalExpenseCount - adjustmentCount
 
+    // Parse data quality metrics
+    const duplicateCount = duplicateDetection?.duplicate_count ? parseInt(String(duplicateDetection.duplicate_count), 10) : 0
+    const overMatchedCount = overMatchedDetection?.over_matched_count ? parseInt(String(overMatchedDetection.over_matched_count), 10) : 0
+    const statusAnomalyCount = statusAnomalyDetection?.status_anomaly_count ? parseInt(String(statusAnomalyDetection.status_anomaly_count), 10) : 0
+
+    // Calculate data quality score (0-10)
+    // Deduct points for: duplicates (1 pt each), over-matching (0.5 pt each), status anomalies (0.5 pt each)
+    const qualityPenalty = Math.min(10, (duplicateCount * 1) + (overMatchedCount * 0.5) + (statusAnomalyCount * 0.5))
+    const dataQualityScore = Math.max(0, 10 - qualityPenalty)
+
     // Calculate match rates based on invoice/bill count (percentage of invoices/bills that have at least one match)
     const arMatchRate = arTotalCount > 0 ? Math.round((arMatchedCount / arTotalCount) * 100) : 0
     const apMatchRate = apTotalCount > 0 ? Math.round((apMatchedCount / apTotalCount) * 100) : 0
@@ -344,6 +425,10 @@ export async function GET(request?: NextRequest) {
       operational_expense_count: operationalExpenseCount,
       adjustment_count: adjustmentCount,
       unclassified_count: unclassifiedCount,
+      data_quality_score: dataQualityScore,
+      duplicate_count: duplicateCount,
+      over_matched_count: overMatchedCount,
+      status_anomaly_count: statusAnomalyCount,
       ar_invoices: arInvoices,
       ap_bills: apBills,
     }

@@ -785,6 +785,55 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_obs_movement ON movement_observations (movement_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_obs_source ON movement_observations (source, source_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_families_user ON movement_families (user_id)")
+  
+  // Classification rules table for user-defined patterns
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS classification_rules (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      pattern TEXT NOT NULL,
+      classification TEXT NOT NULL CHECK (classification IN ('ar_invoice', 'ap_bill', 'internal_transfer', 'fee', 'operational_expense', 'adjustment', 'unclassified')),
+      confidence REAL DEFAULT 0.85 CHECK (confidence >= 0 AND confidence <= 1),
+      is_regex BOOLEAN DEFAULT false,
+      priority INT DEFAULT 100,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, pattern)
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_classification_rules_user ON classification_rules (user_id, priority DESC)")
+  
+  // Reconciliation settings table
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS reconciliation_settings (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      stage4_threshold NUMERIC DEFAULT 1000,
+      processor_fee_tolerance REAL DEFAULT 0.08 CHECK (processor_fee_tolerance >= 0 AND processor_fee_tolerance <= 1),
+      min_confidence REAL DEFAULT 0.80 CHECK (min_confidence >= 0 AND min_confidence <= 1),
+      auto_reconcile_exact BOOLEAN DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_reconciliation_settings_user ON reconciliation_settings (user_id)")
+  
+  // Reconciliation audit trail table
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS reconciliation_audit (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      movement_id UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
+      action TEXT NOT NULL CHECK (action IN ('matched', 'unmatched', 'corrected', 'classified')),
+      old_value JSONB,
+      new_value JSONB,
+      reason TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_reconciliation_audit_user ON reconciliation_audit (user_id, created_at DESC)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_reconciliation_audit_movement ON reconciliation_audit (movement_id)")
+  
   // Phase 1: movement_tags table
   await p.query(`
     CREATE TABLE IF NOT EXISTS movement_tags (
