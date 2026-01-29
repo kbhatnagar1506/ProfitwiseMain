@@ -240,26 +240,26 @@ async function runReconciliationInBackground(userId: string) {
       console.log("[ar-ap-step] No unreconciled movements for LLM Stage 4")
     }
     
-    // Build entity profiles after reconciliation completes
-    let profilesBuilt = 0
-    let narrativesRefreshed = 0
-    try {
-      console.log("[ar-ap-step] Building entity profiles for user:", userId)
-      profilesBuilt = await buildEntityProfiles(userId)
-      console.log("[ar-ap-step] Entity profiles built:", profilesBuilt)
-      
-      // Generate AI narratives for top entities - await to ensure completion before lock release
+    // Build entity profiles and narratives in background (non-blocking)
+    // These are AI operations that can take time, so we don't wait for them
+    // to complete before marking reconciliation as done
+    setImmediate(async () => {
       try {
-        narrativesRefreshed = await refreshEntityNarratives(userId, { maxEntities: 25 })
-        console.log("[ar-ap-step] Entity narratives refreshed:", narrativesRefreshed)
-      } catch (narrativeErr) {
-        console.warn("[ar-ap-step] Failed to refresh entity narratives:", narrativeErr)
-        warnings.push("Failed to refresh entity narratives")
+        console.log("[ar-ap-step] Building entity profiles for user:", userId)
+        const profilesBuilt = await buildEntityProfiles(userId)
+        console.log("[ar-ap-step] Entity profiles built:", profilesBuilt)
+        
+        try {
+          console.log("[ar-ap-step] Refreshing entity narratives for user:", userId)
+          const narrativesRefreshed = await refreshEntityNarratives(userId, { maxEntities: 25 })
+          console.log("[ar-ap-step] Entity narratives refreshed:", narrativesRefreshed)
+        } catch (narrativeErr) {
+          console.warn("[ar-ap-step] Failed to refresh entity narratives:", narrativeErr)
+        }
+      } catch (e) {
+        console.warn("[ar-ap-step] Failed to build entity profiles:", e)
       }
-    } catch (e) {
-      console.warn("[ar-ap-step] Failed to build entity profiles:", e)
-      warnings.push("Failed to build entity profiles")
-    }
+    })
     
     console.log("[ar-ap-step] Background reconciliation completed for user:", userId)
     const finalStatus = warnings.length > 0 ? "completed_with_warnings" : "completed"
