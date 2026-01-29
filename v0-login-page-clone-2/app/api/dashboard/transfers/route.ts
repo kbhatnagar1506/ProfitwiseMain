@@ -97,7 +97,8 @@ export async function GET(request: NextRequest) {
       FROM movements m
       LEFT JOIN movement_tags mt ON mt.movement_id = m.id
       LEFT JOIN plaid_accounts pa_src ON pa_src.account_id = m.cash_account_id
-      LEFT JOIN plaid_accounts pa_dst ON pa_dst.account_id = m.linked_internal_account_id
+      LEFT JOIN plaid_accounts pa_dst ON pa_dst.name = m.linked_internal_account_id
+        AND pa_dst.item_id IN (SELECT item_id FROM plaid_items WHERE user_id = $1)
       LEFT JOIN entities e ON e.id = m.counterparty_entity_id
       WHERE ${whereClause}
       ORDER BY m.date DESC, m.created_at DESC
@@ -166,6 +167,29 @@ export async function GET(request: NextRequest) {
         row.raw_description ||
         "Internal Transfer"
 
+      const metaFrom = meta.from_account_name as string | undefined
+      const metaTo = meta.to_account_name as string | undefined
+
+      const srcAcct = {
+        id: row.cash_account_id,
+        name: row.src_account_name ?? metaFrom ?? null,
+        mask: row.src_account_mask,
+      }
+      const dstAcct = {
+        id: row.linked_internal_account_id,
+        name: row.dst_account_name ?? row.linked_internal_account_id ?? metaTo ?? null,
+        mask: row.dst_account_mask,
+      }
+
+      let fromAcct, toAcct
+      if (isOutflow) {
+        fromAcct = { ...srcAcct, name: srcAcct.name ?? metaFrom ?? null }
+        toAcct = { ...dstAcct, name: dstAcct.name ?? metaTo ?? row.counterparty ?? null }
+      } else {
+        fromAcct = { ...dstAcct, name: dstAcct.name ?? metaFrom ?? row.counterparty ?? null }
+        toAcct = { ...srcAcct, name: srcAcct.name ?? metaTo ?? null }
+      }
+
       return {
         id: row.id,
         date: row.date,
@@ -176,16 +200,8 @@ export async function GET(request: NextRequest) {
         currency: row.currency || "USD",
         is_paired: isPaired,
         confidence: (tagData.classification_confidence as number) ?? 0,
-        source_account: {
-          id: isOutflow ? row.cash_account_id : row.linked_internal_account_id,
-          name: isOutflow ? row.src_account_name : row.dst_account_name,
-          mask: isOutflow ? row.src_account_mask : row.dst_account_mask,
-        },
-        destination_account: {
-          id: isOutflow ? row.linked_internal_account_id : row.cash_account_id,
-          name: isOutflow ? row.dst_account_name : row.src_account_name,
-          mask: isOutflow ? row.dst_account_mask : row.src_account_mask,
-        },
+        source_account: fromAcct,
+        destination_account: toAcct,
       }
     })
 
