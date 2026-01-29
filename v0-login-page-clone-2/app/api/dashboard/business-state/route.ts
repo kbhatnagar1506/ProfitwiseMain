@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
         COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN m.amount ELSE 0 END), 0) as gross_revenue,
         COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class = 'refund' THEN m.amount ELSE 0 END), 0) as contra_revenue,
         COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class IN ('customer_cash_in', 'refund') THEN m.amount ELSE 0 END), 0) as net_revenue,
-        COUNT(DISTINCT CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN m.entity_id END) as customer_count,
+        COUNT(DISTINCT CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN m.counterparty_entity_id END) as customer_count,
         CASE WHEN COUNT(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN 1 END) > 0 
           THEN COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN m.amount ELSE 0 END), 0) / 
                COUNT(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN 1 END)
@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
         0 as payroll,
         0 as recurring_obligations,
         0 as top_vendor_pct,
-        COUNT(DISTINCT CASE WHEN m.direction = 'out' AND mt.economic_class = 'vendor_cash_out' THEN m.entity_id END) as vendor_count
+        COUNT(DISTINCT CASE WHEN m.direction = 'out' AND mt.economic_class = 'vendor_cash_out' THEN m.counterparty_entity_id END) as vendor_count
       FROM movements m
       LEFT JOIN movement_tags mt ON m.id = mt.movement_id
       WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'`,
