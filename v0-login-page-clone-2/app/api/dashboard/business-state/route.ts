@@ -24,8 +24,8 @@ export async function GET(request: NextRequest) {
       repeat_revenue_ratio: number
     }>(
       `SELECT 
-        MIN(m.occurred_at)::date as period_start,
-        MAX(m.occurred_at)::date as period_end,
+        MIN(m.date)::date as period_start,
+        MAX(m.date)::date as period_end,
         COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class = 'customer_cash_in' THEN m.amount ELSE 0 END), 0) as gross_revenue,
         COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class = 'refund' THEN m.amount ELSE 0 END), 0) as contra_revenue,
         COALESCE(SUM(CASE WHEN m.direction = 'in' AND mt.economic_class IN ('customer_cash_in', 'refund') THEN m.amount ELSE 0 END), 0) as net_revenue,
@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
         'stable' as liquidity_regime,
         NULL as runway_days,
         0 as burn_rate,
-        EXTRACT(DAY FROM MAX(m.occurred_at) - MIN(m.occurred_at))::int as period_days
+        EXTRACT(DAY FROM MAX(m.date) - MIN(m.date))::int as period_days
       FROM movements m
       LEFT JOIN movement_tags mt ON m.id = mt.movement_id
       WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'`,
