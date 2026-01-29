@@ -41,7 +41,7 @@ export function TopNavBar({ userName = "John Doe", userEmail = "john@example.com
     .toUpperCase()
 
   return (
-    <header className="sticky top-0 z-50 bg-[#0c0c0c] h-14 shrink-0 border-b border-white/[0.06]">
+    <header className="sticky top-0 z-50 bg-[#0A0A0A] h-14 shrink-0 border-b border-white/[0.06] rounded-tl-2xl">
       <div className="flex h-full items-center px-5 gap-4">
         <Link href="/dashboard/home" className="flex items-center h-full flex-shrink-0">
           <img src="/profitwise-logo.png" alt="ProfitWise" className="h-10 w-auto object-contain" />
