@@ -95,7 +95,9 @@ export async function GET(request: NextRequest) {
         WHERE m.user_id = $1 AND m.movement_type != 'internal_transfer'
       )
       SELECT 
-        COALESCE((SELECT current_balance FROM plaid_accounts pa WHERE pa.user_id = $1 ORDER BY pa.updated_at DESC LIMIT 1), 0) as ending_cash,
+        COALESCE((SELECT current_balance FROM plaid_accounts pa 
+                  INNER JOIN plaid_items pi ON pa.item_id = pi.item_id 
+                  WHERE pi.user_id = $1 ORDER BY pa.updated_at DESC LIMIT 1), 0) as ending_cash,
         COALESCE(SUM(fm.amount), 0) as period_net_cash_flow,
         COALESCE(SUM(CASE WHEN fm.direction = 'in' AND mt.cashflow_bucket = 'operating' THEN fm.amount ELSE 0 END), 0) as operating_inflows,
         COALESCE(SUM(CASE WHEN fm.direction = 'out' AND mt.cashflow_bucket = 'operating' THEN fm.amount ELSE 0 END), 0) as operating_outflows,
