@@ -5052,7 +5052,7 @@ export function OnboardingFlow({
                 </div>
 
                 {/* ─── Insights ─── */}
-                {stateData.insights.length > 0 && (
+                {(stateData?.insights?.length ?? 0) > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Key Insights</div>
                     <div className="space-y-2">
@@ -5067,7 +5067,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── NEW: Transitions (Regime Changes) ─── */}
-                {stateData.transitions && stateData.transitions.length > 0 && (
+                {(stateData?.transitions?.length ?? 0) > 0 && (
                   <div className="bg-gradient-to-r from-amber-500/5 via-transparent to-red-500/5 border border-white/10 rounded-xl p-4">
                     <div className="text-xs uppercase tracking-wider text-amber-400 mb-3">Regime Changes Detected</div>
                     <div className="space-y-2">
@@ -5156,7 +5156,7 @@ export function OnboardingFlow({
                 <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
                   <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
                     <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Data span: {forecastData.data_span_days}d</span>
-                    <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Components: {forecastData.components.length}</span>
+                    <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Components: {forecastData?.components?.length ?? 0}</span>
                     <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-gray-500" />Horizon: {forecastData.forecast_horizon_months} months{forecastData.horizon_capped && <span className="text-amber-400 ml-1">(capped)</span>}</span>
                     {forecastData.context && (
                       <span className="flex items-center gap-1.5">
@@ -5281,7 +5281,7 @@ export function OnboardingFlow({
                 })()}
 
                 {/* ─── Next 7 Days — Top Drivers ─── */}
-                {forecastData.events_30d.length > 0 && (() => {
+                {(forecastData?.events_30d?.length ?? 0) > 0 && (() => {
                   const allEvents = forecastData.events_30d
                   const events7d = allEvents.filter((e) => e.day_offset <= 7)
                   const probTemp = forecastData.backtest?.calibration?.probability_temperature
