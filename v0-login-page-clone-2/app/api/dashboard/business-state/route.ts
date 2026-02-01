@@ -114,7 +114,7 @@ export async function GET(request: NextRequest) {
         'stable' as liquidity_regime,
         NULL as runway_days,
         0 as burn_rate,
-        EXTRACT(DAY FROM (MAX(fm.date) - MIN(fm.date)))::int as period_days
+        EXTRACT(DAY FROM (MAX(fm.date) - MIN(fm.date))::interval)::int as period_days
       FROM filtered_movements fm
       LEFT JOIN movement_tags mt ON fm.id = mt.movement_id AND mt.user_id = $1`,
       [userId]
