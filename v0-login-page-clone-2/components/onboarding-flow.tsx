@@ -4596,10 +4596,10 @@ export function OnboardingFlow({
               <div className="space-y-6">
                 {/* ─── NEW: Period Context ─── */}
                 <div className="flex items-center justify-center gap-4 text-xs text-gray-500 flex-wrap">
-                  {stateData.revenue.period_start && stateData.revenue.period_end && (
+                  {stateData?.revenue?.period_start && stateData?.revenue?.period_end && (
                     <span>
                       Period: {new Date(stateData.revenue.period_start).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – {new Date(stateData.revenue.period_end).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                      {stateData.liquidity.period_days > 0 && <span className="text-gray-600"> ({stateData.liquidity.period_days} days)</span>}
+                      {(stateData?.liquidity?.period_days ?? 0) > 0 && <span className="text-gray-600"> ({stateData.liquidity.period_days} days)</span>}
                     </span>
                   )}
                   {stateData.computed_at && (
@@ -4621,6 +4621,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Key Metrics Overview ─── */}
+                {stateData?.revenue && stateData?.spend && stateData?.liquidity && stateData?.risk && (
                 <div className="grid grid-cols-4 gap-3">
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-center hover:bg-white/[0.07] transition-colors">
                     <div className="text-2xl font-bold text-emerald-400">{money(stateData.revenue.net_revenue)}</div>
@@ -4639,6 +4640,7 @@ export function OnboardingFlow({
                     <div className="text-xs text-gray-400 mt-1">Risk Level</div>
                   </div>
                 </div>
+                )}
 
                 {/* ─── NEW: Data Health Bar ─── */}
                 {(() => {
@@ -4694,6 +4696,7 @@ export function OnboardingFlow({
                 })()}
 
                 {/* ─── Confidence Indicators ─── */}
+                {stateData?.state_confidence && (
                 <div className="flex items-center justify-center gap-8 py-2">
                   <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${stateData.state_confidence.revenue_confidence >= 90 ? "bg-emerald-400" : stateData.state_confidence.revenue_confidence >= 70 ? "bg-amber-400" : "bg-red-400"}`} />
@@ -4711,8 +4714,10 @@ export function OnboardingFlow({
                     <span className={`text-xs font-semibold ${confColor(stateData.state_confidence.liquidity_confidence)}`}>{pct(stateData.state_confidence.liquidity_confidence)}</span>
                   </div>
                 </div>
+                )}
 
                 {/* ─── Risk Breakdown ─── */}
+                {stateData?.risk && (
                 <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Risk Analysis</h3>
@@ -4736,8 +4741,10 @@ export function OnboardingFlow({
                     })}
                   </div>
                 </div>
+                )}
 
                 {/* ─── Revenue & Spend Side by Side ─── */}
+                {stateData?.revenue && stateData?.spend && (
                 <div className="grid grid-cols-2 gap-4">
                   {/* Revenue Card */}
                   <div className="bg-white/5 border border-white/10 rounded-xl p-5">
@@ -4763,11 +4770,11 @@ export function OnboardingFlow({
                         <div className="text-[10px] text-gray-500">Repeat Rev</div>
                       </div>
                     </div>
-                    {stateData.revenue.revenue_by_customer.length > 0 && (
+                    {(stateData?.revenue?.revenue_by_customer?.length ?? 0) > 0 && (
                       <div className="mt-4 pt-3 border-t border-white/5">
                         <div className="text-[10px] uppercase text-gray-500 mb-2">Top Customers</div>
                         <div className="space-y-1">
-                          {stateData.revenue.revenue_by_customer.slice(0, 3).map((c, i) => (
+                          {(stateData?.revenue?.revenue_by_customer ?? []).slice(0, 3).map((c, i) => (
                             <div key={i} className="flex items-center justify-between text-xs">
                               <span className="text-gray-300 truncate max-w-[60%]">{c.name}</span>
                               <span className="text-emerald-400 font-mono">{money(c.total)}</span>
@@ -4802,11 +4809,11 @@ export function OnboardingFlow({
                         <div className="text-[10px] text-gray-500">Top Vendor</div>
                       </div>
                     </div>
-                    {stateData.spend.spend_by_vendor.length > 0 && (
+                    {(stateData?.spend?.spend_by_vendor?.length ?? 0) > 0 && (
                       <div className="mt-4 pt-3 border-t border-white/5">
                         <div className="text-[10px] uppercase text-gray-500 mb-2">Top Vendors</div>
                         <div className="space-y-1">
-                          {stateData.spend.spend_by_vendor.slice(0, 3).map((v, i) => (
+                          {(stateData?.spend?.spend_by_vendor ?? []).slice(0, 3).map((v, i) => (
                             <div key={i} className="flex items-center justify-between text-xs">
                               <span className="text-gray-300 truncate max-w-[60%]">{v.name}</span>
                               <span className="text-amber-400 font-mono">{money(v.total)}</span>
@@ -4817,6 +4824,7 @@ export function OnboardingFlow({
                     )}
                   </div>
                 </div>
+                )}
 
                 {/* ─── NEW: Reconciliation Status ─── */}
                 {step13ArAp && (
@@ -4911,6 +4919,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Liquidity State ─── */}
+                {stateData?.liquidity && (
                 <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-semibold text-blue-400 uppercase tracking-wider">Liquidity</h3>
@@ -4964,6 +4973,7 @@ export function OnboardingFlow({
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* ─── NEW: Movement & Entity Health ─── */}
                 <div className="bg-white/5 border border-white/10 rounded-xl p-4">
@@ -5056,7 +5066,7 @@ export function OnboardingFlow({
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Key Insights</div>
                     <div className="space-y-2">
-                      {stateData.insights.slice(0, 5).map((ins) => (
+                      {(stateData?.insights ?? []).slice(0, 5).map((ins) => (
                         <div key={ins.id} className="flex items-start gap-2.5">
                           <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${ins.severity === "high" ? "bg-red-400" : ins.severity === "medium" ? "bg-amber-400" : "bg-blue-400"}`} />
                           <span className="text-sm text-gray-200">{ins.message}</span>
@@ -5071,7 +5081,7 @@ export function OnboardingFlow({
                   <div className="bg-gradient-to-r from-amber-500/5 via-transparent to-red-500/5 border border-white/10 rounded-xl p-4">
                     <div className="text-xs uppercase tracking-wider text-amber-400 mb-3">Regime Changes Detected</div>
                     <div className="space-y-2">
-                      {stateData.transitions.slice(0, 4).map((t, i) => (
+                      {(stateData?.transitions ?? []).slice(0, 4).map((t, i) => (
                         <div key={i} className="flex items-start gap-2.5">
                           <span className={`mt-1 shrink-0 w-2 h-2 rounded-full ${t.severity === "critical" ? "bg-red-400 animate-pulse" : t.severity === "warning" ? "bg-amber-400" : "bg-blue-400"}`} />
                           <div className="flex-1">
@@ -5165,7 +5175,7 @@ export function OnboardingFlow({
                       </span>
                     )}
                   </div>
-                  {forecastData.forecast_confidence && (() => {
+                  {forecastData?.forecast_confidence && (() => {
                     const conf = forecastData.forecast_confidence
                     const pct = Math.round(conf.score * 100)
                     const color = conf.label === "high" ? "emerald" : conf.label === "medium" ? "amber" : "red"
@@ -5190,7 +5200,7 @@ export function OnboardingFlow({
                 </div>
 
                 {/* ─── Horizon Cap Warning ─── */}
-                {forecastData.horizon_capped && forecastData.horizon_cap_reason && (
+                {forecastData?.horizon_capped && forecastData?.horizon_cap_reason && (
                   <div className="flex items-center gap-2.5 px-4 py-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-300">
                     <span className="text-amber-400 text-sm">⚠</span>
                     <span>{forecastData?.horizon_cap_reason}</span>
@@ -5221,7 +5231,7 @@ export function OnboardingFlow({
                     {forecastData.sensitivity?.top_opportunity_driver && (
                       <span>Largest near-term expected inflow: <span className="text-emerald-300">{forecastData.sensitivity.top_opportunity_driver}</span></span>
                     )}
-                    {forecastData.context.account_balances.length > 0 && forecastData.context.account_balances.map((ab) => (
+                    {(forecastData?.context?.account_balances?.length ?? 0) > 0 && forecastData.context.account_balances.map((ab) => (
                       <span key={ab.account_id}>{ab.name}: <span className="text-white font-mono">${Math.round(ab.balance).toLocaleString()}</span></span>
                     ))}
                     </div>
@@ -5291,8 +5301,8 @@ export function OnboardingFlow({
                   const totalIn = allEvents.filter((e) => e.direction === "in").reduce((s, e) => s + e.amount * e.probability, 0)
                   const totalOut = allEvents.filter((e) => e.direction === "out").reduce((s, e) => s + e.amount * e.probability, 0)
                   const net = totalIn - totalOut
-                  const sim = forecastData.daily_simulation
-                  const lowDay = sim.min_cash_day > 0 ? sim.days.find((d) => d.day === sim.min_cash_day) : null
+                  const sim = forecastData?.daily_simulation
+                  const lowDay = sim?.min_cash_day > 0 ? sim.days.find((d) => d.day === sim.min_cash_day) : null
 
                   return (
                     <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-5">
@@ -5482,7 +5492,7 @@ export function OnboardingFlow({
                       </div>
 
                       {/* Operating vs Treasury breakdown (optional) */}
-                      {forecastData.separated_forecast && (() => {
+                      {forecastData?.separated_forecast && (() => {
                         const sf = forecastData.separated_forecast
                         const hasBreakdown = sf.operating_30d_in + sf.operating_30d_out + sf.settlement_30d_in + sf.settlement_30d_out + sf.treasury_30d_in + sf.treasury_30d_out > 0
                         if (!hasBreakdown) return null
@@ -5528,7 +5538,8 @@ export function OnboardingFlow({
 
                 {/* ─── Monte Carlo Simulation ─── */}
                 {(() => {
-                  const mc = forecastData.monte_carlo
+                  const mc = forecastData?.monte_carlo
+                  if (!mc) return null
                   const pctiles = mc.percentiles
                   const allValues = pctiles.flatMap((p) => [p.p5, p.p95])
                   const maxVal = Math.max(...allValues)
@@ -5684,7 +5695,7 @@ export function OnboardingFlow({
                     <div className="p-5 space-y-5 border-t border-white/10">
 
                 {/* ─── Outstanding Invoices Signal ─── */}
-                {forecastData.behavioral_models.invoice_signal.invoices.length > 0 && (() => {
+                {(forecastData?.behavioral_models?.invoice_signal?.invoices?.length ?? 0) > 0 && (() => {
                   const sig = forecastData.behavioral_models.invoice_signal
                   return (
                     <div className="bg-white/5 border border-amber-500/20 rounded-xl p-5">
@@ -5734,11 +5745,11 @@ export function OnboardingFlow({
                 })()}
 
                 {/* ─── Customer Models ─── */}
-                {forecastData.behavioral_models.customers.length > 0 && (
+                {(forecastData?.behavioral_models?.customers?.length ?? 0) > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                     <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-3">Customer Payment Models</h3>
                     <div className="space-y-2">
-                      {forecastData.behavioral_models.customers.slice(0, 10).map((c) => {
+                      {(forecastData?.behavioral_models?.customers ?? []).slice(0, 10).map((c) => {
                         const archetypeColors: Record<string, string> = {
                           clockwork: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
                           bursty: "bg-amber-500/20 text-amber-300 border-amber-500/30",
@@ -5798,11 +5809,11 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Vendor Models ─── */}
-                {forecastData.behavioral_models.vendors.length > 0 && (
+                {(forecastData?.behavioral_models?.vendors?.length ?? 0) > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                     <h3 className="text-sm font-semibold text-red-400 uppercase tracking-wider mb-3">Vendor Payment Models</h3>
                     <div className="space-y-2">
-                      {forecastData.behavioral_models.vendors.slice(0, 10).map((v) => {
+                      {(forecastData?.behavioral_models?.vendors ?? []).slice(0, 10).map((v) => {
                         const recColors: Record<string, string> = {
                           hard: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
                           soft: "bg-amber-500/20 text-amber-300 border-amber-500/30",
@@ -5845,6 +5856,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Settlement + Transfer Models ─── */}
+                {forecastData?.behavioral_models?.settlement && forecastData?.behavioral_models?.transfers && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <h3 className="text-sm font-semibold text-blue-400 uppercase tracking-wider mb-2">Settlement Model</h3>
@@ -5875,7 +5887,7 @@ export function OnboardingFlow({
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <h3 className="text-sm font-semibold text-purple-400 uppercase tracking-wider mb-2">Transfer Behavior</h3>
                     <div className="space-y-1.5 text-sm">
-                      <div className="flex justify-between"><span className="text-gray-400">Pattern</span><span className="text-white font-mono">{forecastData.behavioral_models.transfers.trigger_pattern.replace(/_/g, " ")}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-400">Pattern</span><span className="text-white font-mono">{forecastData.behavioral_models.transfers.trigger_pattern?.replace(/_/g, " ") ?? "—"}</span></div>
                       <div className="flex justify-between"><span className="text-gray-400">Avg amount</span><span className="text-white font-mono">{money(forecastData.behavioral_models.transfers.avg_transfer_amount)}</span></div>
                       <div className="flex justify-between"><span className="text-gray-400">Count</span><span className="text-white font-mono">{forecastData.behavioral_models.transfers.transfer_count}</span></div>
                       {forecastData.behavioral_models.transfers.avg_interval_days && <div className="flex justify-between"><span className="text-gray-400">Interval</span><span className="text-white font-mono">~{forecastData.behavioral_models.transfers.avg_interval_days}d</span></div>}
@@ -5883,13 +5895,14 @@ export function OnboardingFlow({
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* ─── Recurring Fixed Obligations ─── */}
-                {forecastData.behavioral_models.recurring_fixed.length > 0 && (
+                {(forecastData?.behavioral_models?.recurring_fixed?.length ?? 0) > 0 && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <h3 className="text-sm font-semibold text-amber-400 uppercase tracking-wider mb-2">Recurring Fixed Obligations</h3>
                     <div className="space-y-1">
-                      {forecastData.behavioral_models.recurring_fixed.slice(0, 8).map((rf, i) => (
+                      {(forecastData?.behavioral_models?.recurring_fixed ?? []).slice(0, 8).map((rf, i) => (
                         <div key={i} className="flex items-center justify-between text-sm py-1 border-b border-white/5 last:border-0">
                           <span className="text-gray-300 truncate max-w-[200px]">{rf.label}</span>
                           <span className="text-red-400 font-mono shrink-0">{money(rf.monthly_amount)}/mo</span>
@@ -5903,7 +5916,7 @@ export function OnboardingFlow({
                 <div className="bg-white/5 border border-white/10 rounded-xl p-5">
                   <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4">Aggregate Components</h3>
                   <div className="space-y-2">
-                    {forecastData.components
+                    {(forecastData?.components ?? [])
                       .sort((a, b) => b.monthly_avg - a.monthly_avg)
                       .map((c) => (
                       <div key={c.id} className="flex items-center justify-between gap-3 bg-white/5 rounded-lg px-3 py-2.5">
@@ -5935,7 +5948,7 @@ export function OnboardingFlow({
                 </div>
 
                 {/* ─── Scenario Forecasts ─── */}
-                {forecastData.scenarios.map((sc) => (
+                {(forecastData?.scenarios ?? []).map((sc) => (
                   <div key={sc.scenario} className={`border rounded-xl p-5 ${scenarioBorder(sc.scenario)} ${scenarioBg(sc.scenario)}`}>
                     <div className="flex items-center justify-between mb-4">
                       <div>
@@ -6004,9 +6017,9 @@ export function OnboardingFlow({
                 ))}
 
                 {/* ─── Cash Runway ─── */}
-                {forecastData.cash_runway && (() => {
-                  const mc = forecastData.monte_carlo
-                  const sim = forecastData.daily_simulation
+                {forecastData?.cash_runway && (() => {
+                  const mc = forecastData?.monte_carlo
+                  const sim = forecastData?.daily_simulation
                   const shortTermRisk = mc && mc.prob_below_zero_14d > 0.2
                   const shortTermCrisis = mc && mc.prob_below_zero_14d > 0.5
                   return (
@@ -6073,7 +6086,7 @@ export function OnboardingFlow({
                 })()}
 
                 {/* ─── Sensitivity Analysis ─── */}
-                {forecastData.sensitivity && forecastData.sensitivity.drivers.length > 0 && (
+                {forecastData?.sensitivity && (forecastData.sensitivity?.drivers?.length ?? 0) > 0 && (
                   <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6">
                     <h3 className="text-sm font-semibold text-white uppercase tracking-widest mb-1">Top Drivers of Cash Position</h3>
                     <p className="text-xs text-gray-500 mb-5">Which entities move your cash the most</p>
@@ -6108,7 +6121,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Decision Layer: Top Actions (ranked by impact) ─── */}
-                {forecastData.interventions && forecastData.interventions.length > 0 && (
+                {(forecastData?.interventions?.length ?? 0) > 0 && (
                   <div className="bg-gradient-to-br from-cyan-500/10 via-slate-900/50 to-slate-900/20 border border-cyan-500/30 rounded-3xl p-8 shadow-2xl">
                     <div className="flex items-center gap-3 mb-2">
                       <div className="w-1 h-6 bg-gradient-to-b from-cyan-400 to-cyan-600 rounded-full"></div>
@@ -6117,7 +6130,7 @@ export function OnboardingFlow({
                     </div>
                     <p className="text-sm text-gray-400 mb-6 ml-4">What happens to your cash if you take action?</p>
                     <div className="space-y-3">
-                      {(forecastData.enriched_interventions ?? forecastData.interventions).slice(0, 5).map((iv, idx) => {
+                      {(forecastData?.enriched_interventions ?? forecastData?.interventions ?? []).slice(0, 5).map((iv, idx) => {
                         const hasRange = iv.plausible_range_low != null && iv.plausible_range_high != null
                         const rangeStr = hasRange ? `${money(iv.plausible_range_low!)} – ${money(iv.plausible_range_high!)}` : money(iv.impact_cash_14d)
                         const confLabel = iv.confidence_band ? ` (${iv.confidence_band} confidence)` : ""
@@ -6185,7 +6198,7 @@ export function OnboardingFlow({
                     </div>
 
                     {/* Ranked Strategies */}
-                    {forecastData.ranked_strategies && forecastData.ranked_strategies.length > 0 && (
+                    {(forecastData?.ranked_strategies?.length ?? 0) > 0 && (
                       <div className="mt-8 pt-8 border-t border-cyan-500/20">
                         <div className="flex items-center gap-3 mb-4">
                           <div className="w-1 h-6 bg-gradient-to-b from-emerald-400 to-emerald-600 rounded-full"></div>
@@ -6193,7 +6206,7 @@ export function OnboardingFlow({
                           <span className="text-[10px] text-emerald-400/70 font-semibold ml-auto">Multi-action combos</span>
                         </div>
                         <div className="space-y-3">
-                          {forecastData.ranked_strategies.slice(0, 3).map((s, idx) => (
+                          {(forecastData?.ranked_strategies ?? []).slice(0, 3).map((s, idx) => (
                             <div key={s.id} className="group relative bg-gradient-to-r from-emerald-500/5 to-slate-900/20 rounded-2xl px-5 py-4 border border-emerald-500/30 hover:border-emerald-400/50 transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/10">
                               <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/0 via-emerald-500/0 to-emerald-500/0 group-hover:from-emerald-500/5 group-hover:via-emerald-500/5 group-hover:to-emerald-500/0 rounded-2xl transition-all duration-300 pointer-events-none"></div>
                               <div className="relative">
@@ -6241,7 +6254,7 @@ export function OnboardingFlow({
                     )}
 
                     {/* Execution Plans */}
-                    {forecastData.execution_plans && forecastData.execution_plans.length > 0 && (
+                    {(forecastData?.execution_plans?.length ?? 0) > 0 && (
                       <div className="mt-8 pt-8 border-t border-cyan-500/20">
                         <div className="flex items-center gap-3 mb-4">
                           <div className="w-1 h-6 bg-gradient-to-b from-blue-400 to-blue-600 rounded-full"></div>
@@ -6249,7 +6262,7 @@ export function OnboardingFlow({
                           <span className="text-[10px] text-blue-400/70 font-semibold ml-auto">Step-by-step guidance</span>
                         </div>
                         <div className="space-y-4">
-                          {forecastData.execution_plans.slice(0, 2).map((plan) => (
+                          {(forecastData?.execution_plans ?? []).slice(0, 2).map((plan) => (
                             <div key={plan.action_id} className="bg-gradient-to-r from-blue-500/5 to-slate-900/20 rounded-2xl px-5 py-4 border border-blue-500/30">
                               <div className="text-sm font-bold text-white mb-3">{plan.action_label}</div>
                               <div className="space-y-2 mb-3">
@@ -6281,7 +6294,7 @@ export function OnboardingFlow({
                     )}
 
                     {/* Anomalies & Warnings */}
-                    {forecastData.intervention_anomalies && forecastData.intervention_anomalies.length > 0 && (
+                    {(forecastData?.intervention_anomalies?.length ?? 0) > 0 && (
                       <div className="mt-8 pt-8 border-t border-cyan-500/20">
                         <div className="flex items-center gap-3 mb-4">
                           <div className="w-1 h-6 bg-gradient-to-b from-amber-400 to-amber-600 rounded-full"></div>
@@ -6289,7 +6302,7 @@ export function OnboardingFlow({
                           <span className="text-[10px] text-amber-400/70 font-semibold ml-auto">Quality checks</span>
                         </div>
                         <div className="space-y-2">
-                          {forecastData.intervention_anomalies.map((anomaly, idx) => (
+                          {(forecastData?.intervention_anomalies ?? []).map((anomaly, idx) => (
                             <div key={idx} className={`p-3 rounded-xl border transition-all ${anomaly.severity === "critical" ? "bg-red-500/10 border-red-500/30 hover:border-red-400/50" : anomaly.severity === "warning" ? "bg-amber-500/10 border-amber-500/30 hover:border-amber-400/50" : "bg-blue-500/10 border-blue-500/30 hover:border-blue-400/50"}`}>
                               <div className={`text-sm font-bold flex items-center gap-2 ${anomaly.severity === "critical" ? "text-red-400" : anomaly.severity === "warning" ? "text-amber-400" : "text-blue-400"}`}>
                                 {anomaly.severity === "critical" ? "🔴" : anomaly.severity === "warning" ? "⚠️" : "ℹ️"} {anomaly.anomaly_type ? anomaly.anomaly_type.toUpperCase() : "ANOMALY"}
@@ -6307,12 +6320,12 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Control Layer: Execution (reminders, drafts) ─── */}
-                {forecastData.execution_suggestions && forecastData.execution_suggestions.length > 0 && (
+                {(forecastData?.execution_suggestions?.length ?? 0) > 0 && (
                   <div className="bg-white/5 border border-violet-500/20 rounded-xl p-5">
                     <h3 className="text-sm font-semibold text-violet-400 uppercase tracking-wider mb-1">Execution</h3>
                     <p className="text-xs text-gray-500 mb-4">Turn advice into doing: reminders, drafts, triggers</p>
                     <div className="space-y-3">
-                      {forecastData.execution_suggestions.map((es, i) => (
+                      {(forecastData?.execution_suggestions ?? []).map((es, i) => (
                         <div key={i} className="bg-white/5 rounded-lg px-4 py-3">
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-medium text-violet-300">{es.label}</span>
@@ -6331,7 +6344,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Forecast Confidence (Trust Engine) ─── */}
-                {forecastData.forecast_confidence && (
+                {forecastData?.forecast_confidence && (
                   <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6">
                     <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-widest mb-1">Forecast Confidence</h3>
                     <p className="text-[10px] text-gray-500 mb-4">What would make this prediction wrong? How to improve trust.</p>
@@ -6414,7 +6427,7 @@ export function OnboardingFlow({
                       </div>
                     )}
 
-                    {forecastData.forecast_confidence.reasons.length > 0 && (
+                    {(forecastData.forecast_confidence?.reasons?.length ?? 0) > 0 && (
                       <div className="space-y-1">
                         {forecastData.forecast_confidence.reasons.map((r, i) => (
                           <div key={i} className="text-xs text-gray-400 flex items-center gap-1.5">
@@ -6427,7 +6440,7 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Backtest Accuracy & Calibration ─── */}
-                {forecastData.backtest && (
+                {forecastData?.backtest && (
                   <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Backtest & Calibration</h3>
@@ -6538,12 +6551,12 @@ export function OnboardingFlow({
             {!forecastLoading && forecastData && (
               <div className="space-y-6">
                 {/* ─── Decision Layer: Top Actions ─── */}
-                {forecastData.interventions && forecastData.interventions.length > 0 ? (
+                {(forecastData?.interventions?.length ?? 0) > 0 ? (
                   <div className="bg-white/5 border border-cyan-500/20 rounded-xl p-5">
                     <h3 className="text-sm font-semibold text-cyan-400 uppercase tracking-wider mb-1">Top Actions (by risk reduction)</h3>
                     <p className="text-xs text-gray-500 mb-4">If I do X, what happens to my cash distribution?</p>
                     <div className="space-y-2">
-                      {forecastData.interventions.slice(0, 6).map((iv) => {
+                      {(forecastData?.interventions ?? []).slice(0, 6).map((iv) => {
                         const hasRange = iv.plausible_range_low != null && iv.plausible_range_high != null
                         const rangeStr = hasRange ? `${money(iv.plausible_range_low!)} – ${money(iv.plausible_range_high!)}` : money(iv.impact_cash_14d)
                         const confLabel = iv.confidence_band ? ` (${iv.confidence_band} confidence)` : ""
@@ -6594,11 +6607,11 @@ export function OnboardingFlow({
                       })}
                     </div>
 
-                    {forecastData.combined_strategies && forecastData.combined_strategies.length > 0 && (
+                    {(forecastData?.combined_strategies?.length ?? 0) > 0 && (
                       <div className="mt-4 pt-4 border-t border-white/10">
                         <h4 className="text-xs font-semibold text-cyan-400/90 uppercase mb-2">Best 2-action strategy</h4>
                         <div className="space-y-2">
-                          {forecastData.combined_strategies.map((s) => (
+                          {(forecastData?.combined_strategies ?? []).map((s) => (
                             <div key={s.id} className="bg-cyan-500/10 rounded-lg px-3 py-2 border border-cyan-500/20">
                               <div className="text-xs text-white font-medium mb-1">{s.summary}</div>
                               <div className="flex gap-2 text-[10px]">
@@ -6621,12 +6634,12 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── Control Layer: Execution ─── */}
-                {forecastData.execution_suggestions && forecastData.execution_suggestions.length > 0 && (
+                {(forecastData?.execution_suggestions?.length ?? 0) > 0 && (
                   <div className="bg-white/5 border border-violet-500/20 rounded-xl p-5">
                     <h3 className="text-sm font-semibold text-violet-400 uppercase tracking-wider mb-1">Execution</h3>
                     <p className="text-xs text-gray-500 mb-4">Turn advice into doing: reminders, drafts, triggers</p>
                     <div className="space-y-3">
-                      {forecastData.execution_suggestions.map((es, i) => (
+                      {(forecastData?.execution_suggestions ?? []).map((es, i) => (
                         <div key={i} className="bg-white/5 rounded-lg px-4 py-3">
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-medium text-violet-300">{es.label}</span>
