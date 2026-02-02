@@ -4590,6 +4590,27 @@ export function OnboardingFlow({
                   <p className="text-red-300 text-sm">{stateError}</p>
                 </div>
               )}
+
+              {!stateLoading && !stateData && !stateError && (
+                <div className="flex flex-col items-center gap-4 py-12">
+                  <p className="text-gray-400 text-sm">No business state data yet. Click below to compute.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStateLoading(true)
+                      setStateError(null)
+                      fetch("/api/state/compute")
+                        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+                        .then((data) => { setStateData(data); setStateLoading(false) })
+                        .catch((err) => { setStateError(err instanceof Error ? err.message : "Failed to compute"); setStateLoading(false) })
+                    }}
+                    className="rounded-lg border border-white/20 bg-white/5 px-6 py-3 hover:bg-white/10 transition-colors"
+                  >
+                    <div className="text-sm font-medium text-white">Compute Business State</div>
+                    <div className="text-xs text-gray-400">Analyze revenue, spend, liquidity & risk</div>
+                  </button>
+                </div>
+              )}
             </div>
 
             {!stateLoading && stateData && (
@@ -5157,6 +5178,27 @@ export function OnboardingFlow({
 
               {forecastError && !forecastLoading && (
                 <p className="text-red-300 text-sm mb-4">Failed: {forecastError}</p>
+              )}
+
+              {!forecastLoading && !forecastData && !forecastError && (
+                <div className="flex flex-col items-center gap-4 py-12">
+                  <p className="text-gray-400 text-sm">No forecast data yet. Click below to generate.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForecastLoading(true)
+                      setForecastError(null)
+                      fetch("/api/forecast")
+                        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
+                        .then((data: CashflowForecast) => { setForecastData(data); setForecastLoading(false) })
+                        .catch((err) => { setForecastError(err instanceof Error ? err.message : "Failed to load forecast"); setForecastLoading(false) })
+                    }}
+                    className="rounded-lg border border-white/20 bg-white/5 px-6 py-3 hover:bg-white/10 transition-colors"
+                  >
+                    <div className="text-sm font-medium text-white">Compute Forecast</div>
+                    <div className="text-xs text-gray-400">Simulate future cash from behavioral models</div>
+                  </button>
+                </div>
               )}
             </div>
 
