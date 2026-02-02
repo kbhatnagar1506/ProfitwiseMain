@@ -5198,15 +5198,15 @@ export function OnboardingFlow({
                 )}
 
                 {/* ─── MAE Buffer Warning ─── */}
-                {forecastData.backtest && forecastData.backtest.mean_absolute_error > 0 && forecastData.daily_simulation.min_cash > 0 && forecastData.daily_simulation.min_cash < forecastData.backtest.mean_absolute_error && (
+                {forecastData?.backtest && forecastData.backtest.mean_absolute_error > 0 && forecastData?.daily_simulation?.min_cash > 0 && (forecastData?.daily_simulation?.min_cash ?? 0) < forecastData.backtest.mean_absolute_error && (
                   <div className="flex items-center gap-2.5 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-300">
                     <span className="text-red-400 text-sm">⚠</span>
-                    <span>Projected cash low (${Math.round(forecastData.daily_simulation.min_cash).toLocaleString()}) is within forecast error margin (${Math.round(forecastData.backtest.mean_absolute_error).toLocaleString()}) — safety buffer may be insufficient</span>
+                    <span>Projected cash low (${Math.round(forecastData?.daily_simulation?.min_cash ?? 0).toLocaleString()}) is within forecast error margin (${Math.round(forecastData.backtest.mean_absolute_error).toLocaleString()}) — safety buffer may be insufficient</span>
                   </div>
                 )}
 
                 {/* ─── Context: Risk & Account Balances ─── */}
-                {forecastData.context && (forecastData.context.risk_score > 0 || forecastData.context.account_balances.length > 0) && (
+                {forecastData?.context && (forecastData.context.risk_score > 0 || (forecastData.context?.account_balances?.length ?? 0) > 0) && (
                   <div className="flex flex-col gap-1 text-[10px] text-gray-400 mt-1">
                     <div className="flex flex-wrap gap-3">
                       {forecastData.context.risk_score > 0 && (
@@ -5423,7 +5423,7 @@ export function OnboardingFlow({
                 })()}
 
                 {/* ─── Daily Cashflow Simulation ─── */}
-                {forecastData.daily_simulation.days.length > 0 && (() => {
+                {(forecastData?.daily_simulation?.days?.length ?? 0) > 0 && (() => {
                   const sim = forecastData.daily_simulation
                   const maxCash = Math.max(sim.starting_cash, ...sim.days.map((d) => d.cash))
                   const minCash = Math.min(sim.starting_cash, ...sim.days.map((d) => d.cash))
