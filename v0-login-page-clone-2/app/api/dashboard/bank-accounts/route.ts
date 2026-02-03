@@ -163,15 +163,18 @@ export async function GET(request?: NextRequest) {
       [userId]
     ).then((r) => r.rows)
 
-    const recentTransactions = recentTxnRows.map((r) => ({
-      id: r.id,
-      date: r.date,
-      direction: r.direction,
-      amount: parseFloat(r.amount),
-      display_name: r.entity_name || r.counterparty || r.raw_description || "Unknown",
-      account_name: r.account_name,
-      account_mask: r.account_mask,
-    }))
+    const recentTransactions = recentTxnRows.map((r) => {
+      const acct = accounts.find((a) => a.account_id === r.cash_account_id)
+      return {
+        id: r.id,
+        date: r.date,
+        direction: r.direction,
+        amount: parseFloat(r.amount),
+        display_name: r.entity_name || r.counterparty || r.raw_description || "Unknown",
+        account_name: r.account_name || acct?.name || null,
+        account_mask: r.account_mask || acct?.mask || null,
+      }
+    })
 
     const accountsWithHistory = accounts.map((a) => ({
       ...a,
