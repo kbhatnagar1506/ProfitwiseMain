@@ -65,6 +65,7 @@ function accountLabel(acct: AccountRef): string {
   if (acct.name && acct.mask) return `${acct.name} ...${acct.mask}`
   if (acct.name) return acct.name
   if (acct.mask) return `...${acct.mask}`
+  if (acct.id) return `Account ${acct.id.slice(-6)}`
   return "Unknown"
 }
 
