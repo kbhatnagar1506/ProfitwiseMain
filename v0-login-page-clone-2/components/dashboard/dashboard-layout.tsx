@@ -30,7 +30,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             <SidebarNavigation />
           </Sidebar>
 
-          <div className="flex flex-col flex-1 min-w-0 bg-[#0A0A0A] rounded-tl-2xl border-t border-l border-white/[0.06] shadow-2xl">
+          <div className="flex flex-col flex-1 min-w-0 bg-[#0A0A0A] rounded-tl-2xl border-t border-l border-white/[0.08] shadow-[-8px_0_24px_rgba(0,0,0,0.5)]">
             <TopNavBar />
             <main className="flex-1 overflow-auto px-8 py-6">
               <div className="max-w-6xl">
