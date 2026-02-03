@@ -262,7 +262,7 @@ export default function VendorsPage() {
             className="bg-white/5 border-white/10 text-neutral-300 placeholder:text-neutral-700"
           />
 
-          <Select value={sortBy} onValueChange={(v) => { setSortBy(v); setPage(1) }}>
+          <Select value={sortBy || "lifetime_value"} onValueChange={(v) => { setSortBy(v); setPage(1) }}>
             <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
               <SelectValue placeholder="Sort by" />
             </SelectTrigger>
@@ -273,12 +273,12 @@ export default function VendorsPage() {
             </SelectContent>
           </Select>
 
-          <Select value={archetype} onValueChange={(v) => { setArchetype(v); setPage(1) }}>
+          <Select value={archetype || "__all__"} onValueChange={(v) => { setArchetype(v === "__all__" ? "" : v); setPage(1) }}>
             <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
               <SelectValue placeholder="All archetypes" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
-              <SelectItem value="">All archetypes</SelectItem>
+              <SelectItem value="__all__">All archetypes</SelectItem>
               <SelectItem value="Clockwork">Clockwork</SelectItem>
               <SelectItem value="Bursty">Bursty</SelectItem>
               <SelectItem value="Volatile">Volatile</SelectItem>
