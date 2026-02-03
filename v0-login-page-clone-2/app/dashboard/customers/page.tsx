@@ -342,9 +342,10 @@ export default function CustomersPage() {
                 <TableRow className="border-b border-white/[0.06] hover:bg-transparent">
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Name</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Archetype</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium">Reliability</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Lifetime Volume</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Open Balance</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Last Active</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Open AR</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Overdue</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -358,7 +359,7 @@ export default function CustomersPage() {
                         : ""
                     }`}
                   >
-                    <TableCell className="text-[12px] text-neutral-300 py-2 px-4 truncate max-w-[200px]">
+                    <TableCell className="text-[12px] text-neutral-300 py-2 px-4 truncate max-w-[180px]">
                       {customer.display_name || customer.canonical_name}
                     </TableCell>
                     <TableCell className="text-[11px] py-2 px-4">
@@ -366,20 +367,25 @@ export default function CustomersPage() {
                         {customer.archetype}
                       </Badge>
                     </TableCell>
+                    <TableCell className="text-[11px] py-2 px-4">
+                      <ReliabilityBar score={customer.reliability_score} />
+                    </TableCell>
                     <TableCell className="text-[12px] font-medium text-emerald-400/90 py-2 px-4 text-right tabular-nums">
                       {formatCurrency(customer.lifetime_value)}
                     </TableCell>
                     <TableCell className={`text-[12px] font-medium py-2 px-4 text-right tabular-nums ${
-                      customer.overdue_balance > 0 
-                        ? "text-red-400/90" 
-                        : customer.ar_balance > 0 
-                          ? "text-zinc-100" 
-                          : "text-zinc-500"
+                      customer.ar_balance > 0 
+                        ? "text-zinc-100" 
+                        : "text-zinc-500"
                     }`}>
                       {formatCurrency(customer.ar_balance)}
                     </TableCell>
-                    <TableCell className="text-[11px] text-zinc-500 py-2 px-4 tabular-nums">
-                      {formatShortDate(customer.last_transaction_date || "")}
+                    <TableCell className={`text-[12px] font-medium py-2 px-4 text-right tabular-nums ${
+                      customer.overdue_balance > 0 
+                        ? "text-red-400/90" 
+                        : "text-zinc-500"
+                    }`}>
+                      {formatCurrency(customer.overdue_balance)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -424,19 +430,26 @@ export default function CustomersPage() {
 
       {/* Deep Dive Drawer */}
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <SheetContent className="bg-[#0A0A0A] border-l border-white/[0.06] w-full sm:w-[500px]">
+        <SheetContent className="bg-[#0A0A0A] border-l border-white/[0.06] w-full sm:w-[520px] overflow-y-auto">
           {selectedCustomer && (
             <>
-              <SheetHeader className="border-b border-white/[0.06] pb-4">
-                <SheetTitle className="text-white text-lg">
+              <SheetHeader className="border-b border-white/[0.06] pb-4 mb-6">
+                <SheetTitle className="text-white text-xl font-semibold">
                   {selectedCustomer.display_name || selectedCustomer.canonical_name}
                 </SheetTitle>
-                <p className="text-[12px] text-neutral-500 mt-2">
-                  {selectedCustomer.ai_insight || "No additional insights available"}
-                </p>
               </SheetHeader>
 
-              <div className="space-y-6 mt-6">
+              <div className="space-y-6">
+                {/* AI Insight Block (Prominent) */}
+                {selectedCustomer.ai_insight && (
+                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-4">
+                    <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium mb-2">AI Insight</p>
+                    <p className="text-[13px] text-neutral-300 leading-relaxed">
+                      {selectedCustomer.ai_insight}
+                    </p>
+                  </div>
+                )}
+
                 {/* Mini KPI Grid */}
                 <div className="grid grid-cols-3 gap-3">
                   <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
@@ -462,31 +475,36 @@ export default function CustomersPage() {
                 </div>
 
                 {/* Archetype & Transaction Info */}
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Profile</p>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-neutral-400">Archetype</span>
-                    <Badge className={`text-[10px] h-5 ${getArchetypeColor(selectedCustomer.archetype)}`}>
-                      {selectedCustomer.archetype}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-neutral-400">Transactions</span>
-                    <span className="text-[12px] font-medium text-white">{selectedCustomer.transaction_count}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-neutral-400">Last Active</span>
-                    <span className="text-[12px] font-medium text-zinc-400">
-                      {formatDate(selectedCustomer.last_transaction_date)}
-                    </span>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Archetype</span>
+                      <Badge className={`text-[10px] h-5 ${getArchetypeColor(selectedCustomer.archetype)}`}>
+                        {selectedCustomer.archetype}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Transactions</span>
+                      <span className="text-[12px] font-medium text-white">{selectedCustomer.transaction_count}</span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Last Active</span>
+                      <span className="text-[12px] font-medium text-zinc-400">
+                        {formatDate(selectedCustomer.last_transaction_date)}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
                 {/* Overdue Alert */}
                 {selectedCustomer.overdue_balance > 0 && (
                   <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-                    <p className="text-[11px] text-red-400 font-medium">
+                    <p className="text-[12px] text-red-400 font-medium">
                       ⚠ {formatCurrency(selectedCustomer.overdue_balance)} overdue
+                    </p>
+                    <p className="text-[11px] text-red-400/70 mt-1">
+                      This customer has outstanding invoices past their due date.
                     </p>
                   </div>
                 )}

@@ -21,7 +21,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { ChevronDown, ChevronUp, AlertCircle } from "lucide-react"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
+import { ChevronDown, ChevronUp, AlertCircle, Download, ChevronRight } from "lucide-react"
 
 interface Vendor {
   id: string
@@ -35,6 +41,7 @@ interface Vendor {
   archetype: "Clockwork" | "Bursty" | "Volatile" | "New"
   last_transaction_date: string | null
   ai_insight: string | null
+  metadata?: Record<string, any>
 }
 
 interface EntityProfilesResponse {
@@ -127,6 +134,9 @@ export default function VendorsPage() {
   const [sortBy, setSortBy] = useState(searchParams.get("sort_by") || "lifetime_value")
   const [archetype, setArchetype] = useState(searchParams.get("archetype") || "")
   const [atRisk, setAtRisk] = useState(searchParams.get("at_risk") === "true")
+  
+  const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
   const fetchVendors = useCallback(async () => {
     try {
@@ -163,6 +173,36 @@ export default function VendorsPage() {
     fetchVendors()
   }, [fetchVendors])
 
+  const handleExportCSV = () => {
+    if (!data?.customers) return
+    
+    const headers = ["Name", "Archetype", "Txns", "Lifetime Value", "AP", "Overdue", "Reliability", "Last Active"]
+    const rows = data.customers.map(v => [
+      v.display_name || v.canonical_name,
+      v.archetype,
+      v.transaction_count,
+      v.lifetime_value,
+      v.ar_balance,
+      v.overdue_balance,
+      v.reliability_score,
+      v.last_transaction_date || ""
+    ])
+    
+    const csv = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n")
+    const blob = new Blob([csv], { type: "text/csv" })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `vendors-${new Date().toISOString().split("T")[0]}.csv`
+    a.click()
+    window.URL.revokeObjectURL(url)
+  }
+
+  const handleRowClick = (vendor: Vendor) => {
+    setSelectedVendor(vendor)
+    setDrawerOpen(true)
+  }
+
   if (error) {
     return (
       <div className="space-y-8">
@@ -179,38 +219,25 @@ export default function VendorsPage() {
   const summary = data?.summary
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-foreground tracking-tight">Vendors</h1>
-        {summary && (
-          <div className="flex gap-6 mt-3 text-[13px]">
-            <div>
-              <span className="text-neutral-600">Total:</span>{" "}
-              <span className="text-foreground font-medium">{summary.total_vendors}</span>
-            </div>
-            <div>
-              <span className="text-neutral-600">Outstanding AP:</span>{" "}
-              <span className="text-amber-400/90 font-medium tabular-nums">
-                {formatCurrency(summary.total_ar_outstanding)}
-              </span>
-            </div>
-            <div>
-              <span className="text-neutral-600">Lifetime Value:</span>{" "}
-              <span className="text-emerald-400/90 font-medium tabular-nums">
-                {formatCurrency(summary.total_lifetime_value)}
-              </span>
-            </div>
-            {summary.at_risk_count > 0 && (
-              <div className="flex items-center gap-1 text-amber-400">
-                <AlertCircle className="h-3.5 w-3.5" />
-                <span>{summary.at_risk_count} at risk</span>
-              </div>
-            )}
-          </div>
-        )}
+    <div className="space-y-6">
+      {/* Header with Breadcrumbs and Export */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm text-zinc-400">
+          <span>Relationships</span>
+          <ChevronRight className="h-4 w-4" />
+          <span className="text-white">Vendors</span>
+        </div>
+        <Button
+          onClick={handleExportCSV}
+          disabled={!data?.customers || data.customers.length === 0}
+          className="bg-white/5 hover:bg-white/10 text-white border border-white/10 h-8 px-3 text-sm"
+        >
+          <Download className="h-3.5 w-3.5 mr-2" />
+          Export CSV
+        </Button>
       </div>
 
-      {/* Summary Stats Cards */}
+      {/* Macro KPI Row */}
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
@@ -223,30 +250,32 @@ export default function VendorsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/[0.1] transition-colors">
-            <p className="text-[13px] text-neutral-500 font-medium">Total Vendors</p>
-            <p className="text-2xl font-semibold text-foreground mt-2 tracking-tight">
+            <p className="text-[12px] text-neutral-500 font-medium uppercase tracking-wide">Total Vendors</p>
+            <p className="text-3xl font-semibold text-white mt-3 tracking-tight">
               {summary?.total_vendors || 0}
             </p>
           </div>
 
           <div className="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/[0.1] transition-colors">
-            <p className="text-[13px] text-neutral-500 font-medium">Outstanding AP</p>
-            <p className="text-2xl font-semibold text-amber-400/90 mt-2 tracking-tight tabular-nums">
-              {formatCompactCurrency(summary?.total_ar_outstanding || 0)}
-            </p>
-          </div>
-
-          <div className="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/[0.1] transition-colors">
-            <p className="text-[13px] text-neutral-500 font-medium">Lifetime Value</p>
-            <p className="text-2xl font-semibold text-emerald-400/90 mt-2 tracking-tight tabular-nums">
+            <p className="text-[12px] text-neutral-500 font-medium uppercase tracking-wide">Lifetime Volume</p>
+            <p className="text-3xl font-semibold text-emerald-400/90 mt-3 tracking-tight tabular-nums">
               {formatCompactCurrency(summary?.total_lifetime_value || 0)}
             </p>
           </div>
 
           <div className="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/[0.1] transition-colors">
-            <p className="text-[13px] text-neutral-500 font-medium">At Risk</p>
-            <p className="text-2xl font-semibold text-foreground mt-2 tracking-tight">
-              {summary?.at_risk_count || 0}
+            <p className="text-[12px] text-neutral-500 font-medium uppercase tracking-wide">Outstanding AP</p>
+            <p className="text-3xl font-semibold text-white mt-3 tracking-tight tabular-nums">
+              {formatCompactCurrency(summary?.total_ar_outstanding || 0)}
+            </p>
+          </div>
+
+          <div className="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/[0.1] transition-colors">
+            <p className="text-[12px] text-neutral-500 font-medium uppercase tracking-wide">Overdue AP</p>
+            <p className={`text-3xl font-semibold mt-3 tracking-tight tabular-nums ${
+              (summary?.total_overdue || 0) > 0 ? "text-red-400/90" : "text-zinc-500"
+            }`}>
+              {formatCompactCurrency(summary?.total_overdue || 0)}
             </p>
           </div>
         </div>
@@ -313,25 +342,24 @@ export default function VendorsPage() {
                 <TableRow className="border-b border-white/[0.06] hover:bg-transparent">
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Name</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Archetype</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Txns</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Lifetime Value</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">AP</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Overdue</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Reliability</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Last Activity</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Lifetime Volume</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Open AP</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Overdue</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.customers.map((vendor) => (
                   <TableRow
                     key={vendor.id}
-                    className={`hover:bg-white/[0.03] transition-colors ${
+                    onClick={() => handleRowClick(vendor)}
+                    className={`hover:bg-white/[0.03] transition-colors cursor-pointer ${
                       vendor.ar_balance > 0 || vendor.overdue_balance > 0
                         ? "border-l-2 border-l-amber-500/50"
                         : ""
                     }`}
                   >
-                    <TableCell className="text-[12px] text-neutral-300 py-2 px-4 truncate max-w-[200px]">
+                    <TableCell className="text-[12px] text-neutral-300 py-2 px-4 truncate max-w-[180px]">
                       {vendor.display_name || vendor.canonical_name}
                     </TableCell>
                     <TableCell className="text-[11px] py-2 px-4">
@@ -339,27 +367,25 @@ export default function VendorsPage() {
                         {vendor.archetype}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-[12px] text-neutral-300 py-2 px-4 text-right tabular-nums">
-                      {vendor.transaction_count}
+                    <TableCell className="text-[11px] py-2 px-4">
+                      <ReliabilityBar score={vendor.reliability_score} />
                     </TableCell>
                     <TableCell className="text-[12px] font-medium text-emerald-400/90 py-2 px-4 text-right tabular-nums">
                       {formatCurrency(vendor.lifetime_value)}
                     </TableCell>
                     <TableCell className={`text-[12px] font-medium py-2 px-4 text-right tabular-nums ${
-                      vendor.ar_balance > 0 ? "text-amber-400/90" : "text-zinc-400"
+                      vendor.ar_balance > 0 
+                        ? "text-zinc-100" 
+                        : "text-zinc-500"
                     }`}>
                       {formatCurrency(vendor.ar_balance)}
                     </TableCell>
                     <TableCell className={`text-[12px] font-medium py-2 px-4 text-right tabular-nums ${
-                      vendor.overdue_balance > 0 ? "text-red-400/90" : "text-zinc-400"
+                      vendor.overdue_balance > 0 
+                        ? "text-red-400/90" 
+                        : "text-zinc-500"
                     }`}>
                       {formatCurrency(vendor.overdue_balance)}
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <ReliabilityBar score={vendor.reliability_score} />
-                    </TableCell>
-                    <TableCell className="text-[11px] text-zinc-500 py-2 px-4 tabular-nums">
-                      {formatShortDate(vendor.last_transaction_date || "")}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -401,6 +427,92 @@ export default function VendorsPage() {
           <p className="text-sm text-neutral-600 mt-2">Try adjusting your filters</p>
         </div>
       )}
+
+      {/* Deep Dive Drawer */}
+      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+        <SheetContent className="bg-[#0A0A0A] border-l border-white/[0.06] w-full sm:w-[520px] overflow-y-auto">
+          {selectedVendor && (
+            <>
+              <SheetHeader className="border-b border-white/[0.06] pb-4 mb-6">
+                <SheetTitle className="text-white text-xl font-semibold">
+                  {selectedVendor.display_name || selectedVendor.canonical_name}
+                </SheetTitle>
+              </SheetHeader>
+
+              <div className="space-y-6">
+                {/* AI Insight Block (Prominent) */}
+                {selectedVendor.ai_insight && (
+                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-4">
+                    <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium mb-2">AI Insight</p>
+                    <p className="text-[13px] text-neutral-300 leading-relaxed">
+                      {selectedVendor.ai_insight}
+                    </p>
+                  </div>
+                )}
+
+                {/* Mini KPI Grid */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
+                    <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium">Total Paid</p>
+                    <p className="text-lg font-semibold text-emerald-400/90 mt-2 tabular-nums">
+                      {formatCompactCurrency(selectedVendor.lifetime_value)}
+                    </p>
+                  </div>
+                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
+                    <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium">Open AP</p>
+                    <p className={`text-lg font-semibold mt-2 tabular-nums ${
+                      selectedVendor.ar_balance > 0 ? "text-amber-400/90" : "text-zinc-500"
+                    }`}>
+                      {formatCompactCurrency(selectedVendor.ar_balance)}
+                    </p>
+                  </div>
+                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
+                    <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium">Reliability</p>
+                    <p className="text-lg font-semibold text-white mt-2">
+                      {selectedVendor.reliability_score}%
+                    </p>
+                  </div>
+                </div>
+
+                {/* Archetype & Transaction Info */}
+                <div className="space-y-3">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Profile</p>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Archetype</span>
+                      <Badge className={`text-[10px] h-5 ${getArchetypeColor(selectedVendor.archetype)}`}>
+                        {selectedVendor.archetype}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Transactions</span>
+                      <span className="text-[12px] font-medium text-white">{selectedVendor.transaction_count}</span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Last Active</span>
+                      <span className="text-[12px] font-medium text-zinc-400">
+                        {formatDate(selectedVendor.last_transaction_date)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Overdue Alert */}
+                {selectedVendor.overdue_balance > 0 && (
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                    <p className="text-[12px] text-red-400 font-medium">
+                      ⚠ {formatCurrency(selectedVendor.overdue_balance)} overdue
+                    </p>
+                    <p className="text-[11px] text-red-400/70 mt-1">
+                      This vendor has outstanding invoices past their due date.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }
