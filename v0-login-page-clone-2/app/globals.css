@@ -125,7 +125,7 @@
   
   /* Dashboard sidebar */
   [data-sidebar] {
-    @apply !bg-[#0c0c0c] !text-white;
+    @apply !bg-transparent !text-white;
   }
   
   [data-sidebar="sidebar"] {
