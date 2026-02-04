@@ -103,6 +103,81 @@ export async function GET(request?: NextRequest) {
       last_txn_date: row.last_txn_date,
     }))
 
+    // Build 30-day sparkline: daily net change per account, walked back from current balance
+    type DailyDelta = { cash_account_id: string; d: string; net: string }
+    const thirtyDaysAgo = new Date()
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    const sparkRows = accountIds.length > 0
+      ? await query<DailyDelta>(
+          `SELECT cash_account_id, date::text AS d,
+                  SUM(CASE WHEN direction='inflow' THEN amount ELSE -amount END)::text AS net
+           FROM movements
+           WHERE user_id = $1 AND cash_account_id = ANY($2)
+             AND duplicate_of IS NULL AND date >= $3
+           GROUP BY cash_account_id, date
+           ORDER BY cash_account_id, date`,
+          [userId, accountIds, thirtyDaysAgo.toISOString().split("T")[0]]
+        ).then((r) => r.rows)
+      : []
+
+    const balanceHistoryMap = new Map<string, number[]>()
+    for (const acct of accounts) {
+      const dailyDeltas = sparkRows
+        .filter((r) => r.cash_account_id === acct.account_id)
+        .map((r) => parseFloat(r.net))
+
+      if (dailyDeltas.length < 2) {
+        balanceHistoryMap.set(acct.account_id, [])
+        continue
+      }
+
+      // Walk backwards from current balance to reconstruct daily closing balances
+      const totalDelta = dailyDeltas.reduce((s, v) => s + v, 0)
+      let running = acct.current_balance - totalDelta
+      const points: number[] = []
+      for (const delta of dailyDeltas) {
+        running += delta
+        points.push(Math.round(running * 100) / 100)
+      }
+      balanceHistoryMap.set(acct.account_id, points)
+    }
+
+    // Fetch last 10 transactions across all accounts for the Recent Activity ledger
+    type RecentTxnRow = {
+      id: string; date: string; direction: string; amount: string;
+      counterparty: string | null; raw_description: string | null;
+      cash_account_id: string | null; account_name: string | null;
+      account_mask: string | null; entity_name: string | null;
+    }
+    const recentTxnRows = await query<RecentTxnRow>(
+      `SELECT m.id, m.date::text, m.direction, m.amount::text,
+              m.counterparty, m.raw_description, m.cash_account_id,
+              pa.name AS account_name, pa.mask AS account_mask,
+              e.canonical_name AS entity_name
+       FROM movements m
+       LEFT JOIN plaid_accounts pa ON pa.account_id = m.cash_account_id
+       LEFT JOIN entities e ON e.id = m.counterparty_entity_id
+       WHERE m.user_id = $1 AND m.duplicate_of IS NULL AND m.movement_type != 'internal_transfer'
+       ORDER BY m.date DESC, m.created_at DESC
+       LIMIT 10`,
+      [userId]
+    ).then((r) => r.rows)
+
+    const recentTransactions = recentTxnRows.map((r) => ({
+      id: r.id,
+      date: r.date,
+      direction: r.direction,
+      amount: parseFloat(r.amount),
+      display_name: r.entity_name || r.counterparty || r.raw_description || "Unknown",
+      account_name: r.account_name,
+      account_mask: r.account_mask,
+    }))
+
+    const accountsWithHistory = accounts.map((a) => ({
+      ...a,
+      balance_history: balanceHistoryMap.get(a.account_id) || [],
+    }))
+
     const totals = {
       total_balance: accounts.reduce((sum, a) => sum + a.current_balance, 0),
       total_available: accounts.reduce((sum, a) => sum + a.available_balance, 0),
@@ -112,8 +187,9 @@ export async function GET(request?: NextRequest) {
     log("dashboard.bank-accounts.success", { userId, accountCount: accounts.length })
 
     return NextResponse.json({
-      accounts,
+      accounts: accountsWithHistory,
       totals,
+      recent_transactions: recentTransactions,
     })
   } catch (error) {
     log("dashboard.bank-accounts.error", { error: String(error) })
