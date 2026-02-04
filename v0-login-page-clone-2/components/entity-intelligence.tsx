@@ -8,6 +8,13 @@ export function PaymentBehaviorCell({
   avgDays: number
   stdDays: number
 }) {
+  if (avgDays === 0 && stdDays === 0) {
+    return (
+      <div className="text-[12px] font-medium text-neutral-500">
+        Not available
+      </div>
+    )
+  }
   const displayDays = Math.round(avgDays)
   const displayStd = Math.round(stdDays)
   return (
@@ -19,6 +26,13 @@ export function PaymentBehaviorCell({
 }
 
 export function OnTimeRateCell({ rate }: { rate: number }) {
+  if (rate === 0) {
+    return (
+      <div className="text-[12px] font-medium text-neutral-500">
+        Not available
+      </div>
+    )
+  }
   const displayRate = Math.round(rate)
   let colorClass = "text-emerald-400/90"
 
