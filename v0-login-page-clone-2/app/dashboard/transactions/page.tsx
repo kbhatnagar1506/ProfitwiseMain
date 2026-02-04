@@ -128,26 +128,32 @@ function FlagsCell({ transaction }: { transaction: Transaction }) {
   if (flags.length === 0) return <span className="text-[11px] text-neutral-700">—</span>
 
   return (
-    <div className="flex flex-wrap gap-1">
-      {flags.map((flag) => (
-        <Badge
-          key={flag}
-          variant="secondary"
-          className={`text-[10px] h-5 px-1.5 ${
-            flag === "review"
-              ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
-              : "bg-white/5 text-zinc-300 border-white/10"
-          }`}
-        >
-          {flag}
-        </Badge>
-      ))}
+    <div className="flex flex-wrap items-center gap-1.5">
+      {flags.map((flag) =>
+        flag === "review" ? (
+          <Badge
+            key={flag}
+            variant="secondary"
+            className="text-[10px] h-5 px-1.5 bg-amber-500/10 text-amber-400 border-amber-500/20"
+          >
+            review
+          </Badge>
+        ) : (
+          <span
+            key={flag}
+            className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium"
+          >
+            {flag}
+          </span>
+        )
+      )}
     </div>
   )
 }
 
-function ExpandableRow({ transaction }: { transaction: Transaction }) {
-  const [expanded, setExpanded] = useState(false)
+function ExpandableRow({ transaction, showAccount }: { transaction: Transaction; showAccount: boolean }) {
+  const [expanded, setExpanded]  = useState(false)
+  const colSpan = showAccount ? 9 : 8
 
   return (
     <>
@@ -156,25 +162,31 @@ function ExpandableRow({ transaction }: { transaction: Transaction }) {
           transaction.review_needed ? "border-l-2 border-l-amber-500/50" : ""
         }`}
       >
-        <TableCell className="w-8 p-2">
+        <TableCell className="w-8 py-1.5 px-2">
           <button
             onClick={() => setExpanded(!expanded)}
             className="text-neutral-600 hover:text-neutral-400"
           >
-            {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </button>
         </TableCell>
-        <TableCell className="text-[13px] text-neutral-400 font-medium">
+        <TableCell className="text-[12px] text-neutral-500 font-medium">
           {formatDate(transaction.date)}
         </TableCell>
-        <TableCell className="text-[13px] text-neutral-300 max-w-xs truncate">
+        <TableCell className="text-[12px] text-neutral-300 max-w-xs truncate">
           {transaction.display_name}
         </TableCell>
-        <TableCell className="text-[11px] text-neutral-600">
-          {transaction.account_name ? `${transaction.account_name}` : "—"}
-        </TableCell>
+        {showAccount && (
+          <TableCell className="text-[11px] text-zinc-500">
+            {transaction.account_mask
+              ? `⌂ ...${transaction.account_mask}`
+              : transaction.account_name
+                ? transaction.account_name
+                : "—"}
+          </TableCell>
+        )}
         <TableCell
-          className={`text-[13px] font-medium tabular-nums text-right ${
+          className={`text-[12px] font-medium tabular-nums text-right ${
             transaction.direction === "inflow" ? "text-emerald-400/90" : "text-zinc-400"
           }`}
         >
@@ -206,7 +218,7 @@ function ExpandableRow({ transaction }: { transaction: Transaction }) {
 
       {expanded && (
         <TableRow className="bg-white/[0.02]">
-          <TableCell colSpan={9} className="p-4">
+          <TableCell colSpan={colSpan} className="p-4">
             <div className="grid grid-cols-2 gap-6 text-[12px]">
               <div>
                 <h4 className="font-semibold text-neutral-300 mb-3">Classification</h4>
@@ -490,10 +502,12 @@ export default function TransactionsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="border-b border-white/[0.06] hover:bg-transparent">
-                  <TableHead className="w-8 p-2 text-[11px] text-neutral-600 font-medium" />
+                  <TableHead className="w-8 py-1.5 px-2 text-[11px] text-neutral-600 font-medium" />
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Date</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Description</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Account</TableHead>
+                  {accounts.length > 1 && (
+                    <TableHead className="text-[11px] text-neutral-600 font-medium">Account</TableHead>
+                  )}
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Amount</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Class</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Bucket</TableHead>
@@ -503,7 +517,7 @@ export default function TransactionsPage() {
               </TableHeader>
               <TableBody>
                 {data.transactions.map((txn) => (
-                  <ExpandableRow key={txn.id} transaction={txn} />
+                  <ExpandableRow key={txn.id} transaction={txn} showAccount={accounts.length > 1} />
                 ))}
               </TableBody>
             </Table>
