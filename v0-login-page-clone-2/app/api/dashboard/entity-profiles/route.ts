@@ -60,19 +60,16 @@ export async function GET(request: NextRequest) {
     // Fetch summary stats
     const summaryResult = await query<SummaryRow>(
       `SELECT 
-        COUNT(CASE WHEN e.entity_type = 'customer' THEN 1 END)::int as total_customers,
-        COUNT(CASE WHEN e.entity_type = 'vendor' THEN 1 END)::int as total_vendors,
-        COALESCE(SUM(CASE WHEN e.entity_type IN ('customer', 'vendor') THEN 
-          COALESCE(SUM(ABS(m.amount)), 0) ELSE 0 END), 0)::numeric as total_lifetime_value,
+        COUNT(DISTINCT CASE WHEN e.entity_type = 'customer' THEN e.id END)::int as total_customers,
+        COUNT(DISTINCT CASE WHEN e.entity_type = 'vendor' THEN e.id END)::int as total_vendors,
+        COALESCE(SUM(CASE WHEN e.entity_type IN ('customer', 'vendor') THEN ABS(m.amount) ELSE 0 END), 0)::numeric as total_lifetime_value,
         COALESCE(SUM(CASE WHEN e.entity_type = 'customer' AND m.direction = 'inflow' AND m.movement_type = 'receivable' 
           AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0)::numeric as total_ar_outstanding,
         COALESCE(SUM(CASE WHEN e.entity_type = 'customer' AND m.direction = 'inflow' AND m.movement_type = 'receivable'
           AND m.expected_date < CURRENT_DATE AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0)::numeric as total_overdue,
         COUNT(DISTINCT CASE WHEN (
-          COALESCE(SUM(CASE WHEN m.direction = 'inflow' AND m.movement_type = 'receivable' 
-            AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0) > 0 OR
-          COALESCE(SUM(CASE WHEN m.direction = 'inflow' AND m.movement_type = 'receivable'
-            AND m.expected_date < CURRENT_DATE AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0) > 0
+          m.direction = 'inflow' AND m.movement_type = 'receivable' 
+            AND m.status NOT IN ('paid', 'cancelled')
         ) THEN e.id END)::int as at_risk_count
       FROM entities e
       LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
