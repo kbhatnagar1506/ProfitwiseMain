@@ -2,6 +2,28 @@ import { NextRequest, NextResponse } from "next/server"
 import { requireSession } from "@/lib/require-session"
 import { query } from "@/lib/db"
 
+type EntityRow = {
+  id: string
+  entity_type: "customer" | "vendor"
+  canonical_name: string
+  display_name: string | null
+  transaction_count: number
+  lifetime_value: number
+  ar_balance: number
+  overdue_balance: number
+  last_transaction_date: string | null
+  metadata: Record<string, unknown> | null
+}
+
+type SummaryRow = {
+  total_customers: number
+  total_vendors: number
+  total_lifetime_value: number
+  total_ar_outstanding: number
+  total_overdue: number
+  at_risk_count: number
+}
+
 export async function GET(request: NextRequest) {
   try {
     const session = await requireSession()
@@ -10,61 +32,154 @@ export async function GET(request: NextRequest) {
     }
 
     const userId = session.id
+    const searchParams = request.nextUrl.searchParams
 
-    // Fetch entity profiles summary
-    const summaryResult = await query<{
-      total_customers: number
-      total_vendors: number
-      total_lifetime_value: number
-      at_risk_count: number
-    }>(
+    // Parse query parameters
+    const entityType = searchParams.get("entity_type") || "customer"
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10))
+    const limit = Math.min(100, Math.max(10, parseInt(searchParams.get("limit") || "50", 10)))
+    const offset = (page - 1) * limit
+    const search = searchParams.get("search") || ""
+    const sortBy = searchParams.get("sort_by") || "lifetime_value"
+    const archetype = searchParams.get("archetype") || ""
+    const atRisk = searchParams.get("at_risk") === "true"
+
+    // Build WHERE clause
+    const whereConditions = ["e.user_id = $1", "e.entity_type = $2"]
+    const params: unknown[] = [userId, entityType]
+    let paramIndex = 3
+
+    if (search) {
+      whereConditions.push(`(e.canonical_name ILIKE $${paramIndex} OR e.display_name ILIKE $${paramIndex})`)
+      params.push(`%${search}%`)
+      paramIndex++
+    }
+
+    const whereClause = whereConditions.join(" AND ")
+
+    // Fetch summary stats
+    const summaryResult = await query<SummaryRow>(
       `SELECT 
-        COUNT(CASE WHEN entity_type = 'customer' THEN 1 END) as total_customers,
-        COUNT(CASE WHEN entity_type = 'vendor' THEN 1 END) as total_vendors,
-        COALESCE(SUM(CASE WHEN entity_type IN ('customer', 'vendor') THEN lifetime_value ELSE 0 END), 0) as total_lifetime_value,
-        0 as at_risk_count
-      FROM entities
-      WHERE user_id = $1`,
+        COUNT(CASE WHEN e.entity_type = 'customer' THEN 1 END)::int as total_customers,
+        COUNT(CASE WHEN e.entity_type = 'vendor' THEN 1 END)::int as total_vendors,
+        COALESCE(SUM(CASE WHEN e.entity_type IN ('customer', 'vendor') THEN 
+          COALESCE(SUM(ABS(m.amount)), 0) ELSE 0 END), 0)::numeric as total_lifetime_value,
+        COALESCE(SUM(CASE WHEN e.entity_type = 'customer' AND m.direction = 'inflow' AND m.movement_type = 'receivable' 
+          AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0)::numeric as total_ar_outstanding,
+        COALESCE(SUM(CASE WHEN e.entity_type = 'customer' AND m.direction = 'inflow' AND m.movement_type = 'receivable'
+          AND m.expected_date < CURRENT_DATE AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0)::numeric as total_overdue,
+        COUNT(DISTINCT CASE WHEN (
+          COALESCE(SUM(CASE WHEN m.direction = 'inflow' AND m.movement_type = 'receivable' 
+            AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0) > 0 OR
+          COALESCE(SUM(CASE WHEN m.direction = 'inflow' AND m.movement_type = 'receivable'
+            AND m.expected_date < CURRENT_DATE AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0) > 0
+        ) THEN e.id END)::int as at_risk_count
+      FROM entities e
+      LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
+      WHERE e.user_id = $1`,
       [userId]
-    )
+    ).then((r) => r.rows[0])
 
-    // Fetch top customers and vendors
-    const profilesResult = await query<{
-      id: string
-      entity_type: "customer" | "vendor"
-      canonical_name: string
-      display_name: string | null
-      archetype: string | null
-      transaction_count: number
-      lifetime_value: number
-    }>(
+    // Fetch paginated entities with AR metrics
+    const entitiesResult = await query<EntityRow>(
       `SELECT 
         e.id,
         e.entity_type,
         e.canonical_name,
         e.display_name,
-        e.archetype,
-        COUNT(m.id) as transaction_count,
-        COALESCE(SUM(ABS(m.amount)), 0) as lifetime_value
+        COUNT(m.id)::int as transaction_count,
+        COALESCE(SUM(ABS(m.amount)), 0)::numeric as lifetime_value,
+        COALESCE(SUM(CASE WHEN m.direction = 'inflow' AND m.movement_type = 'receivable' 
+          AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0)::numeric as ar_balance,
+        COALESCE(SUM(CASE WHEN m.direction = 'inflow' AND m.movement_type = 'receivable'
+          AND m.expected_date < CURRENT_DATE AND m.status NOT IN ('paid', 'cancelled') THEN m.amount ELSE 0 END), 0)::numeric as overdue_balance,
+        MAX(m.date)::text as last_transaction_date,
+        e.metadata
       FROM entities e
-      LEFT JOIN movements m ON e.id = m.entity_id AND m.user_id = $1
-      WHERE e.user_id = $1 AND e.entity_type IN ('customer', 'vendor')
-      GROUP BY e.id, e.entity_type, e.canonical_name, e.display_name, e.archetype
-      ORDER BY lifetime_value DESC
-      LIMIT 20`,
-      [userId]
-    )
+      LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
+      WHERE ${whereClause}
+      GROUP BY e.id, e.entity_type, e.canonical_name, e.display_name, e.metadata
+      ORDER BY ${
+        sortBy === "reliability"
+          ? "COALESCE((e.metadata->>'reliability_score')::numeric, 0) DESC"
+          : sortBy === "txn_count"
+            ? "transaction_count DESC"
+            : "lifetime_value DESC"
+      }
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    ).then((r) => r.rows)
 
-    const summary = summaryResult.rows[0] || {
+    // Fetch total count
+    const countResult = await query<{ count: string }>(
+      `SELECT COUNT(DISTINCT e.id)::text FROM entities e
+       WHERE ${whereClause}`,
+      params
+    ).then((r) => r.rows[0])
+
+    const total = countResult ? parseInt(countResult.count, 10) : 0
+    const totalPages = Math.ceil(total / limit)
+
+    // Classify archetypes and calculate reliability scores
+    const enrichedEntities = entitiesResult.map((e) => {
+      const metadata = (e.metadata || {}) as Record<string, unknown>
+      const reliabilityScore = Math.round((metadata.reliability_score as number) || 80)
+      let archetype = "New"
+
+      if (e.transaction_count >= 3) {
+        if (reliabilityScore >= 80) {
+          archetype = "Clockwork"
+        } else if (reliabilityScore >= 60) {
+          archetype = "Bursty"
+        } else {
+          archetype = "Volatile"
+        }
+      }
+
+      return {
+        id: e.id,
+        canonical_name: e.canonical_name,
+        display_name: e.display_name,
+        transaction_count: e.transaction_count,
+        lifetime_value: parseFloat(String(e.lifetime_value)),
+        ar_balance: parseFloat(String(e.ar_balance)),
+        overdue_balance: parseFloat(String(e.overdue_balance)),
+        reliability_score: reliabilityScore,
+        archetype,
+        last_transaction_date: e.last_transaction_date,
+        ai_insight: (metadata.ai_insight as string) || null,
+      }
+    })
+
+    // Apply at_risk filter if requested
+    let filtered = enrichedEntities
+    if (atRisk) {
+      filtered = enrichedEntities.filter((e) => e.ar_balance > 0 || e.overdue_balance > 0)
+    }
+
+    // Apply archetype filter if requested
+    if (archetype) {
+      filtered = filtered.filter((e) => e.archetype === archetype)
+    }
+
+    const summary = summaryResult || {
       total_customers: 0,
       total_vendors: 0,
       total_lifetime_value: 0,
+      total_ar_outstanding: 0,
+      total_overdue: 0,
       at_risk_count: 0,
     }
 
     return NextResponse.json({
       summary,
-      profiles: profilesResult.rows,
+      customers: filtered,
+      pagination: {
+        page,
+        limit,
+        total,
+        total_pages: totalPages,
+      },
     })
   } catch (error) {
     console.error("[entity-profiles] Error:", error)
