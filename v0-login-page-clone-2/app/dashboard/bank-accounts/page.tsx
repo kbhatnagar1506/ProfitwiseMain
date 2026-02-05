@@ -309,7 +309,7 @@ export default function BankAccountsPage() {
 
           {/* Recent Activity Ledger */}
           {recent_transactions && recent_transactions.length > 0 && (
-            <div>
+            <div className="mt-2">
               <p className="text-sm text-zinc-400 mb-4">Recent Account Activity</p>
               <div className="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
                 <table className="w-full text-left">
@@ -317,9 +317,7 @@ export default function BankAccountsPage() {
                     <tr className="border-b border-white/[0.06]">
                       <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Date</th>
                       <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Description</th>
-                      {hasMultipleAccounts && (
-                        <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Account</th>
-                      )}
+                      <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Account</th>
                       <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4 text-right">Amount</th>
                     </tr>
                   </thead>
@@ -332,11 +330,9 @@ export default function BankAccountsPage() {
                         <td className="text-[12px] text-zinc-300 py-2 px-4 truncate max-w-[280px]">
                           {txn.display_name}
                         </td>
-                        {hasMultipleAccounts && (
-                          <td className="text-[11px] text-zinc-600 py-2 px-4">
-                            {txn.account_mask ? `...${txn.account_mask}` : txn.account_name || "—"}
-                          </td>
-                        )}
+                        <td className="text-[11px] text-zinc-500 py-2 px-4">
+                          {txn.account_mask ? `...${txn.account_mask}` : txn.account_name || "—"}
+                        </td>
                         <td className={`text-[12px] font-medium tabular-nums py-2 px-4 text-right ${
                           txn.direction === "inflow" ? "text-emerald-400/90" : "text-zinc-400"
                         }`}>
