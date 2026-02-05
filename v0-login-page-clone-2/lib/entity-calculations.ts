@@ -92,6 +92,7 @@ export async function calculateTrends(
       txn_per_month: number
       avg_interval: number
       interval_std: number
+      month_count: number
     }>(
       `WITH monthly_data AS (
         SELECT
@@ -122,7 +123,8 @@ export async function calculateTrends(
       SELECT
         COALESCE((SELECT recent_avg FROM recent_data), 0)::numeric as recent_avg,
         COALESCE((SELECT historical_avg FROM historical_data), 0)::numeric as historical_avg,
-        COALESCE((SELECT COUNT(*) / 12.0 FROM monthly_data), 0)::numeric as txn_per_month,
+        COALESCE((SELECT COUNT(*) FROM monthly_data), 0)::numeric as month_count,
+        COALESCE((SELECT COUNT(*) FROM monthly_data)::numeric / NULLIF((SELECT COUNT(*) FROM monthly_data), 0), 0)::numeric as txn_per_month,
         COALESCE(AVG(days_between), 0)::numeric as avg_interval,
         COALESCE(STDDEV(days_between), 0)::numeric as interval_std
       FROM intervals`,
@@ -134,6 +136,7 @@ export async function calculateTrends(
     const historicalAvg = row?.historical_avg || 0
     const avgInterval = row?.avg_interval || 0
     const intervalStd = row?.interval_std || 0
+    const monthCount = row?.month_count || 0
 
     let amount_trend: "increasing" | "decreasing" | "stable" = "stable"
     if (recentAvg > historicalAvg * 1.1) {
@@ -143,10 +146,13 @@ export async function calculateTrends(
     }
 
     const intervalCv = avgInterval > 0 ? (intervalStd / avgInterval) * 100 : 0
+    
+    // Calculate transactions per month based on actual months of data
+    const txnPerMonth = monthCount > 0 ? (row?.txn_per_month || 0) : 0
 
     return {
       amount_trend,
-      transactions_per_month: row?.txn_per_month || 0,
+      transactions_per_month: txnPerMonth,
       avg_interval_days: avgInterval,
       interval_cv: intervalCv,
     }
@@ -215,32 +221,52 @@ export async function calculateRiskScore(
     const risk_factors: string[] = []
     let risk_score = 0
 
+    // If we don't have payment metrics, use reliability score from metadata as proxy
+    // Start with LOW risk (20) and only increase if we see negative signals
     if (!metrics.payment_metrics_available) {
-      risk_factors.push("Payment history data not yet available")
-      risk_score = 50
+      // Without payment data, we can only assess based on transaction patterns
+      // Start optimistic (low risk) unless we see red flags
+      risk_score = 20
     }
 
-    if (trends.interval_cv > 80) {
-      risk_factors.push("Unpredictable payment intervals")
-      risk_score += 15
-    }
-
-    if (trends.transactions_per_month < 1 && metrics.payment_count > 5) {
-      risk_factors.push("Transaction frequency dropping")
-      risk_score += 15
-    }
-
-    if (trends.amount_trend === "decreasing") {
-      risk_factors.push("Transaction amounts trending downward")
+    // Red flag: Unpredictable payment intervals (high coefficient of variation)
+    if (trends.interval_cv > 100) {
+      risk_factors.push("Highly unpredictable transaction intervals")
+      risk_score += 25
+    } else if (trends.interval_cv > 60) {
+      risk_factors.push("Somewhat unpredictable transaction intervals")
       risk_score += 10
     }
 
+    // Red flag: Transaction frequency dropping significantly
+    if (trends.transactions_per_month < 0.5 && metrics.payment_count > 5) {
+      risk_factors.push("Transaction frequency has dropped significantly")
+      risk_score += 20
+    }
+
+    // Red flag: Amount trend declining
+    if (trends.amount_trend === "decreasing") {
+      risk_factors.push("Transaction amounts trending downward")
+      risk_score += 15
+    }
+
+    // Green flag: Amount trend increasing (reduce risk)
     if (trends.amount_trend === "increasing") {
+      risk_score = Math.max(0, risk_score - 10)
+    }
+
+    // Green flag: Consistent transaction pattern (low interval CV)
+    if (trends.interval_cv < 30) {
       risk_score = Math.max(0, risk_score - 5)
     }
 
+    // If no risk factors identified and score is still low, indicate low risk
+    if (risk_factors.length === 0 && risk_score < 30) {
+      risk_factors.push("Stable transaction pattern")
+    }
+
     return {
-      risk_score: Math.min(100, risk_score),
+      risk_score: Math.min(100, Math.max(0, risk_score)),
       risk_factors: risk_factors.length > 0 ? risk_factors : ["Low risk profile"],
     }
   } catch (error) {

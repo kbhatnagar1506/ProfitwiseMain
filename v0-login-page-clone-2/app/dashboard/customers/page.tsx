@@ -370,10 +370,6 @@ export default function CustomersPage() {
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Name</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Archetype</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Reliability</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Payment Behavior</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">On-Time</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Trend</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Risk</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Lifetime Value</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Open AR</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Overdue</TableHead>
@@ -400,18 +396,6 @@ export default function CustomersPage() {
                     </TableCell>
                     <TableCell className="text-[11px] py-2 px-4">
                       <ReliabilityBar score={customer.reliability_score} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <PaymentBehaviorCell avgDays={customer.avg_days_to_pay} stdDays={customer.std_days_to_pay} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <OnTimeRateCell rate={customer.on_time_payment_rate} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <TrendIndicator trend={customer.amount_trend} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <RiskBadge score={customer.risk_score} />
                     </TableCell>
                     <TableCell className="text-[12px] font-medium text-emerald-400/90 py-2 px-4 text-right tabular-nums">
                       {formatCurrency(customer.lifetime_value)}
