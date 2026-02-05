@@ -44,27 +44,78 @@ export async function calculatePaymentMetrics(
       total_count: number
       avg_amount: number
       std_amount: number
+      avg_days_to_pay: number | null
+      std_days_to_pay: number | null
+      on_time_rate: number | null
+      early_rate: number | null
+      with_due_dates: number
     }>(
-      `SELECT
+      `WITH payment_data AS (
+        SELECT 
+          ABS(a.net_amount::float) as amount,
+          m.date as transaction_date,
+          COALESCE(
+            (qe.data->>'DueDate')::text,
+            (xe.data->>'DueDateString')::text,
+            (xe.data->>'DueDate')::text
+          ) as ref_due_date
+        FROM movement_attributions a
+        JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
+        LEFT JOIN qbo_entities qe
+          ON qe.entity_id = a.reference_id
+          AND qe.entity_type IN ('Invoice', 'Bill')
+          AND a.reference_id IS NOT NULL
+        LEFT JOIN xero_entities xe
+          ON xe.entity_id = a.reference_id
+          AND xe.entity_type IN ('Invoice', 'Bill')
+          AND a.reference_id IS NOT NULL
+        WHERE a.user_id = $1::uuid
+          AND m.counterparty_entity_id = $2::uuid
+          AND a.component_type IN ('ar', 'ap')
+      ),
+      days_to_pay_calc AS (
+        SELECT 
+          amount,
+          CASE 
+            WHEN ref_due_date IS NOT NULL 
+            THEN ROUND((EXTRACT(EPOCH FROM (transaction_date::timestamp - ref_due_date::timestamp)) / 86400)::numeric)
+            ELSE NULL
+          END as days_to_pay
+        FROM payment_data
+      )
+      SELECT
         COUNT(*)::int as total_count,
-        COALESCE(AVG(ABS(m.amount)), 0)::numeric as avg_amount,
-        COALESCE(STDDEV(ABS(m.amount)), 0)::numeric as std_amount
-      FROM movements m
-      WHERE m.counterparty_entity_id = $1 AND m.user_id = $2 AND m.direction = 'inflow'`,
-      [entityId, userId]
+        COALESCE(AVG(amount), 0)::numeric as avg_amount,
+        COALESCE(STDDEV(amount), 0)::numeric as std_amount,
+        COALESCE(AVG(days_to_pay), 0)::numeric as avg_days_to_pay,
+        COALESCE(STDDEV(days_to_pay), 0)::numeric as std_days_to_pay,
+        COALESCE(
+          SUM(CASE WHEN days_to_pay <= 0 THEN 1 ELSE 0 END)::numeric / 
+          NULLIF(COUNT(CASE WHEN days_to_pay IS NOT NULL THEN 1 END), 0),
+          0
+        )::numeric as on_time_rate,
+        COALESCE(
+          SUM(CASE WHEN days_to_pay < 0 THEN 1 ELSE 0 END)::numeric / 
+          NULLIF(COUNT(CASE WHEN days_to_pay IS NOT NULL THEN 1 END), 0),
+          0
+        )::numeric as early_rate,
+        COUNT(CASE WHEN days_to_pay IS NOT NULL THEN 1 END)::int as with_due_dates
+      FROM days_to_pay_calc`,
+      [userId, entityId]
     )
 
     const row = result.rows[0]
+    const hasPaymentData = (row?.with_due_dates || 0) > 0
 
     return {
-      avg_days_to_pay: 0,
-      std_days_to_pay: 0,
-      on_time_payment_rate: 0,
-      early_payment_rate: 0,
+      avg_days_to_pay: row?.avg_days_to_pay || 0,
+      std_days_to_pay: row?.std_days_to_pay || 0,
+      on_time_payment_rate: row?.on_time_rate || 0,
+      early_payment_rate: row?.early_rate || 0,
       payment_count: row?.total_count || 0,
       avg_payment_amount: row?.avg_amount || 0,
       std_transaction_amount: row?.std_amount || 0,
-      payment_metrics_available: false,
+      payment_metrics_available: hasPaymentData,
     }
   } catch (error) {
     console.error("[entity-calculations] Error calculating payment metrics:", error)
@@ -115,7 +166,7 @@ export async function calculateTrends(
       ),
       intervals AS (
         SELECT
-          EXTRACT(DAY FROM (m.date - LAG(m.date) OVER (ORDER BY m.date))) as days_between
+          EXTRACT(DAY FROM (m.date::timestamp - LAG(m.date::timestamp) OVER (ORDER BY m.date))) as days_between
         FROM movements m
         WHERE m.counterparty_entity_id = $1 AND m.user_id = $2
         ORDER BY m.date
@@ -221,10 +272,35 @@ export async function calculateRiskScore(
     const risk_factors: string[] = []
     let risk_score = 0
 
-    // If we don't have payment metrics, use reliability score from metadata as proxy
-    // Start with LOW risk (20) and only increase if we see negative signals
-    if (!metrics.payment_metrics_available) {
-      // Without payment data, we can only assess based on transaction patterns
+    // If we have payment metrics, use them to assess risk
+    if (metrics.payment_metrics_available) {
+      // Start with base risk of 20 (low)
+      risk_score = 20
+
+      // Green flag: High on-time rate (>85%) indicates reliability
+      if (metrics.on_time_payment_rate > 85) {
+        risk_factors.push("Consistently pays on time")
+        risk_score = Math.max(0, risk_score - 15)
+      }
+      // Red flag: Low on-time rate (<70%) indicates unreliability
+      else if (metrics.on_time_payment_rate < 70) {
+        risk_factors.push("Frequently pays late")
+        risk_score += 25
+      }
+
+      // Green flag: Early payments indicate strong financial health
+      if (metrics.early_payment_rate > 30) {
+        risk_factors.push("Often pays early - strong financial position")
+        risk_score = Math.max(0, risk_score - 20)
+      }
+
+      // Red flag: High payment delay variance
+      if (metrics.std_days_to_pay > 20) {
+        risk_factors.push("Highly variable payment timing")
+        risk_score += 10
+      }
+    } else {
+      // Without payment data, assess based on transaction patterns only
       // Start optimistic (low risk) unless we see red flags
       risk_score = 20
     }

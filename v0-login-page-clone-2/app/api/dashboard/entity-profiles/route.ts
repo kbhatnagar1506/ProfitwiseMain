@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { requireSession } from "@/lib/require-session"
 import { query } from "@/lib/db"
 import { calculateEnrichedEntityData, EnrichedEntityData } from "@/lib/entity-calculations"
+import { buildEntityProfiles } from "@/lib/entity-profiles"
+import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
 
 type EntityRow = {
   id: string
@@ -44,6 +46,18 @@ export async function GET(request: NextRequest) {
     const sortBy = searchParams.get("sort_by") || "lifetime_value"
     const archetype = searchParams.get("archetype") || ""
     const atRisk = searchParams.get("at_risk") === "true"
+    const refresh = searchParams.get("refresh") === "true"
+
+    // If refresh requested, rebuild profiles and narratives
+    if (refresh) {
+      try {
+        await buildEntityProfiles(userId)
+        await refreshEntityNarratives(userId, { maxEntities: 100 })
+      } catch (err) {
+        console.error("[entity-profiles] Error during refresh:", err)
+        // Continue with stale data rather than failing
+      }
+    }
 
     // Build WHERE clause
     const whereConditions = ["e.user_id = $1", "e.entity_type = $2"]
@@ -219,6 +233,51 @@ export async function GET(request: NextRequest) {
       filtered = filtered.filter((e) => e.archetype === archetype)
     }
 
+    // Calculate peer statistics for percentile rankings
+    const calculatePercentile = (value: number | null, values: (number | null)[]): number => {
+      if (value === null) return 50
+      const validValues = values.filter((v) => v !== null) as number[]
+      if (validValues.length === 0) return 50
+      const sorted = validValues.sort((a, b) => a - b)
+      const index = sorted.findIndex((v) => v >= value)
+      if (index === -1) return 100
+      return (index / sorted.length) * 100
+    }
+
+    // Group entities by archetype for peer comparison
+    const entitiesByArchetype = enrichedEntities.reduce(
+      (acc, entity) => {
+        if (!acc[entity.archetype]) {
+          acc[entity.archetype] = []
+        }
+        acc[entity.archetype].push(entity)
+        return acc
+      },
+      {} as Record<string, typeof enrichedEntities>
+    )
+
+    // Add percentile rankings to each entity
+    const entitiesWithPercentiles = filtered.map((entity) => {
+      const peers = entitiesByArchetype[entity.archetype] || []
+      const reliabilityScores = peers.map((p) => p.reliability_score)
+      const riskScores = peers.map((p) => p.risk_score)
+      const daysToPay = peers.map((p) => p.avg_days_to_pay)
+      const activityRates = peers.map((p) => p.transactions_per_month)
+
+      return {
+        ...entity,
+        peer_percentiles: {
+          reliability_score: calculatePercentile(entity.reliability_score, reliabilityScores),
+          risk_score: calculatePercentile(entity.risk_score, riskScores),
+          avg_days_to_pay: calculatePercentile(entity.avg_days_to_pay, daysToPay),
+          transactions_per_month: calculatePercentile(
+            entity.transactions_per_month,
+            activityRates
+          ),
+        },
+      }
+    })
+
     const summary = summaryResult || {
       total_customers: 0,
       total_vendors: 0,
@@ -230,13 +289,14 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       summary,
-      customers: filtered,
+      customers: entitiesWithPercentiles,
       pagination: {
         page,
         limit,
         total,
         total_pages: totalPages,
       },
+      refresh_status: refresh ? "completed" : "none",
     })
   } catch (error) {
     console.error("[entity-profiles] Error:", error)
