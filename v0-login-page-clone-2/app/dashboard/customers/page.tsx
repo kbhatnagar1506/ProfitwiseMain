@@ -555,32 +555,40 @@ export default function CustomersPage() {
                 {/* Payment Behavior Section */}
                 <div className="space-y-3 border-t border-white/[0.06] pt-6">
                   <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Payment Behavior</p>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                      <span className="text-[12px] text-neutral-400">Days to Pay</span>
-                      <span className="text-[12px] font-medium text-zinc-100">
-                        {Math.round(selectedCustomer.avg_days_to_pay)}d ±{Math.round(selectedCustomer.std_days_to_pay)}d
-                      </span>
+                  {selectedCustomer.payment_count === 0 ? (
+                    <div className="bg-white/[0.02] p-3 rounded">
+                      <p className="text-[12px] text-neutral-500">Data not yet available - insufficient transaction history</p>
                     </div>
-                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                      <span className="text-[12px] text-neutral-400">On-Time Rate</span>
-                      <span className="text-[12px] font-medium text-emerald-400/90">
-                        {Math.round(selectedCustomer.on_time_payment_rate)}%
-                      </span>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                        <span className="text-[12px] text-neutral-400">Days to Pay</span>
+                        <span className="text-[12px] font-medium text-zinc-100">
+                          {selectedCustomer.avg_days_to_pay === 0 && selectedCustomer.std_days_to_pay === 0
+                            ? "Not available"
+                            : `${Math.round(selectedCustomer.avg_days_to_pay)}d ±${Math.round(selectedCustomer.std_days_to_pay)}d`}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                        <span className="text-[12px] text-neutral-400">On-Time Rate</span>
+                        <span className="text-[12px] font-medium text-emerald-400/90">
+                          {selectedCustomer.on_time_payment_rate === 0 ? "Not available" : `${Math.round(selectedCustomer.on_time_payment_rate)}%`}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                        <span className="text-[12px] text-neutral-400">Frequency</span>
+                        <span className="text-[12px] font-medium text-white">
+                          {selectedCustomer.transactions_per_month.toFixed(1)}/mo
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                        <span className="text-[12px] text-neutral-400">Avg Amount</span>
+                        <span className="text-[12px] font-medium text-white tabular-nums">
+                          {formatCurrency(selectedCustomer.avg_payment_amount)}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                      <span className="text-[12px] text-neutral-400">Frequency</span>
-                      <span className="text-[12px] font-medium text-white">
-                        {selectedCustomer.transactions_per_month.toFixed(1)}/mo
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                      <span className="text-[12px] text-neutral-400">Avg Amount</span>
-                      <span className="text-[12px] font-medium text-white tabular-nums">
-                        {formatCurrency(selectedCustomer.avg_payment_amount)}
-                      </span>
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* Forecast Signals Section */}
@@ -645,8 +653,8 @@ export default function CustomersPage() {
                 <div className="space-y-3 border-t border-white/[0.06] pt-6">
                   <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">AI Recommendations</p>
                   <div className="space-y-2">
-                    {/* Payment Optimization */}
-                    {selectedCustomer.avg_days_to_pay < -30 && (
+                    {/* Payment Optimization - Only show if payment metrics available */}
+                    {selectedCustomer.avg_days_to_pay !== 0 && selectedCustomer.avg_days_to_pay < -30 && (
                       <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
                         <p className="text-[11px] text-emerald-400 font-medium mb-1">💰 Early Payer Opportunity</p>
                         <p className="text-[11px] text-emerald-400/80">
@@ -665,8 +673,8 @@ export default function CustomersPage() {
                       </div>
                     )}
 
-                    {/* Reliability Boost */}
-                    {selectedCustomer.reliability_score >= 80 && selectedCustomer.on_time_payment_rate >= 90 && (
+                    {/* Reliability Boost - Only show if payment metrics available */}
+                    {selectedCustomer.reliability_score >= 80 && selectedCustomer.on_time_payment_rate > 0 && selectedCustomer.on_time_payment_rate >= 90 && (
                       <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
                         <p className="text-[11px] text-blue-400 font-medium mb-1">⭐ VIP Customer</p>
                         <p className="text-[11px] text-blue-400/80">
@@ -704,7 +712,7 @@ export default function CustomersPage() {
                       </div>
                     )}
 
-                    {/* Variability Warning */}
+                    {/* Variability Warning - Only show if payment metrics available */}
                     {selectedCustomer.std_days_to_pay > 15 && (
                       <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
                         <p className="text-[11px] text-amber-400 font-medium mb-1">⏱️ Unpredictable Payments</p>

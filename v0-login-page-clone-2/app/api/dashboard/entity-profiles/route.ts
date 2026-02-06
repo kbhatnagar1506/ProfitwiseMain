@@ -107,6 +107,25 @@ export async function GET(request: NextRequest) {
       [...params, limit, offset]
     ).then((r) => r.rows)
 
+    // Fetch entity_payment_profiles for fallback data
+    const paymentProfilesResult = await query<{
+      entity_id: string
+      avg_days_to_pay: number | null
+      std_days_to_pay: number | null
+      on_time_payment_rate: number | null
+      early_payment_rate: number | null
+    }>(
+      `SELECT 
+        entity_id::text,
+        avg_days_to_pay,
+        std_days_to_pay,
+        on_time_payment_rate,
+        early_payment_rate
+      FROM entity_payment_profiles
+      WHERE user_id = $1`,
+      [userId]
+    ).then((r) => r.rows)
+
     // Fetch total count
     const countResult = await query<{ count: string }>(
       `SELECT COUNT(DISTINCT e.id)::text FROM entities e
@@ -142,6 +161,16 @@ export async function GET(request: NextRequest) {
           console.error(`[entity-profiles] Error enriching entity ${e.id}:`, err)
         }
 
+        // Check for pre-computed payment profile data
+        const paymentProfile = paymentProfilesResult.find(p => p.entity_id === e.id)
+        const hasPaymentProfile = paymentProfile && paymentProfile.avg_days_to_pay !== null
+
+        // Use pre-computed data if available, otherwise use calculated data
+        const avgDaysToPay = hasPaymentProfile ? paymentProfile.avg_days_to_pay : enrichedData.avg_days_to_pay || 0
+        const stdDaysToPay = hasPaymentProfile ? paymentProfile.std_days_to_pay : enrichedData.std_days_to_pay || 0
+        const onTimeRate = hasPaymentProfile ? paymentProfile.on_time_payment_rate : enrichedData.on_time_payment_rate || 0
+        const earlyRate = hasPaymentProfile ? paymentProfile.early_payment_rate : enrichedData.early_payment_rate || 0
+
         return {
           id: e.id,
           entity_type: e.entity_type,
@@ -156,10 +185,10 @@ export async function GET(request: NextRequest) {
           last_transaction_date: e.last_transaction_date,
           ai_insight: (metadata.ai_insight as string) || null,
           // Enriched payment behavior data
-          avg_days_to_pay: enrichedData.avg_days_to_pay || 0,
-          std_days_to_pay: enrichedData.std_days_to_pay || 0,
-          on_time_payment_rate: enrichedData.on_time_payment_rate || 0,
-          early_payment_rate: enrichedData.early_payment_rate || 0,
+          avg_days_to_pay: avgDaysToPay,
+          std_days_to_pay: stdDaysToPay,
+          on_time_payment_rate: onTimeRate,
+          early_payment_rate: earlyRate,
           payment_count: enrichedData.payment_count || 0,
           avg_payment_amount: enrichedData.avg_payment_amount || 0,
           std_transaction_amount: enrichedData.std_transaction_amount || 0,
