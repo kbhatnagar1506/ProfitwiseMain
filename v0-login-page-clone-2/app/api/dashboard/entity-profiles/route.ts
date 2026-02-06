@@ -83,13 +83,13 @@ export async function GET(request: NextRequest) {
         e.display_name,
         COUNT(DISTINCT m.id)::int as transaction_count,
         COALESCE(SUM(ABS(m.amount)), 0)::numeric as lifetime_value,
-        COALESCE(SUM(CASE WHEN ce.status IN ('open', 'partially_paid') THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as ar_balance,
-        COALESCE(SUM(CASE WHEN ce.status IN ('open', 'partially_paid') AND ce.expected_date < CURRENT_DATE THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as overdue_balance,
+        COALESCE(SUM(CASE WHEN ce.event_type = 'ar' AND ce.status IN ('open', 'partially_paid') THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as ar_balance,
+        COALESCE(SUM(CASE WHEN ce.event_type = 'ar' AND ce.status IN ('open', 'partially_paid') AND ce.expected_date < CURRENT_DATE THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as overdue_balance,
         MAX(m.date)::text as last_transaction_date,
         e.metadata
       FROM entities e
       LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
-      LEFT JOIN cash_events ce ON e.id::text = ce.entity_id AND ce.user_id = $1 AND ce.event_type = 'ar'
+      LEFT JOIN cash_events ce ON e.id::text = ce.entity_id AND ce.user_id = $1
       WHERE ${whereClause}
       GROUP BY e.id, e.entity_type, e.canonical_name, e.display_name, e.metadata
       ORDER BY ${
