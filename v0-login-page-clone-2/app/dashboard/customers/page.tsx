@@ -220,13 +220,9 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header with Breadcrumbs and Export */}
+      {/* Header with Title and Export */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm text-zinc-400">
-          <span>Relationships</span>
-          <ChevronRight className="h-4 w-4" />
-          <span className="text-white">Customers</span>
-        </div>
+        <h1 className="text-2xl font-semibold text-white tracking-tight">Customers</h1>
         <Button
           onClick={handleExportCSV}
           disabled={!data?.customers || data.customers.length === 0}
