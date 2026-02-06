@@ -36,6 +36,17 @@ import {
   RiskFactorsList,
   MonthChart,
 } from "@/components/entity-intelligence"
+import { RefreshButton } from "@/components/refresh-button"
+import { useEntityRefresh } from "@/hooks/useEntityRefresh"
+import { RiskGauge } from "@/components/risk-gauge"
+import { ArchetypeInsights } from "@/components/archetype-insights"
+import { DataQualityScore } from "@/components/data-quality-score"
+import { PeerComparisonCard } from "@/components/peer-comparison-card"
+import { SeasonalityHeatmap } from "@/components/seasonality-heatmap"
+import { TrendSparkline } from "@/components/trend-sparkline"
+import { PaymentBehaviorTimeline } from "@/components/payment-behavior-timeline"
+import { PriorityRecommendations } from "@/components/priority-recommendations"
+import { generatePriorityRecommendations } from "@/lib/dashboard-calculations"
 
 interface Customer {
   id: string
@@ -73,6 +84,13 @@ interface Customer {
   // Forecast
   forecast_uncertainty: "low" | "medium" | "high"
   forecast_notes: string
+  // Peer comparison - Phase 1
+  peer_percentiles?: {
+    reliability_score: number
+    risk_score: number
+    avg_days_to_pay: number
+    transactions_per_month: number
+  }
 }
 
 interface EntityProfilesResponse {
@@ -91,6 +109,7 @@ interface EntityProfilesResponse {
     total: number
     total_pages: number
   }
+  refresh_status?: "none" | "completed"
 }
 
 function formatCurrency(value: number): string {
@@ -169,7 +188,9 @@ export default function CustomersPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  const fetchCustomers = useCallback(async () => {
+  const refreshState = useEntityRefresh()
+
+  const fetchCustomers = useCallback(async (refresh: boolean = false) => {
     try {
       const params = new URLSearchParams()
       params.set("entity_type", "customer")
@@ -179,6 +200,7 @@ export default function CustomersPage() {
       if (debouncedSearch) params.set("search", debouncedSearch)
       if (archetype) params.set("archetype", archetype)
       if (atRisk) params.set("at_risk", "true")
+      if (refresh) params.set("refresh", "true")
 
       const response = await fetch(`/api/dashboard/entity-profiles?${params}`)
       if (!response.ok) throw new Error("Failed to fetch customers")
@@ -186,9 +208,11 @@ export default function CustomersPage() {
       setData(json)
       setError(null)
       setLoading(false)
+      return json
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error")
       setLoading(false)
+      throw err
     }
   }, [page, sortBy, debouncedSearch, archetype, atRisk])
 
@@ -229,6 +253,18 @@ export default function CustomersPage() {
     window.URL.revokeObjectURL(url)
   }
 
+  const handleRefresh = async () => {
+    await refreshState.refresh(fetchCustomers, {
+      onSuccess: () => {
+        // Auto-dismiss success message after 3 seconds
+        setTimeout(() => refreshState.reset(), 3000)
+      },
+      onError: (error) => {
+        console.error("Refresh failed:", error)
+      },
+    })
+  }
+
   const handleRowClick = (customer: Customer) => {
     setSelectedCustomer(customer)
     setDrawerOpen(true)
@@ -251,17 +287,26 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header with Title and Export */}
-      <div className="flex items-center justify-between">
+      {/* Header with Title, Refresh, and Export */}
+      <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold text-white tracking-tight">Customers</h1>
-        <Button
-          onClick={handleExportCSV}
-          disabled={!data?.customers || data.customers.length === 0}
-          className="bg-white/5 hover:bg-white/10 text-white border border-white/10 h-8 px-3 text-sm"
-        >
-          <Download className="h-3.5 w-3.5 mr-2" />
-          Export CSV
-        </Button>
+        <div className="flex items-center gap-3">
+          <RefreshButton
+            isRefreshing={refreshState.isRefreshing}
+            status={refreshState.status}
+            progress={refreshState.progress}
+            message={refreshState.message}
+            onClick={handleRefresh}
+          />
+          <Button
+            onClick={handleExportCSV}
+            disabled={!data?.customers || data.customers.length === 0}
+            className="bg-white/5 hover:bg-white/10 text-white border border-white/10 h-8 px-3 text-sm"
+          >
+            <Download className="h-3.5 w-3.5 mr-2" />
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {/* Macro KPI Row */}
@@ -477,6 +522,9 @@ export default function CustomersPage() {
                   </div>
                 )}
 
+                {/* Archetype Insights - Phase 1 */}
+                <ArchetypeInsights archetype={selectedCustomer.archetype as any} />
+
                 {/* Mini KPI Grid */}
                 <div className="grid grid-cols-3 gap-3">
                   <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
@@ -595,32 +643,43 @@ export default function CustomersPage() {
                   </div>
                 </div>
 
-                {/* Risk Signals Section */}
+                {/* Data Quality Score - Phase 1 */}
+                <div className="border-t border-white/[0.06] pt-6">
+                  <DataQualityScore
+                    transactionCount={selectedCustomer.transaction_count}
+                    dataSpanMonths={Math.max(1, Math.floor((new Date().getTime() - new Date(selectedCustomer.last_transaction_date || new Date()).getTime()) / (1000 * 60 * 60 * 24 * 30)))}
+                    dueDateCoverage={selectedCustomer.payment_count > 0 ? 0.8 : 0}
+                    consistencyScore={Math.max(0, 1 - (selectedCustomer.interval_cv || 0) / 100)}
+                  />
+                </div>
+
+                {/* Peer Comparison - Phase 1 */}
+                <div className="border-t border-white/[0.06] pt-6">
+                  <PeerComparisonCard
+                    entityName={selectedCustomer.display_name || selectedCustomer.canonical_name}
+                    archetype={selectedCustomer.archetype}
+                    metrics={{
+                      reliabilityScore: selectedCustomer.reliability_score,
+                      riskScore: selectedCustomer.risk_score,
+                      avgDaysToPay: selectedCustomer.avg_days_to_pay,
+                      transactionsPerMonth: selectedCustomer.transactions_per_month,
+                    }}
+                    peerPercentiles={selectedCustomer.peer_percentiles || {
+                      reliability_score: 50,
+                      risk_score: 50,
+                      avg_days_to_pay: 50,
+                      transactions_per_month: 50,
+                    }}
+                  />
+                </div>
+
+                {/* Risk Signals Section - Phase 1 with RiskGauge */}
                 <div className="space-y-3 border-t border-white/[0.06] pt-6">
-                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Risk Signals</p>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                      <span className="text-[12px] text-neutral-400">Risk Score</span>
-                      <div className="flex items-center gap-2">
-                        <div className="h-1.5 w-16 bg-zinc-700 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all ${
-                              selectedCustomer.risk_score >= 60 ? "bg-red-400" :
-                              selectedCustomer.risk_score >= 35 ? "bg-amber-400" :
-                              "bg-emerald-400"
-                            }`}
-                            style={{ width: `${Math.min(selectedCustomer.risk_score, 100)}%` }}
-                          />
-                        </div>
-                        <span className="text-[12px] font-medium text-white w-8 text-right">
-                          {Math.round(selectedCustomer.risk_score)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="bg-white/[0.02] p-3 rounded">
-                      <RiskFactorsList factors={selectedCustomer.risk_factors} />
-                    </div>
-                  </div>
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Risk Assessment</p>
+                  <RiskGauge
+                    score={selectedCustomer.risk_score}
+                    factors={selectedCustomer.risk_factors}
+                  />
                 </div>
 
                 {/* Seasonality Section */}
@@ -628,10 +687,69 @@ export default function CustomersPage() {
                   <div className="space-y-3 border-t border-white/[0.06] pt-6">
                     <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Seasonality</p>
                     <div className="bg-white/[0.02] p-4 rounded">
-                      <MonthChart peakMonths={selectedCustomer.peak_months} lowMonths={selectedCustomer.low_months} />
+                      <SeasonalityHeatmap
+                        peakMonths={selectedCustomer.peak_months}
+                        lowMonths={selectedCustomer.low_months}
+                      />
                     </div>
                   </div>
                 )}
+
+                {/* Trends Section - Phase 2 */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Trends</p>
+                  <div className="space-y-3">
+                    <TrendSparkline
+                      label="Amount Trend"
+                      currentValue={selectedCustomer.avg_payment_amount}
+                      trend={selectedCustomer.amount_trend}
+                      unit="USD"
+                      format={(v) => `$${Math.round(v).toLocaleString()}`}
+                    />
+                    <TrendSparkline
+                      label="Frequency"
+                      currentValue={selectedCustomer.transactions_per_month}
+                      trend={selectedCustomer.transactions_per_month > 5 ? "increasing" : selectedCustomer.transactions_per_month < 1 ? "decreasing" : "stable"}
+                      unit="/month"
+                      format={(v) => v.toFixed(1)}
+                    />
+                  </div>
+                </div>
+
+                {/* Payment Behavior Timeline - Phase 2 */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Payment Behavior Summary</p>
+                  <PaymentBehaviorTimeline
+                    avgDaysToPay={selectedCustomer.avg_days_to_pay}
+                    stdDaysToPay={selectedCustomer.std_days_to_pay}
+                    onTimeRate={selectedCustomer.on_time_payment_rate}
+                    earlyRate={selectedCustomer.early_payment_rate}
+                    transactionsPerMonth={selectedCustomer.transactions_per_month}
+                    amountTrend={selectedCustomer.amount_trend}
+                  />
+                </div>
+
+                {/* Priority Recommendations - Phase 2 */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Recommended Actions</p>
+                  <PriorityRecommendations
+                    recommendations={generatePriorityRecommendations({
+                      id: selectedCustomer.id,
+                      archetype: selectedCustomer.archetype,
+                      reliability_score: selectedCustomer.reliability_score,
+                      risk_score: selectedCustomer.risk_score,
+                      avg_days_to_pay: selectedCustomer.avg_days_to_pay,
+                      transactions_per_month: selectedCustomer.transactions_per_month,
+                      on_time_payment_rate: selectedCustomer.on_time_payment_rate,
+                      early_payment_rate: selectedCustomer.early_payment_rate,
+                      amount_trend: selectedCustomer.amount_trend,
+                      risk_factors: selectedCustomer.risk_factors,
+                      transaction_count: selectedCustomer.transaction_count,
+                      avg_interval_days: selectedCustomer.avg_interval_days,
+                      interval_cv: selectedCustomer.interval_cv,
+                    })}
+                  />
+                </div>
 
                 {/* AI Enhancement & Recommendations */}
                 <div className="space-y-3 border-t border-white/[0.06] pt-6">

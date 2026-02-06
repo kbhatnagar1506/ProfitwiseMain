@@ -36,6 +36,8 @@ import {
   RiskFactorsList,
   MonthChart,
 } from "@/components/entity-intelligence"
+import { RefreshButton } from "@/components/refresh-button"
+import { useEntityRefresh } from "@/hooks/useEntityRefresh"
 
 interface Vendor {
   id: string
@@ -169,7 +171,9 @@ export default function VendorsPage() {
   const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  const fetchVendors = useCallback(async () => {
+  const refreshState = useEntityRefresh()
+
+  const fetchVendors = useCallback(async (refresh: boolean = false) => {
     try {
       const params = new URLSearchParams()
       params.set("entity_type", "vendor")
@@ -179,6 +183,7 @@ export default function VendorsPage() {
       if (debouncedSearch) params.set("search", debouncedSearch)
       if (archetype) params.set("archetype", archetype)
       if (atRisk) params.set("at_risk", "true")
+      if (refresh) params.set("refresh", "true")
 
       const response = await fetch(`/api/dashboard/entity-profiles?${params}`)
       if (!response.ok) throw new Error("Failed to fetch vendors")
@@ -186,9 +191,11 @@ export default function VendorsPage() {
       setData(json)
       setError(null)
       setLoading(false)
+      return json
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error")
       setLoading(false)
+      throw err
     }
   }, [page, sortBy, debouncedSearch, archetype, atRisk])
 
@@ -229,6 +236,18 @@ export default function VendorsPage() {
     window.URL.revokeObjectURL(url)
   }
 
+  const handleRefresh = async () => {
+    await refreshState.refresh(fetchVendors, {
+      onSuccess: () => {
+        // Auto-dismiss success message after 3 seconds
+        setTimeout(() => refreshState.reset(), 3000)
+      },
+      onError: (error) => {
+        console.error("Refresh failed:", error)
+      },
+    })
+  }
+
   const handleRowClick = (vendor: Vendor) => {
     setSelectedVendor(vendor)
     setDrawerOpen(true)
@@ -251,17 +270,26 @@ export default function VendorsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header with Title and Export */}
-      <div className="flex items-center justify-between">
+      {/* Header with Title, Refresh, and Export */}
+      <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold text-white tracking-tight">Vendors</h1>
-        <Button
-          onClick={handleExportCSV}
-          disabled={!data?.customers || data.customers.length === 0}
-          className="bg-white/5 hover:bg-white/10 text-white border border-white/10 h-8 px-3 text-sm"
-        >
-          <Download className="h-3.5 w-3.5 mr-2" />
-          Export CSV
-        </Button>
+        <div className="flex items-center gap-3">
+          <RefreshButton
+            isRefreshing={refreshState.isRefreshing}
+            status={refreshState.status}
+            progress={refreshState.progress}
+            message={refreshState.message}
+            onClick={handleRefresh}
+          />
+          <Button
+            onClick={handleExportCSV}
+            disabled={!data?.customers || data.customers.length === 0}
+            className="bg-white/5 hover:bg-white/10 text-white border border-white/10 h-8 px-3 text-sm"
+          >
+            <Download className="h-3.5 w-3.5 mr-2" />
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {/* Macro KPI Row */}
