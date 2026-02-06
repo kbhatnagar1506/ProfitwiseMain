@@ -640,6 +640,91 @@ export default function CustomersPage() {
                     </div>
                   </div>
                 )}
+
+                {/* AI Enhancement & Recommendations */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">AI Recommendations</p>
+                  <div className="space-y-2">
+                    {/* Payment Optimization */}
+                    {selectedCustomer.avg_days_to_pay < -30 && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-emerald-400 font-medium mb-1">💰 Early Payer Opportunity</p>
+                        <p className="text-[11px] text-emerald-400/80">
+                          This customer pays {Math.abs(Math.round(selectedCustomer.avg_days_to_pay))} days early on average. Consider offering early payment discounts to improve cash flow.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Risk Mitigation */}
+                    {selectedCustomer.risk_score >= 60 && (
+                      <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-red-400 font-medium mb-1">⚠️ High Risk Alert</p>
+                        <p className="text-[11px] text-red-400/80">
+                          This customer shows high payment risk. Consider tightening payment terms or requiring deposits on future orders.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Reliability Boost */}
+                    {selectedCustomer.reliability_score >= 80 && selectedCustomer.on_time_payment_rate >= 90 && (
+                      <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-blue-400 font-medium mb-1">⭐ VIP Customer</p>
+                        <p className="text-[11px] text-blue-400/80">
+                          Excellent payment history and reliability. Consider offering volume discounts or extended payment terms to strengthen the relationship.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Frequency Insight */}
+                    {selectedCustomer.transactions_per_month >= 10 && (
+                      <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-purple-400 font-medium mb-1">📈 High Activity</p>
+                        <p className="text-[11px] text-purple-400/80">
+                          {selectedCustomer.transactions_per_month.toFixed(1)} transactions per month. This is a high-value, active customer. Prioritize relationship management.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Trend Alert */}
+                    {selectedCustomer.amount_trend === "increasing" && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-emerald-400 font-medium mb-1">📊 Growing Customer</p>
+                        <p className="text-[11px] text-emerald-400/80">
+                          Transaction amounts are trending upward. This customer is expanding their business with you. Nurture this growth opportunity.
+                        </p>
+                      </div>
+                    )}
+
+                    {selectedCustomer.amount_trend === "decreasing" && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-amber-400 font-medium mb-1">📉 Declining Activity</p>
+                        <p className="text-[11px] text-amber-400/80">
+                          Transaction amounts are trending downward. Reach out to understand if there are issues or if they're shifting to competitors.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Variability Warning */}
+                    {selectedCustomer.std_days_to_pay > 15 && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-amber-400 font-medium mb-1">⏱️ Unpredictable Payments</p>
+                        <p className="text-[11px] text-amber-400/80">
+                          High variability in payment timing (±{Math.round(selectedCustomer.std_days_to_pay)} days). Consider automated payment reminders or stricter terms.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Seasonality Insight */}
+                    {selectedCustomer.peak_months.length > 0 && (
+                      <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-cyan-400 font-medium mb-1">📅 Seasonal Pattern</p>
+                        <p className="text-[11px] text-cyan-400/80">
+                          Peak activity in {selectedCustomer.peak_months.map(m => ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]).join(", ")}. Plan inventory and cash flow accordingly.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </>
           )}

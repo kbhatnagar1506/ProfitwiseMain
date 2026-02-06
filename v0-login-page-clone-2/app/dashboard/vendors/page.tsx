@@ -640,6 +640,91 @@ export default function VendorsPage() {
                     </div>
                   </div>
                 )}
+
+                {/* AI Enhancement & Recommendations */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">AI Recommendations</p>
+                  <div className="space-y-2">
+                    {/* Payment Optimization */}
+                    {selectedVendor.avg_days_to_pay > 30 && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-emerald-400 font-medium mb-1">💰 Extended Terms Opportunity</p>
+                        <p className="text-[11px] text-emerald-400/80">
+                          You're paying {Math.round(selectedVendor.avg_days_to_pay)} days on average. Negotiate for longer payment terms to improve cash flow.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Risk Mitigation */}
+                    {selectedVendor.risk_score >= 60 && (
+                      <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-red-400 font-medium mb-1">⚠️ Supply Risk Alert</p>
+                        <p className="text-[11px] text-red-400/80">
+                          This vendor shows high risk. Consider diversifying suppliers or establishing backup sources.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Reliability Boost */}
+                    {selectedVendor.reliability_score >= 80 && selectedVendor.on_time_payment_rate >= 90 && (
+                      <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-blue-400 font-medium mb-1">⭐ Trusted Vendor</p>
+                        <p className="text-[11px] text-blue-400/80">
+                          Excellent reliability and on-time delivery. Consider increasing order volume or negotiating volume discounts.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Frequency Insight */}
+                    {selectedVendor.transactions_per_month >= 10 && (
+                      <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-purple-400 font-medium mb-1">📈 High Volume Supplier</p>
+                        <p className="text-[11px] text-purple-400/80">
+                          {selectedVendor.transactions_per_month.toFixed(1)} transactions per month. This is a critical supplier. Maintain strong relationship.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Trend Alert */}
+                    {selectedVendor.amount_trend === "increasing" && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-emerald-400 font-medium mb-1">📊 Growing Spend</p>
+                        <p className="text-[11px] text-emerald-400/80">
+                          Your spending with this vendor is increasing. Monitor for cost optimization opportunities.
+                        </p>
+                      </div>
+                    )}
+
+                    {selectedVendor.amount_trend === "decreasing" && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-amber-400 font-medium mb-1">📉 Declining Spend</p>
+                        <p className="text-[11px] text-amber-400/80">
+                          Your spending with this vendor is decreasing. Ensure you're not losing negotiating power or quality.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Variability Warning */}
+                    {selectedVendor.std_days_to_pay > 15 && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-amber-400 font-medium mb-1">⏱️ Inconsistent Delivery</p>
+                        <p className="text-[11px] text-amber-400/80">
+                          High variability in delivery timing (±{Math.round(selectedVendor.std_days_to_pay)} days). Consider establishing SLAs.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Seasonality Insight */}
+                    {selectedVendor.peak_months.length > 0 && (
+                      <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-cyan-400 font-medium mb-1">📅 Seasonal Pattern</p>
+                        <p className="text-[11px] text-cyan-400/80">
+                          Peak activity in {selectedVendor.peak_months.map(m => ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]).join(", ")}. Plan procurement accordingly.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </>
           )}

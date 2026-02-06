@@ -691,6 +691,100 @@ export default function ContactsPage() {
                     </div>
                   </div>
                 )}
+
+                {/* AI Enhancement & Recommendations */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">AI Recommendations</p>
+                  <div className="space-y-2">
+                    {/* Payment Optimization */}
+                    {selectedContact.entity_type === "customer" && selectedContact.avg_days_to_pay < -30 && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-emerald-400 font-medium mb-1">💰 Early Payer Opportunity</p>
+                        <p className="text-[11px] text-emerald-400/80">
+                          This customer pays {Math.abs(Math.round(selectedContact.avg_days_to_pay))} days early on average. Consider offering early payment discounts.
+                        </p>
+                      </div>
+                    )}
+
+                    {selectedContact.entity_type === "vendor" && selectedContact.avg_days_to_pay > 30 && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-emerald-400 font-medium mb-1">💰 Extended Terms Opportunity</p>
+                        <p className="text-[11px] text-emerald-400/80">
+                          You're paying {Math.round(selectedContact.avg_days_to_pay)} days on average. Negotiate for longer payment terms.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Risk Mitigation */}
+                    {selectedContact.risk_score >= 60 && (
+                      <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-red-400 font-medium mb-1">⚠️ High Risk Alert</p>
+                        <p className="text-[11px] text-red-400/80">
+                          This entity shows high risk. {selectedContact.entity_type === "customer" ? "Consider tightening payment terms or requiring deposits." : "Consider diversifying suppliers or establishing backup sources."}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Reliability Boost */}
+                    {selectedContact.reliability_score >= 80 && selectedContact.on_time_payment_rate >= 90 && (
+                      <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-blue-400 font-medium mb-1">⭐ Trusted Entity</p>
+                        <p className="text-[11px] text-blue-400/80">
+                          Excellent reliability. {selectedContact.entity_type === "customer" ? "Consider offering volume discounts or extended terms." : "Consider increasing order volume or negotiating discounts."}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Frequency Insight */}
+                    {selectedContact.transactions_per_month >= 10 && (
+                      <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-purple-400 font-medium mb-1">📈 High Activity</p>
+                        <p className="text-[11px] text-purple-400/80">
+                          {selectedContact.transactions_per_month.toFixed(1)} transactions per month. This is a {selectedContact.entity_type === "customer" ? "high-value customer" : "critical supplier"}. Prioritize relationship management.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Trend Alert */}
+                    {selectedContact.amount_trend === "increasing" && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-emerald-400 font-medium mb-1">📊 Growing {selectedContact.entity_type === "customer" ? "Customer" : "Spend"}</p>
+                        <p className="text-[11px] text-emerald-400/80">
+                          {selectedContact.entity_type === "customer" ? "This customer is expanding their business with you. Nurture this growth opportunity." : "Your spending is increasing. Monitor for cost optimization opportunities."}
+                        </p>
+                      </div>
+                    )}
+
+                    {selectedContact.amount_trend === "decreasing" && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-amber-400 font-medium mb-1">📉 Declining Activity</p>
+                        <p className="text-[11px] text-amber-400/80">
+                          {selectedContact.entity_type === "customer" ? "Reach out to understand if there are issues or if they're shifting to competitors." : "Ensure you're not losing negotiating power or quality."}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Variability Warning */}
+                    {selectedContact.std_days_to_pay > 15 && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-amber-400 font-medium mb-1">⏱️ Unpredictable Timing</p>
+                        <p className="text-[11px] text-amber-400/80">
+                          High variability (±{Math.round(selectedContact.std_days_to_pay)} days). {selectedContact.entity_type === "customer" ? "Consider automated payment reminders or stricter terms." : "Consider establishing SLAs."}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Seasonality Insight */}
+                    {selectedContact.peak_months.length > 0 && (
+                      <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-lg p-3">
+                        <p className="text-[11px] text-cyan-400 font-medium mb-1">📅 Seasonal Pattern</p>
+                        <p className="text-[11px] text-cyan-400/80">
+                          Peak activity in {selectedContact.peak_months.map(m => ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]).join(", ")}. Plan accordingly.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </>
           )}
