@@ -389,10 +389,6 @@ export default function ContactsPage() {
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Type</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Archetype</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Reliability</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Payment Behavior</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">On-Time</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Trend</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Risk</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Lifetime Value</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Balance</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Overdue</TableHead>
@@ -434,18 +430,6 @@ export default function ContactsPage() {
                     </TableCell>
                     <TableCell className="text-[11px] py-2 px-4">
                       <ReliabilityBar score={contact.reliability_score} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <PaymentBehaviorCell avgDays={contact.avg_days_to_pay} stdDays={contact.std_days_to_pay} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <OnTimeRateCell rate={contact.on_time_payment_rate} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <TrendIndicator trend={contact.amount_trend} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <RiskBadge score={contact.risk_score} />
                     </TableCell>
                     <TableCell className="text-[12px] font-medium text-emerald-400/90 py-2 px-4 text-right tabular-nums">
                       {formatCurrency(contact.lifetime_value)}

@@ -370,10 +370,6 @@ export default function VendorsPage() {
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Name</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Archetype</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Reliability</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Payment Behavior</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">On-Time</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Trend</TableHead>
-                  <TableHead className="text-[11px] text-neutral-600 font-medium">Risk</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Lifetime Volume</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Open AP</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Overdue</TableHead>
@@ -400,18 +396,6 @@ export default function VendorsPage() {
                     </TableCell>
                     <TableCell className="text-[11px] py-2 px-4">
                       <ReliabilityBar score={vendor.reliability_score} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <PaymentBehaviorCell avgDays={vendor.avg_days_to_pay} stdDays={vendor.std_days_to_pay} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <OnTimeRateCell rate={vendor.on_time_payment_rate} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <TrendIndicator trend={vendor.amount_trend} />
-                    </TableCell>
-                    <TableCell className="text-[11px] py-2 px-4">
-                      <RiskBadge score={vendor.risk_score} />
                     </TableCell>
                     <TableCell className="text-[12px] font-medium text-emerald-400/90 py-2 px-4 text-right tabular-nums">
                       {formatCurrency(vendor.lifetime_value)}
