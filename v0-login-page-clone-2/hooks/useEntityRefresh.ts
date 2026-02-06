@@ -12,11 +12,12 @@ interface RefreshState {
   progress: number // 0-100
   status: "idle" | "refreshing" | "polling" | "completed" | "error"
   message: string
+  jobId?: string
 }
 
 /**
- * Hook for refreshing entity profiles with polling
- * Triggers a refresh and polls until data is updated
+ * Hook for refreshing entity profiles with background job polling
+ * Starts a background job and polls until completion
  */
 export function useEntityRefresh() {
   const [refreshState, setRefreshState] = useState<RefreshState>({
@@ -34,7 +35,7 @@ export function useEntityRefresh() {
       const {
         onSuccess,
         onError,
-        maxAttempts = 30,
+        maxAttempts = 120, // 2 minutes with 1s polling
         pollInterval = 1000,
       } = options
 
@@ -43,52 +44,76 @@ export function useEntityRefresh() {
           isRefreshing: true,
           progress: 10,
           status: "refreshing",
-          message: "Triggering data refresh...",
+          message: "Starting background refresh job...",
         })
 
-        // Trigger refresh
-        await fetchFn(true)
+        // Start background refresh job
+        const jobResponse = await fetch("/api/dashboard/refresh-job", {
+          method: "POST",
+        })
+
+        if (!jobResponse.ok) {
+          throw new Error("Failed to start refresh job")
+        }
+
+        const { job_id } = await jobResponse.json()
 
         setRefreshState({
           isRefreshing: true,
-          progress: 30,
+          progress: 20,
           status: "polling",
-          message: "Waiting for data to update...",
+          message: "Refresh job started, polling for completion...",
+          jobId: job_id,
         })
 
-        // Poll for updates
+        // Poll for job completion
         let attempts = 0
-        let lastDataHash = ""
+        let jobCompleted = false
 
-        while (attempts < maxAttempts) {
+        while (attempts < maxAttempts && !jobCompleted) {
           await new Promise((resolve) => setTimeout(resolve, pollInterval))
           attempts++
 
           try {
-            const response = await fetchFn(false)
-            const currentDataHash = JSON.stringify(response)
+            const statusResponse = await fetch(
+              `/api/dashboard/refresh-job?job_id=${job_id}`
+            )
 
-            // Check if data has changed
-            if (lastDataHash && currentDataHash !== lastDataHash) {
+            if (!statusResponse.ok) {
+              throw new Error("Failed to check job status")
+            }
+
+            const jobStatus = await statusResponse.json()
+
+            if (jobStatus.status === "completed") {
+              jobCompleted = true
+
+              // Fetch updated data
+              await fetchFn(false)
+
               setRefreshState({
                 isRefreshing: false,
                 progress: 100,
                 status: "completed",
                 message: "Data refreshed successfully!",
+                jobId: job_id,
               })
               onSuccess?.()
               return
+            } else if (jobStatus.status === "failed") {
+              throw new Error(
+                jobStatus.error_message || "Refresh job failed"
+              )
             }
 
-            lastDataHash = currentDataHash
-
             // Update progress
-            const progressPercent = 30 + (attempts / maxAttempts) * 70
+            const progressPercent = 20 + (attempts / maxAttempts) * 80
             setRefreshState({
               isRefreshing: true,
               progress: Math.min(99, progressPercent),
               status: "polling",
-              message: `Polling for updates... (${attempts}/${maxAttempts})`,
+              message: `Refresh in progress... (${attempts}/${maxAttempts})`,
+              jobId: job_id,
             })
           } catch (err) {
             console.error("[useEntityRefresh] Poll attempt failed:", err)
@@ -101,7 +126,8 @@ export function useEntityRefresh() {
           isRefreshing: false,
           progress: 100,
           status: "completed",
-          message: "Refresh completed (data may be updating)",
+          message: "Refresh job submitted (processing in background)",
+          jobId: job_id,
         })
         onSuccess?.()
       } catch (error) {
