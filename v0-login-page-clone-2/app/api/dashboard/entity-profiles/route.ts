@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireSession } from "@/lib/require-session"
 import { query } from "@/lib/db"
+import { calculateEnrichedEntityData, EnrichedEntityData } from "@/lib/entity-calculations"
 
 type EntityRow = {
   id: string
@@ -117,35 +118,68 @@ export async function GET(request: NextRequest) {
     const totalPages = Math.ceil(total / limit)
 
     // Classify archetypes and calculate reliability scores
-    const enrichedEntities = entitiesResult.map((e) => {
-      const metadata = (e.metadata || {}) as Record<string, unknown>
-      const reliabilityScore = Math.round((metadata.reliability_score as number) || 80)
-      let archetype = "New"
+    const enrichedEntities = await Promise.all(
+      entitiesResult.map(async (e) => {
+        const metadata = (e.metadata || {}) as Record<string, unknown>
+        const reliabilityScore = Math.round((metadata.reliability_score as number) || 80)
+        let archetype = "New"
 
-      if (e.transaction_count >= 3) {
-        if (reliabilityScore >= 80) {
-          archetype = "Clockwork"
-        } else if (reliabilityScore >= 60) {
-          archetype = "Bursty"
-        } else {
-          archetype = "Volatile"
+        if (e.transaction_count >= 3) {
+          if (reliabilityScore >= 80) {
+            archetype = "Clockwork"
+          } else if (reliabilityScore >= 60) {
+            archetype = "Bursty"
+          } else {
+            archetype = "Volatile"
+          }
         }
-      }
 
-      return {
-        id: e.id,
-        canonical_name: e.canonical_name,
-        display_name: e.display_name,
-        transaction_count: e.transaction_count,
-        lifetime_value: parseFloat(String(e.lifetime_value)),
-        ar_balance: parseFloat(String(e.ar_balance)),
-        overdue_balance: parseFloat(String(e.overdue_balance)),
-        reliability_score: reliabilityScore,
-        archetype,
-        last_transaction_date: e.last_transaction_date,
-        ai_insight: (metadata.ai_insight as string) || null,
-      }
-    })
+        // Calculate enriched payment and risk data
+        let enrichedData: Partial<EnrichedEntityData> = {}
+        try {
+          enrichedData = await calculateEnrichedEntityData(e.id, userId)
+        } catch (err) {
+          console.error(`[entity-profiles] Error enriching entity ${e.id}:`, err)
+        }
+
+        return {
+          id: e.id,
+          entity_type: e.entity_type,
+          canonical_name: e.canonical_name,
+          display_name: e.display_name,
+          transaction_count: e.transaction_count,
+          lifetime_value: parseFloat(String(e.lifetime_value)),
+          ar_balance: parseFloat(String(e.ar_balance)),
+          overdue_balance: parseFloat(String(e.overdue_balance)),
+          reliability_score: reliabilityScore,
+          archetype,
+          last_transaction_date: e.last_transaction_date,
+          ai_insight: (metadata.ai_insight as string) || null,
+          // Enriched payment behavior data
+          avg_days_to_pay: enrichedData.avg_days_to_pay || 0,
+          std_days_to_pay: enrichedData.std_days_to_pay || 0,
+          on_time_payment_rate: enrichedData.on_time_payment_rate || 0,
+          early_payment_rate: enrichedData.early_payment_rate || 0,
+          payment_count: enrichedData.payment_count || 0,
+          avg_payment_amount: enrichedData.avg_payment_amount || 0,
+          std_transaction_amount: enrichedData.std_transaction_amount || 0,
+          // Trends
+          amount_trend: enrichedData.amount_trend || "stable",
+          transactions_per_month: enrichedData.transactions_per_month || 0,
+          avg_interval_days: enrichedData.avg_interval_days || 0,
+          interval_cv: enrichedData.interval_cv || 0,
+          // Seasonality
+          peak_months: enrichedData.peak_months || [],
+          low_months: enrichedData.low_months || [],
+          // Risk
+          risk_score: enrichedData.risk_score || 0,
+          risk_factors: enrichedData.risk_factors || [],
+          // Forecast
+          forecast_uncertainty: enrichedData.forecast_uncertainty || "medium",
+          forecast_notes: enrichedData.forecast_notes || "",
+        }
+      })
+    )
 
     // Apply at_risk filter if requested
     let filtered = enrichedEntities

@@ -28,6 +28,14 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Download, AlertCircle, Building2, User } from "lucide-react"
+import {
+  PaymentBehaviorCell,
+  OnTimeRateCell,
+  TrendIndicator,
+  RiskBadge,
+  RiskFactorsList,
+  MonthChart,
+} from "@/components/entity-intelligence"
 
 interface Contact {
   id: string
@@ -43,6 +51,28 @@ interface Contact {
   last_transaction_date: string | null
   ai_insight: string | null
   metadata?: Record<string, any>
+  // Enriched payment behavior
+  avg_days_to_pay: number
+  std_days_to_pay: number
+  on_time_payment_rate: number
+  early_payment_rate: number
+  payment_count: number
+  avg_payment_amount: number
+  std_transaction_amount: number
+  // Trends
+  amount_trend: "increasing" | "decreasing" | "stable"
+  transactions_per_month: number
+  avg_interval_days: number
+  interval_cv: number
+  // Seasonality
+  peak_months: number[]
+  low_months: number[]
+  // Risk
+  risk_score: number
+  risk_factors: string[]
+  // Forecast
+  forecast_uncertainty: "low" | "medium" | "high"
+  forecast_notes: string
 }
 
 interface EntityProfilesResponse {
@@ -359,6 +389,10 @@ export default function ContactsPage() {
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Type</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Archetype</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Reliability</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium">Payment Behavior</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium">On-Time</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium">Trend</TableHead>
+                  <TableHead className="text-[11px] text-neutral-600 font-medium">Risk</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Lifetime Value</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Balance</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium text-right">Overdue</TableHead>
@@ -400,6 +434,18 @@ export default function ContactsPage() {
                     </TableCell>
                     <TableCell className="text-[11px] py-2 px-4">
                       <ReliabilityBar score={contact.reliability_score} />
+                    </TableCell>
+                    <TableCell className="text-[11px] py-2 px-4">
+                      <PaymentBehaviorCell avgDays={contact.avg_days_to_pay} stdDays={contact.std_days_to_pay} />
+                    </TableCell>
+                    <TableCell className="text-[11px] py-2 px-4">
+                      <OnTimeRateCell rate={contact.on_time_payment_rate} />
+                    </TableCell>
+                    <TableCell className="text-[11px] py-2 px-4">
+                      <TrendIndicator trend={contact.amount_trend} />
+                    </TableCell>
+                    <TableCell className="text-[11px] py-2 px-4">
+                      <RiskBadge score={contact.risk_score} />
                     </TableCell>
                     <TableCell className="text-[12px] font-medium text-emerald-400/90 py-2 px-4 text-right tabular-nums">
                       {formatCurrency(contact.lifetime_value)}
@@ -554,6 +600,95 @@ export default function ContactsPage() {
                     <p className="text-[11px] text-red-400/70 mt-1">
                       This contact has outstanding balance past their due date.
                     </p>
+                  </div>
+                )}
+
+                {/* Payment Behavior Section */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Payment Behavior</p>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Days to Pay</span>
+                      <span className="text-[12px] font-medium text-zinc-100">
+                        {Math.round(selectedContact.avg_days_to_pay)}d ±{Math.round(selectedContact.std_days_to_pay)}d
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">On-Time Rate</span>
+                      <span className="text-[12px] font-medium text-emerald-400/90">
+                        {Math.round(selectedContact.on_time_payment_rate)}%
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Frequency</span>
+                      <span className="text-[12px] font-medium text-white">
+                        {selectedContact.transactions_per_month.toFixed(1)}/mo
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Avg Amount</span>
+                      <span className="text-[12px] font-medium text-white tabular-nums">
+                        {formatCurrency(selectedContact.avg_payment_amount)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Forecast Signals Section */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Forecast Signals</p>
+                  <div className="space-y-2">
+                    <div className="bg-white/[0.02] p-3 rounded">
+                      <p className="text-[12px] text-neutral-300">{selectedContact.forecast_notes}</p>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Uncertainty</span>
+                      <span className={`text-[12px] font-medium uppercase ${
+                        selectedContact.forecast_uncertainty === "high" ? "text-red-400/90" :
+                        selectedContact.forecast_uncertainty === "medium" ? "text-amber-400/90" :
+                        "text-emerald-400/90"
+                      }`}>
+                        {selectedContact.forecast_uncertainty}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Risk Signals Section */}
+                <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Risk Signals</p>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                      <span className="text-[12px] text-neutral-400">Risk Score</span>
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 w-16 bg-zinc-700 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all ${
+                              selectedContact.risk_score >= 60 ? "bg-red-400" :
+                              selectedContact.risk_score >= 35 ? "bg-amber-400" :
+                              "bg-emerald-400"
+                            }`}
+                            style={{ width: `${Math.min(selectedContact.risk_score, 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-[12px] font-medium text-white w-8 text-right">
+                          {Math.round(selectedContact.risk_score)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="bg-white/[0.02] p-3 rounded">
+                      <RiskFactorsList factors={selectedContact.risk_factors} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Seasonality Section */}
+                {selectedContact.peak_months.length > 0 && (
+                  <div className="space-y-3 border-t border-white/[0.06] pt-6">
+                    <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">Seasonality</p>
+                    <div className="bg-white/[0.02] p-4 rounded">
+                      <MonthChart peakMonths={selectedContact.peak_months} lowMonths={selectedContact.low_months} />
+                    </div>
                   </div>
                 )}
               </div>
