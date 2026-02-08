@@ -198,7 +198,7 @@ export async function GET(request: NextRequest) {
           std_transaction_amount: enrichedData.std_transaction_amount || 0,
           // Trends
           amount_trend: enrichedData.amount_trend || "stable",
-          transactions_per_month: enrichedData.transactions_per_month || 0,
+          transactions_per_month: Number(enrichedData.transactions_per_month) || 0,
           avg_interval_days: enrichedData.avg_interval_days || 0,
           interval_cv: enrichedData.interval_cv || 0,
           // Seasonality
