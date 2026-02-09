@@ -48,16 +48,8 @@ export async function GET(request: NextRequest) {
     const atRisk = searchParams.get("at_risk") === "true"
     const refresh = searchParams.get("refresh") === "true"
 
-    // If refresh requested, rebuild profiles and narratives
-    if (refresh) {
-      try {
-        await buildEntityProfiles(userId)
-        await refreshEntityNarratives(userId, { maxEntities: 100 })
-      } catch (err) {
-        console.error("[entity-profiles] Error during refresh:", err)
-        // Continue with stale data rather than failing
-      }
-    }
+    // Note: refresh parameter is now handled by /api/dashboard/refresh-job endpoint
+    // This endpoint no longer performs synchronous refresh to avoid timeouts
 
     // Build WHERE clause
     const whereConditions = ["e.user_id = $1", "e.entity_type = $2"]
