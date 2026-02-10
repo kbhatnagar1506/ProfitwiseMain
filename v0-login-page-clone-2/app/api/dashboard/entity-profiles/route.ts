@@ -64,24 +64,23 @@ export async function GET(request: NextRequest) {
 
     const whereClause = whereConditions.join(" AND ")
 
-    // Fetch summary stats from movements for AR (movements table has the actual AR data)
+    // Fetch summary stats from cash_events for AR (open invoices)
     const summaryResult = await query<SummaryRow>(
       `SELECT 
         COUNT(DISTINCT CASE WHEN e.entity_type = 'customer' THEN e.id END)::int as total_customers,
         COUNT(DISTINCT CASE WHEN e.entity_type = 'vendor' THEN e.id END)::int as total_vendors,
-        COALESCE(SUM(CASE WHEN e.entity_type IN ('customer', 'vendor') THEN ABS(m.amount) ELSE 0 END), 0)::numeric as total_lifetime_value,
-        COALESCE(SUM(CASE WHEN e.entity_type = 'customer' AND m.direction = 'inflow' AND m.movement_type = 'receivable' 
-          THEN m.amount ELSE 0 END), 0)::numeric as total_ar_outstanding,
-        COALESCE(SUM(CASE WHEN e.entity_type = 'customer' AND m.direction = 'inflow' AND m.movement_type = 'receivable'
-          AND m.date < CURRENT_DATE THEN m.amount ELSE 0 END), 0)::numeric as total_overdue,
-        COUNT(DISTINCT CASE WHEN e.entity_type = 'customer' AND m.direction = 'inflow' AND m.movement_type = 'receivable' THEN e.id END)::int as at_risk_count
+        COALESCE(SUM(ABS(m.amount)), 0)::numeric as total_lifetime_value,
+        COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as total_ar_outstanding,
+        COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 AND ce.due_date < CURRENT_DATE THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as total_overdue,
+        COUNT(DISTINCT CASE WHEN ce.outstanding_amount > 0 THEN e.id END)::int as at_risk_count
       FROM entities e
       LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
+      LEFT JOIN cash_events ce ON e.id = ce.entity_id AND ce.user_id = $1 AND ce.outstanding_amount > 0
       WHERE e.user_id = $1`,
       [userId]
     ).then((r) => r.rows[0])
 
-    // Fetch paginated entities with AR metrics from movements table
+    // Fetch paginated entities with AR metrics from cash_events table (open invoices)
     const entitiesResult = await query<EntityRow>(
       `SELECT 
         e.id,
@@ -90,14 +89,13 @@ export async function GET(request: NextRequest) {
         e.display_name,
         COUNT(DISTINCT m.id)::int as transaction_count,
         COALESCE(SUM(ABS(m.amount)), 0)::numeric as lifetime_value,
-        COALESCE(SUM(CASE WHEN m.direction = 'inflow' AND m.movement_type = 'receivable' 
-          THEN m.amount ELSE 0 END), 0)::numeric as ar_balance,
-        COALESCE(SUM(CASE WHEN m.direction = 'inflow' AND m.movement_type = 'receivable'
-          AND m.date < CURRENT_DATE THEN m.amount ELSE 0 END), 0)::numeric as overdue_balance,
+        COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as ar_balance,
+        COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 AND ce.due_date < CURRENT_DATE THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as overdue_balance,
         MAX(m.date)::text as last_transaction_date,
         e.metadata
       FROM entities e
       LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
+      LEFT JOIN cash_events ce ON e.id = ce.entity_id AND ce.user_id = $1 AND ce.outstanding_amount > 0
       WHERE ${whereClause}
       GROUP BY e.id, e.entity_type, e.canonical_name, e.display_name, e.metadata
       ORDER BY ${

@@ -189,11 +189,15 @@ export async function calculateTrends(
     const intervalStd = row?.interval_std || 0
     const monthCount = row?.month_count || 0
 
+    // If data span is <= 1 month, insufficient data for trend analysis
     let amount_trend: "increasing" | "decreasing" | "stable" = "stable"
-    if (recentAvg > historicalAvg * 1.1) {
-      amount_trend = "increasing"
-    } else if (recentAvg < historicalAvg * 0.9) {
-      amount_trend = "decreasing"
+    if (monthCount > 1) {
+      // Only calculate trends if we have more than 1 month of data
+      if (recentAvg > historicalAvg * 1.1) {
+        amount_trend = "increasing"
+      } else if (recentAvg < historicalAvg * 0.9) {
+        amount_trend = "decreasing"
+      }
     }
 
     const intervalCv = avgInterval > 0 ? (intervalStd / avgInterval) * 100 : 0
@@ -288,8 +292,9 @@ export async function calculateRiskScore(
         risk_score += 25
       }
 
-      // Green flag: Early payments indicate strong financial health
-      if (metrics.early_payment_rate > 30) {
+      // Green flag: Early payments (days_to_pay <= 0) indicate strong financial health
+      // Early payment means they pay BEFORE the due date, which is positive
+      if (metrics.avg_days_to_pay <= 0 && metrics.early_payment_rate > 30) {
         risk_factors.push("Often pays early - strong financial position")
         risk_score = Math.max(0, risk_score - 20)
       }
