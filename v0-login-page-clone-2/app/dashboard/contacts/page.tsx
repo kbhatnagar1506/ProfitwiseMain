@@ -641,7 +641,7 @@ export default function ContactsPage() {
                       <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
                         <span className="text-[12px] text-neutral-400">Frequency</span>
                         <span className="text-[12px] font-medium text-white">
-                          {(selectedContact.transactions_per_month ?? 0).toFixed(1)}/mo
+                          {Number(selectedContact.transactions_per_month ?? 0).toFixed(1)}/mo
                         </span>
                       </div>
                       <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
@@ -760,7 +760,7 @@ export default function ContactsPage() {
                       <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-3">
                         <p className="text-[11px] text-purple-400 font-medium mb-1">📈 High Activity</p>
                         <p className="text-[11px] text-purple-400/80">
-                          {(selectedContact.transactions_per_month ?? 0).toFixed(1)} transactions per month. This is a {selectedContact.entity_type === "customer" ? "high-value customer" : "critical supplier"}. Prioritize relationship management.
+                          {Number(selectedContact.transactions_per_month ?? 0).toFixed(1)} transactions per month. This is a {selectedContact.entity_type === "customer" ? "high-value customer" : "critical supplier"}. Prioritize relationship management.
                         </p>
                       </div>
                     )}
