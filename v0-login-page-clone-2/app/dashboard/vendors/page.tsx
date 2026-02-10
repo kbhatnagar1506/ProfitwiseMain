@@ -590,7 +590,7 @@ export default function VendorsPage() {
                       <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
                         <span className="text-[12px] text-neutral-400">Frequency</span>
                         <span className="text-[12px] font-medium text-white">
-                          {selectedVendor.transactions_per_month.toFixed(1)}/mo
+                          {(selectedVendor.transactions_per_month ?? 0).toFixed(1)}/mo
                         </span>
                       </div>
                       <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
@@ -700,7 +700,7 @@ export default function VendorsPage() {
                       <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-3">
                         <p className="text-[11px] text-purple-400 font-medium mb-1">📈 High Volume Supplier</p>
                         <p className="text-[11px] text-purple-400/80">
-                          {selectedVendor.transactions_per_month.toFixed(1)} transactions per month. This is a critical supplier. Maintain strong relationship.
+                          {(selectedVendor.transactions_per_month ?? 0).toFixed(1)} transactions per month. This is a critical supplier. Maintain strong relationship.
                         </p>
                       </div>
                     )}
