@@ -21,13 +21,27 @@ export interface EntityMetrics {
 
 /**
  * Calculate percentile ranking for a value within a dataset
+ * Handles null values, empty arrays, and division by zero
  */
-export function calculatePercentile(value: number, values: number[]): number {
-  if (values.length === 0) return 50
-  const sorted = [...values].sort((a, b) => a - b)
+export function calculatePercentile(value: number | null, values: (number | null)[]): number {
+  // Handle null value
+  if (value === null || value === undefined) return 50
+  
+  // Filter out null values
+  const validValues = values.filter((v) => v !== null && v !== undefined) as number[]
+  
+  // Handle empty array
+  if (validValues.length === 0) return 50
+  
+  // Sort and find percentile
+  const sorted = [...validValues].sort((a, b) => a - b)
   const index = sorted.findIndex((v) => v >= value)
+  
+  // If value is greater than all values, return 100
   if (index === -1) return 100
-  return (index / sorted.length) * 100
+  
+  // Calculate percentile (avoid division by zero)
+  return (index / Math.max(1, sorted.length)) * 100
 }
 
 /**
