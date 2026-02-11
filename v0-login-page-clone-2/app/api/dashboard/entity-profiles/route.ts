@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
         COUNT(DISTINCT CASE WHEN ce.outstanding_amount > 0 THEN e.id END)::int as at_risk_count
       FROM entities e
       LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
-      LEFT JOIN cash_events ce ON e.id = ce.entity_id AND ce.user_id = $1 AND ce.outstanding_amount > 0
+      LEFT JOIN cash_events ce ON e.id = ce.entity_id::uuid AND ce.user_id = $1 AND ce.outstanding_amount > 0
       WHERE e.user_id = $1`,
       [userId]
     ).then((r) => r.rows[0])
@@ -95,7 +95,7 @@ export async function GET(request: NextRequest) {
         e.metadata
       FROM entities e
       LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
-      LEFT JOIN cash_events ce ON e.id = ce.entity_id AND ce.user_id = $1 AND ce.outstanding_amount > 0
+      LEFT JOIN cash_events ce ON e.id = ce.entity_id::uuid AND ce.user_id = $1 AND ce.outstanding_amount > 0
       WHERE ${whereClause}
       GROUP BY e.id, e.entity_type, e.canonical_name, e.display_name, e.metadata
       ORDER BY ${
