@@ -12,10 +12,10 @@ import {
   DataQualityScore,
   PeerComparisonCard,
   SeasonalityHeatmap,
-  TrendSparkline,
   PaymentBehaviorTimeline,
   PriorityRecommendations,
 } from "@/components/entity-intelligence"
+import { TrendSparkline } from "@/components/trend-sparkline"
 import { CustomerSearchResults } from "./customer-search-results"
 import { SupermemoryContextCard } from "./supermemory-context-card"
 
