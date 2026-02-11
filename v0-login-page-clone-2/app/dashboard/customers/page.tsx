@@ -47,6 +47,7 @@ import { TrendSparkline } from "@/components/trend-sparkline"
 import { PaymentBehaviorTimeline } from "@/components/payment-behavior-timeline"
 import { PriorityRecommendations } from "@/components/priority-recommendations"
 import { generatePriorityRecommendations } from "@/lib/dashboard-calculations"
+import { CustomerDetailDrawer } from "@/components/customer-detail-drawer"
 
 interface Customer {
   id: string
@@ -500,18 +501,12 @@ export default function CustomersPage() {
         </div>
       )}
 
-      {/* Deep Dive Drawer */}
-      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <SheetContent className="bg-[#0A0A0A] border-l border-white/[0.06] w-full sm:w-[520px] overflow-y-auto">
-          {selectedCustomer && (
-            <>
-              <SheetHeader className="border-b border-white/[0.06] pb-4 mb-6">
-                <SheetTitle className="text-white text-xl font-semibold">
-                  {selectedCustomer.display_name || selectedCustomer.canonical_name}
-                </SheetTitle>
-              </SheetHeader>
-
-              <div className="space-y-6">
+      {/* Deep Dive Drawer - Enhanced with AI Summary and Search */}
+      <CustomerDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        customer={selectedCustomer}
+      />
                 {/* AI Insight Block (Prominent) */}
                 {selectedCustomer.ai_insight && (
                   <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-4">
@@ -835,11 +830,6 @@ export default function CustomersPage() {
                     )}
                   </div>
                 </div>
-              </div>
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
     </div>
   )
 }
