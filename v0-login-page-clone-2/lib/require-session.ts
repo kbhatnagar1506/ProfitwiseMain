@@ -14,3 +14,18 @@ export async function requireSession(): Promise<{ id: string; email: string }> {
   if (!user) redirect("/")
   return user
 }
+
+/**
+ * Call from API Route Handlers. Returns null instead of redirecting, so the route can return a 401 JSON response.
+ */
+export async function getSession(): Promise<{ id: string; email: string } | null> {
+  try {
+    const store = await cookies()
+    const token = store.get(SESSION_COOKIE_NAME)?.value
+    if (!token) return null
+    const user = await getUserBySessionToken(token)
+    return user ?? null
+  } catch {
+    return null
+  }
+}
