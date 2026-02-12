@@ -74,7 +74,7 @@ export async function GET(
         m.raw_description
        FROM movements m
        WHERE m.counterparty_entity_id = $1::uuid 
-         AND m.user_id = $2::uuid
+         AND m.user_id = $2
          AND (
            m.raw_description ILIKE $3
            OR m.amount::text ILIKE $3
@@ -153,7 +153,7 @@ export async function GET(
     // Search Supermemory documents
     try {
       const entityResult = await query<{ canonical_name: string }>(
-        `SELECT canonical_name FROM entities WHERE id = $1::uuid AND user_id = $2::uuid`,
+        `SELECT canonical_name FROM entities WHERE id = $1::uuid AND user_id = $2`,
         [entityId, userId]
       )
 

@@ -87,7 +87,7 @@ export async function GET(
     }>(
       `SELECT id, canonical_name, display_name, entity_type, metadata
        FROM entities
-       WHERE id = $1::uuid AND user_id = $2::uuid`,
+       WHERE id = $1::uuid AND user_id = $2`,
       [entityId, userId]
     )
 
@@ -147,7 +147,7 @@ export async function GET(
         forecast_uncertainty,
         forecast_notes
        FROM entity_payment_profiles
-       WHERE entity_id = $1::uuid AND user_id = $2::uuid`,
+       WHERE entity_id = $1::uuid AND user_id = $2`,
       [entityId, userId]
     )
 
@@ -169,7 +169,7 @@ export async function GET(
         NULL::int as days_to_pay
        FROM movements m
        WHERE m.counterparty_entity_id = $1::uuid 
-         AND m.user_id = $2::uuid
+         AND m.user_id = $2
        ORDER BY m.date DESC
        LIMIT 20`,
       [entityId, userId]

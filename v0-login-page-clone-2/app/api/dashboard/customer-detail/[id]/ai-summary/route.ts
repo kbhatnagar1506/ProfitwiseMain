@@ -86,7 +86,7 @@ export async function POST(
       display_name: string | null
       entity_type: string
     }>(
-      `SELECT canonical_name, display_name, entity_type FROM entities WHERE id = $1::uuid AND user_id = $2::uuid`,
+      `SELECT canonical_name, display_name, entity_type FROM entities WHERE id = $1::uuid AND user_id = $2`,
       [entityId, userId]
     )
 
@@ -133,7 +133,7 @@ export async function POST(
         risk_factors,
         archetype
        FROM entity_payment_profiles
-       WHERE entity_id = $1::uuid AND user_id = $2::uuid`,
+       WHERE entity_id = $1::uuid AND user_id = $2`,
       [entityId, userId]
     )
 
