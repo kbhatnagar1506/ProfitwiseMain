@@ -460,3 +460,98 @@ export async function addMerchantOverrideToSupermemory(
   log("supermemory.merchant_override.added", { customId }, "supermemory")
 }
 
+/** Search for customer-specific documents in Supermemory. */
+export async function searchCustomerDocuments(
+  userId: string,
+  customerName: string,
+  query: string
+): Promise<Array<{ id: string; title: string; snippet: string; relevanceScore: number; source: string }>> {
+  try {
+    const client = getClient()
+    const containerTag = getUserFinanceTag(userId)
+    
+    const searchQuery = `${customerName} ${query}`
+    const results = await client.search({
+      query: searchQuery,
+      containerTag,
+      limit: 10,
+    })
+
+    if (!results || results.length === 0) {
+      return []
+    }
+
+    return results.map((result: any, index: number) => ({
+      id: result.id || `doc-${index}`,
+      title: result.title || "Document",
+      snippet: result.snippet || result.content?.slice(0, 200) || "",
+      relevanceScore: 75 - (index * 5),
+      source: result.source || "Supermemory",
+    }))
+  } catch (err) {
+    log("supermemory.customer_search.failed", { 
+      userId, 
+      customerName,
+      error: err instanceof Error ? err.message : String(err) 
+    }, "supermemory")
+    return []
+  }
+}
+
+/** Extract payment terms from document context. */
+export function extractPaymentTerms(context: string): string | null {
+  if (!context) return null
+
+  const patterns = [
+    /Net\s+(\d+)/gi,
+    /(\d+)\s+days?(?:\s+(?:net|payment))?/gi,
+    /payment\s+terms?:?\s*([^.\n]+)/gi,
+    /due\s+(?:within|in)\s+(\d+)\s+days?/gi,
+    /(?:payment|invoice)\s+due\s+(?:within|in)\s+(\d+)\s+days?/gi,
+  ]
+
+  for (const pattern of patterns) {
+    const match = context.match(pattern)
+    if (match) {
+      return match[0].trim()
+    }
+  }
+
+  return null
+}
+
+/** Classify relationship type based on context. */
+export function classifyRelationship(context: string): "Strategic" | "Preferred" | "New" | "At-Risk" {
+  if (!context) return "New"
+
+  const lowerContext = context.toLowerCase()
+
+  if (
+    lowerContext.includes("strategic") ||
+    lowerContext.includes("key account") ||
+    lowerContext.includes("major customer") ||
+    lowerContext.includes("long-term")
+  ) {
+    return "Strategic"
+  }
+
+  if (
+    lowerContext.includes("preferred") ||
+    lowerContext.includes("priority") ||
+    lowerContext.includes("important")
+  ) {
+    return "Preferred"
+  }
+
+  if (
+    lowerContext.includes("at risk") ||
+    lowerContext.includes("delinquent") ||
+    lowerContext.includes("overdue") ||
+    lowerContext.includes("problem")
+  ) {
+    return "At-Risk"
+  }
+
+  return "New"
+}
+
