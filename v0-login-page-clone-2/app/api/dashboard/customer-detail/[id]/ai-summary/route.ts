@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
+import { getSession } from "@/lib/require-session"
 import { query } from "@/lib/db"
 import { searchEntityProfileContext } from "@/lib/supermemory"
 
@@ -72,7 +72,7 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await requireSession()
+    const session = await getSession()
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
@@ -252,8 +252,6 @@ ${supermemoryContext ? `\nDocument Context (from company files):\n${supermemoryC
       )
     }
   } catch (error) {
-    // Re-throw Next.js redirect (thrown by requireSession when unauthenticated)
-    if (error instanceof Error && error.message === "NEXT_REDIRECT") throw error
     console.error("[ai-summary] Error:", error)
     return NextResponse.json(
       { error: "Failed to generate AI summary" },

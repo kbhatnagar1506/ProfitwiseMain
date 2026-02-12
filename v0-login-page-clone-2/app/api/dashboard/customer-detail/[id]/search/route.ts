@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
+import { getSession } from "@/lib/require-session"
 import { query } from "@/lib/db"
 import { searchEntityContextFromSupermemory } from "@/lib/supermemory"
 
@@ -40,7 +40,7 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await requireSession()
+    const session = await getSession()
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
@@ -193,8 +193,6 @@ export async function GET(
       searchTime,
     })
   } catch (error) {
-    // Re-throw Next.js redirect (thrown by requireSession when unauthenticated)
-    if (error instanceof Error && error.message === "NEXT_REDIRECT") throw error
     console.error("[customer-search] Error:", error)
     return NextResponse.json(
       { error: "Failed to search" },
