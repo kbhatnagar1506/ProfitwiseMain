@@ -6,16 +6,6 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AlertCircle, Search, Loader2, ChevronDown } from "lucide-react"
-import {
-  RiskGauge,
-  ArchetypeInsights,
-  DataQualityScore,
-  PeerComparisonCard,
-  SeasonalityHeatmap,
-  PaymentBehaviorTimeline,
-  PriorityRecommendations,
-} from "@/components/entity-intelligence"
-import { TrendSparkline } from "@/components/trend-sparkline"
 import { CustomerSearchResults } from "./customer-search-results"
 import { SupermemoryContextCard } from "./supermemory-context-card"
 
@@ -120,7 +110,6 @@ export function CustomerDetailDrawer({
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     aiSummary: true,
     supermemory: false,
-    existing: false,
   })
   const searchInputRef = useRef<HTMLInputElement>(null)
 
@@ -360,112 +349,82 @@ export function CustomerDetailDrawer({
             </div>
           </div>
 
-          {/* Existing Components Section */}
+          {/* Profile Info */}
           <div className="space-y-3">
-            <button
-              onClick={() => toggleSection("existing")}
-              className="flex items-center justify-between w-full text-left"
-            >
-              <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
-                Detailed Analysis
+            <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
+              Profile
+            </p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                <span className="text-[12px] text-neutral-400">Archetype</span>
+                <Badge className={`text-[10px] h-5 ${getArchetypeColor(customer.archetype)}`}>
+                  {customer.archetype}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                <span className="text-[12px] text-neutral-400">Transactions</span>
+                <span className="text-[12px] font-medium text-white">
+                  {customer.transaction_count}
+                </span>
+              </div>
+              <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                <span className="text-[12px] text-neutral-400">Last Active</span>
+                <span className="text-[12px] font-medium text-zinc-400">
+                  {formatDate(customer.last_transaction_date)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Overdue Alert */}
+          {customer.overdue_balance > 0 && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+              <p className="text-[12px] text-red-400 font-medium">
+                ⚠ {formatCurrency(customer.overdue_balance)} overdue
               </p>
-              <ChevronDown
-                className={`w-4 h-4 text-neutral-600 transition-transform ${
-                  expandedSections.existing ? "rotate-180" : ""
-                }`}
-              />
-            </button>
+              <p className="text-[11px] text-red-400/70 mt-1">
+                This customer has outstanding invoices past their due date.
+              </p>
+            </div>
+          )}
 
-            {expandedSections.existing && (
-              <div className="space-y-6">
-                {/* Archetype Insights */}
-                <ArchetypeInsights archetype={customer.archetype as any} />
-
-                {/* Profile Info */}
-                <div className="space-y-3">
-                  <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
-                    Profile
-                  </p>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                      <span className="text-[12px] text-neutral-400">Archetype</span>
-                      <Badge className={`text-[10px] h-5 ${getArchetypeColor(customer.archetype)}`}>
-                        {customer.archetype}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                      <span className="text-[12px] text-neutral-400">Transactions</span>
-                      <span className="text-[12px] font-medium text-white">
-                        {customer.transaction_count}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                      <span className="text-[12px] text-neutral-400">Last Active</span>
-                      <span className="text-[12px] font-medium text-zinc-400">
-                        {formatDate(customer.last_transaction_date)}
-                      </span>
-                    </div>
-                  </div>
+          {/* Payment Behavior */}
+          <div className="space-y-3 border-t border-white/[0.06] pt-6">
+            <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
+              Payment Behavior
+            </p>
+            {customer.payment_count === 0 ? (
+              <div className="bg-white/[0.02] p-3 rounded">
+                <p className="text-[12px] text-neutral-500">
+                  Data not yet available - insufficient transaction history
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                  <span className="text-[12px] text-neutral-400">Days to Pay</span>
+                  <span className="text-[12px] font-medium text-zinc-100">
+                    {customer.avg_days_to_pay === 0 && customer.std_days_to_pay === 0
+                      ? "—"
+                      : `${customer.avg_days_to_pay.toFixed(0)}d ±${customer.std_days_to_pay.toFixed(0)}`}
+                  </span>
                 </div>
-
-                {/* Overdue Alert */}
-                {customer.overdue_balance > 0 && (
-                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-                    <p className="text-[12px] text-red-400 font-medium">
-                      ⚠ {formatCurrency(customer.overdue_balance)} overdue
-                    </p>
-                    <p className="text-[11px] text-red-400/70 mt-1">
-                      This customer has outstanding invoices past their due date.
-                    </p>
-                  </div>
-                )}
-
-                {/* Risk Gauge */}
-                <RiskGauge riskScore={customer.risk_score} riskFactors={customer.risk_factors} />
-
-                {/* Data Quality Score */}
-                <DataQualityScore
-                  transactionCount={customer.transaction_count}
-                  paymentCount={customer.payment_count}
-                  hasSeasonality={customer.peak_months.length > 0}
-                />
-
-                {/* Peer Comparison */}
-                {customer.peer_percentiles && (
-                  <PeerComparisonCard
-                    archetype={customer.archetype}
-                    percentiles={customer.peer_percentiles}
-                  />
-                )}
-
-                {/* Seasonality Heatmap */}
-                {customer.peak_months.length > 0 && (
-                  <SeasonalityHeatmap
-                    peakMonths={customer.peak_months}
-                    lowMonths={customer.low_months}
-                  />
-                )}
-
-                {/* Trends */}
-                <TrendSparkline
-                  amountTrend={customer.amount_trend}
-                  transactionsPerMonth={customer.transactions_per_month}
-                />
-
-                {/* Payment Behavior Timeline */}
-                <PaymentBehaviorTimeline
-                  avgDaysToPay={customer.avg_days_to_pay}
-                  onTimeRate={customer.on_time_payment_rate}
-                  earlyRate={customer.early_payment_rate}
-                />
-
-                {/* Priority Recommendations */}
-                <PriorityRecommendations
-                  riskScore={customer.risk_score}
-                  riskFactors={customer.risk_factors}
-                  archetype={customer.archetype}
-                  arBalance={customer.ar_balance}
-                />
+                <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                  <span className="text-[12px] text-neutral-400">On-Time Rate</span>
+                  <span className="text-[12px] font-medium text-emerald-400/90">
+                    {customer.on_time_payment_rate
+                      ? (customer.on_time_payment_rate * 100).toFixed(0) + "%"
+                      : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
+                  <span className="text-[12px] text-neutral-400">Early Payment Rate</span>
+                  <span className="text-[12px] font-medium text-blue-400/90">
+                    {customer.early_payment_rate
+                      ? (customer.early_payment_rate * 100).toFixed(0) + "%"
+                      : "—"}
+                  </span>
+                </div>
               </div>
             )}
           </div>
