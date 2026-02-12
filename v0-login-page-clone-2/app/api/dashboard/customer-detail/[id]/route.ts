@@ -4,6 +4,7 @@ import { query } from "@/lib/db"
 import { calculateEnrichedEntityData } from "@/lib/entity-calculations"
 import { searchEntityProfileContext } from "@/lib/supermemory"
 
+// Customer detail endpoint - fetches complete customer profile with transactions and Supermemory context
 type EntityType = "customer" | "vendor"
 
 interface CustomerDetailResponse {
