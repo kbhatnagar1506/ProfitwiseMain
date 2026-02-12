@@ -73,6 +73,7 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+
     const userId = session.id
     const entityId = params.id
 
@@ -157,14 +158,14 @@ export async function GET(
       id: string
       date: string
       amount: number
-      description: string | null
+      raw_description: string | null
       days_to_pay: number | null
     }>(
       `SELECT 
         m.id,
         m.date::text,
         ABS(m.amount)::numeric as amount,
-        m.description,
+        m.raw_description,
         NULL::int as days_to_pay
        FROM movements m
        WHERE m.counterparty_entity_id = $1::uuid 
@@ -178,7 +179,7 @@ export async function GET(
       id: t.id,
       date: t.date,
       amount: typeof t.amount === "string" ? parseFloat(t.amount) : t.amount,
-      description: t.description,
+      description: t.raw_description,
       days_to_pay: t.days_to_pay,
       status: "completed",
     }))
@@ -270,6 +271,8 @@ export async function GET(
 
     return NextResponse.json(response)
   } catch (error) {
+    // Re-throw Next.js redirect (thrown by requireSession when unauthenticated)
+    if (error instanceof Error && error.message === "NEXT_REDIRECT") throw error
     console.error("[customer-detail] Error:", error)
     return NextResponse.json(
       { error: "Failed to fetch customer details" },

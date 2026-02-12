@@ -252,6 +252,8 @@ ${supermemoryContext ? `\nDocument Context (from company files):\n${supermemoryC
       )
     }
   } catch (error) {
+    // Re-throw Next.js redirect (thrown by requireSession when unauthenticated)
+    if (error instanceof Error && error.message === "NEXT_REDIRECT") throw error
     console.error("[ai-summary] Error:", error)
     return NextResponse.json(
       { error: "Failed to generate AI summary" },
