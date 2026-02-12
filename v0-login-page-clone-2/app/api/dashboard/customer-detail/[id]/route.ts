@@ -77,6 +77,8 @@ export async function GET(
     const userId = session.id
     const entityId = params.id
 
+    console.log(`[customer-detail] userId=${userId} entityId=${entityId}`)
+
     // Fetch entity profile
     const entityResult = await query<{
       id: string
