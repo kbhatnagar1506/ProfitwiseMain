@@ -65,18 +65,18 @@ export async function GET(
       id: string
       date: string
       amount: number
-      description: string | null
+      raw_description: string | null
     }>(
       `SELECT 
         m.id,
         m.date::text,
         ABS(m.amount)::numeric as amount,
-        m.description
+        m.raw_description
        FROM movements m
        WHERE m.counterparty_entity_id = $1::uuid 
          AND m.user_id = $2::uuid
          AND (
-           m.description ILIKE $3
+           m.raw_description ILIKE $3
            OR m.amount::text ILIKE $3
            OR m.date::text ILIKE $3
          )
@@ -87,16 +87,16 @@ export async function GET(
 
     for (const t of transactionsResult.rows) {
       const relevance = calculateRelevance(
-        `${t.description || ""} ${t.amount}`,
+        `${t.raw_description || ""} ${t.amount}`,
         searchQuery
       )
       results.push({
         type: "transaction",
         id: t.id,
         title: `Transaction - ${t.date}`,
-        snippet: `${t.description || "No description"} - $${t.amount.toFixed(2)}`,
+        snippet: `${t.raw_description || "No description"} - $${Number(t.amount).toFixed(2)}`,
         date: t.date,
-        amount: t.amount,
+        amount: typeof t.amount === "string" ? parseFloat(t.amount) : t.amount,
         relevanceScore: relevance,
         source: "Transactions",
       })
@@ -193,6 +193,8 @@ export async function GET(
       searchTime,
     })
   } catch (error) {
+    // Re-throw Next.js redirect (thrown by requireSession when unauthenticated)
+    if (error instanceof Error && error.message === "NEXT_REDIRECT") throw error
     console.error("[customer-search] Error:", error)
     return NextResponse.json(
       { error: "Failed to search" },
