@@ -65,7 +65,7 @@ interface CustomerDetailResponse {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getSession()
@@ -73,11 +73,8 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-
     const userId = session.id
-    const entityId = params.id
-
-    console.log(`[customer-detail] userId=${userId} entityId=${entityId}`)
+    const { id: entityId } = await params
 
     // Fetch entity profile
     const entityResult = await query<{
