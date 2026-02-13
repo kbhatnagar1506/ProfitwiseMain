@@ -1,13 +1,27 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { AlertCircle, Search, Loader2, ChevronDown } from "lucide-react"
+import {
+  Search,
+  Sparkles,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  ShieldCheck,
+  ShieldAlert,
+  CircleDollarSign,
+  Calendar,
+  Clock,
+  BarChart2,
+  Zap,
+  RefreshCw,
+  ChevronRight,
+} from "lucide-react"
 import { CustomerSearchResults } from "./customer-search-results"
-import { SupermemoryContextCard } from "./supermemory-context-card"
 
 interface Customer {
   id: string
@@ -39,12 +53,6 @@ interface Customer {
   risk_factors: string[]
   forecast_uncertainty: "low" | "medium" | "high"
   forecast_notes: string
-  peer_percentiles?: {
-    reliability_score: number
-    risk_score: number
-    avg_days_to_pay: number
-    transactions_per_month: number
-  }
 }
 
 interface AISummary {
@@ -56,13 +64,6 @@ interface AISummary {
   recommendations: string[]
   contractContext: string
   generatedAt: string
-}
-
-interface SupermemoryContext {
-  contractTerms: string | null
-  relationshipNotes: string | null
-  paymentTerms: string | null
-  rawContext: string
 }
 
 interface CustomerDetailDrawerProps {
@@ -80,20 +81,65 @@ function formatCurrency(amount: number): string {
 function formatDate(dateString: string | null): string {
   if (!dateString) return "—"
   try {
-    return new Date(dateString).toLocaleDateString()
+    return new Date(dateString).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    })
   } catch {
     return dateString
   }
 }
 
-function getArchetypeColor(archetype: string): string {
-  const colors: Record<string, string> = {
-    Clockwork: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
-    Bursty: "bg-blue-500/20 text-blue-300 border-blue-500/30",
-    Volatile: "bg-orange-500/20 text-orange-300 border-orange-500/30",
-    New: "bg-neutral-500/20 text-neutral-300 border-neutral-500/30",
+const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+function getArchetypeStyle(archetype: string) {
+  const styles: Record<string, { badge: string; dot: string }> = {
+    Clockwork:  { badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/25", dot: "bg-emerald-400" },
+    Bursty:     { badge: "bg-blue-500/15 text-blue-300 border-blue-500/25",          dot: "bg-blue-400"    },
+    Volatile:   { badge: "bg-orange-500/15 text-orange-300 border-orange-500/25",    dot: "bg-orange-400"  },
+    "At-Risk":  { badge: "bg-red-500/15 text-red-300 border-red-500/25",             dot: "bg-red-400"     },
+    Strategic:  { badge: "bg-violet-500/15 text-violet-300 border-violet-500/25",    dot: "bg-violet-400"  },
+    Seasonal:   { badge: "bg-amber-500/15 text-amber-300 border-amber-500/25",       dot: "bg-amber-400"   },
+    New:        { badge: "bg-neutral-500/15 text-neutral-300 border-neutral-500/25", dot: "bg-neutral-400" },
   }
-  return colors[archetype] || colors.New
+  return styles[archetype] || styles.New
+}
+
+function getRiskColor(score: number) {
+  if (score < 0.3) return { bar: "bg-emerald-500", text: "text-emerald-400", label: "Low" }
+  if (score < 0.6) return { bar: "bg-amber-500",   text: "text-amber-400",   label: "Medium" }
+  return                 { bar: "bg-red-500",       text: "text-red-400",     label: "High" }
+}
+
+function ScoreBar({ value, color }: { value: number; color: string }) {
+  return (
+    <div className="h-1 w-full bg-white/[0.06] rounded-full overflow-hidden">
+      <div
+        className={`h-full rounded-full transition-all ${color}`}
+        style={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }}
+      />
+    </div>
+  )
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">
+      {children}
+    </p>
+  )
+}
+
+function Row({ label, value, accent }: { label: string; value: React.ReactNode; accent?: boolean }) {
+  return (
+    <div className="flex items-center justify-between py-2 border-b border-white/[0.04] last:border-0">
+      <span className="text-[12px] text-neutral-500">{label}</span>
+      <span className={`text-[12px] font-medium ${accent ? "text-white" : "text-neutral-300"}`}>
+        {value}
+      </span>
+    </div>
+  )
 }
 
 export function CustomerDetailDrawer({
@@ -105,329 +151,382 @@ export function CustomerDetailDrawer({
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const [searchActive, setSearchActive] = useState(false)
-  const [supermemoryContext, setSupermemoryContext] = useState<SupermemoryContext | null>(null)
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    aiSummary: true,
-    supermemory: false,
-  })
-  const searchInputRef = useRef<HTMLInputElement>(null)
+  const prevCustomerId = useRef<string | null>(null)
 
-  // Generate AI summary when drawer opens
   useEffect(() => {
-    if (open && customer && !aiSummary) {
-      generateAISummary()
+    if (open && customer && customer.id !== prevCustomerId.current) {
+      prevCustomerId.current = customer.id
+      setAiSummary(null)
+      setAiError(null)
+      setSearchQuery("")
+      generateAISummary(customer.id)
+    }
+    if (!open) {
+      prevCustomerId.current = null
     }
   }, [open, customer?.id])
 
-  const generateAISummary = async () => {
-    if (!customer) return
-
+  const generateAISummary = async (id: string) => {
     setAiLoading(true)
     setAiError(null)
-
     try {
-      const response = await fetch(
-        `/api/dashboard/customer-detail/${customer.id}/ai-summary`,
-        { method: "POST" }
-      )
-
-      if (!response.ok) {
-        throw new Error("Failed to generate AI summary")
-      }
-
-      const data = await response.json()
-      setAiSummary(data)
-    } catch (err) {
-      console.error("AI summary error:", err)
-      setAiError("Unable to generate AI summary at this time")
+      const res = await fetch(`/api/dashboard/customer-detail/${id}/ai-summary`, { method: "POST" })
+      if (!res.ok) throw new Error("Failed")
+      setAiSummary(await res.json())
+    } catch {
+      setAiError("AI summary unavailable")
     } finally {
       setAiLoading(false)
     }
   }
 
-  // Fetch Supermemory context when drawer opens
-  useEffect(() => {
-    if (open && customer && !supermemoryContext) {
-      fetchSupermemoryContext()
-    }
-  }, [open, customer?.id])
-
-  const fetchSupermemoryContext = async () => {
-    if (!customer) return
-
-    try {
-      const response = await fetch(
-        `/api/dashboard/customer-detail/${customer.id}`
-      )
-
-      if (!response.ok) return
-
-      const data = await response.json()
-      setSupermemoryContext(data.supermemoryContext)
-    } catch (err) {
-      console.error("Supermemory context error:", err)
-    }
-  }
-
-  const toggleSection = (section: string) => {
-    setExpandedSections((prev) => ({
-      ...prev,
-      [section]: !prev[section],
-    }))
-  }
-
   if (!customer) return null
+
+  const name = customer.display_name || customer.canonical_name
+  const archetypeStyle = getArchetypeStyle(customer.archetype)
+  const riskStyle = getRiskColor(customer.risk_score)
+  const TrendIcon =
+    customer.amount_trend === "increasing" ? TrendingUp :
+    customer.amount_trend === "decreasing" ? TrendingDown : Minus
+  const trendColor =
+    customer.amount_trend === "increasing" ? "text-emerald-400" :
+    customer.amount_trend === "decreasing" ? "text-red-400" : "text-neutral-500"
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="bg-black border-l border-white/10 w-full sm:w-[600px] overflow-y-auto shadow-[-20px_0_40px_rgba(0,0,0,0.5)]">
-        <SheetHeader className="border-b border-white/[0.06] pb-4 mb-6">
-          <SheetTitle className="text-white text-xl font-semibold">
-            {customer.display_name || customer.canonical_name}
-          </SheetTitle>
-        </SheetHeader>
-
-        <div className="space-y-6">
-          {/* AI Summary Section */}
-          <div className="space-y-3">
-            <button
-              onClick={() => toggleSection("aiSummary")}
-              className="flex items-center justify-between w-full text-left"
-            >
-              <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
-                AI Summary
-              </p>
-              <ChevronDown
-                className={`w-4 h-4 text-neutral-600 transition-transform ${
-                  expandedSections.aiSummary ? "rotate-180" : ""
-                }`}
-              />
-            </button>
-
-            {expandedSections.aiSummary && (
-              <div className="space-y-3">
-                {aiLoading ? (
-                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-4 space-y-2">
-                    <Skeleton className="h-4 w-full bg-white/10" />
-                    <Skeleton className="h-4 w-3/4 bg-white/10" />
-                    <Skeleton className="h-4 w-5/6 bg-white/10" />
-                  </div>
-                ) : aiError ? (
-                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-                    <p className="text-[12px] text-red-400">{aiError}</p>
-                  </div>
-                ) : aiSummary ? (
-                  <div className="space-y-3">
-                    {aiSummary.summary && (
-                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
-                        <p className="text-[12px] text-neutral-300 leading-relaxed">
-                          {aiSummary.summary}
-                        </p>
-                      </div>
-                    )}
-
-                    {aiSummary.paymentBehavior && (
-                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
-                        <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium mb-2">
-                          Payment Behavior
-                        </p>
-                        <p className="text-[12px] text-neutral-300">
-                          {aiSummary.paymentBehavior}
-                        </p>
-                      </div>
-                    )}
-
-                    {aiSummary.riskAssessment && (
-                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
-                        <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium mb-2">
-                          Risk Assessment
-                        </p>
-                        <p className="text-[12px] text-neutral-300">
-                          {aiSummary.riskAssessment}
-                        </p>
-                      </div>
-                    )}
-
-                    {aiSummary.recommendations && aiSummary.recommendations.length > 0 && (
-                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
-                        <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium mb-2">
-                          Recommendations
-                        </p>
-                        <ul className="space-y-1">
-                          {aiSummary.recommendations.map((rec, idx) => (
-                            <li key={idx} className="text-[12px] text-neutral-300">
-                              • {rec}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                ) : null}
+      <SheetContent
+        className="bg-[#0a0a0a] border-l border-white/[0.07] w-full sm:max-w-[520px] p-0 overflow-y-auto shadow-[-24px_0_48px_rgba(0,0,0,0.6)] backdrop-blur-sm"
+        aria-describedby={undefined}
+      >
+        {/* Header */}
+        <div className="sticky top-0 z-10 bg-[#0a0a0a]/95 backdrop-blur-sm border-b border-white/[0.07] px-6 py-4">
+          <SheetHeader>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <SheetTitle className="text-white text-[17px] font-semibold leading-tight truncate">
+                  {name}
+                </SheetTitle>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <Badge className={`text-[10px] h-4.5 px-1.5 border ${archetypeStyle.badge}`}>
+                    {customer.archetype}
+                  </Badge>
+                  {customer.overdue_balance > 0 && (
+                    <Badge className="text-[10px] h-4.5 px-1.5 bg-red-500/15 text-red-300 border border-red-500/25">
+                      {formatCurrency(customer.overdue_balance)} overdue
+                    </Badge>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-
-          {/* Search Section */}
-          <div className="space-y-3">
-            <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
-              Search
-            </p>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-neutral-600" />
-              <Input
-                ref={searchInputRef}
-                type="text"
-                placeholder="Search transactions, invoices, documents..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value)
-                  setSearchActive(e.target.value.length > 0)
-                }}
-                className="pl-10 bg-white/[0.03] border border-white/[0.06] text-neutral-300 placeholder-neutral-600"
-              />
             </div>
+          </SheetHeader>
+        </div>
 
-            {searchActive && searchQuery.length > 0 && (
-              <CustomerSearchResults customerId={customer.id} query={searchQuery} />
-            )}
+        <div className="px-6 py-5 space-y-7">
+
+          {/* KPI Hero Row */}
+          <div className="grid grid-cols-3 gap-2.5">
+            {[
+              { label: "Lifetime Value", value: formatCurrency(customer.lifetime_value), color: "text-emerald-400" },
+              { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : "text-neutral-500" },
+              { label: "Reliability",    value: `${customer.reliability_score}%`,        color: "text-white" },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold">{label}</p>
+                <p className={`text-[18px] font-bold mt-1.5 tabular-nums leading-none ${color}`}>{value}</p>
+              </div>
+            ))}
           </div>
 
-          {/* Supermemory Context Section */}
-          {supermemoryContext && (
-            <div className="space-y-3">
-              <button
-                onClick={() => toggleSection("supermemory")}
-                className="flex items-center justify-between w-full text-left"
-              >
-                <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
-                  Contract & Relationship
-                </p>
-                <ChevronDown
-                  className={`w-4 h-4 text-neutral-600 transition-transform ${
-                    expandedSections.supermemory ? "rotate-180" : ""
-                  }`}
-                />
-              </button>
-
-              {expandedSections.supermemory && (
-                <SupermemoryContextCard context={supermemoryContext} />
+          {/* AI Summary */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles className="w-3.5 h-3.5 text-violet-400" />
+              <SectionLabel>AI Intelligence</SectionLabel>
+              {aiSummary && !aiLoading && (
+                <button
+                  onClick={() => { setAiSummary(null); generateAISummary(customer.id) }}
+                  className="ml-auto text-neutral-600 hover:text-neutral-400 transition-colors"
+                  title="Regenerate"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                </button>
               )}
             </div>
-          )}
 
-          {/* Mini KPI Grid */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
-              <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium">
-                Total Invoiced
-              </p>
-              <p className="text-lg font-semibold text-emerald-400/90 mt-2 tabular-nums">
-                {formatCurrency(customer.lifetime_value)}
-              </p>
-            </div>
-            <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
-              <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium">
-                Open AR
-              </p>
-              <p
-                className={`text-lg font-semibold mt-2 tabular-nums ${
-                  customer.ar_balance > 0 ? "text-amber-400/90" : "text-zinc-500"
-                }`}
-              >
-                {formatCurrency(customer.ar_balance)}
-              </p>
-            </div>
-            <div className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3">
-              <p className="text-[10px] text-neutral-600 uppercase tracking-wide font-medium">
-                Reliability
-              </p>
-              <p className="text-lg font-semibold text-white mt-2">
-                {customer.reliability_score}%
-              </p>
-            </div>
+            {aiLoading ? (
+              <div className="space-y-2.5">
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-2">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Sparkles className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
+                    <span className="text-[11px] text-violet-400/70">Analyzing {name}…</span>
+                  </div>
+                  <Skeleton className="h-3 w-full bg-white/[0.06]" />
+                  <Skeleton className="h-3 w-5/6 bg-white/[0.06]" />
+                  <Skeleton className="h-3 w-4/5 bg-white/[0.06]" />
+                </div>
+              </div>
+            ) : aiError ? (
+              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
+                <p className="text-[12px] text-neutral-500">{aiError}</p>
+              </div>
+            ) : aiSummary ? (
+              <div className="space-y-2.5">
+                {/* Summary pill */}
+                {aiSummary.summary && (
+                  <div className="bg-violet-500/[0.07] border border-violet-500/[0.15] rounded-xl p-4">
+                    <p className="text-[12.5px] text-neutral-200 leading-relaxed">{aiSummary.summary}</p>
+                  </div>
+                )}
+
+                {/* Behavior + Risk side-by-side */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  {aiSummary.paymentBehavior && (
+                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                      <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Payment Behavior</p>
+                      <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.paymentBehavior}</p>
+                    </div>
+                  )}
+                  {aiSummary.riskAssessment && (
+                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                      <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Risk Assessment</p>
+                      <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.riskAssessment}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Trends + Seasonality side-by-side */}
+                {(aiSummary.trends || aiSummary.seasonality) && (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {aiSummary.trends && (
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                        <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Trends</p>
+                        <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.trends}</p>
+                      </div>
+                    )}
+                    {aiSummary.seasonality && (
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                        <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Seasonality</p>
+                        <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.seasonality}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Contract context */}
+                {aiSummary.contractContext && (
+                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                    <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Contract Context</p>
+                    <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.contractContext}</p>
+                  </div>
+                )}
+
+                {/* Recommendations */}
+                {aiSummary.recommendations?.length > 0 && (
+                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                    <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">Action Items</p>
+                    <div className="space-y-2">
+                      {aiSummary.recommendations.map((rec, i) => (
+                        <div key={i} className="flex items-start gap-2.5">
+                          <div className="w-4 h-4 rounded-full bg-violet-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <span className="text-[8px] text-violet-400 font-bold">{i + 1}</span>
+                          </div>
+                          <p className="text-[11.5px] text-neutral-300 leading-relaxed">{rec}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
 
-          {/* Profile Info */}
-          <div className="space-y-3">
-            <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
-              Profile
-            </p>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                <span className="text-[12px] text-neutral-400">Archetype</span>
-                <Badge className={`text-[10px] h-5 ${getArchetypeColor(customer.archetype)}`}>
-                  {customer.archetype}
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                <span className="text-[12px] text-neutral-400">Transactions</span>
-                <span className="text-[12px] font-medium text-white">
-                  {customer.transaction_count}
-                </span>
-              </div>
-              <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                <span className="text-[12px] text-neutral-400">Last Active</span>
-                <span className="text-[12px] font-medium text-zinc-400">
-                  {formatDate(customer.last_transaction_date)}
-                </span>
-              </div>
+          {/* Search */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <Search className="w-3.5 h-3.5 text-neutral-500" />
+              <SectionLabel>Intelligent Search</SectionLabel>
             </div>
-          </div>
-
-          {/* Overdue Alert */}
-          {customer.overdue_balance > 0 && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-              <p className="text-[12px] text-red-400 font-medium">
-                ⚠ {formatCurrency(customer.overdue_balance)} overdue
-              </p>
-              <p className="text-[11px] text-red-400/70 mt-1">
-                This customer has outstanding invoices past their due date.
-              </p>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-600" />
+              <Input
+                type="text"
+                placeholder="Search transactions, invoices, documents…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 h-9 bg-white/[0.03] border border-white/[0.07] text-neutral-300 text-[12px] placeholder:text-neutral-600 focus-visible:ring-0 focus-visible:border-white/20"
+              />
             </div>
-          )}
-
-          {/* Payment Behavior */}
-          <div className="space-y-3 border-t border-white/[0.06] pt-6">
-            <p className="text-[11px] text-neutral-600 uppercase tracking-wide font-medium">
-              Payment Behavior
-            </p>
-            {customer.payment_count === 0 ? (
-              <div className="bg-white/[0.02] p-3 rounded">
-                <p className="text-[12px] text-neutral-500">
-                  Data not yet available - insufficient transaction history
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                  <span className="text-[12px] text-neutral-400">Days to Pay</span>
-                  <span className="text-[12px] font-medium text-zinc-100">
-                    {customer.avg_days_to_pay === 0 && customer.std_days_to_pay === 0
-                      ? "—"
-                      : `${customer.avg_days_to_pay.toFixed(0)}d ±${customer.std_days_to_pay.toFixed(0)}`}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                  <span className="text-[12px] text-neutral-400">On-Time Rate</span>
-                  <span className="text-[12px] font-medium text-emerald-400/90">
-                    {customer.on_time_payment_rate
-                      ? (customer.on_time_payment_rate * 100).toFixed(0) + "%"
-                      : "—"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between bg-white/[0.02] p-2.5 rounded">
-                  <span className="text-[12px] text-neutral-400">Early Payment Rate</span>
-                  <span className="text-[12px] font-medium text-blue-400/90">
-                    {customer.early_payment_rate
-                      ? (customer.early_payment_rate * 100).toFixed(0) + "%"
-                      : "—"}
-                  </span>
-                </div>
+            {searchQuery.length > 1 && (
+              <div className="mt-2">
+                <CustomerSearchResults customerId={customer.id} query={searchQuery} />
               </div>
             )}
           </div>
+
+          {/* Risk Profile */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              {customer.risk_score > 0.5
+                ? <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                : <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              }
+              <SectionLabel>Risk Profile</SectionLabel>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-[12px] text-neutral-400">Risk Score</span>
+                <span className={`text-[12px] font-semibold ${riskStyle.text}`}>
+                  {riskStyle.label} · {(customer.risk_score * 100).toFixed(0)}%
+                </span>
+              </div>
+              <ScoreBar value={customer.risk_score} color={riskStyle.bar} />
+
+              {customer.risk_factors?.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  {customer.risk_factors.map((factor, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <div className="w-1 h-1 rounded-full bg-amber-400/60 mt-1.5 flex-shrink-0" />
+                      <span className="text-[11px] text-neutral-400">{factor}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {customer.risk_factors?.length === 0 && (
+                <p className="text-[11px] text-neutral-500">No risk factors identified</p>
+              )}
+            </div>
+          </div>
+
+          {/* Payment Metrics */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <Clock className="w-3.5 h-3.5 text-neutral-500" />
+              <SectionLabel>Payment Metrics</SectionLabel>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
+              <div className="px-4 py-1">
+                <Row
+                  label="Avg Days to Pay"
+                  value={
+                    customer.avg_days_to_pay === 0 && customer.std_days_to_pay === 0
+                      ? "—"
+                      : `${customer.avg_days_to_pay < 0 ? "" : ""}${customer.avg_days_to_pay.toFixed(0)}d ±${customer.std_days_to_pay.toFixed(0)}`
+                  }
+                  accent
+                />
+                <Row
+                  label="On-Time Rate"
+                  value={
+                    customer.on_time_payment_rate
+                      ? <span className="text-emerald-400">{(customer.on_time_payment_rate * 100).toFixed(0)}%</span>
+                      : "—"
+                  }
+                />
+                <Row
+                  label="Early Payment Rate"
+                  value={
+                    customer.early_payment_rate
+                      ? <span className="text-blue-400">{(customer.early_payment_rate * 100).toFixed(0)}%</span>
+                      : "—"
+                  }
+                />
+                <Row
+                  label="Avg Transaction"
+                  value={customer.avg_payment_amount ? formatCurrency(customer.avg_payment_amount) : "—"}
+                />
+                <Row
+                  label="Amount Trend"
+                  value={
+                    <span className={`flex items-center gap-1 ${trendColor}`}>
+                      <TrendIcon className="w-3 h-3" />
+                      {customer.amount_trend}
+                    </span>
+                  }
+                />
+                <Row
+                  label="Transactions / Month"
+                  value={customer.transactions_per_month ? customer.transactions_per_month.toFixed(1) : "—"}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Seasonality */}
+          {(customer.peak_months?.length > 0 || customer.low_months?.length > 0) && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Calendar className="w-3.5 h-3.5 text-neutral-500" />
+                <SectionLabel>Seasonality</SectionLabel>
+              </div>
+              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+                <div className="grid grid-cols-12 gap-1 mb-3">
+                  {MONTH_ABBR.map((m, i) => {
+                    const monthNum = i + 1
+                    const isPeak = customer.peak_months?.includes(monthNum)
+                    const isLow = customer.low_months?.includes(monthNum)
+                    return (
+                      <div key={m} className="text-center">
+                        <div
+                          className={`w-full aspect-square rounded text-[7px] flex items-center justify-center font-medium transition-colors ${
+                            isPeak ? "bg-emerald-500/30 text-emerald-300" :
+                            isLow  ? "bg-red-500/20 text-red-400" :
+                            "bg-white/[0.04] text-neutral-600"
+                          }`}
+                        >
+                          {m.slice(0, 1)}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-sm bg-emerald-500/30" />
+                    <span className="text-[10px] text-neutral-500">Peak months</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-sm bg-red-500/20" />
+                    <span className="text-[10px] text-neutral-500">Low months</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Transaction Profile */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
+              <SectionLabel>Transaction Profile</SectionLabel>
+            </div>
+            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
+              <div className="px-4 py-1">
+                <Row label="Total Transactions" value={customer.transaction_count} accent />
+                <Row label="Archetype" value={
+                  <Badge className={`text-[10px] px-1.5 py-0 border ${archetypeStyle.badge}`}>
+                    {customer.archetype}
+                  </Badge>
+                } />
+                <Row label="Last Active" value={formatDate(customer.last_transaction_date)} />
+                <Row
+                  label="Avg Interval"
+                  value={customer.avg_interval_days ? `${customer.avg_interval_days.toFixed(0)} days` : "—"}
+                />
+                <Row
+                  label="Regularity (CV)"
+                  value={
+                    customer.interval_cv
+                      ? <span className={customer.interval_cv < 0.5 ? "text-emerald-400" : customer.interval_cv < 1 ? "text-amber-400" : "text-red-400"}>
+                          {customer.interval_cv < 0.5 ? "Very Regular" : customer.interval_cv < 1 ? "Moderate" : "Irregular"}
+                        </span>
+                      : "—"
+                  }
+                />
+              </div>
+            </div>
+          </div>
+
         </div>
       </SheetContent>
     </Sheet>

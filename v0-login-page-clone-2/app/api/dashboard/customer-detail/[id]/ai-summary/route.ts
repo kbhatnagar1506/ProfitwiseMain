@@ -225,7 +225,12 @@ ${supermemoryContext ? `\nDocument Context (from company files):\n${supermemoryC
     }
 
     try {
-      const parsed = JSON.parse(response) as Partial<AISummaryResponse>
+      // Strip markdown code fences if LLM wrapped the JSON
+      const cleaned = response
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```\s*$/, "")
+        .trim()
+      const parsed = JSON.parse(cleaned) as Partial<AISummaryResponse>
       return NextResponse.json({
         summary: parsed.summary || "Analysis complete",
         paymentBehavior: parsed.paymentBehavior || "",
