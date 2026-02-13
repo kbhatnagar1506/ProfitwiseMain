@@ -184,8 +184,19 @@ export function CustomerDetailDrawer({
 
   const name = customer.display_name || customer.canonical_name
   const archetypeStyle = getArchetypeStyle(customer.archetype)
-  const riskStyle = getRiskColor(customer.risk_score)
-  const TrendIcon =
+
+  // Coerce all numeric fields — pg returns REAL/NUMERIC columns as strings
+  const avgDaysToPay      = Number(customer.avg_days_to_pay) || 0
+  const stdDaysToPay      = Number(customer.std_days_to_pay) || 0
+  const onTimeRate        = Number(customer.on_time_payment_rate) || 0
+  const earlyRate         = Number(customer.early_payment_rate) || 0
+  const avgPayment        = Number(customer.avg_payment_amount) || 0
+  const txPerMonth        = Number(customer.transactions_per_month) || 0
+  const avgInterval       = Number(customer.avg_interval_days) || 0
+  const intervalCv        = Number(customer.interval_cv) || 0
+  const riskScore         = Number(customer.risk_score) || 0
+
+  const riskStyle = getRiskColor(riskScore)
     customer.amount_trend === "increasing" ? TrendingUp :
     customer.amount_trend === "decreasing" ? TrendingDown : Minus
   const trendColor =
@@ -366,7 +377,7 @@ export function CustomerDetailDrawer({
           {/* Risk Profile */}
           <div>
             <div className="flex items-center gap-2 mb-3">
-              {customer.risk_score > 0.5
+              {riskScore > 0.5
                 ? <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
                 : <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               }
@@ -376,10 +387,10 @@ export function CustomerDetailDrawer({
               <div className="flex items-center justify-between">
                 <span className="text-[12px] text-neutral-400">Risk Score</span>
                 <span className={`text-[12px] font-semibold ${riskStyle.text}`}>
-                  {riskStyle.label} · {(customer.risk_score * 100).toFixed(0)}%
+                  {riskStyle.label} · {(riskScore * 100).toFixed(0)}%
                 </span>
               </div>
-              <ScoreBar value={customer.risk_score} color={riskStyle.bar} />
+              <ScoreBar value={riskScore} color={riskStyle.bar} />
 
               {customer.risk_factors?.length > 0 && (
                 <div className="space-y-1.5 pt-1">
@@ -409,31 +420,31 @@ export function CustomerDetailDrawer({
                 <Row
                   label="Avg Days to Pay"
                   value={
-                    customer.avg_days_to_pay === 0 && customer.std_days_to_pay === 0
+                    avgDaysToPay === 0 && stdDaysToPay === 0
                       ? "—"
-                      : `${customer.avg_days_to_pay < 0 ? "" : ""}${customer.avg_days_to_pay.toFixed(0)}d ±${customer.std_days_to_pay.toFixed(0)}`
+                      : `${avgDaysToPay.toFixed(0)}d ±${stdDaysToPay.toFixed(0)}`
                   }
                   accent
                 />
                 <Row
                   label="On-Time Rate"
                   value={
-                    customer.on_time_payment_rate
-                      ? <span className="text-emerald-400">{(customer.on_time_payment_rate * 100).toFixed(0)}%</span>
+                    onTimeRate
+                      ? <span className="text-emerald-400">{(onTimeRate * 100).toFixed(0)}%</span>
                       : "—"
                   }
                 />
                 <Row
                   label="Early Payment Rate"
                   value={
-                    customer.early_payment_rate
-                      ? <span className="text-blue-400">{(customer.early_payment_rate * 100).toFixed(0)}%</span>
+                    earlyRate
+                      ? <span className="text-blue-400">{(earlyRate * 100).toFixed(0)}%</span>
                       : "—"
                   }
                 />
                 <Row
                   label="Avg Transaction"
-                  value={customer.avg_payment_amount ? formatCurrency(customer.avg_payment_amount) : "—"}
+                  value={avgPayment ? formatCurrency(avgPayment) : "—"}
                 />
                 <Row
                   label="Amount Trend"
@@ -446,7 +457,7 @@ export function CustomerDetailDrawer({
                 />
                 <Row
                   label="Transactions / Month"
-                  value={customer.transactions_per_month ? customer.transactions_per_month.toFixed(1) : "—"}
+                  value={txPerMonth ? txPerMonth.toFixed(1) : "—"}
                 />
               </div>
             </div>
@@ -511,14 +522,14 @@ export function CustomerDetailDrawer({
                 <Row label="Last Active" value={formatDate(customer.last_transaction_date)} />
                 <Row
                   label="Avg Interval"
-                  value={customer.avg_interval_days ? `${customer.avg_interval_days.toFixed(0)} days` : "—"}
+                  value={avgInterval ? `${avgInterval.toFixed(0)} days` : "—"}
                 />
                 <Row
                   label="Regularity (CV)"
                   value={
-                    customer.interval_cv
-                      ? <span className={customer.interval_cv < 0.5 ? "text-emerald-400" : customer.interval_cv < 1 ? "text-amber-400" : "text-red-400"}>
-                          {customer.interval_cv < 0.5 ? "Very Regular" : customer.interval_cv < 1 ? "Moderate" : "Irregular"}
+                    intervalCv
+                      ? <span className={intervalCv < 0.5 ? "text-emerald-400" : intervalCv < 1 ? "text-amber-400" : "text-red-400"}>
+                          {intervalCv < 0.5 ? "Very Regular" : intervalCv < 1 ? "Moderate" : "Irregular"}
                         </span>
                       : "—"
                   }
