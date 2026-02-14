@@ -1,7 +1,11 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -13,13 +17,11 @@ import {
   Minus,
   ShieldCheck,
   ShieldAlert,
-  CircleDollarSign,
-  Calendar,
   Clock,
+  Calendar,
   BarChart2,
-  Zap,
   RefreshCw,
-  ChevronRight,
+  X,
 } from "lucide-react"
 import {
   ResponsiveContainer,
@@ -325,70 +327,145 @@ export function CustomerDetailDrawer({
     }))
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        className="bg-[#0a0a0a] border-l border-white/[0.07] w-full sm:max-w-[520px] p-0 overflow-y-auto shadow-[-24px_0_48px_rgba(0,0,0,0.6)] backdrop-blur-sm"
-        aria-describedby={undefined}
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        showCloseButton={false}
+        className="bg-[#0a0a0a] border border-white/10 shadow-2xl max-w-6xl w-[95vw] h-[90vh] p-0 overflow-hidden flex flex-col [&>button]:hidden data-[state=open]:zoom-in-95"
       >
-        {/* Header */}
-        <div className="sticky top-0 z-10 bg-[#0a0a0a]/95 backdrop-blur-sm border-b border-white/[0.07] px-6 py-4">
-          <SheetHeader>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <SheetTitle className="text-white text-[17px] font-semibold leading-tight truncate">
-                  {name}
-                </SheetTitle>
-                <div className="flex items-center gap-2 mt-1.5">
-                  <Badge className={`text-[10px] h-4.5 px-1.5 border ${archetypeStyle.badge}`}>
-                    {customer.archetype}
-                  </Badge>
-                  {customer.overdue_balance > 0 && (
-                    <Badge className="text-[10px] h-4.5 px-1.5 bg-red-500/15 text-red-300 border border-red-500/25">
-                      {formatCurrency(customer.overdue_balance)} overdue
-                    </Badge>
-                  )}
+        {/* ── Header bar ─────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-white/[0.07] bg-[#0a0a0a] flex-shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <DialogTitle className="text-white text-[17px] font-semibold leading-tight truncate">
+              {name}
+            </DialogTitle>
+            <Badge className={`text-[10px] px-1.5 border flex-shrink-0 ${archetypeStyle.badge}`}>
+              {customer.archetype}
+            </Badge>
+            {customer.overdue_balance > 0 && (
+              <Badge className="text-[10px] px-1.5 bg-red-500/15 text-red-300 border border-red-500/25 flex-shrink-0">
+                {formatCurrency(customer.overdue_balance)} overdue
+              </Badge>
+            )}
+          </div>
+          <button
+            onClick={() => onOpenChange(false)}
+            className="flex items-center gap-1.5 text-neutral-600 hover:text-neutral-300 transition-colors flex-shrink-0 group"
+          >
+            <kbd className="text-[9px] border border-white/10 rounded px-1 py-0.5 font-mono group-hover:border-white/20 transition-colors">
+              ESC
+            </kbd>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* ── 3-column body ──────────────────────────────────────────── */}
+        <div className="flex-1 overflow-hidden grid grid-cols-12 divide-x divide-white/[0.05] min-h-0">
+
+          {/* ── LEFT col (3): Identity · Risk · AI Recommendations ──── */}
+          <div className="col-span-3 overflow-y-auto p-5 space-y-6">
+
+            {/* Identity KPIs */}
+            <div className="space-y-2">
+              {[
+                { label: "Lifetime Value", value: formatCurrency(customer.lifetime_value), color: "text-emerald-400" },
+                { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
+                { label: "Reliability",    value: `${customer.reliability_score}%`,        color: "text-white" },
+              ].map(({ label, value, color }) => (
+                <div key={label} className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                  <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold">{label}</p>
+                  <p className={`text-[20px] font-bold mt-1 tabular-nums leading-none ${color}`}>{value}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Risk Profile */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                {riskScore > 0.5
+                  ? <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                  : <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                }
+                <SectionLabel>Risk Profile</SectionLabel>
+              </div>
+              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] text-neutral-400">Risk Score</span>
+                  <span className={`text-[12px] font-semibold ${riskStyle.text}`}>
+                    {riskStyle.label} · {(riskScore * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <ScoreBar value={riskScore} color={riskStyle.bar} />
+                <div className="space-y-1.5 pt-1">
+                  {customer.risk_factors?.length > 0
+                    ? customer.risk_factors.map((f, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <div className="w-1 h-1 rounded-full bg-amber-400/60 mt-1.5 flex-shrink-0" />
+                          <span className="text-[11px] text-neutral-400">{formatRiskFactor(f)}</span>
+                        </div>
+                      ))
+                    : <p className="text-[11px] text-neutral-500">No risk factors identified</p>
+                  }
                 </div>
               </div>
             </div>
-          </SheetHeader>
-        </div>
 
-        <div className="px-6 py-5 space-y-7">
-
-          {/* KPI Hero Row */}
-          <div className="grid grid-cols-3 gap-2.5">
-            {[
-              { label: "Lifetime Value", value: formatCurrency(customer.lifetime_value), color: "text-emerald-400" },
-              { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : "text-neutral-500" },
-              { label: "Reliability",    value: `${customer.reliability_score}%`,        color: "text-white" },
-            ].map(({ label, value, color }) => (
-              <div key={label} className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold">{label}</p>
-                <p className={`text-[18px] font-bold mt-1.5 tabular-nums leading-none ${color}`}>{value}</p>
+            {/* AI Recommendations */}
+            {(aiSummary?.recommendations?.length ?? 0) > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles className="w-3.5 h-3.5 text-violet-400" />
+                  <SectionLabel>Action Items</SectionLabel>
+                </div>
+                <div className="space-y-2">
+                  {(aiSummary?.recommendations ?? []).map((rec, i) => (
+                    <div key={i} className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5 flex items-start gap-2.5">
+                      <div className="w-4 h-4 rounded-full bg-violet-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <span className="text-[8px] text-violet-400 font-bold">{i + 1}</span>
+                      </div>
+                      <p className="text-[11.5px] text-neutral-300 leading-relaxed">{rec}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
-            ))}
+            )}
+            {aiLoading && !aiSummary && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
+                  <SectionLabel>Action Items</SectionLabel>
+                </div>
+                <div className="space-y-2">
+                  {[1,2,3].map(i => (
+                    <Skeleton key={i} className="h-14 w-full bg-white/[0.04] rounded-xl" />
+                  ))}
+                </div>
+              </div>
+            )}
+
           </div>
 
-          {/* AI Summary */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Sparkles className="w-3.5 h-3.5 text-violet-400" />
-              <SectionLabel>AI Intelligence</SectionLabel>
-              {aiSummary && !aiLoading && (
-                <button
-                  onClick={() => { setAiSummary(null); generateAISummary(customer.id) }}
-                  className="ml-auto text-neutral-600 hover:text-neutral-400 transition-colors"
-                  title="Regenerate"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                </button>
-              )}
-            </div>
+          {/* ── MIDDLE col (5): AI Summary · Charts · Seasonality ───── */}
+          <div className="col-span-5 overflow-y-auto p-5 space-y-6">
 
-            {aiLoading ? (
-              <div className="space-y-2.5">
-                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-2">
-                  <div className="flex items-center gap-2 mb-3">
+            {/* AI Summary */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles className="w-3.5 h-3.5 text-violet-400" />
+                <SectionLabel>AI Intelligence</SectionLabel>
+                {aiSummary && !aiLoading && (
+                  <button
+                    onClick={() => { setAiSummary(null); generateAISummary(customer.id) }}
+                    className="ml-auto text-neutral-600 hover:text-neutral-400 transition-colors"
+                    title="Regenerate"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {aiLoading ? (
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-2.5">
+                  <div className="flex items-center gap-2 mb-2">
                     <Sparkles className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
                     <span className="text-[11px] text-violet-400/70">Analyzing {name}…</span>
                   </div>
@@ -396,39 +473,30 @@ export function CustomerDetailDrawer({
                   <Skeleton className="h-3 w-5/6 bg-white/[0.06]" />
                   <Skeleton className="h-3 w-4/5 bg-white/[0.06]" />
                 </div>
-              </div>
-            ) : aiError ? (
-              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
-                <p className="text-[12px] text-neutral-500">{aiError}</p>
-              </div>
-            ) : aiSummary ? (
-              <div className="space-y-2.5">
-                {/* Summary pill */}
-                {aiSummary.summary && (
-                  <div className="bg-violet-500/[0.07] border border-violet-500/[0.15] rounded-xl p-4">
-                    <p className="text-[12.5px] text-neutral-200 leading-relaxed">{aiSummary.summary}</p>
-                  </div>
-                )}
-
-                {/* Behavior + Risk side-by-side */}
-                <div className="grid grid-cols-2 gap-2.5">
-                  {aiSummary.paymentBehavior && (
-                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                      <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Payment Behavior</p>
-                      <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.paymentBehavior}</p>
-                    </div>
-                  )}
-                  {aiSummary.riskAssessment && (
-                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                      <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Risk Assessment</p>
-                      <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.riskAssessment}</p>
-                    </div>
-                  )}
+              ) : aiError ? (
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
+                  <p className="text-[12px] text-neutral-500">{aiError}</p>
                 </div>
-
-                {/* Trends + Seasonality side-by-side */}
-                {(aiSummary.trends || aiSummary.seasonality) && (
+              ) : aiSummary ? (
+                <div className="space-y-2.5">
+                  {aiSummary.summary && (
+                    <div className="bg-violet-500/[0.07] border border-violet-500/[0.15] rounded-xl p-4">
+                      <p className="text-[12.5px] text-neutral-200 leading-relaxed">{aiSummary.summary}</p>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-2.5">
+                    {aiSummary.paymentBehavior && (
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                        <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Payment Behavior</p>
+                        <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.paymentBehavior}</p>
+                      </div>
+                    )}
+                    {aiSummary.riskAssessment && (
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                        <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Risk Assessment</p>
+                        <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.riskAssessment}</p>
+                      </div>
+                    )}
                     {aiSummary.trends && (
                       <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
                         <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Trends</p>
@@ -442,376 +510,225 @@ export function CustomerDetailDrawer({
                       </div>
                     )}
                   </div>
-                )}
-
-                {/* Contract context */}
-                {aiSummary.contractContext && (
-                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                    <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Contract Context</p>
-                    <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.contractContext}</p>
-                  </div>
-                )}
-
-                {/* Recommendations */}
-                {aiSummary.recommendations?.length > 0 && (
-                  <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                    <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">Action Items</p>
-                    <div className="space-y-2">
-                      {aiSummary.recommendations.map((rec, i) => (
-                        <div key={i} className="flex items-start gap-2.5">
-                          <div className="w-4 h-4 rounded-full bg-violet-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                            <span className="text-[8px] text-violet-400 font-bold">{i + 1}</span>
-                          </div>
-                          <p className="text-[11.5px] text-neutral-300 leading-relaxed">{rec}</p>
-                        </div>
-                      ))}
+                  {aiSummary.contractContext && (
+                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                      <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Contract Context</p>
+                      <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.contractContext}</p>
                     </div>
-                  </div>
-                )}
-              </div>
-            ) : null}
-          </div>
-
-          {/* Search */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Search className="w-3.5 h-3.5 text-neutral-500" />
-              <SectionLabel>Intelligent Search</SectionLabel>
-            </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-600" />
-              <Input
-                type="text"
-                placeholder="Search transactions, invoices, documents…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 h-9 bg-white/[0.03] border border-white/[0.07] text-neutral-300 text-[12px] placeholder:text-neutral-600 focus-visible:ring-0 focus-visible:border-white/20"
-              />
-            </div>
-            {searchQuery.length > 1 && (
-              <div className="mt-2">
-                <CustomerSearchResults customerId={customer.id} query={searchQuery} />
-              </div>
-            )}
-          </div>
-
-          {/* Risk Profile */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              {riskScore > 0.5
-                ? <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-                : <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              }
-              <SectionLabel>Risk Profile</SectionLabel>
-            </div>
-            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-[12px] text-neutral-400">Risk Score</span>
-                <span className={`text-[12px] font-semibold ${riskStyle.text}`}>
-                  {riskStyle.label} · {(riskScore * 100).toFixed(0)}%
-                </span>
-              </div>
-              <ScoreBar value={riskScore} color={riskStyle.bar} />
-
-              {customer.risk_factors?.length > 0 && (
-                <div className="space-y-1.5 pt-1">
-                  {customer.risk_factors.map((factor, i) => (
-                    <div key={i} className="flex items-start gap-2">
-                      <div className="w-1 h-1 rounded-full bg-amber-400/60 mt-1.5 flex-shrink-0" />
-                      <span className="text-[11px] text-neutral-400">{formatRiskFactor(factor)}</span>
-                    </div>
-                  ))}
+                  )}
                 </div>
-              )}
-
-              {customer.risk_factors?.length === 0 && (
-                <p className="text-[11px] text-neutral-500">No risk factors identified</p>
-              )}
-
-              {/* Days-to-Pay trend chart */}
-              {dtpData.length >= 3 && (
-                <div className="pt-1">
-                  <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">
-                    Days to Pay · Recent Trend
-                  </p>
-                  <ResponsiveContainer width="100%" height={80}>
-                    <BarChart data={dtpData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }} barCategoryGap="25%">
-                      <XAxis
-                        dataKey="label"
-                        tick={{ fontSize: 9, fill: "#525252" }}
-                        axisLine={false}
-                        tickLine={false}
-                        interval="preserveStartEnd"
-                      />
-                      <YAxis hide />
-                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
-                      <Tooltip
-                        content={({ active, payload, label }) => (
-                          <ChartTooltip
-                            active={active}
-                            payload={payload as Array<{ value: number }>}
-                            label={label}
-                            formatter={(v) => `${v > 0 ? "+" : ""}${v}d vs due`}
-                          />
-                        )}
-                      />
-                      <Bar dataKey="dtp" radius={[2, 2, 0, 0]}>
-                        {dtpData.map((entry, i) => (
-                          <Cell
-                            key={i}
-                            fill={entry.dtp <= 0 ? "#34d399" : entry.dtp <= 7 ? "#fbbf24" : "#f87171"}
-                            fillOpacity={0.7}
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                  <div className="flex items-center gap-4 mt-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-sm bg-emerald-400/50" />
-                      <span className="text-[10px] text-neutral-500">Early / on-time</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-sm bg-amber-400/50" />
-                      <span className="text-[10px] text-neutral-500">≤7 days late</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-sm bg-red-400/50" />
-                      <span className="text-[10px] text-neutral-500">Late</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Payment Metrics */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Clock className="w-3.5 h-3.5 text-neutral-500" />
-              <SectionLabel>Payment Metrics</SectionLabel>
-            </div>
-            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
-              <div className="px-4 py-1">
-                <Row
-                  label="Avg Days to Pay"
-                  value={
-                    avgDaysToPay === 0 && stdDaysToPay === 0
-                      ? "—"
-                      : `${avgDaysToPay.toFixed(0)}d ±${stdDaysToPay.toFixed(0)}`
-                  }
-                  accent
-                />
-                <Row
-                  label="On-Time Rate"
-                  value={
-                    onTimeRate
-                      ? <span className="text-emerald-400">{(onTimeRate * 100).toFixed(0)}%</span>
-                      : "—"
-                  }
-                />
-                <Row
-                  label="Early Payment Rate"
-                  value={
-                    earlyRate
-                      ? <span className="text-blue-400">{(earlyRate * 100).toFixed(0)}%</span>
-                      : "—"
-                  }
-                />
-                <Row
-                  label="Avg Transaction"
-                  value={avgPayment ? formatCurrency(avgPayment) : "—"}
-                />
-                <Row
-                  label="Amount Trend"
-                  value={
-                    <span className={`flex items-center gap-1 ${trendColor}`}>
-                      <TrendIcon className="w-3 h-3" />
-                      {customer.amount_trend}
-                    </span>
-                  }
-                />
-                <Row
-                  label="Transactions / Month"
-                  value={txPerMonth ? txPerMonth.toFixed(1) : "—"}
-                />
-              </div>
+              ) : null}
             </div>
 
             {/* Transaction Amount Sparkline */}
             {amountSparkData.length >= 3 && (
-              <div className="mt-3 bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-                <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">
-                  Transaction Amounts Over Time
-                </p>
-                <ResponsiveContainer width="100%" height={90}>
-                  <AreaChart data={amountSparkData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="amtGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%"  stopColor="#a78bfa" stopOpacity={0.25} />
-                        <stop offset="95%" stopColor="#a78bfa" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis
-                      dataKey="label"
-                      tick={{ fontSize: 9, fill: "#525252" }}
-                      axisLine={false}
-                      tickLine={false}
-                      interval="preserveStartEnd"
-                    />
-                    <YAxis hide />
-                    <Tooltip
-                      content={({ active, payload, label }) => (
-                        <ChartTooltip
-                          active={active}
-                          payload={payload as Array<{ value: number }>}
-                          label={label}
-                          formatter={formatCurrency}
-                        />
-                      )}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="amount"
-                      stroke="#a78bfa"
-                      strokeWidth={1.5}
-                      fill="url(#amtGrad)"
-                      dot={false}
-                      activeDot={{ r: 3, fill: "#a78bfa", strokeWidth: 0 }}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
+                  <SectionLabel>Transaction Amounts</SectionLabel>
+                </div>
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+                  <ResponsiveContainer width="100%" height={110}>
+                    <AreaChart data={amountSparkData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="amtGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%"  stopColor="#a78bfa" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="#a78bfa" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#525252" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                      <YAxis hide />
+                      <Tooltip content={({ active, payload, label }) => (
+                        <ChartTooltip active={active} payload={payload as Array<{ value: number }>} label={label} formatter={formatCurrency} />
+                      )} />
+                      <Area type="monotone" dataKey="amount" stroke="#a78bfa" strokeWidth={1.5} fill="url(#amtGrad)" dot={false} activeDot={{ r: 3, fill: "#a78bfa", strokeWidth: 0 }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             )}
+
+            {/* Days-to-Pay trend */}
+            {dtpData.length >= 3 && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Clock className="w-3.5 h-3.5 text-neutral-500" />
+                  <SectionLabel>Days to Pay · Trend</SectionLabel>
+                </div>
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+                  <ResponsiveContainer width="100%" height={100}>
+                    <BarChart data={dtpData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }} barCategoryGap="25%">
+                      <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#525252" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                      <YAxis hide />
+                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                      <Tooltip content={({ active, payload, label }) => (
+                        <ChartTooltip active={active} payload={payload as Array<{ value: number }>} label={label} formatter={(v) => `${v > 0 ? "+" : ""}${v}d vs due`} />
+                      )} />
+                      <Bar dataKey="dtp" radius={[2, 2, 0, 0]}>
+                        {dtpData.map((e, i) => (
+                          <Cell key={i} fill={e.dtp <= 0 ? "#34d399" : e.dtp <= 7 ? "#fbbf24" : "#f87171"} fillOpacity={0.75} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="flex items-center gap-4 mt-2">
+                    {[["bg-emerald-400/50","Early / on-time"],["bg-amber-400/50","≤7 days late"],["bg-red-400/50","Late"]].map(([bg, lbl]) => (
+                      <div key={lbl} className="flex items-center gap-1.5">
+                        <div className={`w-2 h-2 rounded-sm ${bg}`} />
+                        <span className="text-[10px] text-neutral-500">{lbl}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Seasonality */}
+            {(customer.peak_months?.length > 0 || customer.low_months?.length > 0 || monthlyData.some(m => m.count > 0)) && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Calendar className="w-3.5 h-3.5 text-neutral-500" />
+                  <SectionLabel>Seasonality</SectionLabel>
+                </div>
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-4">
+                  {monthlyData.some(m => m.count > 0) && (
+                    <div>
+                      <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">Monthly Activity</p>
+                      <ResponsiveContainer width="100%" height={90}>
+                        <BarChart data={monthlyData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }} barCategoryGap="20%">
+                          <XAxis dataKey="month" tick={{ fontSize: 9, fill: "#525252" }} axisLine={false} tickLine={false} />
+                          <YAxis hide allowDecimals={false} />
+                          <Tooltip content={({ active, payload, label }) => (
+                            <ChartTooltip active={active} payload={payload as Array<{ value: number }>} label={label} formatter={(v) => `${v} txn${v !== 1 ? "s" : ""}`} />
+                          )} />
+                          <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                            {monthlyData.map((_, i) => {
+                              const mn = new Date(new Date().getFullYear(), new Date().getMonth() - (11 - i), 1).getMonth() + 1
+                              const isPeak = customer.peak_months?.includes(mn)
+                              const isLow  = customer.low_months?.includes(mn)
+                              return <Cell key={i} fill={isPeak ? "#34d399" : isLow ? "#f87171" : "#a78bfa"} fillOpacity={isPeak || isLow ? 0.7 : 0.35} />
+                            })}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                  {(customer.peak_months?.length > 0 || customer.low_months?.length > 0) && (
+                    <>
+                      <div className="grid grid-cols-12 gap-1">
+                        {MONTH_ABBR.map((m, i) => {
+                          const isPeak = customer.peak_months?.includes(i + 1)
+                          const isLow  = customer.low_months?.includes(i + 1)
+                          return (
+                            <div key={m} className={`aspect-square rounded text-[7px] flex items-center justify-center font-medium ${isPeak ? "bg-emerald-500/30 text-emerald-300" : isLow ? "bg-red-500/20 text-red-400" : "bg-white/[0.04] text-neutral-600"}`}>
+                              {m[0]}
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-sm bg-emerald-500/30" /><span className="text-[10px] text-neutral-500">Peak</span></div>
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-sm bg-red-500/20" /><span className="text-[10px] text-neutral-500">Low</span></div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
           </div>
 
-          {/* Seasonality */}
-          {(customer.peak_months?.length > 0 || customer.low_months?.length > 0 || monthlyData.some(m => m.count > 0)) && (
+          {/* ── RIGHT col (4): AR KPIs · Search · Transactions · Stats ─ */}
+          <div className="col-span-4 overflow-y-auto p-5 space-y-6">
+
+            {/* Payment Metrics */}
             <div>
               <div className="flex items-center gap-2 mb-3">
-                <Calendar className="w-3.5 h-3.5 text-neutral-500" />
-                <SectionLabel>Seasonality</SectionLabel>
+                <Clock className="w-3.5 h-3.5 text-neutral-500" />
+                <SectionLabel>Payment Metrics</SectionLabel>
               </div>
-              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-4">
-
-                {/* Monthly activity bar chart */}
-                {monthlyData.some(m => m.count > 0) && (
-                  <div>
-                    <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">
-                      Monthly Activity
-                    </p>
-                    <ResponsiveContainer width="100%" height={80}>
-                      <BarChart data={monthlyData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }} barCategoryGap="20%">
-                        <XAxis
-                          dataKey="month"
-                          tick={{ fontSize: 9, fill: "#525252" }}
-                          axisLine={false}
-                          tickLine={false}
-                        />
-                        <YAxis hide allowDecimals={false} />
-                        <Tooltip
-                          content={({ active, payload, label }) => (
-                            <ChartTooltip
-                              active={active}
-                              payload={payload as Array<{ value: number }>}
-                              label={label}
-                              formatter={(v) => `${v} txn${v !== 1 ? "s" : ""}`}
-                            />
-                          )}
-                        />
-                        <Bar dataKey="count" radius={[2, 2, 0, 0]}>
-                          {monthlyData.map((entry, i) => {
-                            const mn = new Date(new Date().getFullYear(), new Date().getMonth() - (11 - i), 1).getMonth() + 1
-                            const isPeak = customer.peak_months?.includes(mn)
-                            const isLow  = customer.low_months?.includes(mn)
-                            return (
-                              <Cell
-                                key={i}
-                                fill={isPeak ? "#34d399" : isLow ? "#f87171" : "#a78bfa"}
-                                fillOpacity={isPeak || isLow ? 0.7 : 0.35}
-                              />
-                            )
-                          })}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-
-                {/* Month grid */}
-                {(customer.peak_months?.length > 0 || customer.low_months?.length > 0) && (
-                  <>
-                    <div className="grid grid-cols-12 gap-1">
-                      {MONTH_ABBR.map((m, i) => {
-                        const monthNum = i + 1
-                        const isPeak = customer.peak_months?.includes(monthNum)
-                        const isLow = customer.low_months?.includes(monthNum)
-                        return (
-                          <div key={m} className="text-center">
-                            <div
-                              className={`w-full aspect-square rounded text-[7px] flex items-center justify-center font-medium transition-colors ${
-                                isPeak ? "bg-emerald-500/30 text-emerald-300" :
-                                isLow  ? "bg-red-500/20 text-red-400" :
-                                "bg-white/[0.04] text-neutral-600"
-                              }`}
-                            >
-                              {m.slice(0, 1)}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-2 h-2 rounded-sm bg-emerald-500/30" />
-                        <span className="text-[10px] text-neutral-500">Peak months</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-2 h-2 rounded-sm bg-red-500/20" />
-                        <span className="text-[10px] text-neutral-500">Low months</span>
-                      </div>
-                    </div>
-                  </>
-                )}
+              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
+                <div className="px-4 py-1">
+                  <Row label="Avg Days to Pay" value={avgDaysToPay === 0 && stdDaysToPay === 0 ? "—" : `${avgDaysToPay.toFixed(0)}d ±${stdDaysToPay.toFixed(0)}`} accent />
+                  <Row label="On-Time Rate" value={onTimeRate ? <span className="text-emerald-400">{(onTimeRate * 100).toFixed(0)}%</span> : "—"} />
+                  <Row label="Early Payment Rate" value={earlyRate ? <span className="text-blue-400">{(earlyRate * 100).toFixed(0)}%</span> : "—"} />
+                  <Row label="Avg Transaction" value={avgPayment ? formatCurrency(avgPayment) : "—"} />
+                  <Row label="Amount Trend" value={<span className={`flex items-center gap-1 ${trendColor}`}><TrendIcon className="w-3 h-3" />{customer.amount_trend}</span>} />
+                  <Row label="Txns / Month" value={txPerMonth ? txPerMonth.toFixed(1) : "—"} />
+                </div>
               </div>
             </div>
-          )}
 
-          {/* Transaction Profile */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
-              <SectionLabel>Transaction Profile</SectionLabel>
-            </div>
-            <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
-              <div className="px-4 py-1">
-                <Row label="Total Transactions" value={customer.transaction_count} accent />
-                <Row label="Archetype" value={
-                  <Badge className={`text-[10px] px-1.5 py-0 border ${archetypeStyle.badge}`}>
-                    {customer.archetype}
-                  </Badge>
-                } />
-                <Row label="Last Active" value={formatDate(customer.last_transaction_date)} />
-                <Row
-                  label="Avg Interval"
-                  value={avgInterval ? `${avgInterval.toFixed(0)} days` : "—"}
-                />
-                <Row
-                  label="Regularity (CV)"
-                  value={
+            {/* Transaction Profile */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
+                <SectionLabel>Transaction Profile</SectionLabel>
+              </div>
+              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
+                <div className="px-4 py-1">
+                  <Row label="Total Transactions" value={customer.transaction_count} accent />
+                  <Row label="Archetype" value={<Badge className={`text-[10px] px-1.5 py-0 border ${archetypeStyle.badge}`}>{customer.archetype}</Badge>} />
+                  <Row label="Last Active" value={formatDate(customer.last_transaction_date)} />
+                  <Row label="Avg Interval" value={avgInterval ? `${avgInterval.toFixed(0)} days` : "—"} />
+                  <Row label="Regularity (CV)" value={
                     intervalCv
                       ? <span className={intervalCv < 0.5 ? "text-emerald-400" : intervalCv < 1 ? "text-amber-400" : "text-red-400"}>
                           {intervalCv < 0.5 ? "Very Regular" : intervalCv < 1 ? "Moderate" : "Irregular"}
                         </span>
                       : "—"
-                  }
-                />
+                  } />
+                </div>
               </div>
             </div>
-          </div>
 
+            {/* Recent Transactions */}
+            {transactions.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
+                  <SectionLabel>Recent Transactions</SectionLabel>
+                </div>
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
+                  {transactions.slice(0, 8).map((t) => (
+                    <div key={t.id} className="flex items-center justify-between px-4 py-2.5 border-b border-white/[0.04] last:border-0">
+                      <div className="min-w-0 mr-3">
+                        <p className="text-[11px] text-neutral-300 truncate">{t.description || "Transaction"}</p>
+                        <p className="text-[10px] text-neutral-600">{formatDate(t.date)}</p>
+                      </div>
+                      <span className="text-[12px] font-semibold text-white tabular-nums flex-shrink-0">{formatCurrency(t.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Intelligent Search */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Search className="w-3.5 h-3.5 text-neutral-500" />
+                <SectionLabel>Intelligent Search</SectionLabel>
+              </div>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-600" />
+                <Input
+                  type="text"
+                  placeholder="Search transactions, invoices, documents…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 h-9 bg-white/[0.03] border border-white/[0.07] text-neutral-300 text-[12px] placeholder:text-neutral-600 focus-visible:ring-0 focus-visible:border-white/20"
+                />
+              </div>
+              {searchQuery.length > 1 && (
+                <div className="mt-2">
+                  <CustomerSearchResults customerId={customer.id} query={searchQuery} />
+                </div>
+              )}
+            </div>
+
+          </div>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   )
 }
