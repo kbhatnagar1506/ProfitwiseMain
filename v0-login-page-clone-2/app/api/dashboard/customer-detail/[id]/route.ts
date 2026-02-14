@@ -119,8 +119,6 @@ export async function GET(
       low_months: number[] | null
       risk_score: number | null
       risk_factors: string[] | null
-      forecast_uncertainty: string | null
-      forecast_notes: string | null
     }>(
       `SELECT 
         transaction_count,
@@ -142,9 +140,7 @@ export async function GET(
         peak_months,
         low_months,
         risk_score,
-        risk_factors,
-        forecast_uncertainty,
-        forecast_notes
+        risk_factors
        FROM entity_payment_profiles
        WHERE entity_id = $1::uuid AND user_id = $2`,
       [entityId, userId]
@@ -260,8 +256,8 @@ export async function GET(
         low_months: profile.low_months || [],
         risk_score: profile.risk_score || 0,
         risk_factors: profile.risk_factors || [],
-        forecast_uncertainty: (profile.forecast_uncertainty as "low" | "medium" | "high") || "medium",
-        forecast_notes: profile.forecast_notes || "",
+        forecast_uncertainty: "medium" as "low" | "medium" | "high",
+        forecast_notes: "",
       },
       recentTransactions,
       supermemoryContext,
