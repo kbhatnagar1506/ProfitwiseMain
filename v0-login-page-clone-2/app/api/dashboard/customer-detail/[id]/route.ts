@@ -263,9 +263,12 @@ export async function GET(
         peak_months: liveData?.peak_months ?? profile.peak_months ?? [],
         low_months: liveData?.low_months ?? profile.low_months ?? [],
         // Risk — live wins over stale
-        risk_score: liveData
-          ? liveData.risk_score / 100           // entity-calculations uses 0–100; normalise to 0–1
-          : Number(profile.risk_score) ?? 0,
+        // Normalise to 0–1: live calc uses 0–100, stored may be 0–1 (new) or 0–100 (legacy)
+        risk_score: (() => {
+          if (liveData) return Math.min(1, liveData.risk_score / 100)
+          const raw = Number(profile.risk_score) || 0
+          return raw > 1 ? raw / 100 : raw   // legacy stored as 0–100
+        })(),
         risk_factors: liveData?.risk_factors ?? profile.risk_factors ?? [],
         forecast_uncertainty: liveData?.forecast_uncertainty ?? "medium",
         forecast_notes: liveData?.forecast_notes ?? "",
