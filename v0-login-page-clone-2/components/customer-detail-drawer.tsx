@@ -197,6 +197,7 @@ export function CustomerDetailDrawer({
   const riskScore         = Number(customer.risk_score) || 0
 
   const riskStyle = getRiskColor(riskScore)
+  const TrendIcon =
     customer.amount_trend === "increasing" ? TrendingUp :
     customer.amount_trend === "decreasing" ? TrendingDown : Minus
   const trendColor =
