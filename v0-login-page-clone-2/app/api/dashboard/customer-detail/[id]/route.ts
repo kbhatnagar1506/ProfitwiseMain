@@ -224,37 +224,27 @@ export async function GET(
         display_name: entity.display_name,
         entity_type: entityType,
         transaction_count: profile.transaction_count || 0,
-        lifetime_value: typeof profile.lifetime_value === "string"
-          ? parseFloat(profile.lifetime_value)
-          : profile.lifetime_value || 0,
-        ar_balance: typeof profile.outstanding_amount === "string"
-          ? parseFloat(profile.outstanding_amount)
-          : profile.outstanding_amount || 0,
-        overdue_balance: typeof profile.overdue_amount === "string"
-          ? parseFloat(profile.overdue_amount)
-          : profile.overdue_amount || 0,
-        reliability_score: profile.reliability_score || 80,
+        lifetime_value: Number(profile.lifetime_value) || 0,
+        ar_balance: Number(profile.outstanding_amount) || 0,
+        overdue_balance: Number(profile.overdue_amount) || 0,
+        reliability_score: Number(profile.reliability_score) || 80,
         archetype: profile.archetype || "New",
         last_transaction_date: null,
         metadata: entity.metadata,
-        avg_days_to_pay: profile.avg_days_to_pay || 0,
-        std_days_to_pay: profile.std_days_to_pay || 0,
-        on_time_payment_rate: profile.on_time_payment_rate || 0,
-        early_payment_rate: profile.early_payment_rate || 0,
-        payment_count: profile.transaction_count || 0,
-        avg_payment_amount: typeof profile.avg_payment_amount === "string"
-          ? parseFloat(profile.avg_payment_amount)
-          : profile.avg_payment_amount || 0,
-        std_transaction_amount: typeof profile.std_transaction_amount === "string"
-          ? parseFloat(profile.std_transaction_amount)
-          : profile.std_transaction_amount || 0,
+        avg_days_to_pay: Number(profile.avg_days_to_pay) || 0,
+        std_days_to_pay: Number(profile.std_days_to_pay) || 0,
+        on_time_payment_rate: Number(profile.on_time_payment_rate) || 0,
+        early_payment_rate: Number(profile.early_payment_rate) || 0,
+        payment_count: Number(profile.transaction_count) || 0,
+        avg_payment_amount: Number(profile.avg_payment_amount) || 0,
+        std_transaction_amount: Number(profile.std_transaction_amount) || 0,
         amount_trend: (profile.amount_trend as "increasing" | "decreasing" | "stable") || "stable",
-        transactions_per_month: profile.transactions_per_month || 0,
-        avg_interval_days: profile.avg_interval_days || 0,
-        interval_cv: profile.interval_cv || 0,
+        transactions_per_month: Number(profile.transactions_per_month) || 0,
+        avg_interval_days: Number(profile.avg_interval_days) || 0,
+        interval_cv: Number(profile.interval_cv) || 0,
         peak_months: profile.peak_months || [],
         low_months: profile.low_months || [],
-        risk_score: profile.risk_score || 0,
+        risk_score: Number(profile.risk_score) || 0,
         risk_factors: profile.risk_factors || [],
         forecast_uncertainty: "medium" as "low" | "medium" | "high",
         forecast_notes: "",
