@@ -37,7 +37,7 @@ function calculateRelevance(text: string, query: string): number {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getSession()
@@ -46,7 +46,7 @@ export async function GET(
     }
 
     const userId = session.id
-    const entityId = params.id
+    const { id: entityId } = await params
     const searchQuery = request.nextUrl.searchParams.get("q") || ""
     const startTime = Date.now()
 
