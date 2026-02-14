@@ -148,6 +148,14 @@ export async function GET(
 
     const profile = profileResult.rows[0] || {}
 
+    // Fetch fresh live calculations to override stale stored values
+    let liveData: import("@/lib/entity-calculations").EnrichedEntityData | null = null
+    try {
+      liveData = await calculateEnrichedEntityData(entityId, userId)
+    } catch (err) {
+      console.warn("[customer-detail] Live calculation failed, using stored profile:", err)
+    }
+
     // Fetch recent transactions
     const transactionsResult = await query<{
       id: string
@@ -180,7 +188,12 @@ export async function GET(
     }))
 
     // Fetch Supermemory context
-    let supermemoryContext = {
+    let supermemoryContext: {
+      contractTerms: string | null
+      relationshipNotes: string | null
+      paymentTerms: string | null
+      rawContext: string
+    } = {
       contractTerms: null,
       relationshipNotes: null,
       paymentTerms: null,
@@ -231,23 +244,31 @@ export async function GET(
         archetype: profile.archetype || "New",
         last_transaction_date: null,
         metadata: entity.metadata,
-        avg_days_to_pay: Number(profile.avg_days_to_pay) || 0,
-        std_days_to_pay: Number(profile.std_days_to_pay) || 0,
-        on_time_payment_rate: Number(profile.on_time_payment_rate) || 0,
-        early_payment_rate: Number(profile.early_payment_rate) || 0,
-        payment_count: Number(profile.transaction_count) || 0,
-        avg_payment_amount: Number(profile.avg_payment_amount) || 0,
-        std_transaction_amount: Number(profile.std_transaction_amount) || 0,
-        amount_trend: (profile.amount_trend as "increasing" | "decreasing" | "stable") || "stable",
-        transactions_per_month: Number(profile.transactions_per_month) || 0,
-        avg_interval_days: Number(profile.avg_interval_days) || 0,
-        interval_cv: Number(profile.interval_cv) || 0,
-        peak_months: profile.peak_months || [],
-        low_months: profile.low_months || [],
-        risk_score: Number(profile.risk_score) || 0,
-        risk_factors: profile.risk_factors || [],
-        forecast_uncertainty: "medium" as "low" | "medium" | "high",
-        forecast_notes: "",
+        // Payment metrics — prefer live calculations (freshest data)
+        avg_days_to_pay: liveData?.avg_days_to_pay ?? Number(profile.avg_days_to_pay) ?? 0,
+        std_days_to_pay: liveData?.std_days_to_pay ?? Number(profile.std_days_to_pay) ?? 0,
+        on_time_payment_rate: liveData?.on_time_payment_rate ?? Number(profile.on_time_payment_rate) ?? 0,
+        early_payment_rate: liveData?.early_payment_rate ?? Number(profile.early_payment_rate) ?? 0,
+        payment_count: liveData?.payment_count ?? Number(profile.transaction_count) ?? 0,
+        avg_payment_amount: liveData?.avg_payment_amount ?? Number(profile.avg_payment_amount) ?? 0,
+        std_transaction_amount: liveData?.std_transaction_amount ?? Number(profile.std_transaction_amount) ?? 0,
+        // Trend data — live wins over stale stored values
+        amount_trend: liveData?.amount_trend ?? (profile.amount_trend as "increasing" | "decreasing" | "stable") ?? "stable",
+        transactions_per_month: liveData?.transactions_per_month ?? Number(profile.transactions_per_month) ?? 0,
+        avg_interval_days: liveData?.avg_interval_days ?? Number(profile.avg_interval_days) ?? 0,
+        // interval_cv: live uses 0–100 scale, stored uses 0–1; normalise to 0–1 for display
+        interval_cv: liveData
+          ? liveData.interval_cv / 100
+          : Number(profile.interval_cv) ?? 0,
+        peak_months: liveData?.peak_months ?? profile.peak_months ?? [],
+        low_months: liveData?.low_months ?? profile.low_months ?? [],
+        // Risk — live wins over stale
+        risk_score: liveData
+          ? liveData.risk_score / 100           // entity-calculations uses 0–100; normalise to 0–1
+          : Number(profile.risk_score) ?? 0,
+        risk_factors: liveData?.risk_factors ?? profile.risk_factors ?? [],
+        forecast_uncertainty: liveData?.forecast_uncertainty ?? "medium",
+        forecast_notes: liveData?.forecast_notes ?? "",
       },
       recentTransactions,
       supermemoryContext,

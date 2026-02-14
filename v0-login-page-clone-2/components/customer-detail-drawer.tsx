@@ -21,6 +21,18 @@ import {
   RefreshCw,
   ChevronRight,
 } from "lucide-react"
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ReferenceLine,
+  Cell,
+} from "recharts"
 import { CustomerSearchResults } from "./customer-search-results"
 
 interface Customer {
@@ -66,6 +78,15 @@ interface AISummary {
   generatedAt: string
 }
 
+interface RecentTransaction {
+  id: string
+  date: string
+  amount: number
+  description: string | null
+  days_to_pay: number | null
+  status: string
+}
+
 interface CustomerDetailDrawerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -106,10 +127,24 @@ function getArchetypeStyle(archetype: string) {
   return styles[archetype] || styles.New
 }
 
+const RISK_FACTOR_LABELS: Record<string, string> = {
+  payment_slowing:          "Payment timing is slowing down",
+  amount_declining:         "Transaction amounts trending downward",
+  low_on_time_rate:         "Frequently pays late",
+  high_timing_variance:     "Highly unpredictable transaction intervals",
+  frequency_dropping:       "Transaction frequency has dropped significantly",
+  // Legacy human-readable strings pass through unchanged
+}
+
+function formatRiskFactor(factor: string): string {
+  return RISK_FACTOR_LABELS[factor] ?? factor
+}
+
 function getRiskColor(score: number) {
+  // risk_score stored as 0–1 ratio in entity_payment_profiles
   if (score < 0.3) return { bar: "bg-emerald-500", text: "text-emerald-400", label: "Low" }
   if (score < 0.6) return { bar: "bg-amber-500",   text: "text-amber-400",   label: "Medium" }
-  return                 { bar: "bg-red-500",       text: "text-red-400",     label: "High" }
+  return               { bar: "bg-red-500",       text: "text-red-400",     label: "High" }
 }
 
 function ScoreBar({ value, color }: { value: number; color: string }) {
@@ -142,6 +177,30 @@ function Row({ label, value, accent }: { label: string; value: React.ReactNode; 
   )
 }
 
+/* ── Custom tooltip used by both charts ──────────────────────────────── */
+function ChartTooltip({
+  active,
+  payload,
+  label,
+  formatter,
+}: {
+  active?: boolean
+  payload?: Array<{ value: number }>
+  label?: string
+  formatter?: (v: number) => string
+}) {
+  if (!active || !payload?.length) return null
+  const val = payload[0].value
+  return (
+    <div className="bg-[#111] border border-white/10 rounded-lg px-3 py-2 shadow-xl">
+      {label && <p className="text-[10px] text-neutral-500 mb-0.5">{label}</p>}
+      <p className="text-[12px] text-white font-semibold">
+        {formatter ? formatter(val) : val}
+      </p>
+    </div>
+  )
+}
+
 export function CustomerDetailDrawer({
   open,
   onOpenChange,
@@ -151,6 +210,7 @@ export function CustomerDetailDrawer({
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
+  const [transactions, setTransactions] = useState<RecentTransaction[]>([])
   const prevCustomerId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -159,12 +219,25 @@ export function CustomerDetailDrawer({
       setAiSummary(null)
       setAiError(null)
       setSearchQuery("")
+      setTransactions([])
       generateAISummary(customer.id)
+      fetchTransactions(customer.id)
     }
     if (!open) {
       prevCustomerId.current = null
     }
   }, [open, customer?.id])
+
+  const fetchTransactions = async (id: string) => {
+    try {
+      const res = await fetch(`/api/dashboard/customer-detail/${id}`)
+      if (!res.ok) return
+      const data = await res.json()
+      setTransactions(data.recentTransactions || [])
+    } catch {
+      // silently skip — charts will just be empty
+    }
+  }
 
   const generateAISummary = async (id: string) => {
     setAiLoading(true)
@@ -203,6 +276,53 @@ export function CustomerDetailDrawer({
   const trendColor =
     customer.amount_trend === "increasing" ? "text-emerald-400" :
     customer.amount_trend === "decreasing" ? "text-red-400" : "text-neutral-500"
+
+  // ── Chart data ──────────────────────────────────────────────────────────
+  // Amount sparkline (oldest → newest)
+  const amountSparkData = [...transactions]
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .map((t, i) => ({
+      i,
+      amount: t.amount,
+      label: new Date(t.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    }))
+
+  // Monthly activity bar chart (last 12 months)
+  const monthlyData = (() => {
+    const now = new Date()
+    const months: { month: string; count: number; amount: number }[] = []
+    for (let m = 11; m >= 0; m--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - m, 1)
+      months.push({
+        month: d.toLocaleDateString("en-US", { month: "short" }),
+        count: 0,
+        amount: 0,
+      })
+    }
+    transactions.forEach((t) => {
+      const d = new Date(t.date)
+      const diffMonths =
+        (now.getFullYear() - d.getFullYear()) * 12 +
+        (now.getMonth() - d.getMonth())
+      if (diffMonths >= 0 && diffMonths < 12) {
+        const idx = 11 - diffMonths
+        months[idx].count += 1
+        months[idx].amount += t.amount
+      }
+    })
+    return months
+  })()
+
+  // Days-to-pay bar chart (only transactions with dtp data)
+  const dtpData = transactions
+    .filter((t) => t.days_to_pay !== null)
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .slice(-12)
+    .map((t, i) => ({
+      i,
+      dtp: t.days_to_pay as number,
+      label: new Date(t.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    }))
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -398,7 +518,7 @@ export function CustomerDetailDrawer({
                   {customer.risk_factors.map((factor, i) => (
                     <div key={i} className="flex items-start gap-2">
                       <div className="w-1 h-1 rounded-full bg-amber-400/60 mt-1.5 flex-shrink-0" />
-                      <span className="text-[11px] text-neutral-400">{factor}</span>
+                      <span className="text-[11px] text-neutral-400">{formatRiskFactor(factor)}</span>
                     </div>
                   ))}
                 </div>
@@ -406,6 +526,61 @@ export function CustomerDetailDrawer({
 
               {customer.risk_factors?.length === 0 && (
                 <p className="text-[11px] text-neutral-500">No risk factors identified</p>
+              )}
+
+              {/* Days-to-Pay trend chart */}
+              {dtpData.length >= 3 && (
+                <div className="pt-1">
+                  <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">
+                    Days to Pay · Recent Trend
+                  </p>
+                  <ResponsiveContainer width="100%" height={80}>
+                    <BarChart data={dtpData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }} barCategoryGap="25%">
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fontSize: 9, fill: "#525252" }}
+                        axisLine={false}
+                        tickLine={false}
+                        interval="preserveStartEnd"
+                      />
+                      <YAxis hide />
+                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                      <Tooltip
+                        content={({ active, payload, label }) => (
+                          <ChartTooltip
+                            active={active}
+                            payload={payload as Array<{ value: number }>}
+                            label={label}
+                            formatter={(v) => `${v > 0 ? "+" : ""}${v}d vs due`}
+                          />
+                        )}
+                      />
+                      <Bar dataKey="dtp" radius={[2, 2, 0, 0]}>
+                        {dtpData.map((entry, i) => (
+                          <Cell
+                            key={i}
+                            fill={entry.dtp <= 0 ? "#34d399" : entry.dtp <= 7 ? "#fbbf24" : "#f87171"}
+                            fillOpacity={0.7}
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="flex items-center gap-4 mt-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-sm bg-emerald-400/50" />
+                      <span className="text-[10px] text-neutral-500">Early / on-time</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-sm bg-amber-400/50" />
+                      <span className="text-[10px] text-neutral-500">≤7 days late</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-sm bg-red-400/50" />
+                      <span className="text-[10px] text-neutral-500">Late</span>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -462,46 +637,142 @@ export function CustomerDetailDrawer({
                 />
               </div>
             </div>
+
+            {/* Transaction Amount Sparkline */}
+            {amountSparkData.length >= 3 && (
+              <div className="mt-3 bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+                <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">
+                  Transaction Amounts Over Time
+                </p>
+                <ResponsiveContainer width="100%" height={90}>
+                  <AreaChart data={amountSparkData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="amtGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#a78bfa" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#a78bfa" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fontSize: 9, fill: "#525252" }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis hide />
+                    <Tooltip
+                      content={({ active, payload, label }) => (
+                        <ChartTooltip
+                          active={active}
+                          payload={payload as Array<{ value: number }>}
+                          label={label}
+                          formatter={formatCurrency}
+                        />
+                      )}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="amount"
+                      stroke="#a78bfa"
+                      strokeWidth={1.5}
+                      fill="url(#amtGrad)"
+                      dot={false}
+                      activeDot={{ r: 3, fill: "#a78bfa", strokeWidth: 0 }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
 
           {/* Seasonality */}
-          {(customer.peak_months?.length > 0 || customer.low_months?.length > 0) && (
+          {(customer.peak_months?.length > 0 || customer.low_months?.length > 0 || monthlyData.some(m => m.count > 0)) && (
             <div>
               <div className="flex items-center gap-2 mb-3">
                 <Calendar className="w-3.5 h-3.5 text-neutral-500" />
                 <SectionLabel>Seasonality</SectionLabel>
               </div>
-              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-                <div className="grid grid-cols-12 gap-1 mb-3">
-                  {MONTH_ABBR.map((m, i) => {
-                    const monthNum = i + 1
-                    const isPeak = customer.peak_months?.includes(monthNum)
-                    const isLow = customer.low_months?.includes(monthNum)
-                    return (
-                      <div key={m} className="text-center">
-                        <div
-                          className={`w-full aspect-square rounded text-[7px] flex items-center justify-center font-medium transition-colors ${
-                            isPeak ? "bg-emerald-500/30 text-emerald-300" :
-                            isLow  ? "bg-red-500/20 text-red-400" :
-                            "bg-white/[0.04] text-neutral-600"
-                          }`}
-                        >
-                          {m.slice(0, 1)}
-                        </div>
+              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-4">
+
+                {/* Monthly activity bar chart */}
+                {monthlyData.some(m => m.count > 0) && (
+                  <div>
+                    <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">
+                      Monthly Activity
+                    </p>
+                    <ResponsiveContainer width="100%" height={80}>
+                      <BarChart data={monthlyData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }} barCategoryGap="20%">
+                        <XAxis
+                          dataKey="month"
+                          tick={{ fontSize: 9, fill: "#525252" }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <YAxis hide allowDecimals={false} />
+                        <Tooltip
+                          content={({ active, payload, label }) => (
+                            <ChartTooltip
+                              active={active}
+                              payload={payload as Array<{ value: number }>}
+                              label={label}
+                              formatter={(v) => `${v} txn${v !== 1 ? "s" : ""}`}
+                            />
+                          )}
+                        />
+                        <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                          {monthlyData.map((entry, i) => {
+                            const mn = new Date(new Date().getFullYear(), new Date().getMonth() - (11 - i), 1).getMonth() + 1
+                            const isPeak = customer.peak_months?.includes(mn)
+                            const isLow  = customer.low_months?.includes(mn)
+                            return (
+                              <Cell
+                                key={i}
+                                fill={isPeak ? "#34d399" : isLow ? "#f87171" : "#a78bfa"}
+                                fillOpacity={isPeak || isLow ? 0.7 : 0.35}
+                              />
+                            )
+                          })}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+
+                {/* Month grid */}
+                {(customer.peak_months?.length > 0 || customer.low_months?.length > 0) && (
+                  <>
+                    <div className="grid grid-cols-12 gap-1">
+                      {MONTH_ABBR.map((m, i) => {
+                        const monthNum = i + 1
+                        const isPeak = customer.peak_months?.includes(monthNum)
+                        const isLow = customer.low_months?.includes(monthNum)
+                        return (
+                          <div key={m} className="text-center">
+                            <div
+                              className={`w-full aspect-square rounded text-[7px] flex items-center justify-center font-medium transition-colors ${
+                                isPeak ? "bg-emerald-500/30 text-emerald-300" :
+                                isLow  ? "bg-red-500/20 text-red-400" :
+                                "bg-white/[0.04] text-neutral-600"
+                              }`}
+                            >
+                              {m.slice(0, 1)}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-2 h-2 rounded-sm bg-emerald-500/30" />
+                        <span className="text-[10px] text-neutral-500">Peak months</span>
                       </div>
-                    )
-                  })}
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-2 h-2 rounded-sm bg-emerald-500/30" />
-                    <span className="text-[10px] text-neutral-500">Peak months</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-2 h-2 rounded-sm bg-red-500/20" />
-                    <span className="text-[10px] text-neutral-500">Low months</span>
-                  </div>
-                </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-2 h-2 rounded-sm bg-red-500/20" />
+                        <span className="text-[10px] text-neutral-500">Low months</span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}

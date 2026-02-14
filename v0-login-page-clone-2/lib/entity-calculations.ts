@@ -282,19 +282,19 @@ export async function calculateRiskScore(
       risk_score = 20
 
       // Green flag: High on-time rate (>85%) indicates reliability
-      if (metrics.on_time_payment_rate > 85) {
+      if (metrics.on_time_payment_rate > 0.85) {
         risk_factors.push("Consistently pays on time")
         risk_score = Math.max(0, risk_score - 15)
       }
       // Red flag: Low on-time rate (<70%) indicates unreliability
-      else if (metrics.on_time_payment_rate < 70) {
+      else if (metrics.on_time_payment_rate < 0.70) {
         risk_factors.push("Frequently pays late")
         risk_score += 25
       }
 
       // Green flag: Early payments (days_to_pay <= 0) indicate strong financial health
       // Early payment means they pay BEFORE the due date, which is positive
-      if (metrics.avg_days_to_pay <= 0 && metrics.early_payment_rate > 30) {
+      if (metrics.avg_days_to_pay <= 0 && metrics.early_payment_rate > 0.30) {
         risk_factors.push("Often pays early - strong financial position")
         risk_score = Math.max(0, risk_score - 20)
       }
