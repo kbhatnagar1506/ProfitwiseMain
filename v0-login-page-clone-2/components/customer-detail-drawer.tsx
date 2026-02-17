@@ -162,7 +162,7 @@ function ScoreBar({ value, color }: { value: number; color: string }) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">
+    <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold">
       {children}
     </p>
   )
@@ -170,9 +170,9 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function Row({ label, value, accent }: { label: string; value: React.ReactNode; accent?: boolean }) {
   return (
-    <div className="flex items-center justify-between py-2 border-b border-white/[0.04] last:border-0">
-      <span className="text-[12px] text-neutral-500">{label}</span>
-      <span className={`text-[12px] font-medium ${accent ? "text-white" : "text-neutral-300"}`}>
+    <div className="flex items-start justify-between gap-3 py-2.5 border-b border-white/[0.04] last:border-0">
+      <span className="text-[12px] text-neutral-500 flex-shrink-0">{label}</span>
+      <span className={`text-[12px] font-medium text-right ${accent ? "text-white" : "text-neutral-300"}`}>
         {value}
       </span>
     </div>
@@ -330,7 +330,7 @@ export function CustomerDetailDrawer({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="bg-[#0a0a0a] border border-white/10 shadow-2xl max-w-[80vw] w-[80vw] h-[90vh] p-0 overflow-hidden flex flex-col [&>button]:hidden data-[state=open]:zoom-in-95"
+        className="bg-[#0a0a0a] border border-white/10 shadow-2xl w-[80vw] max-w-[80vw] h-[90vh] p-0 overflow-hidden flex flex-col [&>button]:hidden data-[state=open]:zoom-in-95"
       >
         {/* ── Header bar ─────────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-white/[0.07] bg-[#0a0a0a] flex-shrink-0">
@@ -359,10 +359,10 @@ export function CustomerDetailDrawer({
         </div>
 
         {/* ── 3-column body ──────────────────────────────────────────── */}
-        <div className="flex-1 overflow-hidden grid grid-cols-12 divide-x divide-white/[0.05] min-h-0">
+        <div className="flex-1 overflow-hidden grid min-h-0" style={{ gridTemplateColumns: "300px 1fr 320px" }}>
 
-          {/* ── LEFT col (3): Identity · Risk · AI Recommendations ──── */}
-          <div className="col-span-3 overflow-y-auto p-5 space-y-6">
+          {/* ── LEFT: Identity · Risk · AI Recommendations ──── */}
+          <div className="overflow-y-auto p-5 space-y-5 border-r border-white/[0.05]">
 
             {/* Identity KPIs */}
             <div className="space-y-2">
@@ -371,16 +371,16 @@ export function CustomerDetailDrawer({
                 { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
                 { label: "Reliability",    value: `${customer.reliability_score}%`,        color: "text-white" },
               ].map(({ label, value, color }) => (
-                <div key={label} className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                  <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold">{label}</p>
-                  <p className={`text-[20px] font-bold mt-1 tabular-nums leading-none ${color}`}>{value}</p>
+                <div key={label} className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+                  <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-1.5">{label}</p>
+                  <p className={`text-[22px] font-bold tabular-nums leading-none ${color}`}>{value}</p>
                 </div>
               ))}
             </div>
 
             {/* Risk Profile */}
             <div>
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-2.5">
                 {riskScore > 0.5
                   ? <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
                   : <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
@@ -412,7 +412,7 @@ export function CustomerDetailDrawer({
             {/* AI Recommendations */}
             {(aiSummary?.recommendations?.length ?? 0) > 0 && (
               <div>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-2.5">
                   <Sparkles className="w-3.5 h-3.5 text-violet-400" />
                   <SectionLabel>Action Items</SectionLabel>
                 </div>
@@ -430,7 +430,7 @@ export function CustomerDetailDrawer({
             )}
             {aiLoading && !aiSummary && (
               <div>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-2.5">
                   <Sparkles className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
                   <SectionLabel>Action Items</SectionLabel>
                 </div>
@@ -444,12 +444,12 @@ export function CustomerDetailDrawer({
 
           </div>
 
-          {/* ── MIDDLE col (5): AI Summary · Charts · Seasonality ───── */}
-          <div className="col-span-5 overflow-y-auto p-5 space-y-6">
+          {/* ── MIDDLE: AI Summary · Charts · Seasonality ───── */}
+          <div className="overflow-y-auto p-5 space-y-5 border-r border-white/[0.05]">
 
             {/* AI Summary */}
             <div>
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-2.5">
                 <Sparkles className="w-3.5 h-3.5 text-violet-400" />
                 <SectionLabel>AI Intelligence</SectionLabel>
                 {aiSummary && !aiLoading && (
@@ -523,7 +523,7 @@ export function CustomerDetailDrawer({
             {/* Transaction Amount Sparkline */}
             {amountSparkData.length >= 3 && (
               <div>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-2.5">
                   <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
                   <SectionLabel>Transaction Amounts</SectionLabel>
                 </div>
@@ -551,7 +551,7 @@ export function CustomerDetailDrawer({
             {/* Days-to-Pay trend */}
             {dtpData.length >= 3 && (
               <div>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-2.5">
                   <Clock className="w-3.5 h-3.5 text-neutral-500" />
                   <SectionLabel>Days to Pay · Trend</SectionLabel>
                 </div>
@@ -586,7 +586,7 @@ export function CustomerDetailDrawer({
             {/* Seasonality */}
             {(customer.peak_months?.length > 0 || customer.low_months?.length > 0 || monthlyData.some(m => m.count > 0)) && (
               <div>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-2.5">
                   <Calendar className="w-3.5 h-3.5 text-neutral-500" />
                   <SectionLabel>Seasonality</SectionLabel>
                 </div>
@@ -638,12 +638,12 @@ export function CustomerDetailDrawer({
 
           </div>
 
-          {/* ── RIGHT col (4): AR KPIs · Search · Transactions · Stats ─ */}
-          <div className="col-span-4 overflow-y-auto p-5 space-y-6">
+          {/* ── RIGHT: AR KPIs · Search · Transactions · Stats ─ */}
+          <div className="overflow-y-auto p-5 space-y-5">
 
             {/* Payment Metrics */}
             <div>
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-2.5">
                 <Clock className="w-3.5 h-3.5 text-neutral-500" />
                 <SectionLabel>Payment Metrics</SectionLabel>
               </div>
@@ -661,7 +661,7 @@ export function CustomerDetailDrawer({
 
             {/* Transaction Profile */}
             <div>
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-2.5">
                 <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
                 <SectionLabel>Transaction Profile</SectionLabel>
               </div>
@@ -685,7 +685,7 @@ export function CustomerDetailDrawer({
             {/* Recent Transactions */}
             {transactions.length > 0 && (
               <div>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-2.5">
                   <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
                   <SectionLabel>Recent Transactions</SectionLabel>
                 </div>
@@ -705,7 +705,7 @@ export function CustomerDetailDrawer({
 
             {/* Intelligent Search */}
             <div>
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-2.5">
                 <Search className="w-3.5 h-3.5 text-neutral-500" />
                 <SectionLabel>Intelligent Search</SectionLabel>
               </div>
