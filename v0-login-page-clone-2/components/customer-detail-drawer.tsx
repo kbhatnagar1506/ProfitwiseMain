@@ -330,7 +330,7 @@ export function CustomerDetailDrawer({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="bg-[#0a0a0a] border border-white/[0.08] shadow-2xl fixed inset-[2.5vh_2.5vw] w-auto h-auto p-0 overflow-hidden flex flex-col rounded-2xl [&>button]:hidden data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.97] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.97] duration-200"
+        className="bg-[#0a0a0a] border border-white/[0.08] shadow-2xl fixed inset-[2.5vh_2.5vw] w-full h-full p-0 overflow-hidden flex flex-col rounded-2xl [&>button]:hidden data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.97] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.97] duration-200"
       >
         {/* ── Header bar ─────────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-white/[0.07] bg-[#0a0a0a] flex-shrink-0">
