@@ -151,7 +151,7 @@ function getRiskColor(score: number) {
 
 function ScoreBar({ value, color }: { value: number; color: string }) {
   return (
-    <div className="h-1 w-full bg-white/[0.06] rounded-full overflow-hidden">
+    <div className="h-1.5 w-full bg-white/[0.06] rounded-full overflow-hidden">
       <div
         className={`h-full rounded-full transition-all ${color}`}
         style={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }}
@@ -162,7 +162,7 @@ function ScoreBar({ value, color }: { value: number; color: string }) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold">
+    <p className="text-[11px] text-neutral-500 uppercase tracking-widest font-semibold">
       {children}
     </p>
   )
@@ -170,9 +170,9 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function Row({ label, value, accent }: { label: string; value: React.ReactNode; accent?: boolean }) {
   return (
-    <div className="flex items-start justify-between gap-3 py-2.5 border-b border-white/[0.04] last:border-0">
-      <span className="text-[12px] text-neutral-500 flex-shrink-0">{label}</span>
-      <span className={`text-[12px] font-medium text-right ${accent ? "text-white" : "text-neutral-300"}`}>
+    <div className="flex items-start justify-between gap-3 py-3 border-b border-white/[0.04] last:border-0">
+      <span className="text-[13px] text-neutral-500 flex-shrink-0">{label}</span>
+      <span className={`text-[13px] font-medium text-right ${accent ? "text-white" : "text-neutral-300"}`}>
         {value}
       </span>
     </div>
@@ -330,12 +330,12 @@ export function CustomerDetailDrawer({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="bg-[#0a0a0a] border border-white/10 shadow-2xl w-[80vw] max-w-[80vw] h-[90vh] p-0 overflow-hidden flex flex-col [&>button]:hidden data-[state=open]:zoom-in-95"
+        className="bg-[#0a0a0a] border border-white/[0.08] shadow-2xl fixed inset-[2.5vh_2.5vw] w-auto h-auto p-0 overflow-hidden flex flex-col rounded-2xl [&>button]:hidden data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.97] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.97] duration-200"
       >
         {/* ── Header bar ─────────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-white/[0.07] bg-[#0a0a0a] flex-shrink-0">
           <div className="flex items-center gap-3 min-w-0">
-            <DialogTitle className="text-white text-[17px] font-semibold leading-tight truncate">
+            <DialogTitle className="text-white text-[20px] font-semibold leading-tight truncate">
               {name}
             </DialogTitle>
             <Badge className={`text-[10px] px-1.5 border flex-shrink-0 ${archetypeStyle.badge}`}>
@@ -378,10 +378,10 @@ export function CustomerDetailDrawer({
         </div>
 
         {/* ── 3-column body ──────────────────────────────────────────── */}
-        <div className="flex-1 overflow-hidden grid min-h-0" style={{ gridTemplateColumns: "300px 1fr 320px" }}>
+        <div className="flex-1 overflow-hidden grid min-h-0" style={{ gridTemplateColumns: "340px 1fr 360px" }}>
 
           {/* ── LEFT: Identity · Risk · AI Recommendations ──── */}
-          <div className="overflow-y-auto p-5 space-y-5 border-r border-white/[0.05]">
+          <div className="overflow-y-auto p-5 space-y-5 border-r border-white/[0.06]">
 
             {/* Identity KPIs */}
             <div className="space-y-2">
@@ -390,16 +390,16 @@ export function CustomerDetailDrawer({
                 { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
                 { label: "Reliability",    value: `${customer.reliability_score}%`,        color: "text-white" },
               ].map(({ label, value, color }) => (
-                <div key={label} className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-                  <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-1.5">{label}</p>
-                  <p className={`text-[22px] font-bold tabular-nums leading-none ${color}`}>{value}</p>
+                <div key={label} className={`bg-white/[0.03] border border-white/[0.06] border-l-2 rounded-xl p-4 ${color === "text-emerald-400" ? "border-l-emerald-500/60" : color === "text-amber-400" ? "border-l-amber-500/60" : "border-l-white/20"}`}>
+                  <p className="text-[11px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">{label}</p>
+                  <p className={`text-[28px] font-bold tabular-nums leading-none ${color}`}>{value}</p>
                 </div>
               ))}
             </div>
 
             {/* Risk Profile */}
             <div>
-              <div className="flex items-center gap-2 mb-2.5">
+              <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                 {riskScore > 0.5
                   ? <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
                   : <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
@@ -431,7 +431,7 @@ export function CustomerDetailDrawer({
             {/* AI Recommendations */}
             {(aiSummary?.recommendations?.length ?? 0) > 0 && (
               <div>
-                <div className="flex items-center gap-2 mb-2.5">
+                <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                   <Sparkles className="w-3.5 h-3.5 text-violet-400" />
                   <SectionLabel>Action Items</SectionLabel>
                 </div>
@@ -441,7 +441,7 @@ export function CustomerDetailDrawer({
                       <div className="w-4 h-4 rounded-full bg-violet-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                         <span className="text-[8px] text-violet-400 font-bold">{i + 1}</span>
                       </div>
-                      <p className="text-[11.5px] text-neutral-300 leading-relaxed">{rec}</p>
+                      <p className="text-[12.5px] text-neutral-300 leading-relaxed">{rec}</p>
                     </div>
                   ))}
                 </div>
@@ -449,7 +449,7 @@ export function CustomerDetailDrawer({
             )}
             {aiLoading && !aiSummary && (
               <div>
-                <div className="flex items-center gap-2 mb-2.5">
+                <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                   <Sparkles className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
                   <SectionLabel>Action Items</SectionLabel>
                 </div>
@@ -464,11 +464,11 @@ export function CustomerDetailDrawer({
           </div>
 
           {/* ── MIDDLE: AI Summary · Charts · Seasonality ───── */}
-          <div className="overflow-y-auto p-5 space-y-5 border-r border-white/[0.05]">
+          <div className="overflow-y-auto p-5 space-y-5 border-r border-white/[0.06]">
 
             {/* AI Summary */}
             <div>
-              <div className="flex items-center gap-2 mb-2.5">
+              <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                 <Sparkles className="w-3.5 h-3.5 text-violet-400" />
                 <SectionLabel>AI Intelligence</SectionLabel>
                 {aiSummary && !aiLoading && (
@@ -499,40 +499,40 @@ export function CustomerDetailDrawer({
               ) : aiSummary ? (
                 <div className="space-y-2.5">
                   {aiSummary.summary && (
-                    <div className="bg-violet-500/[0.07] border border-violet-500/[0.15] rounded-xl p-4">
-                      <p className="text-[12.5px] text-neutral-200 leading-relaxed">{aiSummary.summary}</p>
+                    <div className="bg-violet-500/[0.07] border border-violet-500/[0.15] rounded-xl p-5">
+                      <p className="text-[13.5px] text-neutral-200 leading-relaxed">{aiSummary.summary}</p>
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2.5">
                     {aiSummary.paymentBehavior && (
                       <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                        <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Payment Behavior</p>
-                        <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.paymentBehavior}</p>
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Payment Behavior</p>
+                        <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.paymentBehavior}</p>
                       </div>
                     )}
                     {aiSummary.riskAssessment && (
                       <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                        <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Risk Assessment</p>
-                        <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.riskAssessment}</p>
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Risk Assessment</p>
+                        <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.riskAssessment}</p>
                       </div>
                     )}
                     {aiSummary.trends && (
                       <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                        <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Trends</p>
-                        <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.trends}</p>
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Trends</p>
+                        <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.trends}</p>
                       </div>
                     )}
                     {aiSummary.seasonality && (
                       <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                        <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Seasonality</p>
-                        <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.seasonality}</p>
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Seasonality</p>
+                        <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.seasonality}</p>
                       </div>
                     )}
                   </div>
                   {aiSummary.contractContext && (
                     <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                      <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Contract Context</p>
-                      <p className="text-[11.5px] text-neutral-300 leading-relaxed">{aiSummary.contractContext}</p>
+                      <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Contract Context</p>
+                      <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.contractContext}</p>
                     </div>
                   )}
                 </div>
@@ -542,12 +542,12 @@ export function CustomerDetailDrawer({
             {/* Transaction Amount Sparkline */}
             {amountSparkData.length >= 3 && (
               <div>
-                <div className="flex items-center gap-2 mb-2.5">
+                <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                   <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
                   <SectionLabel>Transaction Amounts</SectionLabel>
                 </div>
                 <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-                  <ResponsiveContainer width="100%" height={110}>
+                  <ResponsiveContainer width="100%" height={150}>
                     <AreaChart data={amountSparkData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                       <defs>
                         <linearGradient id="amtGrad" x1="0" y1="0" x2="0" y2="1">
@@ -570,12 +570,12 @@ export function CustomerDetailDrawer({
             {/* Days-to-Pay trend */}
             {dtpData.length >= 3 && (
               <div>
-                <div className="flex items-center gap-2 mb-2.5">
+                <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                   <Clock className="w-3.5 h-3.5 text-neutral-500" />
                   <SectionLabel>Days to Pay · Trend</SectionLabel>
                 </div>
                 <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-                  <ResponsiveContainer width="100%" height={100}>
+                  <ResponsiveContainer width="100%" height={130}>
                     <BarChart data={dtpData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }} barCategoryGap="25%">
                       <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#525252" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
                       <YAxis hide />
@@ -605,15 +605,15 @@ export function CustomerDetailDrawer({
             {/* Seasonality */}
             {(customer.peak_months?.length > 0 || customer.low_months?.length > 0 || monthlyData.some(m => m.count > 0)) && (
               <div>
-                <div className="flex items-center gap-2 mb-2.5">
+                <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                   <Calendar className="w-3.5 h-3.5 text-neutral-500" />
                   <SectionLabel>Seasonality</SectionLabel>
                 </div>
                 <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-4">
                   {monthlyData.some(m => m.count > 0) && (
                     <div>
-                      <p className="text-[9px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">Monthly Activity</p>
-                      <ResponsiveContainer width="100%" height={90}>
+                      <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-3">Monthly Activity</p>
+                      <ResponsiveContainer width="100%" height={130}>
                         <BarChart data={monthlyData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }} barCategoryGap="20%">
                           <XAxis dataKey="month" tick={{ fontSize: 9, fill: "#525252" }} axisLine={false} tickLine={false} />
                           <YAxis hide allowDecimals={false} />
@@ -662,7 +662,7 @@ export function CustomerDetailDrawer({
 
             {/* Payment Metrics */}
             <div>
-              <div className="flex items-center gap-2 mb-2.5">
+              <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                 <Clock className="w-3.5 h-3.5 text-neutral-500" />
                 <SectionLabel>Payment Metrics</SectionLabel>
               </div>
@@ -680,7 +680,7 @@ export function CustomerDetailDrawer({
 
             {/* Transaction Profile */}
             <div>
-              <div className="flex items-center gap-2 mb-2.5">
+              <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                 <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
                 <SectionLabel>Transaction Profile</SectionLabel>
               </div>
@@ -704,16 +704,16 @@ export function CustomerDetailDrawer({
             {/* Recent Transactions */}
             {transactions.length > 0 && (
               <div>
-                <div className="flex items-center gap-2 mb-2.5">
+                <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                   <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
                   <SectionLabel>Recent Transactions</SectionLabel>
                 </div>
                 <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
                   {transactions.slice(0, 8).map((t) => (
-                    <div key={t.id} className="flex items-center justify-between px-4 py-2.5 border-b border-white/[0.04] last:border-0">
+                    <div key={t.id} className="flex items-center justify-between px-4 py-3 border-b border-white/[0.04] last:border-0">
                       <div className="min-w-0 mr-3">
-                        <p className="text-[11px] text-neutral-300 truncate">{t.description || "Transaction"}</p>
-                        <p className="text-[10px] text-neutral-600">{formatDate(t.date)}</p>
+                        <p className="text-[12px] text-neutral-300 truncate">{t.description || "Transaction"}</p>
+                        <p className="text-[11px] text-neutral-600">{formatDate(t.date)}</p>
                       </div>
                       <span className="text-[12px] font-semibold text-white tabular-nums flex-shrink-0">{formatCurrency(t.amount)}</span>
                     </div>
