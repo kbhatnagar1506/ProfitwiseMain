@@ -358,6 +358,25 @@ export function CustomerDetailDrawer({
           </button>
         </div>
 
+        {/* ── Full-width search bar ───────────────────────────────────── */}
+        <div className="flex-shrink-0 border-b border-white/[0.07] px-6 py-3">
+          <div className="relative">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
+            <Input
+              type="text"
+              placeholder="Search transactions, invoices, documents… (AI-powered)"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 h-10 bg-white/[0.03] border border-white/[0.07] text-neutral-200 text-[13px] placeholder:text-neutral-600 focus-visible:ring-0 focus-visible:border-white/25 rounded-xl"
+            />
+          </div>
+          {searchQuery.length > 1 && (
+            <div className="mt-2">
+              <CustomerSearchResults customerId={customer.id} query={searchQuery} />
+            </div>
+          )}
+        </div>
+
         {/* ── 3-column body ──────────────────────────────────────────── */}
         <div className="flex-1 overflow-hidden grid min-h-0" style={{ gridTemplateColumns: "300px 1fr 320px" }}>
 
@@ -702,29 +721,6 @@ export function CustomerDetailDrawer({
                 </div>
               </div>
             )}
-
-            {/* Intelligent Search */}
-            <div>
-              <div className="flex items-center gap-2 mb-2.5">
-                <Search className="w-3.5 h-3.5 text-neutral-500" />
-                <SectionLabel>Intelligent Search</SectionLabel>
-              </div>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-600" />
-                <Input
-                  type="text"
-                  placeholder="Search transactions, invoices, documents…"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 h-9 bg-white/[0.03] border border-white/[0.07] text-neutral-300 text-[12px] placeholder:text-neutral-600 focus-visible:ring-0 focus-visible:border-white/20"
-                />
-              </div>
-              {searchQuery.length > 1 && (
-                <div className="mt-2">
-                  <CustomerSearchResults customerId={customer.id} query={searchQuery} />
-                </div>
-              )}
-            </div>
 
           </div>
         </div>
