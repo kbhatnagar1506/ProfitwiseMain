@@ -175,7 +175,7 @@ export async function calculateTrends(
         COALESCE((SELECT recent_avg FROM recent_data), 0)::numeric as recent_avg,
         COALESCE((SELECT historical_avg FROM historical_data), 0)::numeric as historical_avg,
         COALESCE((SELECT COUNT(*) FROM monthly_data), 0)::numeric as month_count,
-        COALESCE((SELECT COUNT(*) FROM monthly_data)::numeric / NULLIF((SELECT COUNT(*) FROM monthly_data), 0), 0)::numeric as txn_per_month,
+        COALESCE((SELECT SUM(txn_count) FROM monthly_data)::numeric / NULLIF((SELECT COUNT(*) FROM monthly_data), 0), 0)::numeric as txn_per_month,
         COALESCE(AVG(days_between), 0)::numeric as avg_interval,
         COALESCE(STDDEV(days_between), 0)::numeric as interval_std
       FROM intervals`,
@@ -270,7 +270,8 @@ export async function calculateRiskScore(
   entityId: string,
   userId: string,
   metrics: PaymentMetrics,
-  trends: TrendData
+  trends: TrendData,
+  entityType: "customer" | "vendor" = "customer"
 ): Promise<RiskAssessment> {
   try {
     const risk_factors: string[] = []
@@ -281,36 +282,48 @@ export async function calculateRiskScore(
       // Start with base risk of 20 (low)
       risk_score = 20
 
-      // Green flag: High on-time rate (>85%) indicates reliability
-      if (metrics.on_time_payment_rate > 0.85) {
-        risk_factors.push("Consistently pays on time")
-        risk_score = Math.max(0, risk_score - 15)
-      }
-      // Red flag: Low on-time rate (<70%) indicates unreliability
-      else if (metrics.on_time_payment_rate < 0.70) {
-        risk_factors.push("Frequently pays late")
-        risk_score += 25
+      if (entityType === "customer") {
+        // CUSTOMER: high on-time rate means they reliably pay YOU
+        if (metrics.on_time_payment_rate > 0.85) {
+          risk_factors.push("Consistently pays on time")
+          risk_score = Math.max(0, risk_score - 15)
+        } else if (metrics.on_time_payment_rate < 0.70) {
+          risk_factors.push("Frequently pays late")
+          risk_score += 25
+        }
+
+        // CUSTOMER: early payment = strong financial health, positive signal
+        if (metrics.avg_days_to_pay <= 0 && metrics.early_payment_rate > 0.30) {
+          risk_factors.push("Often pays early - strong financial position")
+          risk_score = Math.max(0, risk_score - 20)
+        }
+      } else {
+        // VENDOR: on-time AP rate measures whether YOU pay them on time
+        if (metrics.on_time_payment_rate > 0.85) {
+          risk_factors.push("AP invoices consistently paid on time")
+          risk_score = Math.max(0, risk_score - 15)
+        } else if (metrics.on_time_payment_rate < 0.70) {
+          risk_factors.push("AP invoices frequently paid late")
+          risk_score += 20
+        }
+
+        // VENDOR: paying early means YOUR cash is leaving early — neutral to slight flag
+        if (metrics.avg_days_to_pay <= 0 && metrics.early_payment_rate > 0.30) {
+          risk_factors.push("Often paying vendors early (cash flow consideration)")
+          risk_score += 5
+        }
       }
 
-      // Green flag: Early payments (days_to_pay <= 0) indicate strong financial health
-      // Early payment means they pay BEFORE the due date, which is positive
-      if (metrics.avg_days_to_pay <= 0 && metrics.early_payment_rate > 0.30) {
-        risk_factors.push("Often pays early - strong financial position")
-        risk_score = Math.max(0, risk_score - 20)
-      }
-
-      // Red flag: High payment delay variance
+      // High payment delay variance — bad for both
       if (metrics.std_days_to_pay > 20) {
         risk_factors.push("Highly variable payment timing")
         risk_score += 10
       }
     } else {
-      // Without payment data, assess based on transaction patterns only
-      // Start optimistic (low risk) unless we see red flags
       risk_score = 20
     }
 
-    // Red flag: Unpredictable payment intervals (high coefficient of variation)
+    // Unpredictable transaction intervals — bad for both
     if (trends.interval_cv > 100) {
       risk_factors.push("Highly unpredictable transaction intervals")
       risk_score += 25
@@ -319,29 +332,38 @@ export async function calculateRiskScore(
       risk_score += 10
     }
 
-    // Red flag: Transaction frequency dropping significantly
+    // Transaction frequency dropping — bad for both (for vendors: may mean ending the relationship)
     if (trends.transactions_per_month < 0.5 && metrics.payment_count > 5) {
       risk_factors.push("Transaction frequency has dropped significantly")
       risk_score += 20
     }
 
-    // Red flag: Amount trend declining
-    if (trends.amount_trend === "decreasing") {
-      risk_factors.push("Transaction amounts trending downward")
-      risk_score += 15
+    if (entityType === "customer") {
+      // CUSTOMER: declining revenue = bad, increasing revenue = good
+      if (trends.amount_trend === "decreasing") {
+        risk_factors.push("Transaction amounts trending downward")
+        risk_score += 15
+      }
+      if (trends.amount_trend === "increasing") {
+        risk_score = Math.max(0, risk_score - 10)
+      }
+    } else {
+      // VENDOR: declining spend = cost reduction = good, increasing spend = cost growth = flag
+      if (trends.amount_trend === "decreasing") {
+        risk_factors.push("Vendor spend trending downward (cost reduction)")
+        risk_score = Math.max(0, risk_score - 10)
+      }
+      if (trends.amount_trend === "increasing") {
+        risk_factors.push("Vendor spend increasing (monitor cost growth)")
+        risk_score += 10
+      }
     }
 
-    // Green flag: Amount trend increasing (reduce risk)
-    if (trends.amount_trend === "increasing") {
-      risk_score = Math.max(0, risk_score - 10)
-    }
-
-    // Green flag: Consistent transaction pattern (low interval CV)
+    // Consistent transaction pattern (low interval CV) — good for both
     if (trends.interval_cv < 30) {
       risk_score = Math.max(0, risk_score - 5)
     }
 
-    // If no risk factors identified and score is still low, indicate low risk
     if (risk_factors.length === 0 && risk_score < 30) {
       risk_factors.push("Stable transaction pattern")
     }
@@ -398,12 +420,13 @@ export async function generateForecastSignals(
 
 export async function calculateEnrichedEntityData(
   entityId: string,
-  userId: string
+  userId: string,
+  entityType: "customer" | "vendor" = "customer"
 ): Promise<EnrichedEntityData> {
   const metrics = await calculatePaymentMetrics(entityId, userId)
   const trends = await calculateTrends(entityId, userId)
   const seasonality = await calculateSeasonality(entityId, userId)
-  const risk = await calculateRiskScore(entityId, userId, metrics, trends)
+  const risk = await calculateRiskScore(entityId, userId, metrics, trends, entityType)
   const forecast = await generateForecastSignals(metrics, trends, risk, seasonality)
 
   return {

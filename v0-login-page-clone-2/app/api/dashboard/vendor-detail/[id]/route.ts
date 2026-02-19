@@ -151,7 +151,7 @@ export async function GET(
     // Fetch fresh live calculations to override stale stored values
     let liveData: import("@/lib/entity-calculations").EnrichedEntityData | null = null
     try {
-      liveData = await calculateEnrichedEntityData(entityId, userId)
+      liveData = await calculateEnrichedEntityData(entityId, userId, "vendor")
     } catch (err) {
       console.warn("[vendor-detail] Live calculation failed, using stored profile:", err)
     }
