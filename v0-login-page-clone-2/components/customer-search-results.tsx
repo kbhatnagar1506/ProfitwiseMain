@@ -18,6 +18,7 @@ interface SearchResult {
 interface CustomerSearchResultsProps {
   customerId: string
   query: string
+  entityType?: "customer" | "vendor"
 }
 
 function getSourceIcon(type: string) {
@@ -64,6 +65,7 @@ function formatDate(dateString: string): string {
 export function CustomerSearchResults({
   customerId,
   query,
+  entityType = "customer",
 }: CustomerSearchResultsProps) {
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -88,7 +90,7 @@ export function CustomerSearchResults({
 
     try {
       const response = await fetch(
-        `/api/dashboard/customer-detail/${customerId}/search?q=${encodeURIComponent(query)}`
+        `/api/dashboard/${entityType}-detail/${customerId}/search?q=${encodeURIComponent(query)}`
       )
 
       if (!response.ok) {

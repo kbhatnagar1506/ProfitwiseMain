@@ -373,7 +373,7 @@ export function VendorDetailDrawer({
           </div>
           {searchQuery.length > 1 && (
             <div className="mt-2">
-              <CustomerSearchResults customerId={vendor.id} query={searchQuery} />
+              <CustomerSearchResults customerId={vendor.id} query={searchQuery} entityType="vendor" />
             </div>
           )}
         </div>
@@ -673,7 +673,7 @@ export function VendorDetailDrawer({
                   <Row label="On-Time Rate" value={onTimeRate ? <span className="text-emerald-400">{(onTimeRate * 100).toFixed(0)}%</span> : "—"} />
                   <Row label="Early Payment Rate" value={earlyRate ? <span className="text-blue-400">{(earlyRate * 100).toFixed(0)}%</span> : "—"} />
                   <Row label="Avg Transaction" value={avgPayment ? formatCurrency(avgPayment) : "—"} />
-                  <Row label="Amount Trend" value={<span className={`flex items-center gap-1 ${trendColor}`}><TrendIcon className="w-3 h-3" />{customer.amount_trend}</span>} />
+                  <Row label="Amount Trend" value={<span className={`flex items-center gap-1 ${trendColor}`}><TrendIcon className="w-3 h-3" />{vendor.amount_trend}</span>} />
                   <Row label="Txns / Month" value={txPerMonth ? txPerMonth.toFixed(1) : "—"} />
                 </div>
               </div>
