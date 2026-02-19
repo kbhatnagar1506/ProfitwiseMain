@@ -46,7 +46,8 @@ interface Contact {
   entity_type: "customer" | "vendor"
   transaction_count: number
   last_transaction_date: string | null
-  metadata?: Record<string, string | null | undefined>
+  metadata?: Record<string, unknown>
+  contact_email: string | null
 }
 
 interface EntityProfilesResponse {
@@ -70,11 +71,11 @@ interface ContactContext {
 }
 
 function getEmail(c: Contact): string {
-  return (c.metadata?.email || c.metadata?.billing_email || c.metadata?.contact_email || "") as string
+  return c.contact_email || (c.metadata?.email as string) || (c.metadata?.billing_email as string) || (c.metadata?.contact_email as string) || ""
 }
 
 function getPhone(c: Contact): string {
-  return (c.metadata?.phone || c.metadata?.phone_number || "") as string
+  return (c.metadata?.phone as string) || (c.metadata?.phone_number as string) || ""
 }
 
 function formatDate(dateStr: string | null): string {
