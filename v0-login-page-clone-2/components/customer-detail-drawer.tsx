@@ -351,9 +351,7 @@ export function CustomerDetailDrawer({
             onClick={() => onOpenChange(false)}
             className="flex items-center gap-1.5 text-neutral-600 hover:text-neutral-300 transition-colors flex-shrink-0 group"
           >
-            <kbd className="text-[9px] border border-white/10 rounded px-1 py-0.5 font-mono group-hover:border-white/20 transition-colors">
-              ESC
-            </kbd>
+            <span className="text-[9px] font-mono group-hover:text-neutral-400 transition-colors">ESC</span>
             <X className="w-4 h-4" />
           </button>
         </div>
