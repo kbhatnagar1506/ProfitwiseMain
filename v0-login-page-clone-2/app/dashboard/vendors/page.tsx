@@ -484,8 +484,12 @@ export default function VendorsPage() {
         </div>
       )}
 
-      {/* Deep Dive Drawer */}
-      <VendorDetailDrawer vendor={selectedVendor} open={drawerOpen} onOpenChange={setDrawerOpen} />
+      {/* Vendor Detail Overlay */}
+      <VendorDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        vendor={selectedVendor}
+      />
     </div>
   )
 }

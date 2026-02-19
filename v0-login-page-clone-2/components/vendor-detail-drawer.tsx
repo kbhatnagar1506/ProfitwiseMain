@@ -1,15 +1,41 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { X, Search, ShieldAlert, ShieldCheck, Sparkles, BarChart2, Clock, Calendar } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
+import { useEffect, useState, useRef } from "react"
 import {
   Dialog,
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { AreaChart, BarChart, Area, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from "recharts"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Search,
+  Sparkles,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  ShieldCheck,
+  ShieldAlert,
+  Clock,
+  Calendar,
+  BarChart2,
+  RefreshCw,
+  X,
+} from "lucide-react"
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ReferenceLine,
+  Cell,
+} from "recharts"
+import { CustomerSearchResults } from "./customer-search-results"
 
 interface Vendor {
   id: string
@@ -21,9 +47,8 @@ interface Vendor {
   ar_balance: number
   overdue_balance: number
   reliability_score: number
-  archetype: "Clockwork" | "Bursty" | "Volatile" | "New"
+  archetype: string
   last_transaction_date: string | null
-  ai_insight: string | null
   metadata?: Record<string, any>
   avg_days_to_pay: number
   std_days_to_pay: number
@@ -44,26 +69,84 @@ interface Vendor {
   forecast_notes: string
 }
 
+interface AISummary {
+  summary: string
+  paymentBehavior: string
+  riskAssessment: string
+  seasonality: string
+  trends: string
+  recommendations: string[]
+  contractContext: string
+  generatedAt: string
+}
+
 interface RecentTransaction {
   id: string
   date: string
-  description: string
   amount: number
+  description: string | null
+  days_to_pay: number | null
+  status: string
 }
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value)
+interface VendorDetailDrawerProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  vendor: Vendor | null
 }
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "—"
-  const date = new Date(dateStr)
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+function formatCurrency(amount: number): string {
+  if (amount >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`
+  if (amount >= 1000) return `$${(amount / 1000).toFixed(1)}K`
+  return `$${amount.toFixed(0)}`
+}
+
+function formatDate(dateString: string | null): string {
+  if (!dateString) return "—"
+  try {
+    return new Date(dateString).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    })
+  } catch {
+    return dateString
+  }
+}
+
+const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+function getArchetypeStyle(archetype: string) {
+  const styles: Record<string, { badge: string; dot: string }> = {
+    Clockwork:  { badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/25", dot: "bg-emerald-400" },
+    Bursty:     { badge: "bg-blue-500/15 text-blue-300 border-blue-500/25",          dot: "bg-blue-400"    },
+    Volatile:   { badge: "bg-orange-500/15 text-orange-300 border-orange-500/25",    dot: "bg-orange-400"  },
+    "At-Risk":  { badge: "bg-red-500/15 text-red-300 border-red-500/25",             dot: "bg-red-400"     },
+    Strategic:  { badge: "bg-violet-500/15 text-violet-300 border-violet-500/25",    dot: "bg-violet-400"  },
+    Seasonal:   { badge: "bg-amber-500/15 text-amber-300 border-amber-500/25",       dot: "bg-amber-400"   },
+    New:        { badge: "bg-neutral-500/15 text-neutral-300 border-neutral-500/25", dot: "bg-neutral-400" },
+  }
+  return styles[archetype] || styles.New
+}
+
+const RISK_FACTOR_LABELS: Record<string, string> = {
+  payment_slowing:          "Payment timing is slowing down",
+  amount_declining:         "Transaction amounts trending downward",
+  low_on_time_rate:         "Frequently pays late",
+  high_timing_variance:     "Highly unpredictable transaction intervals",
+  frequency_dropping:       "Transaction frequency has dropped significantly",
+  // Legacy human-readable strings pass through unchanged
+}
+
+function formatRiskFactor(factor: string): string {
+  return RISK_FACTOR_LABELS[factor] ?? factor
+}
+
+function getRiskColor(score: number) {
+  // risk_score stored as 0–1 ratio in entity_payment_profiles
+  if (score < 0.3) return { bar: "bg-emerald-500", text: "text-emerald-400", label: "Low" }
+  if (score < 0.6) return { bar: "bg-amber-500",   text: "text-amber-400",   label: "Medium" }
+  return               { bar: "bg-red-500",       text: "text-red-400",     label: "High" }
 }
 
 function ScoreBar({ value, color }: { value: number; color: string }) {
@@ -96,6 +179,7 @@ function Row({ label, value, accent }: { label: string; value: React.ReactNode; 
   )
 }
 
+/* ── Custom tooltip used by both charts ──────────────────────────────── */
 function ChartTooltip({
   active,
   payload,
@@ -108,92 +192,139 @@ function ChartTooltip({
   formatter?: (v: number) => string
 }) {
   if (!active || !payload?.length) return null
+  const val = payload[0].value
   return (
-    <div className="bg-[#1a1a1a] border border-white/[0.1] rounded-lg p-2 shadow-lg">
-      <p className="text-[11px] text-neutral-400">{label}</p>
-      <p className="text-[12px] font-semibold text-white">
-        {formatter ? formatter(payload[0].value) : formatCurrency(payload[0].value)}
+    <div className="bg-[#111] border border-white/10 rounded-lg px-3 py-2 shadow-xl">
+      {label && <p className="text-[10px] text-neutral-500 mb-0.5">{label}</p>}
+      <p className="text-[12px] text-white font-semibold">
+        {formatter ? formatter(val) : val}
       </p>
     </div>
   )
 }
 
-const RISK_FACTOR_LABELS: Record<string, string> = {
-  payment_slowing: "Payment timing is slowing down",
-  high_variability: "High variability in payment timing",
-  declining_volume: "Transaction volume is declining",
-  increasing_overdue: "Overdue balance is increasing",
-  missed_payments: "Missed or late payments",
-  unusual_patterns: "Unusual payment patterns detected",
-}
-
-function formatRiskFactor(factor: string): string {
-  return RISK_FACTOR_LABELS[factor] || factor
-}
-
-function getArchetypeStyle(archetype: string) {
-  switch (archetype) {
-    case "Clockwork":
-      return { badge: "bg-emerald-500/15 text-emerald-300 border border-emerald-500/25" }
-    case "Bursty":
-      return { badge: "bg-blue-500/15 text-blue-300 border border-blue-500/25" }
-    case "Volatile":
-      return { badge: "bg-amber-500/15 text-amber-300 border border-amber-500/25" }
-    case "New":
-      return { badge: "bg-zinc-500/15 text-zinc-300 border border-zinc-500/25" }
-    default:
-      return { badge: "bg-white/5 text-zinc-400 border border-white/10" }
-  }
-}
-
-function getRiskColor(score: number) {
-  if (score < 0.3) return { text: "text-emerald-400", bar: "bg-emerald-500" }
-  if (score < 0.6) return { text: "text-amber-400", bar: "bg-amber-500" }
-  return { text: "text-red-400", bar: "bg-red-500" }
-}
-
 export function VendorDetailDrawer({
-  vendor,
   open,
   onOpenChange,
-}: {
-  vendor: Vendor | null
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
+  vendor,
+}: VendorDetailDrawerProps) {
+  const [aiSummary, setAiSummary] = useState<AISummary | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [transactions, setTransactions] = useState<RecentTransaction[]>([])
-  const [amountSparkData, setAmountSparkData] = useState<Array<{ date: string; amount: number }>>([])
-  const [monthlyData, setMonthlyData] = useState<Array<{ month: string; count: number }>>([])
-  const [dtpData, setDtpData] = useState<Array<{ label: string; dtp: number }>>([])
-
-  const riskScore = Math.min(1, (vendor?.risk_score ?? 0) / 100)
-  const riskStyle = getRiskColor(riskScore)
-  const archetypeStyle = getArchetypeStyle(vendor?.archetype || "")
-  const name = vendor?.display_name || vendor?.canonical_name || ""
-
-  const fetchTransactions = useCallback(async () => {
-    if (!vendor?.id) return
-    try {
-      const response = await fetch(`/api/dashboard/vendor-detail/${vendor.id}`)
-      if (!response.ok) return
-      const data = await response.json()
-      setTransactions(data.transactions || [])
-      setAmountSparkData(data.amountSparkData || [])
-      setMonthlyData(data.monthlyData || [])
-      setDtpData(data.dtpData || [])
-    } catch (err) {
-      console.error("Failed to fetch vendor transactions:", err)
-    }
-  }, [vendor?.id])
+  const prevVendorId = useRef<string | null>(null)
 
   useEffect(() => {
-    if (open && vendor?.id) {
-      fetchTransactions()
+    if (open && vendor && vendor.id !== prevVendorId.current) {
+      prevVendorId.current = vendor.id
+      setAiSummary(null)
+      setAiError(null)
+      setSearchQuery("")
+      setTransactions([])
+      generateAISummary(vendor.id)
+      fetchTransactions(vendor.id)
     }
-  }, [open, vendor?.id, fetchTransactions])
+    if (!open) {
+      prevVendorId.current = null
+    }
+  }, [open, vendor?.id])
+
+  const fetchTransactions = async (id: string) => {
+    try {
+      const res = await fetch(`/api/dashboard/vendor-detail/${id}`)
+      if (!res.ok) return
+      const data = await res.json()
+      setTransactions(data.recentTransactions || [])
+    } catch {
+      // silently skip — charts will just be empty
+    }
+  }
+
+  const generateAISummary = async (id: string) => {
+    setAiLoading(true)
+    setAiError(null)
+    try {
+      const res = await fetch(`/api/dashboard/vendor-detail/${id}/ai-summary`, { method: "POST" })
+      if (!res.ok) throw new Error("Failed")
+      setAiSummary(await res.json())
+    } catch {
+      setAiError("AI summary unavailable")
+    } finally {
+      setAiLoading(false)
+    }
+  }
 
   if (!vendor) return null
+
+  const name = vendor.display_name || vendor.canonical_name
+  const archetypeStyle = getArchetypeStyle(vendor.archetype)
+
+  // Coerce all numeric fields — pg returns REAL/NUMERIC columns as strings
+  const avgDaysToPay      = Number(vendor.avg_days_to_pay) || 0
+  const stdDaysToPay      = Number(vendor.std_days_to_pay) || 0
+  const onTimeRate        = Number(vendor.on_time_payment_rate) || 0
+  const earlyRate         = Number(vendor.early_payment_rate) || 0
+  const avgPayment        = Number(vendor.avg_payment_amount) || 0
+  const txPerMonth        = Number(vendor.transactions_per_month) || 0
+  const avgInterval       = Number(vendor.avg_interval_days) || 0
+  const intervalCv        = Number(vendor.interval_cv) || 0
+  const riskScore         = Number(vendor.risk_score) || 0
+
+  const riskStyle = getRiskColor(riskScore)
+  const TrendIcon =
+    vendor.amount_trend === "increasing" ? TrendingUp :
+    vendor.amount_trend === "decreasing" ? TrendingDown : Minus
+  const trendColor =
+    vendor.amount_trend === "increasing" ? "text-emerald-400" :
+    vendor.amount_trend === "decreasing" ? "text-red-400" : "text-neutral-500"
+
+  // ── Chart data ──────────────────────────────────────────────────────────
+  // Amount sparkline (oldest → newest)
+  const amountSparkData = [...transactions]
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .map((t, i) => ({
+      i,
+      amount: t.amount,
+      label: new Date(t.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    }))
+
+  // Monthly activity bar chart (last 12 months)
+  const monthlyData = (() => {
+    const now = new Date()
+    const months: { month: string; count: number; amount: number }[] = []
+    for (let m = 11; m >= 0; m--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - m, 1)
+      months.push({
+        month: d.toLocaleDateString("en-US", { month: "short" }),
+        count: 0,
+        amount: 0,
+      })
+    }
+    transactions.forEach((t) => {
+      const d = new Date(t.date)
+      const diffMonths =
+        (now.getFullYear() - d.getFullYear()) * 12 +
+        (now.getMonth() - d.getMonth())
+      if (diffMonths >= 0 && diffMonths < 12) {
+        const idx = 11 - diffMonths
+        months[idx].count += 1
+        months[idx].amount += t.amount
+      }
+    })
+    return months
+  })()
+
+  // Days-to-pay bar chart (only transactions with dtp data)
+  const dtpData = transactions
+    .filter((t) => t.days_to_pay !== null)
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .slice(-12)
+    .map((t, i) => ({
+      i,
+      dtp: t.days_to_pay as number,
+      label: new Date(t.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    }))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -239,6 +370,11 @@ export function VendorDetailDrawer({
               className="pl-10 h-10 bg-white/[0.03] border border-white/[0.07] text-neutral-200 text-[13px] placeholder:text-neutral-600 focus-visible:ring-0 focus-visible:border-white/25 rounded-xl"
             />
           </div>
+          {searchQuery.length > 1 && (
+            <div className="mt-2">
+              <CustomerSearchResults customerId={vendor.id} query={searchQuery} />
+            </div>
+          )}
         </div>
 
         {/* ── 3-column body ──────────────────────────────────────────── */}
@@ -250,8 +386,8 @@ export function VendorDetailDrawer({
             {/* Identity KPIs */}
             <div className="space-y-2">
               {[
-                { label: "Lifetime Volume", value: formatCurrency(vendor.lifetime_value), color: "text-emerald-400" },
-                { label: "Open AP",        value: formatCurrency(vendor.ar_balance),     color: vendor.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
+                { label: "Lifetime Spend", value: formatCurrency(vendor.lifetime_value), color: "text-emerald-400" },
+                { label: "Open AP",        value: formatCurrency(vendor.ap_balance),     color: vendor.ap_balance > 0 ? "text-amber-400" : "text-neutral-400" },
                 { label: "Reliability",    value: `${vendor.reliability_score}%`,        color: "text-white" },
               ].map(({ label, value, color }) => (
                 <div key={label} className={`bg-white/[0.03] border border-white/[0.06] border-l-2 rounded-xl p-4 ${color === "text-emerald-400" ? "border-l-emerald-500/60" : color === "text-amber-400" ? "border-l-amber-500/60" : "border-l-white/20"}`}>
@@ -274,7 +410,7 @@ export function VendorDetailDrawer({
                 <div className="flex items-center justify-between">
                   <span className="text-[12px] text-neutral-400">Risk Score</span>
                   <span className={`text-[12px] font-semibold ${riskStyle.text}`}>
-                    {riskStyle.text === "text-emerald-400" ? "Low" : riskStyle.text === "text-amber-400" ? "Medium" : "High"} · {(riskScore * 100).toFixed(0)}%
+                    {riskStyle.label} · {(riskScore * 100).toFixed(0)}%
                   </span>
                 </div>
                 <ScoreBar value={riskScore} color={riskStyle.bar} />
@@ -292,25 +428,118 @@ export function VendorDetailDrawer({
               </div>
             </div>
 
-            {/* Action Items */}
-            {vendor.forecast_notes && (
+            {/* AI Recommendations */}
+            {(aiSummary?.recommendations?.length ?? 0) > 0 && (
               <div>
                 <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                   <Sparkles className="w-3.5 h-3.5 text-violet-400" />
                   <SectionLabel>Action Items</SectionLabel>
                 </div>
-                <div className="bg-violet-500/[0.07] border border-violet-500/[0.15] rounded-xl p-4 space-y-2">
-                  <p className="text-[12.5px] text-neutral-300 leading-relaxed">{vendor.forecast_notes}</p>
+                <div className="space-y-2">
+                  {(aiSummary?.recommendations ?? []).map((rec, i) => (
+                    <div key={i} className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5 flex items-start gap-2.5">
+                      <div className="w-4 h-4 rounded-full bg-violet-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <span className="text-[8px] text-violet-400 font-bold">{i + 1}</span>
+                      </div>
+                      <p className="text-[12.5px] text-neutral-300 leading-relaxed">{rec}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {aiLoading && !aiSummary && (
+              <div>
+                <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
+                  <Sparkles className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
+                  <SectionLabel>Action Items</SectionLabel>
+                </div>
+                <div className="space-y-2">
+                  {[1,2,3].map(i => (
+                    <Skeleton key={i} className="h-14 w-full bg-white/[0.04] rounded-xl" />
+                  ))}
                 </div>
               </div>
             )}
 
           </div>
 
-          {/* ── CENTER: Charts & Trends ──────────────────────────────── */}
+          {/* ── MIDDLE: AI Summary · Charts · Seasonality ───── */}
           <div className="overflow-y-auto p-5 space-y-5 border-r border-white/[0.06]">
 
-            {/* Amount Sparkline */}
+            {/* AI Summary */}
+            <div>
+              <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
+                <Sparkles className="w-3.5 h-3.5 text-violet-400" />
+                <SectionLabel>AI Intelligence</SectionLabel>
+                {aiSummary && !aiLoading && (
+                  <button
+                    onClick={() => { setAiSummary(null); generateAISummary(vendor.id) }}
+                    className="ml-auto text-neutral-600 hover:text-neutral-400 transition-colors"
+                    title="Regenerate"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {aiLoading ? (
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-2.5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
+                    <span className="text-[11px] text-violet-400/70">Analyzing {name}…</span>
+                  </div>
+                  <Skeleton className="h-3 w-full bg-white/[0.06]" />
+                  <Skeleton className="h-3 w-5/6 bg-white/[0.06]" />
+                  <Skeleton className="h-3 w-4/5 bg-white/[0.06]" />
+                </div>
+              ) : aiError ? (
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
+                  <p className="text-[12px] text-neutral-500">{aiError}</p>
+                </div>
+              ) : aiSummary ? (
+                <div className="space-y-2.5">
+                  {aiSummary.summary && (
+                    <div className="bg-violet-500/[0.07] border border-violet-500/[0.15] rounded-xl p-5">
+                      <p className="text-[13.5px] text-neutral-200 leading-relaxed">{aiSummary.summary}</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {aiSummary.paymentBehavior && (
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Payment Behavior</p>
+                        <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.paymentBehavior}</p>
+                      </div>
+                    )}
+                    {aiSummary.riskAssessment && (
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Risk Assessment</p>
+                        <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.riskAssessment}</p>
+                      </div>
+                    )}
+                    {aiSummary.trends && (
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Trends</p>
+                        <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.trends}</p>
+                      </div>
+                    )}
+                    {aiSummary.seasonality && (
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Seasonality</p>
+                        <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.seasonality}</p>
+                      </div>
+                    )}
+                  </div>
+                  {aiSummary.contractContext && (
+                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
+                      <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Contract Context</p>
+                      <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.contractContext}</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+
+            {/* Transaction Amount Sparkline */}
             {amountSparkData.length >= 3 && (
               <div>
                 <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
@@ -319,26 +548,26 @@ export function VendorDetailDrawer({
                 </div>
                 <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
                   <ResponsiveContainer width="100%" height={150}>
-                    <AreaChart data={amountSparkData} margin={{ top: 2, right: 0, left: -28, bottom: 0 }}>
+                    <AreaChart data={amountSparkData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                       <defs>
-                        <linearGradient id="colorAmount" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                        <linearGradient id="amtGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%"  stopColor="#a78bfa" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="#a78bfa" stopOpacity={0} />
                         </linearGradient>
                       </defs>
-                      <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#525252" }} axisLine={false} tickLine={false} />
+                      <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#525252" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
                       <YAxis hide />
                       <Tooltip content={({ active, payload, label }) => (
                         <ChartTooltip active={active} payload={payload as Array<{ value: number }>} label={label} formatter={formatCurrency} />
                       )} />
-                      <Area type="monotone" dataKey="amount" stroke="#3b82f6" strokeWidth={1.5} fillOpacity={1} fill="url(#colorAmount)" />
+                      <Area type="monotone" dataKey="amount" stroke="#a78bfa" strokeWidth={1.5} fill="url(#amtGrad)" dot={false} activeDot={{ r: 3, fill: "#a78bfa", strokeWidth: 0 }} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
               </div>
             )}
 
-            {/* Days to Pay Trend */}
+            {/* Days-to-Pay trend */}
             {dtpData.length >= 3 && (
               <div>
                 <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
@@ -352,7 +581,7 @@ export function VendorDetailDrawer({
                       <YAxis hide />
                       <ReferenceLine y={0} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                       <Tooltip content={({ active, payload, label }) => (
-                        <ChartTooltip active={active} payload={payload as Array<{ value: number }>} label={label} formatter={(v) => `${v > 0 ? "+" : ""}${v}d vs avg`} />
+                        <ChartTooltip active={active} payload={payload as Array<{ value: number }>} label={label} formatter={(v) => `${v > 0 ? "+" : ""}${v}d vs due`} />
                       )} />
                       <Bar dataKey="dtp" radius={[2, 2, 0, 0]}>
                         {dtpData.map((e, i) => (
@@ -393,36 +622,42 @@ export function VendorDetailDrawer({
                           )} />
                           <Bar dataKey="count" radius={[2, 2, 0, 0]}>
                             {monthlyData.map((_, i) => {
-                              const isLow = vendor.low_months?.includes(i + 1)
-                              const isPeak = vendor.peak_months?.includes(i + 1)
-                              return <Cell key={i} fill={isPeak ? "#3b82f6" : isLow ? "#525252" : "#6b7280"} fillOpacity={0.6} />
+                              const mn = new Date(new Date().getFullYear(), new Date().getMonth() - (11 - i), 1).getMonth() + 1
+                              const isPeak = vendor.peak_months?.includes(mn)
+                              const isLow  = vendor.low_months?.includes(mn)
+                              return <Cell key={i} fill={isPeak ? "#34d399" : isLow ? "#f87171" : "#a78bfa"} fillOpacity={isPeak || isLow ? 0.7 : 0.35} />
                             })}
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
                   )}
-                  <div className="flex items-center gap-4 text-[10px]">
-                    {vendor.peak_months?.length > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-2 h-2 rounded-sm bg-blue-500" />
-                        <span className="text-neutral-500">Peak: {vendor.peak_months.map(m => ["J","F","M","A","M","J","J","A","S","O","N","D"][m-1]).join("")}</span>
+                  {(vendor.peak_months?.length > 0 || vendor.low_months?.length > 0) && (
+                      <>
+                        <div className="grid grid-cols-12 gap-1">
+                          {MONTH_ABBR.map((m, i) => {
+                            const isPeak = vendor.peak_months?.includes(i + 1)
+                            const isLow  = vendor.low_months?.includes(i + 1)
+                          return (
+                            <div key={m} className={`aspect-square rounded text-[7px] flex items-center justify-center font-medium ${isPeak ? "bg-emerald-500/30 text-emerald-300" : isLow ? "bg-red-500/20 text-red-400" : "bg-white/[0.04] text-neutral-600"}`}>
+                              {m[0]}
+                            </div>
+                          )
+                        })}
                       </div>
-                    )}
-                    {vendor.low_months?.length > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-2 h-2 rounded-sm bg-zinc-600" />
-                        <span className="text-neutral-500">Low: {vendor.low_months.map(m => ["J","F","M","A","M","J","J","A","S","O","N","D"][m-1]).join("")}</span>
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-sm bg-emerald-500/30" /><span className="text-[10px] text-neutral-500">Peak</span></div>
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-sm bg-red-500/20" /><span className="text-[10px] text-neutral-500">Low</span></div>
                       </div>
-                    )}
-                  </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
 
           </div>
 
-          {/* ── RIGHT: Payment Metrics · Transaction Profile · Recent Txns ──── */}
+          {/* ── RIGHT: AR KPIs · Search · Transactions · Stats ─ */}
           <div className="overflow-y-auto p-5 space-y-5">
 
             {/* Payment Metrics */}
@@ -431,13 +666,15 @@ export function VendorDetailDrawer({
                 <Clock className="w-3.5 h-3.5 text-neutral-500" />
                 <SectionLabel>Payment Metrics</SectionLabel>
               </div>
-              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-0">
-                <Row label="Avg Days to Pay" value={`${Number(vendor.avg_days_to_pay ?? 0).toFixed(0)}d ±${Number(vendor.std_days_to_pay ?? 0).toFixed(0)}`} />
-                <Row label="On-Time Rate" value={`${Number(vendor.on_time_payment_rate ?? 0).toFixed(0)}%`} accent />
-                <Row label="Early Payment Rate" value={`${Number(vendor.early_payment_rate ?? 0).toFixed(0)}%`} />
-                <Row label="Avg Transaction" value={formatCurrency(Number(vendor.avg_payment_amount ?? 0))} />
-                <Row label="Amount Trend" value={vendor.amount_trend} />
-                <Row label="Txns / Month" value={`${Number(vendor.transactions_per_month ?? 0).toFixed(1)}`} />
+              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
+                <div className="px-4 py-1">
+                  <Row label="Avg Days to Pay" value={avgDaysToPay === 0 && stdDaysToPay === 0 ? "—" : `${avgDaysToPay.toFixed(0)}d ±${stdDaysToPay.toFixed(0)}`} accent />
+                  <Row label="On-Time Rate" value={onTimeRate ? <span className="text-emerald-400">{(onTimeRate * 100).toFixed(0)}%</span> : "—"} />
+                  <Row label="Early Payment Rate" value={earlyRate ? <span className="text-blue-400">{(earlyRate * 100).toFixed(0)}%</span> : "—"} />
+                  <Row label="Avg Transaction" value={avgPayment ? formatCurrency(avgPayment) : "—"} />
+                  <Row label="Amount Trend" value={<span className={`flex items-center gap-1 ${trendColor}`}><TrendIcon className="w-3 h-3" />{customer.amount_trend}</span>} />
+                  <Row label="Txns / Month" value={txPerMonth ? txPerMonth.toFixed(1) : "—"} />
+                </div>
               </div>
             </div>
 
@@ -447,12 +684,20 @@ export function VendorDetailDrawer({
                 <BarChart2 className="w-3.5 h-3.5 text-neutral-500" />
                 <SectionLabel>Transaction Profile</SectionLabel>
               </div>
-              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-0">
-                <Row label="Total Transactions" value={vendor.transaction_count} />
-                <Row label="Archetype" value={vendor.archetype} />
-                <Row label="Last Active" value={formatDate(vendor.last_transaction_date)} />
-                <Row label="Avg Interval" value={`${Number(vendor.avg_interval_days ?? 0).toFixed(0)}d`} />
-                <Row label="Regularity (CV)" value={`${Number(vendor.interval_cv ?? 0).toFixed(1)}`} />
+              <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
+                <div className="px-4 py-1">
+                  <Row label="Total Transactions" value={vendor.transaction_count} accent />
+                  <Row label="Archetype" value={<Badge className={`text-[10px] px-1.5 py-0 border ${archetypeStyle.badge}`}>{vendor.archetype}</Badge>} />
+                  <Row label="Last Active" value={formatDate(vendor.last_transaction_date)} />
+                  <Row label="Avg Interval" value={avgInterval ? `${avgInterval.toFixed(0)} days` : "—"} />
+                  <Row label="Regularity (CV)" value={
+                    intervalCv
+                      ? <span className={intervalCv < 0.5 ? "text-emerald-400" : intervalCv < 1 ? "text-amber-400" : "text-red-400"}>
+                          {intervalCv < 0.5 ? "Very Regular" : intervalCv < 1 ? "Moderate" : "Irregular"}
+                        </span>
+                      : "—"
+                  } />
+                </div>
               </div>
             </div>
 
@@ -478,7 +723,6 @@ export function VendorDetailDrawer({
             )}
 
           </div>
-
         </div>
       </DialogContent>
     </Dialog>
