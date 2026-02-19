@@ -130,18 +130,28 @@ function getArchetypeStyle(archetype: string) {
   return styles[archetype] || styles.New
 }
 
-const RISK_FACTOR_LABELS: Record<string, string> = {
+const VENDOR_RISK_FACTOR_LABELS: Record<string, string> = {
+  // Key-based mappings (from entity-calculations.ts new output)
   payment_slowing:          "AP payment timing slowing",
   amount_declining:         "Vendor spend trending downward (cost reduction)",
   low_on_time_rate:         "AP invoices frequently paid late",
   high_timing_variance:     "Highly unpredictable AP transaction intervals",
   frequency_dropping:       "AP transaction frequency has dropped significantly",
   often_pays_early:         "Often paying vendors early (cash flow consideration)",
-  // Legacy human-readable strings pass through unchanged
+  // Legacy human-readable customer strings stored in DB → vendor-correct equivalents
+  "Consistently pays on time":                    "AP invoices consistently paid on time",
+  "Frequently pays late":                         "AP invoices frequently paid late",
+  "Often pays early - strong financial position": "Often paying vendors early (cash flow consideration)",
+  "Highly variable payment timing":               "Highly variable AP payment timing",
+  "Highly unpredictable transaction intervals":   "Highly unpredictable AP transaction intervals",
+  "Somewhat unpredictable transaction intervals": "Somewhat unpredictable AP transaction intervals",
+  "Transaction frequency has dropped significantly": "AP transaction frequency has dropped significantly",
+  "Transaction amounts trending downward":        "Vendor spend trending downward (cost reduction)",
+  "Stable transaction pattern":                   "Stable AP transaction pattern",
 }
 
 function formatRiskFactor(factor: string): string {
-  return RISK_FACTOR_LABELS[factor] ?? factor
+  return VENDOR_RISK_FACTOR_LABELS[factor] ?? factor
 }
 
 function getRiskColor(score: number) {
@@ -215,6 +225,7 @@ export function VendorDetailDrawer({
   const [aiError, setAiError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [transactions, setTransactions] = useState<RecentTransaction[]>([])
+  const [liveRisk, setLiveRisk] = useState<{ score: number; factors: string[] } | null>(null)
   const prevVendorId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -224,6 +235,7 @@ export function VendorDetailDrawer({
       setAiError(null)
       setSearchQuery("")
       setTransactions([])
+      setLiveRisk(null)
       generateAISummary(vendor.id)
       fetchTransactions(vendor.id)
     }
@@ -238,6 +250,14 @@ export function VendorDetailDrawer({
       if (!res.ok) return
       const data = await res.json()
       setTransactions(data.recentTransactions || [])
+      // Capture live-calculated risk from detail API (overrides stale DB values from list page)
+      if (data.vendor?.risk_score !== undefined) {
+        const rawScore = Number(data.vendor.risk_score)
+        setLiveRisk({
+          score: rawScore > 1 ? rawScore / 100 : rawScore,
+          factors: data.vendor.risk_factors ?? [],
+        })
+      }
     } catch {
       // silently skip — charts will just be empty
     }
@@ -271,7 +291,11 @@ export function VendorDetailDrawer({
   const txPerMonth        = Number(vendor.transactions_per_month) || 0
   const avgInterval       = Number(vendor.avg_interval_days) || 0
   const intervalCv        = Number(vendor.interval_cv) || 0
-  const riskScore         = Number(vendor.risk_score) || 0
+  // Use live-calculated risk (from detail API) when available; otherwise normalize from prop
+  // DB may store risk_score as 0-100 — divide by 100 if > 1 to get 0-1 scale
+  const riskScore = liveRisk
+    ? liveRisk.score
+    : (() => { const raw = Number(vendor.risk_score) || 0; return raw > 1 ? raw / 100 : raw })()
 
   const riskStyle = getRiskColor(riskScore)
   const TrendIcon =
@@ -416,8 +440,8 @@ export function VendorDetailDrawer({
                 </div>
                 <ScoreBar value={riskScore} color={riskStyle.bar} />
                 <div className="space-y-1.5 pt-1">
-                  {vendor.risk_factors?.length > 0
-                    ? vendor.risk_factors.map((f, i) => (
+                  {(liveRisk?.factors ?? vendor.risk_factors ?? []).length > 0
+                    ? (liveRisk?.factors ?? vendor.risk_factors).map((f, i) => (
                         <div key={i} className="flex items-start gap-2">
                           <div className="w-1 h-1 rounded-full bg-amber-400/60 mt-1.5 flex-shrink-0" />
                           <span className="text-[11px] text-neutral-400">{formatRiskFactor(f)}</span>
