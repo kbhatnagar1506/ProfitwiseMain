@@ -44,7 +44,7 @@ interface Vendor {
   entity_type: "customer" | "vendor"
   transaction_count: number
   lifetime_value: number
-  ar_balance: number
+  ap_balance: number
   overdue_balance: number
   reliability_score: number
   archetype: string
@@ -131,11 +131,12 @@ function getArchetypeStyle(archetype: string) {
 }
 
 const RISK_FACTOR_LABELS: Record<string, string> = {
-  payment_slowing:          "Payment timing is slowing down",
-  amount_declining:         "Transaction amounts trending downward",
-  low_on_time_rate:         "Frequently pays late",
-  high_timing_variance:     "Highly unpredictable transaction intervals",
-  frequency_dropping:       "Transaction frequency has dropped significantly",
+  payment_slowing:          "AP payment timing slowing",
+  amount_declining:         "Vendor spend trending downward (cost reduction)",
+  low_on_time_rate:         "AP invoices frequently paid late",
+  high_timing_variance:     "Highly unpredictable AP transaction intervals",
+  frequency_dropping:       "AP transaction frequency has dropped significantly",
+  often_pays_early:         "Often paying vendors early (cash flow consideration)",
   // Legacy human-readable strings pass through unchanged
 }
 
@@ -276,9 +277,10 @@ export function VendorDetailDrawer({
   const TrendIcon =
     vendor.amount_trend === "increasing" ? TrendingUp :
     vendor.amount_trend === "decreasing" ? TrendingDown : Minus
+  // For vendors: increasing spend = cost growth (amber warning), decreasing = cost saving (green)
   const trendColor =
-    vendor.amount_trend === "increasing" ? "text-emerald-400" :
-    vendor.amount_trend === "decreasing" ? "text-red-400" : "text-neutral-500"
+    vendor.amount_trend === "increasing" ? "text-amber-400" :
+    vendor.amount_trend === "decreasing" ? "text-emerald-400" : "text-neutral-500"
 
   // ── Chart data ──────────────────────────────────────────────────────────
   // Amount sparkline (oldest → newest)
@@ -344,7 +346,7 @@ export function VendorDetailDrawer({
             </Badge>
             {vendor.overdue_balance > 0 && (
               <Badge className="text-[10px] px-1.5 bg-red-500/15 text-red-300 border border-red-500/25 flex-shrink-0">
-                {formatCurrency(vendor.overdue_balance)} overdue
+                {formatCurrency(vendor.overdue_balance)} AP overdue
               </Badge>
             )}
           </div>
@@ -388,7 +390,7 @@ export function VendorDetailDrawer({
             <div className="space-y-2">
               {[
                 { label: "Lifetime Spend", value: formatCurrency(vendor.lifetime_value), color: "text-emerald-400" },
-                { label: "Open AP",        value: formatCurrency(vendor.ar_balance),     color: vendor.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
+                { label: "Open AP",        value: formatCurrency(vendor.ap_balance),     color: vendor.ap_balance > 0 ? "text-amber-400" : "text-neutral-400" },
                 { label: "Reliability",    value: `${vendor.reliability_score}%`,        color: "text-white" },
               ].map(({ label, value, color }) => (
                 <div key={label} className={`bg-white/[0.03] border border-white/[0.06] border-l-2 rounded-xl p-4 ${color === "text-emerald-400" ? "border-l-emerald-500/60" : color === "text-amber-400" ? "border-l-amber-500/60" : "border-l-white/20"}`}>
@@ -409,7 +411,7 @@ export function VendorDetailDrawer({
               </div>
               <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-[12px] text-neutral-400">Risk Score</span>
+                  <span className="text-[12px] text-neutral-400">AP Concentration Risk</span>
                   <span className={`text-[12px] font-semibold ${riskStyle.text}`}>
                     {riskStyle.label} · {(riskScore * 100).toFixed(0)}%
                   </span>
@@ -507,7 +509,7 @@ export function VendorDetailDrawer({
                   <div className="grid grid-cols-2 gap-2.5">
                     {aiSummary.paymentBehavior && (
                       <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-3.5">
-                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">Payment Behavior</p>
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">AP Payment Behavior</p>
                         <p className="text-[12.5px] text-neutral-300 leading-relaxed">{aiSummary.paymentBehavior}</p>
                       </div>
                     )}
@@ -573,7 +575,7 @@ export function VendorDetailDrawer({
               <div>
                 <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                   <Clock className="w-3.5 h-3.5 text-neutral-500" />
-                  <SectionLabel>Days to Pay · Trend</SectionLabel>
+                  <SectionLabel>AP Days to Pay · Trend</SectionLabel>
                 </div>
                 <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
                   <ResponsiveContainer width="100%" height={130}>
@@ -582,7 +584,7 @@ export function VendorDetailDrawer({
                       <YAxis hide />
                       <ReferenceLine y={0} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                       <Tooltip content={({ active, payload, label }) => (
-                        <ChartTooltip active={active} payload={payload as Array<{ value: number }>} label={label} formatter={(v) => `${v > 0 ? "+" : ""}${v}d vs due`} />
+                        <ChartTooltip active={active} payload={payload as Array<{ value: number }>} label={label} formatter={(v) => `${v > 0 ? "+" : ""}${v}d vs due (your payment)`} />
                       )} />
                       <Bar dataKey="dtp" radius={[2, 2, 0, 0]}>
                         {dtpData.map((e, i) => (
@@ -592,13 +594,14 @@ export function VendorDetailDrawer({
                     </BarChart>
                   </ResponsiveContainer>
                   <div className="flex items-center gap-4 mt-2">
-                    {[["bg-emerald-400/50","Early / on-time"],["bg-amber-400/50","≤7 days late"],["bg-red-400/50","Late"]].map(([bg, lbl]) => (
+                    {[["bg-emerald-400/50","Paid early / on-time"],["bg-amber-400/50","≤7 days late"],["bg-red-400/50","Late payment"]].map(([bg, lbl]) => (
                       <div key={lbl} className="flex items-center gap-1.5">
                         <div className={`w-2 h-2 rounded-sm ${bg}`} />
                         <span className="text-[10px] text-neutral-500">{lbl}</span>
                       </div>
                     ))}
                   </div>
+                  <p className="text-[10px] text-neutral-600 mt-2">Days your business took to pay this vendor after invoice due date</p>
                 </div>
               </div>
             )}
@@ -658,20 +661,20 @@ export function VendorDetailDrawer({
 
           </div>
 
-          {/* ── RIGHT: AR KPIs · Search · Transactions · Stats ─ */}
+          {/* ── RIGHT: AP KPIs · Stats · Transactions ─ */}
           <div className="overflow-y-auto p-5 space-y-5">
 
             {/* Payment Metrics */}
             <div>
               <div className="flex items-center gap-2 mb-2.5 border-b border-white/[0.04] pb-2">
                 <Clock className="w-3.5 h-3.5 text-neutral-500" />
-                <SectionLabel>Payment Metrics</SectionLabel>
+                <SectionLabel>AP Payment Metrics</SectionLabel>
               </div>
               <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden">
                 <div className="px-4 py-1">
-                  <Row label="Avg Days to Pay" value={avgDaysToPay === 0 && stdDaysToPay === 0 ? "—" : `${avgDaysToPay.toFixed(0)}d ±${stdDaysToPay.toFixed(0)}`} accent />
-                  <Row label="On-Time Rate" value={onTimeRate ? <span className="text-emerald-400">{(onTimeRate * 100).toFixed(0)}%</span> : "—"} />
-                  <Row label="Early Payment Rate" value={earlyRate ? <span className="text-blue-400">{(earlyRate * 100).toFixed(0)}%</span> : "—"} />
+                  <Row label="Avg Days to Pay Vendor" value={avgDaysToPay === 0 && stdDaysToPay === 0 ? "—" : `${avgDaysToPay.toFixed(0)}d ±${stdDaysToPay.toFixed(0)}`} accent />
+                  <Row label="On-Time AP Rate" value={onTimeRate ? <span className="text-emerald-400">{(onTimeRate * 100).toFixed(0)}%</span> : "—"} />
+                  <Row label="Early Pay Rate" value={earlyRate ? <span className="text-amber-400">{(earlyRate * 100).toFixed(0)}%</span> : "—"} />
                   <Row label="Avg Transaction" value={avgPayment ? formatCurrency(avgPayment) : "—"} />
                   <Row label="Amount Trend" value={<span className={`flex items-center gap-1 ${trendColor}`}><TrendIcon className="w-3 h-3" />{vendor.amount_trend}</span>} />
                   <Row label="Txns / Month" value={txPerMonth ? txPerMonth.toFixed(1) : "—"} />

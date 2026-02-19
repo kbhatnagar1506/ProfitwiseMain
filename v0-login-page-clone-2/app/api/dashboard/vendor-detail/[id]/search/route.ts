@@ -147,7 +147,7 @@ export async function GET(
         })
       }
     } catch (err) {
-      console.warn("[customer-search] Invoice search failed:", err)
+      console.warn("[vendor-search] Invoice search failed:", err)
     }
 
     // Search Supermemory documents
@@ -179,7 +179,7 @@ export async function GET(
         }
       }
     } catch (err) {
-      console.warn("[customer-search] Supermemory search failed:", err)
+      console.warn("[vendor-search] Supermemory search failed:", err)
     }
 
     // Sort by relevance score
@@ -193,7 +193,7 @@ export async function GET(
       searchTime,
     })
   } catch (error) {
-    console.error("[customer-search] Error:", error)
+    console.error("[vendor-search] Error:", error)
     return NextResponse.json(
       { error: "Failed to search" },
       { status: 500 }
