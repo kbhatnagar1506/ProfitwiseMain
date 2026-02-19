@@ -213,7 +213,7 @@ export function CustomerDetailDrawer({
   const [aiError, setAiError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [transactions, setTransactions] = useState<RecentTransaction[]>([])
-  const [liveRisk, setLiveRisk] = useState<{ score: number; factors: string[]; reliability: number | null } | null>(null)
+  const [liveRisk, setLiveRisk] = useState<{ score: number; factors: string[]; reliability: number | null; lifetimeValue: number | null } | null>(null)
   const prevCustomerId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -245,6 +245,7 @@ export function CustomerDetailDrawer({
           score: rawScore > 1 ? rawScore / 100 : rawScore,
           factors: data.customer.risk_factors ?? [],
           reliability: Number(data.customer.reliability_score) || null,
+          lifetimeValue: Number(data.customer.lifetime_value) || null,
         })
       }
     } catch {
@@ -401,7 +402,7 @@ export function CustomerDetailDrawer({
             {/* Identity KPIs */}
             <div className="space-y-2">
               {[
-                { label: "Lifetime Value", value: formatCurrency(customer.lifetime_value), color: "text-emerald-400" },
+                { label: "Lifetime Value", value: formatCurrency(liveRisk?.lifetimeValue ?? customer.lifetime_value), color: "text-emerald-400" },
                 { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
                 { label: "Reliability",    value: `${reliabilityDisplay}%`,               color: reliabilityColor },
               ].map(({ label, value, color }) => (

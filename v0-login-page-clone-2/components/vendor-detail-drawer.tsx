@@ -225,7 +225,7 @@ export function VendorDetailDrawer({
   const [aiError, setAiError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [transactions, setTransactions] = useState<RecentTransaction[]>([])
-  const [liveRisk, setLiveRisk] = useState<{ score: number; factors: string[]; reliability: number | null } | null>(null)
+  const [liveRisk, setLiveRisk] = useState<{ score: number; factors: string[]; reliability: number | null; lifetimeValue: number | null } | null>(null)
   const prevVendorId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -257,6 +257,7 @@ export function VendorDetailDrawer({
           score: rawScore > 1 ? rawScore / 100 : rawScore,
           factors: data.vendor.risk_factors ?? [],
           reliability: Number(data.vendor.reliability_score) || null,
+          lifetimeValue: Number(data.vendor.lifetime_value) || null,
         })
       }
     } catch {
@@ -414,7 +415,7 @@ export function VendorDetailDrawer({
             {/* Identity KPIs */}
             <div className="space-y-2">
               {[
-                { label: "Lifetime Spend", value: formatCurrency(vendor.lifetime_value), color: "text-emerald-400" },
+                { label: "Lifetime Spend", value: formatCurrency(liveRisk?.lifetimeValue ?? vendor.lifetime_value), color: "text-emerald-400" },
                 { label: "Open AP",        value: formatCurrency(vendor.ap_balance),     color: vendor.ap_balance > 0 ? "text-amber-400" : "text-neutral-400" },
                 { label: "Reliability",    value: `${reliabilityDisplay}%`,              color: reliabilityColor },
               ].map(({ label, value, color }) => (

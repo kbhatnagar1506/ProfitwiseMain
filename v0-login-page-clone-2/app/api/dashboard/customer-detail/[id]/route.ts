@@ -156,6 +156,15 @@ export async function GET(
       console.warn("[customer-detail] Live calculation failed, using stored profile:", err)
     }
 
+    // Compute lifetime value live from movements (same source as the list page)
+    const ltvResult = await query<{ lifetime_value: string }>(
+      `SELECT COALESCE(SUM(ABS(amount)), 0)::numeric as lifetime_value
+       FROM movements
+       WHERE counterparty_entity_id = $1::uuid AND user_id = $2`,
+      [entityId, userId]
+    )
+    const liveLifetimeValue = parseFloat(ltvResult.rows[0]?.lifetime_value ?? "0") || 0
+
     // Fetch recent transactions
     const transactionsResult = await query<{
       id: string
@@ -237,7 +246,7 @@ export async function GET(
         display_name: entity.display_name,
         entity_type: entityType,
         transaction_count: profile.transaction_count || 0,
-        lifetime_value: Number(profile.lifetime_value) || 0,
+        lifetime_value: liveLifetimeValue || Number(profile.lifetime_value) || 0,
         ar_balance: Number(profile.outstanding_amount) || 0,
         overdue_balance: Number(profile.overdue_amount) || 0,
         reliability_score: (() => {
