@@ -213,7 +213,7 @@ export function CustomerDetailDrawer({
   const [aiError, setAiError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [transactions, setTransactions] = useState<RecentTransaction[]>([])
-  const [liveRisk, setLiveRisk] = useState<{ score: number; factors: string[] } | null>(null)
+  const [liveRisk, setLiveRisk] = useState<{ score: number; factors: string[]; reliability: number | null } | null>(null)
   const prevCustomerId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -244,6 +244,7 @@ export function CustomerDetailDrawer({
         setLiveRisk({
           score: rawScore > 1 ? rawScore / 100 : rawScore,
           factors: data.customer.risk_factors ?? [],
+          reliability: Number(data.customer.reliability_score) || null,
         })
       }
     } catch {
@@ -285,6 +286,8 @@ export function CustomerDetailDrawer({
     ? liveRisk.score
     : (() => { const raw = Number(customer.risk_score) || 0; return raw > 1 ? raw / 100 : raw })()
 
+  const reliabilityDisplay = liveRisk?.reliability ?? Number(customer.reliability_score) ?? 50
+  const reliabilityColor = reliabilityDisplay >= 80 ? "text-emerald-400" : reliabilityDisplay >= 60 ? "text-amber-400" : "text-red-400"
   const riskStyle = getRiskColor(riskScore)
   const TrendIcon =
     customer.amount_trend === "increasing" ? TrendingUp :
@@ -400,7 +403,7 @@ export function CustomerDetailDrawer({
               {[
                 { label: "Lifetime Value", value: formatCurrency(customer.lifetime_value), color: "text-emerald-400" },
                 { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
-                { label: "Reliability",    value: `${customer.reliability_score}%`,        color: "text-white" },
+                { label: "Reliability",    value: `${reliabilityDisplay}%`,               color: reliabilityColor },
               ].map(({ label, value, color }) => (
                 <div key={label} className={`bg-white/[0.03] border border-white/[0.06] border-l-2 rounded-xl p-4 ${color === "text-emerald-400" ? "border-l-emerald-500/60" : color === "text-amber-400" ? "border-l-amber-500/60" : "border-l-white/20"}`}>
                   <p className="text-[11px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">{label}</p>
