@@ -95,10 +95,11 @@ interface VendorDetailDrawerProps {
   vendor: Vendor | null
 }
 
-function formatCurrency(amount: number): string {
-  if (amount >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`
-  if (amount >= 1000) return `$${(amount / 1000).toFixed(1)}K`
-  return `$${amount.toFixed(0)}`
+function formatCurrency(amount: number | undefined | null): string {
+  const n = Number(amount) || 0
+  if (n >= 1000000) return `$${(n / 1000000).toFixed(1)}M`
+  if (n >= 1000) return `$${(n / 1000).toFixed(1)}K`
+  return `$${n.toFixed(0)}`
 }
 
 function formatDate(dateString: string | null): string {
@@ -387,7 +388,7 @@ export function VendorDetailDrawer({
             <div className="space-y-2">
               {[
                 { label: "Lifetime Spend", value: formatCurrency(vendor.lifetime_value), color: "text-emerald-400" },
-                { label: "Open AP",        value: formatCurrency(vendor.ap_balance),     color: vendor.ap_balance > 0 ? "text-amber-400" : "text-neutral-400" },
+                { label: "Open AP",        value: formatCurrency(vendor.ar_balance),     color: vendor.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
                 { label: "Reliability",    value: `${vendor.reliability_score}%`,        color: "text-white" },
               ].map(({ label, value, color }) => (
                 <div key={label} className={`bg-white/[0.03] border border-white/[0.06] border-l-2 rounded-xl p-4 ${color === "text-emerald-400" ? "border-l-emerald-500/60" : color === "text-amber-400" ? "border-l-amber-500/60" : "border-l-white/20"}`}>
