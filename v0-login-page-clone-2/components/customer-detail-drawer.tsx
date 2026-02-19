@@ -213,6 +213,7 @@ export function CustomerDetailDrawer({
   const [aiError, setAiError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [transactions, setTransactions] = useState<RecentTransaction[]>([])
+  const [liveRisk, setLiveRisk] = useState<{ score: number; factors: string[] } | null>(null)
   const prevCustomerId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -222,6 +223,7 @@ export function CustomerDetailDrawer({
       setAiError(null)
       setSearchQuery("")
       setTransactions([])
+      setLiveRisk(null)
       generateAISummary(customer.id)
       fetchTransactions(customer.id)
     }
@@ -236,6 +238,14 @@ export function CustomerDetailDrawer({
       if (!res.ok) return
       const data = await res.json()
       setTransactions(data.recentTransactions || [])
+      // Capture live-calculated risk from detail API (overrides stale DB values from list page)
+      if (data.customer?.risk_score !== undefined) {
+        const rawScore = Number(data.customer.risk_score)
+        setLiveRisk({
+          score: rawScore > 1 ? rawScore / 100 : rawScore,
+          factors: data.customer.risk_factors ?? [],
+        })
+      }
     } catch {
       // silently skip — charts will just be empty
     }
@@ -269,7 +279,11 @@ export function CustomerDetailDrawer({
   const txPerMonth        = Number(customer.transactions_per_month) || 0
   const avgInterval       = Number(customer.avg_interval_days) || 0
   const intervalCv        = Number(customer.interval_cv) || 0
-  const riskScore         = Number(customer.risk_score) || 0
+  // Use live-calculated risk (from detail API) when available; otherwise normalize from prop
+  // DB may store risk_score as 0-100 — divide by 100 if > 1 to get 0-1 scale
+  const riskScore = liveRisk
+    ? liveRisk.score
+    : (() => { const raw = Number(customer.risk_score) || 0; return raw > 1 ? raw / 100 : raw })()
 
   const riskStyle = getRiskColor(riskScore)
   const TrendIcon =
@@ -413,8 +427,8 @@ export function CustomerDetailDrawer({
                 </div>
                 <ScoreBar value={riskScore} color={riskStyle.bar} />
                 <div className="space-y-1.5 pt-1">
-                  {customer.risk_factors?.length > 0
-                    ? customer.risk_factors.map((f, i) => (
+                  {(liveRisk?.factors ?? customer.risk_factors ?? []).length > 0
+                    ? (liveRisk?.factors ?? customer.risk_factors).map((f, i) => (
                         <div key={i} className="flex items-start gap-2">
                           <div className="w-1 h-1 rounded-full bg-amber-400/60 mt-1.5 flex-shrink-0" />
                           <span className="text-[11px] text-neutral-400">{formatRiskFactor(f)}</span>
