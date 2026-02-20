@@ -240,7 +240,16 @@ export async function GET(
         lifetime_value: Number(profile.lifetime_value) || 0,
         ap_balance: Number(profile.outstanding_amount) || 0,
         overdue_balance: Number(profile.overdue_amount) || 0,
-        reliability_score: Number(profile.reliability_score) || 80,
+        reliability_score: (() => {
+          // Prefer live on_time_payment_rate + early_payment_rate for a real computed score
+          const onTime = liveData?.on_time_payment_rate ?? Number(profile.on_time_payment_rate) ?? 0
+          const early  = liveData?.early_payment_rate  ?? Number(profile.early_payment_rate)  ?? 0
+          if (onTime > 0 || early > 0) {
+            return Math.min(100, Math.round((onTime * 0.7 + early * 0.3) * 100))
+          }
+          const stored = Number(profile.reliability_score) || 0
+          return stored > 0 ? (stored <= 1 ? Math.round(stored * 100) : Math.round(stored)) : 50
+        })(),
         archetype: profile.archetype || "New",
         last_transaction_date: null,
         metadata: entity.metadata,

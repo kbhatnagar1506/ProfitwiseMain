@@ -142,7 +142,25 @@ export async function GET(request: NextRequest) {
     const enrichedEntities = await Promise.all(
       entitiesResult.map(async (e) => {
         const metadata = (e.metadata || {}) as Record<string, unknown>
-        const reliabilityScore = Math.round((metadata.reliability_score as number) || 80)
+
+        // Check for pre-computed payment profile data first
+        const paymentProfile = paymentProfilesResult.find(p => p.entity_id === e.id)
+        const hasPaymentProfile = paymentProfile && paymentProfile.on_time_payment_rate !== null
+
+        // Compute reliability from actual payment metrics; fall back to metadata then 50 (neutral)
+        let reliabilityScore: number
+        if (hasPaymentProfile && paymentProfile.on_time_payment_rate !== null) {
+          const onTimeRate  = Number(paymentProfile.on_time_payment_rate) || 0
+          const earlyRate   = Number(paymentProfile.early_payment_rate)   || 0
+          reliabilityScore = Math.min(100, Math.round((onTimeRate * 0.7 + earlyRate * 0.3) * 100))
+        } else if (metadata.reliability_score) {
+          // Legacy: metadata stores 0-1 scale, convert to 0-100
+          const raw = Number(metadata.reliability_score)
+          reliabilityScore = raw <= 1 ? Math.round(raw * 100) : Math.round(raw)
+        } else {
+          reliabilityScore = 50  // neutral default when no data
+        }
+
         let archetype = "New"
 
         if (e.transaction_count >= 3) {
@@ -162,10 +180,6 @@ export async function GET(request: NextRequest) {
         } catch (err) {
           console.error(`[entity-profiles] Error enriching entity ${e.id}:`, err)
         }
-
-        // Check for pre-computed payment profile data
-        const paymentProfile = paymentProfilesResult.find(p => p.entity_id === e.id)
-        const hasPaymentProfile = paymentProfile && paymentProfile.avg_days_to_pay !== null
 
         // Use pre-computed data if available, otherwise use calculated data
         const avgDaysToPay = hasPaymentProfile ? paymentProfile.avg_days_to_pay : enrichedData.avg_days_to_pay || 0
