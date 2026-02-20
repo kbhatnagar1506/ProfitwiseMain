@@ -16,6 +16,7 @@ type EntityRow = {
   overdue_balance: number
   last_transaction_date: string | null
   metadata: Record<string, unknown> | null
+  contact_email: string | null
 }
 
 type SummaryRow = {
@@ -92,7 +93,8 @@ export async function GET(request: NextRequest) {
         COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as ar_balance,
         0::numeric as overdue_balance,
         MAX(m.date)::text as last_transaction_date,
-        e.metadata
+        e.metadata,
+        (SELECT ea.alias FROM entity_aliases ea WHERE ea.entity_id = e.id AND ea.alias_type = 'email' LIMIT 1) AS contact_email
       FROM entities e
       LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
       LEFT JOIN cash_events ce ON e.id = ce.entity_id::uuid AND ce.user_id = $1 AND ce.outstanding_amount > 0
@@ -103,7 +105,11 @@ export async function GET(request: NextRequest) {
           ? "COALESCE((e.metadata->>'reliability_score')::numeric, 0) DESC"
           : sortBy === "txn_count"
             ? "transaction_count DESC"
-            : "lifetime_value DESC"
+            : sortBy === "last_active"
+              ? "MAX(m.date) DESC NULLS LAST"
+              : sortBy === "name"
+                ? "e.canonical_name ASC"
+                : "lifetime_value DESC"
       }
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset]
@@ -200,6 +206,8 @@ export async function GET(request: NextRequest) {
           archetype,
           last_transaction_date: e.last_transaction_date,
           ai_insight: (metadata.ai_insight as string) || null,
+          metadata: e.metadata,
+          contact_email: e.contact_email || null,
           // Enriched payment behavior data
           avg_days_to_pay: avgDaysToPay,
           std_days_to_pay: stdDaysToPay,
