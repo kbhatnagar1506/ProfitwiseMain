@@ -161,31 +161,47 @@ async function getReconciliationLockStatus(userId: string): Promise<Reconciliati
 async function runReconciliationInBackground(userId: string) {
   console.log("[ar-ap-step] Starting background reconciliation for user:", userId)
   const warnings: string[] = []
+  const startTime = Date.now()
   
   try {
+    console.log("[ar-ap-step] Step 1: Fetching invoices...")
     const invoices = await fetchInvoicesForReconciliation(userId)
+    console.log("[ar-ap-step] Step 1 complete: fetched", invoices.length, "invoices in", Date.now() - startTime, "ms")
+    
+    console.log("[ar-ap-step] Step 2: Fetching bills...")
     const bills = await fetchBillsForReconciliation(userId)
+    console.log("[ar-ap-step] Step 2 complete: fetched", bills.length, "bills in", Date.now() - startTime, "ms")
+    
     const obligations = computeAPStateFromBills(bills.filter(b => b.status !== "paid"))
     
+    console.log("[ar-ap-step] Step 3: Refreshing entity aliases...")
     await refreshEntityAliasesFromAccounting(userId)
+    console.log("[ar-ap-step] Step 3 complete in", Date.now() - startTime, "ms")
+    
+    console.log("[ar-ap-step] Step 4: Refreshing movement entity IDs...")
     await refreshMovementEntityIds(userId)
+    console.log("[ar-ap-step] Step 4 complete in", Date.now() - startTime, "ms")
     
     // Ensure movement tags are up-to-date before reconciliation
-    console.log("[ar-ap-step] Running tagMovements for user:", userId)
+    console.log("[ar-ap-step] Step 5: Running tagMovements...")
     await tagMovements(userId)
+    console.log("[ar-ap-step] Step 5 complete in", Date.now() - startTime, "ms")
     
     // Run rule-based waterfall (Stages 0-3)
+    console.log("[ar-ap-step] Step 6: Running financial brain...")
     await runFinancialBrain(userId, {
       outstandingInvoices: invoices,
       apObligations: obligations,
     })
+    console.log("[ar-ap-step] Step 6 complete in", Date.now() - startTime, "ms")
     
     // Run LLM Stage 4 on ALL unreconciled movements (not just flagged ones)
-    console.log("[ar-ap-step] Running LLM Stage 4 for user:", userId)
+    console.log("[ar-ap-step] Step 7: Running LLM Stage 4...")
     const unreconciledMovements = await getAllUnreconciledMovements(userId)
+    console.log("[ar-ap-step] Step 7a: Found", unreconciledMovements.length, "unreconciled movements in", Date.now() - startTime, "ms")
     
     if (unreconciledMovements.length > 0) {
-      console.log("[ar-ap-step] Found", unreconciledMovements.length, "unreconciled movements for LLM matching")
+      console.log("[ar-ap-step] Step 7b: Preparing invoice/bill data for LLM...")
       
       // Prepare invoice/bill data for LLM matching
       // Filter to only open/overdue invoices and bills (exclude paid ones)
@@ -212,6 +228,7 @@ async function runReconciliationInBackground(userId: string) {
           source: b.source,
         }))
       
+      console.log("[ar-ap-step] Step 7c: Calling runLLMStage4 with", invoicesForLLM.length, "invoices and", billsForLLM.length, "bills...")
       const llmResult = await runLLMStage4(
         userId,
         unreconciledMovements,
@@ -219,6 +236,7 @@ async function runReconciliationInBackground(userId: string) {
         billsForLLM,
         "high" // Only auto-apply high-confidence matches
       )
+      console.log("[ar-ap-step] Step 7c complete in", Date.now() - startTime, "ms")
       
       console.log("[ar-ap-step] LLM Stage 4 result:", {
         unreconciledCount: unreconciledMovements.length,
@@ -238,32 +256,34 @@ async function runReconciliationInBackground(userId: string) {
     }
     
     // Build entity profiles after reconciliation completes
+    console.log("[ar-ap-step] Step 8: Building entity profiles...")
     let profilesBuilt = 0
     let narrativesRefreshed = 0
     try {
-      console.log("[ar-ap-step] Building entity profiles for user:", userId)
       profilesBuilt = await buildEntityProfiles(userId)
-      console.log("[ar-ap-step] Entity profiles built:", profilesBuilt)
+      console.log("[ar-ap-step] Step 8 complete: Entity profiles built:", profilesBuilt, "in", Date.now() - startTime, "ms")
       
       // Generate AI narratives for top entities - await to ensure completion before lock release
+      console.log("[ar-ap-step] Step 9: Refreshing entity narratives...")
       try {
         narrativesRefreshed = await refreshEntityNarratives(userId, { maxEntities: 25 })
-        console.log("[ar-ap-step] Entity narratives refreshed:", narrativesRefreshed)
+        console.log("[ar-ap-step] Step 9 complete: Entity narratives refreshed:", narrativesRefreshed, "in", Date.now() - startTime, "ms")
       } catch (narrativeErr) {
-        console.warn("[ar-ap-step] Failed to refresh entity narratives:", narrativeErr)
+        console.warn("[ar-ap-step] Step 9 failed:", narrativeErr)
         warnings.push("Failed to refresh entity narratives")
       }
     } catch (e) {
-      console.warn("[ar-ap-step] Failed to build entity profiles:", e)
+      console.warn("[ar-ap-step] Step 8 failed:", e)
       warnings.push("Failed to build entity profiles")
     }
     
-    console.log("[ar-ap-step] Background reconciliation completed for user:", userId)
+    console.log("[ar-ap-step] Background reconciliation completed for user:", userId, "in", Date.now() - startTime, "ms")
     const finalStatus = warnings.length > 0 ? "completed_with_warnings" : "completed"
     await releaseReconciliationLock(userId, finalStatus, undefined, warnings.length > 0 ? warnings : undefined)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error("[ar-ap-step] Background reconciliation failed:", msg)
+    console.error("[ar-ap-step] Background reconciliation failed after", Date.now() - startTime, "ms:", msg)
+    console.error("[ar-ap-step] Full error:", e)
     await releaseReconciliationLock(userId, "failed", msg)
   }
 }
