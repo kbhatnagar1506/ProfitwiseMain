@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CheckCircle2, XCircle, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Link2Off, DollarSign, ArrowDownRight, ArrowUpRight, Sparkles } from "lucide-react"
 
 interface ARAPStepResponse {
-  ar: {
+  ar?: {
     invoices: any[]
     paid_invoices: any[]
     reconciliation_summary: {
@@ -18,7 +18,7 @@ interface ARAPStepResponse {
       discrepancy: number
     }
   }
-  ap: {
+  ap?: {
     bills: any[]
     paid_bills: any[]
     reconciliation_summary: {
@@ -26,16 +26,17 @@ interface ARAPStepResponse {
       discrepancy: number
     }
   }
-  recon: {
+  recon?: {
     unmatched_inflows: any[]
     unmatched_outflows: any[]
   }
-  lifetime: {
+  lifetime?: {
     ar: { reconciled_pct: number }
     ap: { reconciled_pct: number }
   }
   is_reconciling: boolean
   reconciliation_status: any
+  message?: string
 }
 
 function formatCurrency(n: number) {
@@ -133,8 +134,28 @@ export default function ReconciliationPage() {
     return <div className="p-8 text-red-400">{error || "No data"}</div>
   }
 
-  const arMatchRate = data.ar.reconciliation_summary.match_rate || 0
-  const apMatchRate = data.ap.reconciliation_summary.match_rate || 0
+  // When reconciliation is running, show minimal UI
+  if (data.is_reconciling && !data.ar) {
+    return (
+      <div className="p-8 space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-white">Reconciliation</h1>
+            <p className="text-zinc-400 mt-1">Running reconciliation...</p>
+          </div>
+        </div>
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-8 text-center">
+          <div className="inline-flex items-center gap-3">
+            <div className="h-5 w-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-zinc-300">Reconciliation in progress. Polling for updates...</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const arMatchRate = data.ar?.reconciliation_summary?.match_rate || 0
+  const apMatchRate = data.ap?.reconciliation_summary?.match_rate || 0
 
   return (
     <div className="p-8 space-y-6">
@@ -166,20 +187,20 @@ export default function ReconciliationPage() {
         </div>
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-xs text-zinc-500 uppercase tracking-wide">AR Gap</p>
-          <p className="text-2xl font-bold text-amber-400 mt-2">{formatCurrency(data.ar.reconciliation_summary.discrepancy)}</p>
+          <p className="text-2xl font-bold text-amber-400 mt-2">{formatCurrency(data.ar?.reconciliation_summary?.discrepancy || 0)}</p>
         </div>
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-xs text-zinc-500 uppercase tracking-wide">AP Gap</p>
-          <p className="text-2xl font-bold text-amber-400 mt-2">{formatCurrency(data.ap.reconciliation_summary.discrepancy)}</p>
+          <p className="text-2xl font-bold text-amber-400 mt-2">{formatCurrency(data.ap?.reconciliation_summary?.discrepancy || 0)}</p>
         </div>
       </div>
 
       {/* Tabs */}
       <Tabs defaultValue="ar" className="w-full">
         <TabsList className="bg-[#141414] border border-white/10">
-          <TabsTrigger value="ar">AR ({data.ar.invoices.length})</TabsTrigger>
-          <TabsTrigger value="ap">AP ({data.ap.bills.length})</TabsTrigger>
-          <TabsTrigger value="unmatched">Unmatched ({data.recon.unmatched_inflows.length + data.recon.unmatched_outflows.length})</TabsTrigger>
+          <TabsTrigger value="ar">AR ({data.ar?.invoices?.length || 0})</TabsTrigger>
+          <TabsTrigger value="ap">AP ({data.ap?.bills?.length || 0})</TabsTrigger>
+          <TabsTrigger value="unmatched">Unmatched ({(data.recon?.unmatched_inflows?.length || 0) + (data.recon?.unmatched_outflows?.length || 0)})</TabsTrigger>
           <TabsTrigger value="llm">LLM Queue</TabsTrigger>
         </TabsList>
 
@@ -198,7 +219,7 @@ export default function ReconciliationPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.ar.invoices.map(inv => (
+                {(data.ar?.invoices || []).map(inv => (
                   <TableRow key={inv.id} className="border-b border-white/5 hover:bg-white/[0.02]">
                     <TableCell className="text-sm text-white">{inv.customer_name}</TableCell>
                     <TableCell className="text-sm text-right text-zinc-300">{formatCurrency(inv.amount)}</TableCell>
@@ -236,7 +257,7 @@ export default function ReconciliationPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.ap.bills.map(bill => (
+                {(data.ap?.bills || []).map(bill => (
                   <TableRow key={bill.id} className="border-b border-white/5 hover:bg-white/[0.02]">
                     <TableCell className="text-sm text-white">{bill.vendor_name}</TableCell>
                     <TableCell className="text-sm text-right text-zinc-300">{formatCurrency(bill.amount)}</TableCell>
@@ -262,7 +283,7 @@ export default function ReconciliationPage() {
         {/* Unmatched Tab */}
         <TabsContent value="unmatched" className="space-y-4">
           <div className="text-sm text-zinc-400">
-            {data.recon.unmatched_inflows.length + data.recon.unmatched_outflows.length} unmatched movements
+            {(data.recon?.unmatched_inflows?.length || 0) + (data.recon?.unmatched_outflows?.length || 0)} unmatched movements
           </div>
         </TabsContent>
 
