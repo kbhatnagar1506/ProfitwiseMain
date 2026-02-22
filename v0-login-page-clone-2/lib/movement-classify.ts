@@ -2741,46 +2741,64 @@ export async function classifyMovements(userId: string): Promise<{
  * preserving `movement_attributions` foreign keys.
  */
 export async function refreshMovementEntityIds(userId: string): Promise<number> {
+  console.log("[movement-classify] refreshMovementEntityIds: acquiring lock for user:", userId)
   await query("SELECT pg_advisory_lock(hashtext('movements:' || $1))", [userId])
+  console.log("[movement-classify] refreshMovementEntityIds: lock acquired, building identity context...")
 
-  const identityCtx = await buildMovementIdentityContext(userId)
-  if (identityCtx.size === 0) {
-    await query("SELECT pg_advisory_unlock(hashtext('movements:' || $1))", [userId])
-    return 0
-  }
-  const prefixIdx = buildPrefixIndex(identityCtx)
-
-  const { rows } = await query<{
-    id: string
-    counterparty: string | null
-    raw_description: string | null
-    counterparty_entity_id: string | null
-  }>(
-    `SELECT id, counterparty, raw_description, counterparty_entity_id
-     FROM movements WHERE user_id = $1 AND duplicate_of IS NULL`,
-    [userId]
-  )
-
-  let updated = 0
-  for (const row of rows) {
-    const stub = {
-      counterparty: row.counterparty,
-      raw_description: row.raw_description,
-      evidence: [],
-    } as unknown as CanonicalMovement
-
-    const entry = resolveCounterpartyIdentity(stub, identityCtx, prefixIdx)
-    const newId = entry?.entity_id ?? null
-    if (newId && newId !== row.counterparty_entity_id) {
-      await query(
-        `UPDATE movements SET counterparty_entity_id = $1, counterparty_entity_type = $2 WHERE id = $3`,
-        [newId, entry!.role, row.id]
-      )
-      updated++
+  try {
+    const startTime = Date.now()
+    const identityCtx = await buildMovementIdentityContext(userId)
+    console.log("[movement-classify] refreshMovementEntityIds: identity context built in", Date.now() - startTime, "ms, size:", identityCtx.size)
+    
+    if (identityCtx.size === 0) {
+      console.log("[movement-classify] refreshMovementEntityIds: empty identity context, returning 0")
+      return 0
     }
-  }
+    
+    console.log("[movement-classify] refreshMovementEntityIds: building prefix index...")
+    const prefixIdx = buildPrefixIndex(identityCtx)
+    console.log("[movement-classify] refreshMovementEntityIds: prefix index built")
 
-  log("movements.refresh_entity_ids.done", { userId, updated, total: rows.length }, "movements")
-  await query("SELECT pg_advisory_unlock(hashtext('movements:' || $1))", [userId])
-  return updated
+    console.log("[movement-classify] refreshMovementEntityIds: fetching movements...")
+    const { rows } = await query<{
+      id: string
+      counterparty: string | null
+      raw_description: string | null
+      counterparty_entity_id: string | null
+    }>(
+      `SELECT id, counterparty, raw_description, counterparty_entity_id
+       FROM movements WHERE user_id = $1 AND duplicate_of IS NULL`,
+      [userId]
+    )
+    console.log("[movement-classify] refreshMovementEntityIds: fetched", rows.length, "movements")
+
+    let updated = 0
+    for (const row of rows) {
+      const stub = {
+        counterparty: row.counterparty,
+        raw_description: row.raw_description,
+        evidence: [],
+      } as unknown as CanonicalMovement
+
+      const entry = resolveCounterpartyIdentity(stub, identityCtx, prefixIdx)
+      const newId = entry?.entity_id ?? null
+      if (newId && newId !== row.counterparty_entity_id) {
+        await query(
+          `UPDATE movements SET counterparty_entity_id = $1, counterparty_entity_type = $2 WHERE id = $3`,
+          [newId, entry!.role, row.id]
+        )
+        updated++
+      }
+    }
+
+    console.log("[movement-classify] refreshMovementEntityIds: completed, updated", updated, "of", rows.length, "movements")
+    log("movements.refresh_entity_ids.done", { userId, updated, total: rows.length }, "movements")
+    return updated
+  } catch (err) {
+    console.error("[movement-classify] refreshMovementEntityIds: error:", err)
+    throw err
+  } finally {
+    console.log("[movement-classify] refreshMovementEntityIds: releasing lock")
+    await query("SELECT pg_advisory_unlock(hashtext('movements:' || $1))", [userId])
+  }
 }

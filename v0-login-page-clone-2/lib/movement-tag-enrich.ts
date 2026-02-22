@@ -413,8 +413,11 @@ export async function tagMovements(userId: string): Promise<{
   owner_dependency: OwnerDependency
   working_capital: WorkingCapitalSignals
 }> {
+  console.log("[movement-tag-enrich] tagMovements: starting for user:", userId)
   await ensureMovementsSchema()
 
+  console.log("[movement-tag-enrich] tagMovements: fetching movements...")
+  const startTime = Date.now()
   const movements = await query<CanonicalMovement & { movement_type: string }>(
     `SELECT m.id, m.user_id, m.date AS occurred_at, m.direction, m.amount::float,
             m.currency, m.raw_description, m.movement_type,
@@ -439,6 +442,7 @@ export async function tagMovements(userId: string): Promise<{
       metadata: { ...md, cash_account_name: row.account_id },
     } as CanonicalMovement
   }))
+  console.log("[movement-tag-enrich] tagMovements: fetched", movements.length, "movements in", Date.now() - startTime, "ms")
 
   const movementIds = movements.map((m) => m.id)
   const overridesByMovementId = new Map<string, {
