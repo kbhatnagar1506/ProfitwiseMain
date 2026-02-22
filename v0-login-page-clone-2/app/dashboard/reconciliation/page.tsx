@@ -85,9 +85,12 @@ export default function ReconciliationPage() {
     setRunning(true)
     try {
       await fetch("/api/ar-ap-step?run=true")
-      setData(prev => prev ? { ...prev, is_reconciling: true } : null)
+      // Immediately fetch to get the updated is_reconciling status
+      await fetchData()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error")
+    } finally {
+      setRunning(false)
     }
   }
 
