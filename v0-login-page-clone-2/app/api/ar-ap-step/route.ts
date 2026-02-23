@@ -162,15 +162,20 @@ async function runReconciliationInBackground(userId: string) {
   console.log("[ar-ap-step] Starting background reconciliation for user:", userId)
   const warnings: string[] = []
   const startTime = Date.now()
+  const MAX_DURATION_MS = 5 * 60 * 1000 // 5 minute timeout
   
   try {
     console.log("[ar-ap-step] Step 1: Fetching invoices...")
     const invoices = await fetchInvoicesForReconciliation(userId)
     console.log("[ar-ap-step] Step 1 complete: fetched", invoices.length, "invoices in", Date.now() - startTime, "ms")
     
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
     console.log("[ar-ap-step] Step 2: Fetching bills...")
     const bills = await fetchBillsForReconciliation(userId)
     console.log("[ar-ap-step] Step 2 complete: fetched", bills.length, "bills in", Date.now() - startTime, "ms")
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
     
     const obligations = computeAPStateFromBills(bills.filter(b => b.status !== "paid"))
     
@@ -178,14 +183,20 @@ async function runReconciliationInBackground(userId: string) {
     await refreshEntityAliasesFromAccounting(userId)
     console.log("[ar-ap-step] Step 3 complete in", Date.now() - startTime, "ms")
     
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
     console.log("[ar-ap-step] Step 4: Refreshing movement entity IDs...")
     await refreshMovementEntityIds(userId)
     console.log("[ar-ap-step] Step 4 complete in", Date.now() - startTime, "ms")
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
     
     // Ensure movement tags are up-to-date before reconciliation
     console.log("[ar-ap-step] Step 5: Running tagMovements...")
     await tagMovements(userId)
     console.log("[ar-ap-step] Step 5 complete in", Date.now() - startTime, "ms")
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
     
     // Run rule-based waterfall (Stages 0-3)
     console.log("[ar-ap-step] Step 6: Running financial brain...")
@@ -195,6 +206,8 @@ async function runReconciliationInBackground(userId: string) {
     })
     console.log("[ar-ap-step] Step 6 complete in", Date.now() - startTime, "ms")
     
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
     // Run LLM Stage 4 on ALL unreconciled movements (not just flagged ones)
     console.log("[ar-ap-step] Step 7: Running LLM Stage 4...")
     const unreconciledMovements = await getAllUnreconciledMovements(userId)
@@ -202,6 +215,8 @@ async function runReconciliationInBackground(userId: string) {
     
     if (unreconciledMovements.length > 0) {
       console.log("[ar-ap-step] Step 7b: Preparing invoice/bill data for LLM...")
+      
+      if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
       
       // Prepare invoice/bill data for LLM matching
       // Filter to only open/overdue invoices and bills (exclude paid ones)
@@ -255,6 +270,8 @@ async function runReconciliationInBackground(userId: string) {
       console.log("[ar-ap-step] No unreconciled movements for LLM Stage 4")
     }
     
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
     // Build entity profiles after reconciliation completes
     console.log("[ar-ap-step] Step 8: Building entity profiles...")
     let profilesBuilt = 0
@@ -262,6 +279,8 @@ async function runReconciliationInBackground(userId: string) {
     try {
       profilesBuilt = await buildEntityProfiles(userId)
       console.log("[ar-ap-step] Step 8 complete: Entity profiles built:", profilesBuilt, "in", Date.now() - startTime, "ms")
+      
+      if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
       
       // Generate AI narratives for top entities - await to ensure completion before lock release
       console.log("[ar-ap-step] Step 9: Refreshing entity narratives...")
