@@ -441,6 +441,15 @@ export async function GET(request: Request) {
     },
   }
 
+  // Build suggested matches from movement_attributions
+  const suggestedMatches = await buildSuggestedMatches(user.id, enrichedInvoices, enrichedBills)
+  
+  // Build reconciled movements list
+  const reconciledMovements = await buildReconciledMovements(user.id)
+  
+  // Build excluded movements list
+  const excludedMovements = await buildExcludedMovements(user.id)
+
   return NextResponse.json({
     ar: {
       ...ar,
@@ -456,6 +465,31 @@ export async function GET(request: Request) {
     waterfall_review,
     is_reconciling: reconciliationStatus.is_running,
     reconciliation_status: reconciliationStatus,
+    // NEW: Clearing House data
+    suggested_matches: suggestedMatches,
+    movements: {
+      unmatched_inflows: recon.unmatched_inflows.map(m => ({
+        id: m.movement_id,
+        date: m.date,
+        amount: m.amount,
+        description: m.display_name || m.counterparty || "Unknown",
+        counterparty: m.counterparty,
+        economic_class: m.economic_class,
+        suggested_match: suggestedMatches.ar.find(s => s.movement_id === m.movement_id) || 
+                        suggestedMatches.ap.find(s => s.movement_id === m.movement_id),
+      })),
+      unmatched_outflows: recon.unmatched_outflows.map(m => ({
+        id: m.movement_id,
+        date: m.date,
+        amount: m.amount,
+        description: m.display_name || m.counterparty || "Unknown",
+        counterparty: m.counterparty,
+        economic_class: m.economic_class,
+        suggested_match: suggestedMatches.ap.find(s => s.movement_id === m.movement_id),
+      })),
+    },
+    reconciled_movements: reconciledMovements,
+    excluded_movements: excludedMovements,
   })
 }
 
@@ -606,6 +640,171 @@ function computeApReconciliationSummary(bills: OutstandingBill[]) {
     discrepancy: r2(discrepancy),
     suspicious_count: suspicious.length,
     suspicious_amount: r2(suspiciousAmount),
+  }
+}
+
+/**
+ * Build suggested matches from movement_attributions
+ */
+async function buildSuggestedMatches(
+  userId: string,
+  invoices: OutstandingInvoice[],
+  bills: OutstandingBill[]
+) {
+  const { rows: attributions } = await query<{
+    movement_id: string
+    reference_id: string | null
+    component_type: string
+    confidence: string
+    source: string
+    metadata: any
+  }>(
+    `SELECT DISTINCT ON (movement_id, component_type, reference_id)
+       a.movement_id, a.reference_id, a.component_type, 
+       a.confidence::text, a.source, a.metadata
+     FROM movement_attributions a
+     WHERE a.user_id = $1 
+       AND a.source IN ('rule', 'llm', 'model')
+       AND a.confidence >= 0.6
+       AND a.reference_id IS NOT NULL
+     ORDER BY movement_id, component_type, reference_id, a.confidence DESC`,
+    [userId]
+  )
+
+  const arMatches = attributions
+    .filter(a => a.component_type === 'ar')
+    .map(a => {
+      const confidence = parseFloat(a.confidence)
+      const invoice = invoices.find(i => i.invoice_id === a.reference_id)
+      return {
+        movement_id: a.movement_id,
+        invoice_id: a.reference_id,
+        confidence,
+        reason: getMatchReason(a.source, a.metadata, confidence),
+        matched_amount: invoice?.amount || 0,
+        waterfall_stage: a.metadata?.waterfall_stage,
+        auto_accepted: confidence >= 0.95,
+      }
+    })
+
+  const apMatches = attributions
+    .filter(a => a.component_type === 'ap')
+    .map(a => {
+      const confidence = parseFloat(a.confidence)
+      const bill = bills.find(b => b.bill_id === a.reference_id)
+      return {
+        movement_id: a.movement_id,
+        bill_id: a.reference_id,
+        confidence,
+        reason: getMatchReason(a.source, a.metadata, confidence),
+        matched_amount: bill?.amount || 0,
+        waterfall_stage: a.metadata?.waterfall_stage,
+        auto_accepted: confidence >= 0.95,
+      }
+    })
+
+  return { ar: arMatches, ap: apMatches }
+}
+
+/**
+ * Get human-readable reason for a match
+ */
+function getMatchReason(source: string, metadata: any, confidence: number): string {
+  if (source === 'rule') {
+    const stage = metadata?.waterfall_stage
+    if (stage === 0) return "Direct link (Stage 0)"
+    if (stage === 1) return "Exact match (Stage 1)"
+    if (stage === 2) return "Processor fee band (Stage 2)"
+    if (stage === 3) return "FIFO match (Stage 3)"
+    return "Rule-based match"
+  }
+  if (source === 'llm') {
+    if (confidence >= 0.88) return "LLM high confidence"
+    if (confidence >= 0.75) return "LLM medium confidence"
+    return "LLM low confidence"
+  }
+  if (source === 'model') return "Model-based match"
+  return "Suggested match"
+}
+
+/**
+ * Build list of reconciled movements
+ */
+async function buildReconciledMovements(userId: string) {
+  const { rows } = await query<{
+    movement_id: string
+    reference_id: string
+    component_type: string
+    source: string
+    confidence: string
+    matched_at: string
+  }>(
+    `SELECT DISTINCT ON (movement_id, component_type, reference_id)
+       a.movement_id, a.reference_id, a.component_type, 
+       a.source, a.confidence::text, a.created_at::text AS matched_at
+     FROM movement_attributions a
+     WHERE a.user_id = $1 
+       AND a.reference_id IS NOT NULL
+     ORDER BY movement_id, component_type, reference_id, a.created_at DESC
+     LIMIT 500`,
+    [userId]
+  )
+
+  return {
+    matched: rows.map(r => ({
+      movement_id: r.movement_id,
+      matched_to: r.reference_id,
+      matched_at: r.matched_at,
+      matched_by: r.source === 'user' ? 'user' : 'ai',
+      confidence: parseFloat(r.confidence),
+      amount_matched: 0, // Will be populated by frontend from movement data
+    })),
+  }
+}
+
+/**
+ * Build list of excluded movements
+ */
+async function buildExcludedMovements(userId: string) {
+  const { rows } = await query<{
+    id: string
+    date: string
+    amount: string
+    description: string
+    economic_class: string
+  }>(
+    `SELECT m.id, m.date::text, ABS(m.amount::float)::text AS amount, 
+            COALESCE(m.raw_description, m.counterparty, 'Unknown') AS description,
+            mt.economic_class
+     FROM movements m
+     LEFT JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
+     WHERE m.user_id = $1
+       AND m.duplicate_of IS NULL
+       AND mt.economic_class IN (
+         'transfer', 'owner_draw', 'owner_contribution', 
+         'bank_fee', 'bank_fee_refund', 'interest', 
+         'processor_fee', 'processor_payout',
+         'opening_balance', 'account_verification', 'system_adjustment', 
+         'settlement_in', 'settlement_adjustment'
+       )
+     ORDER BY m.date DESC
+     LIMIT 100`,
+    [userId]
+  )
+
+  const total_amount = rows.reduce((sum, r) => sum + parseFloat(r.amount), 0)
+
+  return {
+    count: rows.length,
+    total_amount: r2(total_amount),
+    movements: rows.map(r => ({
+      id: r.id,
+      date: r.date,
+      amount: parseFloat(r.amount),
+      description: r.description,
+      economic_class: r.economic_class,
+      reason: r.economic_class, // The economic_class is the reason it's excluded
+    })),
   }
 }
 
