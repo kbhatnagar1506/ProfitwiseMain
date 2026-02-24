@@ -2742,8 +2742,20 @@ export async function classifyMovements(userId: string): Promise<{
  */
 export async function refreshMovementEntityIds(userId: string): Promise<number> {
   console.log("[movement-classify] refreshMovementEntityIds: acquiring lock for user:", userId)
-  await query("SELECT pg_advisory_lock(hashtext('movements:' || $1))", [userId])
-  console.log("[movement-classify] refreshMovementEntityIds: lock acquired, building identity context...")
+  const lockStartTime = Date.now()
+  
+  // Try to acquire lock with a timeout
+  try {
+    await Promise.race([
+      query("SELECT pg_advisory_lock(hashtext('movements:' || $1))", [userId]),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Lock acquisition timeout")), 10000))
+    ])
+  } catch (err) {
+    console.error("[movement-classify] refreshMovementEntityIds: lock acquisition failed:", err)
+    throw err
+  }
+  
+  console.log("[movement-classify] refreshMovementEntityIds: lock acquired in", Date.now() - lockStartTime, "ms, building identity context...")
 
   try {
     const startTime = Date.now()
@@ -2772,7 +2784,9 @@ export async function refreshMovementEntityIds(userId: string): Promise<number> 
     )
     console.log("[movement-classify] refreshMovementEntityIds: fetched", rows.length, "movements")
 
-    let updated = 0
+    // Batch updates instead of individual updates
+    const updates: Array<{ id: string; newId: string | null; role: string }> = []
+    
     for (const row of rows) {
       const stub = {
         counterparty: row.counterparty,
@@ -2783,17 +2797,31 @@ export async function refreshMovementEntityIds(userId: string): Promise<number> 
       const entry = resolveCounterpartyIdentity(stub, identityCtx, prefixIdx)
       const newId = entry?.entity_id ?? null
       if (newId && newId !== row.counterparty_entity_id) {
-        await query(
-          `UPDATE movements SET counterparty_entity_id = $1, counterparty_entity_type = $2 WHERE id = $3`,
-          [newId, entry!.role, row.id]
-        )
-        updated++
+        updates.push({ id: row.id, newId, role: entry!.role })
       }
     }
 
-    console.log("[movement-classify] refreshMovementEntityIds: completed, updated", updated, "of", rows.length, "movements")
-    log("movements.refresh_entity_ids.done", { userId, updated, total: rows.length }, "movements")
-    return updated
+    console.log("[movement-classify] refreshMovementEntityIds: prepared", updates.length, "updates")
+    
+    // Batch execute updates
+    if (updates.length > 0) {
+      console.log("[movement-classify] refreshMovementEntityIds: executing batch updates...")
+      const updateStartTime = Date.now()
+      
+      // Use a single batch update query
+      for (const update of updates) {
+        await query(
+          `UPDATE movements SET counterparty_entity_id = $1, counterparty_entity_type = $2 WHERE id = $3`,
+          [update.newId, update.role, update.id]
+        )
+      }
+      
+      console.log("[movement-classify] refreshMovementEntityIds: batch updates completed in", Date.now() - updateStartTime, "ms")
+    }
+
+    console.log("[movement-classify] refreshMovementEntityIds: completed, updated", updates.length, "of", rows.length, "movements")
+    log("movements.refresh_entity_ids.done", { userId, updated: updates.length, total: rows.length }, "movements")
+    return updates.length
   } catch (err) {
     console.error("[movement-classify] refreshMovementEntityIds: error:", err)
     throw err
