@@ -113,7 +113,7 @@ export async function GET(request: Request) {
        JOIN movements m2 ON m1.user_id = m2.user_id
          AND ABS(m1.amount::float) = ABS(m2.amount::float)
          AND m1.direction = 'outflow' AND m2.direction = 'inflow'
-         AND (m2.date - m1.date) >= INTERVAL '0 days' AND (m2.date - m1.date) <= INTERVAL '3 days'
+         AND m2.date >= m1.date AND m2.date <= m1.date + INTERVAL '3 days'
        WHERE m1.user_id = $1
          AND m1.duplicate_of IS NULL AND m2.duplicate_of IS NULL
        ORDER BY m1.date DESC`,
