@@ -185,10 +185,9 @@ async function runReconciliationInBackground(userId: string) {
     
     if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
     
-    // Skip refreshMovementEntityIds for now - it's too slow
-    // console.log("[ar-ap-step] Step 4: Refreshing movement entity IDs...")
-    // await refreshMovementEntityIds(userId)
-    // console.log("[ar-ap-step] Step 4 complete in", Date.now() - startTime, "ms")
+    console.log("[ar-ap-step] Step 4: Refreshing movement entity IDs...")
+    await refreshMovementEntityIds(userId)
+    console.log("[ar-ap-step] Step 4 complete in", Date.now() - startTime, "ms")
     
     if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
     
