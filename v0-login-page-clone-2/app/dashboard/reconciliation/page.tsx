@@ -5,65 +5,93 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer"
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Input } from "@/components/ui/input"
-import { CheckCircle2, XCircle, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Sparkles, ArrowRight } from "lucide-react"
+import { RefreshCw, Search, ArrowRight, Copy, Mail, Phone, ExternalLink, Sparkles, Clock } from "lucide-react"
+
+interface SuggestedMatch {
+  movement_id: string
+  invoice_id?: string
+  bill_id?: string
+  confidence: number
+  reason: string
+  matched_amount: number
+  waterfall_stage?: number
+  auto_accepted: boolean
+}
 
 interface Movement {
   id: string
   date: string
-  direction: "inflow" | "outflow"
   amount: number
   description: string
   counterparty: string | null
   economic_class: string | null
-  movement_type: string | null
+  suggested_match?: SuggestedMatch
 }
 
-interface OutstandingInvoice {
-  invoice_id: string
-  customer_name: string
+interface ReconciledMovement {
+  movement_id: string
+  matched_to: string
+  matched_at: string
+  matched_by: "ai" | "user"
+  confidence: number
+  amount_matched: number
+}
+
+interface ExcludedMovement {
+  id: string
+  date: string
   amount: number
-  amount_due: number
-  due_date: string | null
-  status: "open" | "overdue" | "partially_paid" | "paid"
-  reconciliation_status?: "matched" | "unmatched" | "partial"
+  description: string
+  economic_class: string
+  reason: string
 }
 
-interface OutstandingBill {
-  bill_id: string
-  vendor_name: string
-  amount: number
-  amount_due: number
-  due_date: string | null
-  status: "open" | "overdue" | "partially_paid" | "paid"
-  reconciliation_status?: "matched" | "unmatched" | "partial"
-}
-
-interface ClearingHouseData {
-  unmatched_movements: {
-    inflows: Movement[]
-    outflows: Movement[]
-    total_inflows: number
-    total_outflows: number
+interface ARAPStepResponse {
+  ar?: {
+    invoices: any[]
+    paid_invoices: any[]
+    reconciliation_summary: {
+      match_rate: number
+      discrepancy: number
+    }
   }
-  open_ar: OutstandingInvoice[]
-  open_ap: OutstandingBill[]
-  total_ar_waiting: number
-  total_ap_waiting: number
-  ai_suggestions: {
-    high_confidence: any[]
-    medium_confidence: any[]
-    low_confidence: any[]
+  ap?: {
+    bills: any[]
+    paid_bills: any[]
+    reconciliation_summary: {
+      match_rate: number
+      discrepancy: number
+    }
   }
-  internal_transfers: {
-    paired: any[]
-    unpaired: Movement[]
+  recon?: {
+    unmatched_inflows: any[]
+    unmatched_outflows: any[]
+    total_unmatched_inflows: number
+    total_unmatched_outflows: number
   }
-  reconciliation_stats: {
-    total_matched_today: number
-    total_matched_this_week: number
-    match_rate_pct: number
+  lifetime?: {
+    ar: { outstanding: number }
+    ap: { outstanding: number }
+  }
+  is_reconciling: boolean
+  reconciliation_status: any
+  suggested_matches?: {
+    ar: SuggestedMatch[]
+    ap: SuggestedMatch[]
+  }
+  movements?: {
+    unmatched_inflows: Movement[]
+    unmatched_outflows: Movement[]
+  }
+  reconciled_movements?: {
+    matched: ReconciledMovement[]
+  }
+  excluded_movements?: {
+    count: number
+    total_amount: number
+    movements: ExcludedMovement[]
   }
 }
 
@@ -76,19 +104,27 @@ function formatDate(d: string | null) {
   return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }
 
-export default function ClearingHousePage() {
-  const [data, setData] = useState<ClearingHouseData | null>(null)
+function getConfidenceBadge(confidence: number) {
+  if (confidence >= 0.88) return { label: `High ${Math.round(confidence * 100)}%`, color: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" }
+  if (confidence >= 0.75) return { label: `Medium ${Math.round(confidence * 100)}%`, color: "bg-amber-500/10 text-amber-400 border-amber-500/20" }
+  return { label: `Low ${Math.round(confidence * 100)}%`, color: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20" }
+}
+
+export default function ReconciliationPage() {
+  const [data, setData] = useState<ARAPStepResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedMovement, setSelectedMovement] = useState<Movement | null>(null)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
-  const [selectedInvoices, setSelectedInvoices] = useState<OutstandingInvoice[]>([])
-  const [selectedBills, setSelectedBills] = useState<OutstandingBill[]>([])
-  const [isMatching, setIsMatching] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searchResults, setSearchResults] = useState<any[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [selectedMatches, setSelectedMatches] = useState<Array<{ reference_id: string; component_type: "ar" | "ap"; amount: number }>>([])
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch("/api/dashboard/reconciliation/clearing-house")
+      const res = await fetch("/api/ar-ap-step")
       if (!res.ok) throw new Error("Failed to fetch")
       const json = await res.json()
       setData(json)
@@ -104,50 +140,62 @@ export default function ClearingHousePage() {
     fetchData()
   }, [fetchData])
 
-  // Poll every 5 seconds
   useEffect(() => {
-    const timer = setInterval(fetchData, 5000)
-    return () => clearInterval(timer)
-  }, [fetchData])
+    if (!data?.is_reconciling) return
+    const timer = setTimeout(() => fetchData(), 3000)
+    return () => clearTimeout(timer)
+  }, [data?.is_reconciling, fetchData])
 
   const handleRunReconciliation = async () => {
+    setRunning(true)
     try {
       await fetch("/api/ar-ap-step?run=true")
-      setTimeout(fetchData, 1000)
+      await fetchData()
     } catch (err) {
-      console.error(err)
+      setError(err instanceof Error ? err.message : "Error")
+    } finally {
+      setRunning(false)
     }
   }
 
-  const handleClearMatch = async (movement: Movement, invoice?: OutstandingInvoice, bill?: OutstandingBill) => {
-    setIsMatching(true)
+  const handleSearch = async (query: string, type: "ar" | "ap") => {
+    if (!query.trim()) {
+      setSearchResults([])
+      return
+    }
+    setSearchLoading(true)
     try {
-      const target = invoice || bill
-      if (!target) return
-
-      const componentType = invoice ? "ar" : "ap"
-      const referenceId = invoice ? invoice.invoice_id : bill!.bill_id
-      const entityId = `${componentType}://${componentType === "ar" ? "invoice" : "bill"}/${referenceId}`
-
-      const res = await fetch("/api/dashboard/reconciliation/apply-match", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          movement_id: movement.id,
-          reference_id: referenceId,
-          component_type: componentType,
-          entity_id: entityId,
-          amount: movement.amount,
-        }),
-      })
-
+      const res = await fetch(`/api/dashboard/reconciliation/search?q=${encodeURIComponent(query)}&type=${type}`)
       if (res.ok) {
-        await fetchData()
+        const json = await res.json()
+        setSearchResults(json.results)
       }
     } catch (err) {
       console.error(err)
     } finally {
-      setIsMatching(false)
+      setSearchLoading(false)
+    }
+  }
+
+  const handleConfirmMatch = async () => {
+    if (!selectedMovement || selectedMatches.length === 0) return
+    try {
+      const res = await fetch("/api/dashboard/reconciliation/split-match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          movement_id: selectedMovement.id,
+          matches: selectedMatches,
+        }),
+      })
+      if (res.ok) {
+        setIsDrawerOpen(false)
+        setSelectedMovement(null)
+        setSelectedMatches([])
+        await fetchData()
+      }
+    } catch (err) {
+      console.error(err)
     }
   }
 
@@ -166,19 +214,46 @@ export default function ClearingHousePage() {
     return <div className="p-8 text-red-400">{error || "No data"}</div>
   }
 
-  const totalUnmatched = data.unmatched_movements.total_inflows + data.unmatched_movements.total_outflows
+  if (data.is_reconciling && !data.ar) {
+    return (
+      <div className="p-8 space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-white">Reconciliation</h1>
+            <p className="text-zinc-400 mt-1">Running reconciliation...</p>
+          </div>
+        </div>
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-8 text-center">
+          <div className="inline-flex items-center gap-3">
+            <div className="h-5 w-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-zinc-300">Reconciliation in progress. Polling for updates...</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const unmatched_inflows = data.movements?.unmatched_inflows || []
+  const unmatched_outflows = data.movements?.unmatched_outflows || []
+  const totalUnmatched = (data.recon?.total_unmatched_inflows || 0) + (data.recon?.total_unmatched_outflows || 0)
+  const openAR = data.lifetime?.ar?.outstanding || 0
+  const openAP = data.lifetime?.ap?.outstanding || 0
 
   return (
     <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white">Clearing House</h1>
-          <p className="text-zinc-400 mt-1">Match bank cash to open AR/AP</p>
+          <h1 className="text-3xl font-bold text-white">Reconciliation</h1>
+          <p className="text-zinc-400 mt-1">Clearing House - Match bank cash to AR/AP</p>
         </div>
-        <Button onClick={handleRunReconciliation} className="bg-emerald-600 hover:bg-emerald-700">
+        <Button
+          onClick={handleRunReconciliation}
+          disabled={data.is_reconciling || running}
+          className="bg-emerald-600 hover:bg-emerald-700"
+        >
           <RefreshCw className="h-4 w-4 mr-2" />
-          Run Reconciliation
+          {data.is_reconciling ? "Running..." : "Run Reconciliation"}
         </Button>
       </div>
 
@@ -189,28 +264,28 @@ export default function ClearingHousePage() {
           <p className={`text-2xl font-bold mt-2 ${totalUnmatched > 0 ? "text-red-400" : "text-emerald-400"}`}>
             {formatCurrency(totalUnmatched)}
           </p>
-          <p className="text-xs text-zinc-400 mt-2">{data.unmatched_movements.inflows.length + data.unmatched_movements.outflows.length} movements</p>
+          <p className="text-xs text-zinc-400 mt-2">{unmatched_inflows.length + unmatched_outflows.length} movements</p>
         </div>
 
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-xs text-zinc-500 uppercase tracking-wide">Open AR Waiting</p>
-          <p className="text-2xl font-bold mt-2 text-emerald-400">{formatCurrency(data.total_ar_waiting)}</p>
-          <p className="text-xs text-zinc-400 mt-2">{data.open_ar.length} invoices</p>
+          <p className="text-2xl font-bold mt-2 text-emerald-400">{formatCurrency(openAR)}</p>
+          <p className="text-xs text-zinc-400 mt-2">{data.ar?.invoices?.length || 0} invoices</p>
         </div>
 
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-xs text-zinc-500 uppercase tracking-wide">Open AP Waiting</p>
-          <p className="text-2xl font-bold mt-2 text-amber-400">{formatCurrency(data.total_ap_waiting)}</p>
-          <p className="text-xs text-zinc-400 mt-2">{data.open_ap.length} bills</p>
+          <p className="text-2xl font-bold mt-2 text-amber-400">{formatCurrency(openAP)}</p>
+          <p className="text-xs text-zinc-400 mt-2">{data.ap?.bills?.length || 0} bills</p>
         </div>
       </div>
 
       {/* Tabs */}
       <Tabs defaultValue="review" className="w-full">
         <TabsList className="bg-[#141414] border border-white/10">
-          <TabsTrigger value="review">Review Queue ({data.unmatched_movements.inflows.length + data.unmatched_movements.outflows.length})</TabsTrigger>
-          <TabsTrigger value="reconciled">Reconciled</TabsTrigger>
-          <TabsTrigger value="transfers">Internal Transfers ({data.internal_transfers.paired.length + data.internal_transfers.unpaired.length})</TabsTrigger>
+          <TabsTrigger value="review">Review Queue ({unmatched_inflows.length + unmatched_outflows.length})</TabsTrigger>
+          <TabsTrigger value="reconciled">Reconciled ({data.reconciled_movements?.matched?.length || 0})</TabsTrigger>
+          <TabsTrigger value="excluded">Excluded ({data.excluded_movements?.count || 0})</TabsTrigger>
         </TabsList>
 
         {/* Review Queue Tab */}
@@ -220,101 +295,99 @@ export default function ClearingHousePage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-white/10">
-                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3 w-[30%]">Bank Movement</th>
-                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3 w-[20%]">Match</th>
-                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3 w-[40%]">Ledger</th>
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3 w-[30%]">Bank Side</th>
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3 w-[20%]">Match Bridge</th>
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3 w-[40%]">Ledger Side</th>
                     <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3 w-[10%]">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[...data.unmatched_movements.inflows, ...data.unmatched_movements.outflows].map(movement => {
-                    // Find matching AR/AP suggestion
-                    const suggestion = data.ai_suggestions.high_confidence.find(s => s.movement_id === movement.id)
-                    const matchedInvoice = suggestion && suggestion.component_type === "ar" 
-                      ? data.open_ar.find(i => i.invoice_id === suggestion.reference_id)
-                      : undefined
-                    const matchedBill = suggestion && suggestion.component_type === "ap"
-                      ? data.open_ap.find(b => b.bill_id === suggestion.reference_id)
-                      : undefined
-
+                  {[...unmatched_inflows, ...unmatched_outflows].map(movement => {
+                    const badge = movement.suggested_match ? getConfidenceBadge(movement.suggested_match.confidence) : null
                     return (
                       <tr key={movement.id} className="border-b border-white/5 hover:bg-white/[0.02]">
-                        {/* Left: Bank Movement */}
                         <td className="px-4 py-3">
                           <div className="space-y-1">
                             <p className="text-xs text-zinc-400">{formatDate(movement.date)}</p>
                             <p className="text-sm text-white truncate">{movement.description}</p>
-                            <p className={`text-sm font-mono tabular-nums ${movement.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
-                              {movement.direction === "inflow" ? "+" : "-"}{formatCurrency(movement.amount)}
+                            <p className={`text-sm font-mono tabular-nums ${movement.amount > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                              {movement.amount > 0 ? "+" : ""}{formatCurrency(movement.amount)}
                             </p>
                           </div>
                         </td>
 
-                        {/* Middle: Match Badge */}
                         <td className="px-4 py-3">
-                          {suggestion ? (
+                          {badge ? (
                             <div className="flex items-center gap-2">
-                              <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                {Math.round(suggestion.confidence * 100)}% Match
+                              <Badge className={`${badge.color} border`}>
+                                {badge.label}
                               </Badge>
                               <ArrowRight className="h-4 w-4 text-zinc-500" />
                             </div>
                           ) : (
                             <Badge className="bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
-                              No Match
+                              Manual Review
                             </Badge>
                           )}
                         </td>
 
-                        {/* Right: Ledger */}
                         <td className="px-4 py-3">
-                          {matchedInvoice ? (
+                          {movement.suggested_match ? (
                             <div className="space-y-1">
                               <div className="flex items-center gap-2">
-                                <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs">AR</Badge>
-                                <span className="text-sm text-white">{matchedInvoice.customer_name}</span>
+                                <Badge className={`${movement.suggested_match.invoice_id ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"} border text-xs`}>
+                                  {movement.suggested_match.invoice_id ? "AR" : "AP"}
+                                </Badge>
+                                <span className="text-sm text-white">
+                                  {movement.suggested_match.invoice_id ? "Invoice" : "Bill"}
+                                </span>
                               </div>
-                              <p className="text-xs text-zinc-400">Inv-{matchedInvoice.invoice_id.slice(-4)}</p>
-                              <p className="text-sm font-mono tabular-nums text-zinc-300">{formatCurrency(matchedInvoice.amount_due)}</p>
-                            </div>
-                          ) : matchedBill ? (
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2">
-                                <Badge className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs">AP</Badge>
-                                <span className="text-sm text-white">{matchedBill.vendor_name}</span>
-                              </div>
-                              <p className="text-xs text-zinc-400">Bill-{matchedBill.bill_id.slice(-4)}</p>
-                              <p className="text-sm font-mono tabular-nums text-zinc-300">{formatCurrency(matchedBill.amount_due)}</p>
+                              <p className="text-xs text-zinc-400">{movement.suggested_match.reason}</p>
+                              <p className="text-sm font-mono tabular-nums text-zinc-300">{formatCurrency(movement.suggested_match.matched_amount)}</p>
                             </div>
                           ) : (
                             <p className="text-sm text-zinc-400">—</p>
                           )}
                         </td>
 
-                        {/* Action */}
                         <td className="px-4 py-3">
-                          {matchedInvoice || matchedBill ? (
+                          {movement.suggested_match && movement.suggested_match.confidence >= 0.88 ? (
                             <Button
                               size="sm"
-                              onClick={() => handleClearMatch(movement, matchedInvoice, matchedBill)}
-                              disabled={isMatching}
                               className="bg-emerald-600 hover:bg-emerald-700 text-xs"
+                              onClick={async () => {
+                                const componentType = movement.suggested_match!.invoice_id ? "ar" : "ap"
+                                const referenceId = movement.suggested_match!.invoice_id || movement.suggested_match!.bill_id
+                                await fetch("/api/dashboard/reconciliation/apply-match", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    movement_id: movement.id,
+                                    reference_id: referenceId,
+                                    component_type: componentType,
+                                    entity_id: "",
+                                    amount: movement.suggested_match!.matched_amount,
+                                  }),
+                                })
+                                await fetchData()
+                              }}
                             >
-                              ✓ Clear
+                              ✓ Accept
                             </Button>
                           ) : (
                             <Button
                               size="sm"
                               variant="ghost"
+                              className="text-xs"
                               onClick={() => {
                                 setSelectedMovement(movement)
-                                setSelectedInvoices([])
-                                setSelectedBills([])
+                                setSelectedMatches([])
+                                setSearchQuery("")
+                                setSearchResults([])
                                 setIsDrawerOpen(true)
                               }}
-                              className="text-xs"
                             >
-                              Match
+                              ⋯ Match
                             </Button>
                           )}
                         </td>
@@ -329,49 +402,26 @@ export default function ClearingHousePage() {
 
         {/* Reconciled Tab */}
         <TabsContent value="reconciled" className="space-y-4">
-          <div className="bg-[#141414] border border-white/10 rounded-lg p-6 text-center">
-            <p className="text-zinc-400">Reconciled matches will appear here</p>
-            <p className="text-sm text-zinc-500 mt-2">Total matched this week: {data.reconciliation_stats.total_matched_this_week}</p>
-          </div>
-        </TabsContent>
-
-        {/* Internal Transfers Tab */}
-        <TabsContent value="transfers" className="space-y-4">
           <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-white/10">
                     <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Date</th>
-                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">From</th>
-                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">To</th>
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Description</th>
                     <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Amount</th>
-                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Status</th>
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Matched By</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.internal_transfers.paired.map((pair, idx) => (
-                    <tr key={idx} className="border-b border-white/5 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 text-sm text-zinc-400">—</td>
-                      <td className="px-4 py-3 text-sm text-white">Account A</td>
-                      <td className="px-4 py-3 text-sm text-white">Account B</td>
-                      <td className="px-4 py-3 text-sm font-mono tabular-nums text-zinc-300">{formatCurrency(pair.amount)}</td>
+                  {(data.reconciled_movements?.matched || []).map(m => (
+                    <tr key={m.movement_id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                      <td className="px-4 py-3 text-sm text-zinc-400">{formatDate(m.matched_at)}</td>
+                      <td className="px-4 py-3 text-sm text-white">{m.matched_to}</td>
+                      <td className="px-4 py-3 text-sm font-mono tabular-nums text-zinc-300">{formatCurrency(m.amount_matched)}</td>
                       <td className="px-4 py-3">
-                        <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs">
-                          Auto-Paired
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                  {data.internal_transfers.unpaired.map(transfer => (
-                    <tr key={transfer.id} className="border-b border-white/5 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 text-sm text-zinc-400">{formatDate(transfer.date)}</td>
-                      <td className="px-4 py-3 text-sm text-white">{transfer.description}</td>
-                      <td className="px-4 py-3 text-sm text-white">—</td>
-                      <td className="px-4 py-3 text-sm font-mono tabular-nums text-zinc-300">{formatCurrency(transfer.amount)}</td>
-                      <td className="px-4 py-3">
-                        <Badge className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs">
-                          Unpaired
+                        <Badge className={m.matched_by === "ai" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-blue-500/10 text-blue-400 border-blue-500/20"} variant="outline">
+                          {m.matched_by === "ai" ? "AI" : "User"}
                         </Badge>
                       </td>
                     </tr>
@@ -381,115 +431,142 @@ export default function ClearingHousePage() {
             </div>
           </div>
         </TabsContent>
+
+        {/* Excluded Tab */}
+        <TabsContent value="excluded" className="space-y-4">
+          <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-white/10">
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Date</th>
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Description</th>
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Amount</th>
+                    <th className="text-left text-xs text-zinc-500 uppercase tracking-wide px-4 py-3">Type</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.excluded_movements?.movements || []).map(m => (
+                    <tr key={m.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                      <td className="px-4 py-3 text-sm text-zinc-400">{formatDate(m.date)}</td>
+                      <td className="px-4 py-3 text-sm text-white">{m.description}</td>
+                      <td className="px-4 py-3 text-sm font-mono tabular-nums text-zinc-300">{formatCurrency(m.amount)}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-400">{m.economic_class}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </TabsContent>
       </Tabs>
 
-      {/* Manual Match Drawer */}
-      <Drawer open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
-        <DrawerContent className="bg-[#141414] border-t border-white/10">
-          <DrawerHeader>
-            <DrawerTitle className="text-white">Match Movement</DrawerTitle>
-          </DrawerHeader>
-          
+      {/* Manual Match Sheet */}
+      <Sheet open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
+        <SheetContent className="bg-[#141414] border-l border-white/10 w-full sm:max-w-2xl">
+          <SheetHeader>
+            <SheetTitle className="text-white">Manual Match</SheetTitle>
+          </SheetHeader>
+
           {selectedMovement && (
-            <div className="p-6 space-y-6">
-              {/* Frozen Header */}
+            <div className="space-y-6 mt-6">
+              {/* Frozen Movement */}
               <div className="bg-[#0A0A0A] border border-white/10 rounded-lg p-4">
-                <p className="text-xs text-zinc-500 uppercase tracking-wide">Selected Movement</p>
+                <p className="text-xs text-zinc-500 uppercase tracking-wide">Bank Transaction</p>
                 <div className="mt-3 space-y-2">
                   <p className="text-sm text-white">{selectedMovement.description}</p>
-                  <p className={`text-lg font-mono tabular-nums ${selectedMovement.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
-                    {selectedMovement.direction === "inflow" ? "+" : "-"}{formatCurrency(selectedMovement.amount)}
+                  <p className={`text-lg font-mono tabular-nums ${selectedMovement.amount > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {selectedMovement.amount > 0 ? "+" : ""}{formatCurrency(selectedMovement.amount)}
                   </p>
                 </div>
               </div>
 
-              {/* Tabs for AR/AP */}
-              <Tabs defaultValue="ar" className="w-full">
-                <TabsList className="bg-[#0A0A0A] border border-white/10">
-                  <TabsTrigger value="ar">Open Invoices (AR)</TabsTrigger>
-                  <TabsTrigger value="ap">Open Bills (AP)</TabsTrigger>
-                </TabsList>
+              {/* Search */}
+              <div className="space-y-3">
+                <p className="text-xs text-zinc-500 uppercase tracking-wide">Search Invoices/Bills</p>
+                <Input
+                  placeholder="Search by name or ID..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value)
+                    handleSearch(e.target.value, "ar")
+                  }}
+                  className="bg-[#0A0A0A] border-white/10"
+                />
+              </div>
 
-                <TabsContent value="ar" className="space-y-3 mt-4">
-                  {data.open_ar.map(invoice => (
+              {/* Search Results */}
+              {searchResults.length > 0 && (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {searchResults.map(result => (
                     <div
-                      key={invoice.invoice_id}
+                      key={result.id}
                       className="flex items-center gap-3 p-3 bg-[#0A0A0A] border border-white/10 rounded-lg cursor-pointer hover:border-emerald-500/50"
                       onClick={() => {
-                        if (selectedInvoices.find(i => i.invoice_id === invoice.invoice_id)) {
-                          setSelectedInvoices(selectedInvoices.filter(i => i.invoice_id !== invoice.invoice_id))
+                        const existing = selectedMatches.find(m => m.reference_id === result.id)
+                        if (existing) {
+                          setSelectedMatches(selectedMatches.filter(m => m.reference_id !== result.id))
                         } else {
-                          setSelectedInvoices([...selectedInvoices, invoice])
+                          setSelectedMatches([...selectedMatches, {
+                            reference_id: result.id,
+                            component_type: "ar",
+                            amount: Math.min(result.amount_due, Math.abs(selectedMovement.amount)),
+                          }])
                         }
                       }}
                     >
                       <input
                         type="checkbox"
-                        checked={selectedInvoices.some(i => i.invoice_id === invoice.invoice_id)}
+                        checked={selectedMatches.some(m => m.reference_id === result.id)}
                         onChange={() => {}}
                         className="w-4 h-4"
                       />
                       <div className="flex-1">
-                        <p className="text-sm text-white">{invoice.customer_name}</p>
-                        <p className="text-xs text-zinc-400">{formatCurrency(invoice.amount_due)} due</p>
+                        <p className="text-sm text-white">{result.entity_name}</p>
+                        <p className="text-xs text-zinc-400">{formatCurrency(result.amount_due)} due</p>
                       </div>
                     </div>
                   ))}
-                </TabsContent>
+                </div>
+              )}
 
-                <TabsContent value="ap" className="space-y-3 mt-4">
-                  {data.open_ap.map(bill => (
+              {/* Consumption Bar */}
+              {selectedMatches.length > 0 && (
+                <div className="bg-[#0A0A0A] border border-white/10 rounded-lg p-4 space-y-2">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-zinc-400">Matched</span>
+                    <span className="text-white font-mono">
+                      {formatCurrency(selectedMatches.reduce((sum, m) => sum + m.amount, 0))} / {formatCurrency(Math.abs(selectedMovement.amount))}
+                    </span>
+                  </div>
+                  <div className="w-full bg-zinc-700 rounded-full h-2">
                     <div
-                      key={bill.bill_id}
-                      className="flex items-center gap-3 p-3 bg-[#0A0A0A] border border-white/10 rounded-lg cursor-pointer hover:border-amber-500/50"
-                      onClick={() => {
-                        if (selectedBills.find(b => b.bill_id === bill.bill_id)) {
-                          setSelectedBills(selectedBills.filter(b => b.bill_id !== bill.bill_id))
-                        } else {
-                          setSelectedBills([...selectedBills, bill])
-                        }
+                      className="bg-emerald-500 h-2 rounded-full transition-all"
+                      style={{
+                        width: `${Math.min(100, (selectedMatches.reduce((sum, m) => sum + m.amount, 0) / Math.abs(selectedMovement.amount)) * 100)}%`,
                       }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedBills.some(b => b.bill_id === bill.bill_id)}
-                        onChange={() => {}}
-                        className="w-4 h-4"
-                      />
-                      <div className="flex-1">
-                        <p className="text-sm text-white">{bill.vendor_name}</p>
-                        <p className="text-xs text-zinc-400">{formatCurrency(bill.amount_due)} due</p>
-                      </div>
-                    </div>
-                  ))}
-                </TabsContent>
-              </Tabs>
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Action Buttons */}
-              <div className="flex gap-3 justify-end">
+              <div className="flex gap-3 justify-end pt-4">
                 <Button variant="ghost" onClick={() => setIsDrawerOpen(false)}>
                   Cancel
                 </Button>
                 <Button
-                  onClick={async () => {
-                    for (const invoice of selectedInvoices) {
-                      await handleClearMatch(selectedMovement, invoice)
-                    }
-                    for (const bill of selectedBills) {
-                      await handleClearMatch(selectedMovement, undefined, bill)
-                    }
-                    setIsDrawerOpen(false)
-                  }}
-                  disabled={selectedInvoices.length === 0 && selectedBills.length === 0}
+                  onClick={handleConfirmMatch}
+                  disabled={selectedMatches.length === 0}
                   className="bg-emerald-600 hover:bg-emerald-700"
                 >
-                  Match Selected
+                  Confirm Match
                 </Button>
               </div>
             </div>
           )}
-        </DrawerContent>
-      </Drawer>
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }
