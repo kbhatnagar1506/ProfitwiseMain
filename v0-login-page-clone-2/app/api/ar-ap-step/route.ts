@@ -92,6 +92,7 @@ async function releaseReconciliationLock(
   errorMessage?: string,
   warnings?: string[]
 ): Promise<void> {
+  console.log("[ar-ap-step] Releasing reconciliation lock with status:", status)
   // Store warnings in error_message field as JSON if present
   const messageToStore = warnings && warnings.length > 0
     ? JSON.stringify({ error: errorMessage, warnings })
@@ -104,6 +105,7 @@ async function releaseReconciliationLock(
      WHERE user_id = $1::uuid`,
     [userId, status, messageToStore]
   )
+  console.log("[ar-ap-step] Reconciliation lock released with status:", status)
 }
 
 /**
@@ -145,6 +147,13 @@ async function getReconciliationLockStatus(userId: string): Promise<Reconciliati
   const lock = rows[0]
   const elapsed = Date.now() - new Date(lock.started_at).getTime()
   const isRunning = lock.status === "running" && elapsed < LOCK_TIMEOUT_MS
+  
+  console.log("[ar-ap-step] getReconciliationLockStatus:", {
+    status: lock.status,
+    isRunning,
+    elapsed,
+    completed_at: lock.completed_at,
+  })
   
   return {
     is_running: isRunning,
