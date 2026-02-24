@@ -92,9 +92,8 @@ export async function GET(request: Request) {
     const { rows: aiSuggestions } = await query<Match>(
       `SELECT 
          ma.movement_id, ma.reference_id, ma.component_type, ma.entity_id,
-         ma.confidence, e.canonical_name as entity_name, ma.gross_amount as amount
+         ma.confidence, ma.entity_id as entity_name, ma.gross_amount as amount
        FROM movement_attributions ma
-       JOIN entities e ON ma.entity_id = e.id
        WHERE ma.user_id = $1 AND ma.source = 'llm' AND ma.confidence >= 0.7
        ORDER BY ma.confidence DESC
        LIMIT 50`,
@@ -131,15 +130,8 @@ export async function GET(request: Request) {
        WHERE m.user_id = $1 
          AND m.duplicate_of IS NULL
          AND mt.economic_class = 'transfer'
-         AND NOT EXISTS (
-           SELECT 1 FROM movements m2
-           WHERE m2.user_id = $1
-             AND ABS(m2.amount::float) = ABS(m.amount::float)
-             AND m2.direction != m.direction
-             AND m2.date - m.date BETWEEN INTERVAL '-3 days' AND INTERVAL '3 days'
-             AND m2.duplicate_of IS NULL
-         )
-       ORDER BY m.date DESC`,
+       ORDER BY m.date DESC
+       LIMIT 50`,
       [userId]
     )
 
