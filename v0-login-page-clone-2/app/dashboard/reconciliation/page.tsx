@@ -193,25 +193,39 @@ export default function ReconciliationPage() {
         setSelectedMovement(null)
         setSelectedMatches([])
         await fetchData()
+      } else {
+        const errorData = await res.json()
+        setError(errorData.error || "Failed to confirm match")
       }
     } catch (err) {
-      console.error(err)
+      setError(err instanceof Error ? err.message : "Error confirming match")
     }
   }
 
   if (loading) {
     return (
-      <div className="p-8 space-y-6">
+      <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
         <Skeleton className="h-12 w-64" />
         <div className="grid grid-cols-3 gap-4">
           {[1, 2, 3].map(i => <Skeleton key={i} className="h-24" />)}
         </div>
+        <Skeleton className="h-96" />
       </div>
     )
   }
 
   if (!data) {
-    return <div className="p-8 text-red-400">{error || "No data"}</div>
+    return (
+      <div className="p-8 bg-[#0A0A0A] min-h-screen">
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6 text-red-400">
+          <p className="font-semibold">Error loading reconciliation data</p>
+          <p className="text-sm mt-2">{error || "Unknown error"}</p>
+          <Button onClick={() => fetchData()} className="mt-4 bg-red-600 hover:bg-red-700">
+            Retry
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   if (data.is_reconciling && !data.ar) {
@@ -305,7 +319,7 @@ export default function ReconciliationPage() {
                   {[...unmatched_inflows, ...unmatched_outflows].map(movement => {
                     const badge = movement.suggested_match ? getConfidenceBadge(movement.suggested_match.confidence) : null
                     return (
-                      <tr key={movement.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                      <tr key={movement.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-150">
                         <td className="px-4 py-3">
                           <div className="space-y-1">
                             <p className="text-xs text-zinc-400">{formatDate(movement.date)}</p>
@@ -319,7 +333,7 @@ export default function ReconciliationPage() {
                         <td className="px-4 py-3">
                           {badge ? (
                             <div className="flex items-center gap-2">
-                              <Badge className={`${badge.color} border`}>
+                              <Badge className={`${badge.color} border transition-all duration-150`}>
                                 {badge.label}
                               </Badge>
                               <ArrowRight className="h-4 w-4 text-zinc-500" />
@@ -354,22 +368,30 @@ export default function ReconciliationPage() {
                           {movement.suggested_match && movement.suggested_match.confidence >= 0.88 ? (
                             <Button
                               size="sm"
-                              className="bg-emerald-600 hover:bg-emerald-700 text-xs"
+                              className="bg-emerald-600 hover:bg-emerald-700 text-xs transition-all duration-150"
                               onClick={async () => {
                                 const componentType = movement.suggested_match!.invoice_id ? "ar" : "ap"
                                 const referenceId = movement.suggested_match!.invoice_id || movement.suggested_match!.bill_id
-                                await fetch("/api/dashboard/reconciliation/apply-match", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({
-                                    movement_id: movement.id,
-                                    reference_id: referenceId,
-                                    component_type: componentType,
-                                    entity_id: "",
-                                    amount: movement.suggested_match!.matched_amount,
-                                  }),
-                                })
-                                await fetchData()
+                                try {
+                                  const res = await fetch("/api/dashboard/reconciliation/apply-match", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      movement_id: movement.id,
+                                      reference_id: referenceId,
+                                      component_type: componentType,
+                                      entity_id: "",
+                                      amount: movement.suggested_match!.matched_amount,
+                                    }),
+                                  })
+                                  if (res.ok) {
+                                    await fetchData()
+                                  } else {
+                                    setError("Failed to apply match")
+                                  }
+                                } catch (err) {
+                                  setError(err instanceof Error ? err.message : "Error")
+                                }
                               }}
                             >
                               ✓ Accept
@@ -378,7 +400,7 @@ export default function ReconciliationPage() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              className="text-xs"
+                              className="text-xs transition-all duration-150"
                               onClick={() => {
                                 setSelectedMovement(movement)
                                 setSelectedMatches([])
@@ -468,6 +490,12 @@ export default function ReconciliationPage() {
             <SheetTitle className="text-white">Manual Match</SheetTitle>
           </SheetHeader>
 
+          {error && (
+            <div className="mt-4 bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
           {selectedMovement && (
             <div className="space-y-6 mt-6">
               {/* Frozen Movement */}
@@ -484,24 +512,36 @@ export default function ReconciliationPage() {
               {/* Search */}
               <div className="space-y-3">
                 <p className="text-xs text-zinc-500 uppercase tracking-wide">Search Invoices/Bills</p>
-                <Input
-                  placeholder="Search by name or ID..."
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value)
-                    handleSearch(e.target.value, "ar")
-                  }}
-                  className="bg-[#0A0A0A] border-white/10"
-                />
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-500" />
+                  <Input
+                    placeholder="Search by name or ID..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value)
+                      handleSearch(e.target.value, "ar")
+                    }}
+                    className="bg-[#0A0A0A] border-white/10 pl-10"
+                  />
+                </div>
               </div>
 
               {/* Search Results */}
-              {searchResults.length > 0 && (
+              {searchLoading && (
+                <div className="text-center py-4 text-zinc-400">
+                  <div className="inline-flex items-center gap-2">
+                    <div className="h-4 w-4 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-sm">Searching...</span>
+                  </div>
+                </div>
+              )}
+
+              {!searchLoading && searchResults.length > 0 && (
                 <div className="space-y-2 max-h-64 overflow-y-auto">
                   {searchResults.map(result => (
                     <div
                       key={result.id}
-                      className="flex items-center gap-3 p-3 bg-[#0A0A0A] border border-white/10 rounded-lg cursor-pointer hover:border-emerald-500/50"
+                      className="flex items-center gap-3 p-3 bg-[#0A0A0A] border border-white/10 rounded-lg cursor-pointer hover:border-emerald-500/50 transition-colors duration-150"
                       onClick={() => {
                         const existing = selectedMatches.find(m => m.reference_id === result.id)
                         if (existing) {
@@ -530,6 +570,12 @@ export default function ReconciliationPage() {
                 </div>
               )}
 
+              {!searchLoading && searchQuery && searchResults.length === 0 && (
+                <div className="text-center py-4 text-zinc-400 text-sm">
+                  No results found
+                </div>
+              )}
+
               {/* Consumption Bar */}
               {selectedMatches.length > 0 && (
                 <div className="bg-[#0A0A0A] border border-white/10 rounded-lg p-4 space-y-2">
@@ -539,13 +585,18 @@ export default function ReconciliationPage() {
                       {formatCurrency(selectedMatches.reduce((sum, m) => sum + m.amount, 0))} / {formatCurrency(Math.abs(selectedMovement.amount))}
                     </span>
                   </div>
-                  <div className="w-full bg-zinc-700 rounded-full h-2">
+                  <div className="w-full bg-zinc-700 rounded-full h-2 overflow-hidden">
                     <div
-                      className="bg-emerald-500 h-2 rounded-full transition-all"
+                      className="bg-gradient-to-r from-emerald-500 to-emerald-400 h-2 rounded-full transition-all duration-300 ease-out"
                       style={{
                         width: `${Math.min(100, (selectedMatches.reduce((sum, m) => sum + m.amount, 0) / Math.abs(selectedMovement.amount)) * 100)}%`,
                       }}
                     />
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className={selectedMatches.reduce((sum, m) => sum + m.amount, 0) >= Math.abs(selectedMovement.amount) - 0.01 ? "text-emerald-400" : "text-amber-400"}>
+                      {selectedMatches.reduce((sum, m) => sum + m.amount, 0) >= Math.abs(selectedMovement.amount) - 0.01 ? "✓ Fully matched" : `Remaining: ${formatCurrency(Math.abs(selectedMovement.amount) - selectedMatches.reduce((sum, m) => sum + m.amount, 0))}`}
+                    </span>
                   </div>
                 </div>
               )}
