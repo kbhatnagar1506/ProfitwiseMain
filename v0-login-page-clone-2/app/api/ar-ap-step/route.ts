@@ -473,6 +473,7 @@ export async function GET(request: Request) {
         date: m.date,
         amount: m.amount,
         description: m.display_name || m.counterparty || "Unknown",
+        raw_description: m.counterparty,
         counterparty: m.counterparty,
         economic_class: m.economic_class,
         suggested_match: suggestedMatches.ar.find(s => s.movement_id === m.movement_id) || 
@@ -483,6 +484,7 @@ export async function GET(request: Request) {
         date: m.date,
         amount: m.amount,
         description: m.display_name || m.counterparty || "Unknown",
+        raw_description: m.counterparty,
         counterparty: m.counterparty,
         economic_class: m.economic_class,
         suggested_match: suggestedMatches.ap.find(s => s.movement_id === m.movement_id),
@@ -682,6 +684,7 @@ async function buildSuggestedMatches(
         confidence,
         reason: getMatchReason(a.source, a.metadata, confidence),
         matched_amount: invoice?.amount || 0,
+        entity_name: invoice?.customer_name || null,
         waterfall_stage: a.metadata?.waterfall_stage,
         auto_accepted: confidence >= 0.95,
       }
@@ -698,6 +701,7 @@ async function buildSuggestedMatches(
         confidence,
         reason: getMatchReason(a.source, a.metadata, confidence),
         matched_amount: bill?.amount || 0,
+        entity_name: bill?.vendor_name || null,
         waterfall_stage: a.metadata?.waterfall_stage,
         auto_accepted: confidence >= 0.95,
       }
