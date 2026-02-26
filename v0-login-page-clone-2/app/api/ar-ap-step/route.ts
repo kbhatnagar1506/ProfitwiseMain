@@ -742,14 +742,46 @@ async function buildReconciledMovements(userId: string) {
     source: string
     confidence: string
     matched_at: string
+    net_amount: string
+    movement_description: string
+    movement_amount: string
+    movement_date: string
+    entity_name: string | null
+    ref_number: string | null
+    fee_amount: string
   }>(
-    `SELECT DISTINCT ON (movement_id, component_type, reference_id)
-       a.movement_id, a.reference_id, a.component_type, 
-       a.source, a.confidence::text, a.created_at::text AS matched_at
+    `SELECT DISTINCT ON (a.movement_id, a.component_type, a.reference_id)
+       a.movement_id, a.reference_id, a.component_type,
+       a.source, a.confidence::text, a.created_at::text AS matched_at,
+       COALESCE(ABS(a.net_amount::float), 0)::text AS net_amount,
+       COALESCE(m.description, m.counterparty, 'Unknown') AS movement_description,
+       COALESCE(m.amount::text, '0') AS movement_amount,
+       m.date::text AS movement_date,
+       CASE
+         WHEN a.component_type = 'ar' THEN inv.customer_name
+         WHEN a.component_type = 'ap' THEN bil.vendor_name
+         ELSE NULL
+       END AS entity_name,
+       CASE
+         WHEN a.component_type = 'ar' THEN inv.invoice_number
+         WHEN a.component_type = 'ap' THEN bil.bill_number
+         ELSE NULL
+       END AS ref_number,
+       COALESCE((
+         SELECT ABS(f.net_amount::float)::text
+         FROM movement_attributions f
+         WHERE f.movement_id = a.movement_id AND f.user_id = a.user_id
+           AND f.component_type = 'fee'
+         LIMIT 1
+       ), '0') AS fee_amount
      FROM movement_attributions a
-     WHERE a.user_id = $1 
+     JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
+     LEFT JOIN invoices inv ON inv.id = a.reference_id AND a.component_type = 'ar'
+     LEFT JOIN bills bil ON bil.id = a.reference_id AND a.component_type = 'ap'
+     WHERE a.user_id = $1
        AND a.reference_id IS NOT NULL
-     ORDER BY movement_id, component_type, reference_id, a.created_at DESC
+       AND a.component_type IN ('ar', 'ap')
+     ORDER BY a.movement_id, a.component_type, a.reference_id, a.created_at DESC
      LIMIT 500`,
     [userId]
   )
@@ -761,7 +793,14 @@ async function buildReconciledMovements(userId: string) {
       matched_at: r.matched_at,
       matched_by: r.source === 'user' ? 'user' : 'ai',
       confidence: parseFloat(r.confidence),
-      amount_matched: 0, // Will be populated by frontend from movement data
+      amount_matched: parseFloat(r.net_amount) || 0,
+      movement_description: r.movement_description,
+      movement_amount: parseFloat(r.movement_amount) || 0,
+      movement_date: r.movement_date,
+      entity_name: r.entity_name || null,
+      ref_number: r.ref_number || null,
+      fee_amount: parseFloat(r.fee_amount) || 0,
+      component_type: r.component_type,
     })),
   }
 }
