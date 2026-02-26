@@ -1089,81 +1089,98 @@ export default function ReconciliationPage() {
                 <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Bank &#8594; Ledger Matches</p>
                 <span className="text-[10px] text-zinc-600">{data.reconciled_movements!.matched.length} movements matched</span>
               </div>
-              {/* Column headers */}
-              <div className="grid grid-cols-[1fr_1fr_120px_100px_90px] gap-0 px-4 mb-1.5">
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Bank Transaction</p>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Matched To</p>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-right">Matched</p>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-right">Fees</p>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-center">Source</p>
-              </div>
-              <div className="space-y-1.5">
-                {(data.reconciled_movements?.matched || []).map((m, i) => {
-                  const isAR = m.component_type === "ar"
-                  const isInflow = (m.movement_amount ?? 0) > 0
-                  const hasFee = (m.fee_amount ?? 0) > 0
-                  return (
-                    <div
-                      key={`${m.movement_id}-${i}`}
-                      className="grid grid-cols-[1fr_1fr_120px_100px_90px] items-center bg-[#141414] border border-white/[0.06] rounded-xl overflow-hidden hover:border-white/[0.12] transition-colors duration-150"
-                    >
-                      {/* Bank side */}
-                      <div className="px-4 py-2.5 border-r border-white/[0.06] flex items-center gap-2.5">
-                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isInflow ? "bg-emerald-500" : "bg-red-500"}`} />
-                        <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-white truncate leading-tight">
-                            {m.movement_description || m.movement_id.slice(0, 12) + "…"}
-                          </p>
-                          <div className="flex items-baseline gap-2 mt-0.5">
+              <div className="bg-[#141414] border border-white/[0.07] rounded-xl overflow-hidden">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-white/[0.07]">
+                      <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[28%]">Bank Transaction</th>
+                      <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[10%]">Date</th>
+                      <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[6%]">Type</th>
+                      <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[22%]">Matched To</th>
+                      <th className="text-right text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[12%]">Bank Amt</th>
+                      <th className="text-right text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[12%]">Matched</th>
+                      <th className="text-right text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[6%]">Fees</th>
+                      <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[4%]">By</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data.reconciled_movements?.matched || []).map((m, i) => {
+                      const isAR = m.component_type === "ar"
+                      const isInflow = (m.movement_amount ?? 0) > 0
+                      const hasFee = (m.fee_amount ?? 0) > 0
+                      const amountDiff = Math.abs((m.movement_amount ?? 0)) - m.amount_matched
+                      const hasPartial = Math.abs(amountDiff) > 0.01
+                      return (
+                        <tr
+                          key={`${m.movement_id}-${i}`}
+                          className="border-b border-white/[0.04] hover:bg-white/[0.025] transition-colors duration-100"
+                        >
+                          {/* Bank description */}
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isInflow ? "bg-emerald-500" : "bg-red-500"}`} />
+                              <p className="text-[12px] text-white truncate font-medium leading-snug">
+                                {m.movement_description || m.movement_id.slice(0, 14) + "…"}
+                              </p>
+                            </div>
+                          </td>
+                          {/* Date */}
+                          <td className="px-4 py-2.5 whitespace-nowrap">
+                            <span className="text-[11px] text-zinc-500">{formatDate(m.movement_date ?? null)}</span>
+                          </td>
+                          {/* AR/AP */}
+                          <td className="px-4 py-2.5">
+                            <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider ${isAR ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>
+                              {isAR ? "AR" : "AP"}
+                            </span>
+                          </td>
+                          {/* Entity / invoice */}
+                          <td className="px-4 py-2.5 min-w-0">
+                            <p className="text-[12px] text-zinc-200 truncate leading-snug">
+                              {m.entity_name || (isAR ? "Invoice" : "Bill")}
+                            </p>
+                            {m.ref_number && (
+                              <p className="text-[10px] text-zinc-600 mt-0.5">{isAR ? "Inv" : "Bill"} #{m.ref_number}</p>
+                            )}
+                          </td>
+                          {/* Bank amount */}
+                          <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <span className={`text-[12px] font-mono tabular-nums font-semibold ${isInflow ? "text-emerald-400" : "text-red-400"}`}>
                               {isInflow ? "+" : "−"}{formatCurrency(Math.abs(m.movement_amount ?? 0))}
                             </span>
-                            <span className="text-[10px] text-zinc-600">{formatDate(m.movement_date ?? null)}</span>
-                          </div>
-                        </div>
-                      </div>
-                      {/* Ledger side */}
-                      <div className="px-4 py-2.5 border-r border-white/[0.06] flex items-center gap-2">
-                        <div className={`px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider shrink-0 ${isAR ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>
-                          {isAR ? "AR" : "AP"}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-white truncate leading-tight">
-                            {m.entity_name || (isAR ? "Invoice" : "Bill")}
-                          </p>
-                          {m.ref_number && (
-                            <p className="text-[10px] text-zinc-500 mt-0.5">
-                              {isAR ? "Inv" : "Bill"} #{m.ref_number}
-                            </p>
-                          )}
-                          <p className="text-[10px] text-zinc-600 mt-0.5">{formatDate(m.matched_at)}</p>
-                        </div>
-                      </div>
-                      {/* Matched amount */}
-                      <div className="px-3 py-2.5 text-right border-r border-white/[0.06]">
-                        <span className="text-[14px] font-mono tabular-nums font-semibold text-zinc-200">
-                          {formatCurrency(m.amount_matched)}
-                        </span>
-                      </div>
-                      {/* Fees */}
-                      <div className="px-3 py-2.5 text-right border-r border-white/[0.06]">
-                        {hasFee ? (
-                          <span className="text-[13px] font-mono tabular-nums text-amber-400">
-                            −{formatCurrency(m.fee_amount!)}
-                          </span>
-                        ) : (
-                          <span className="text-[12px] text-zinc-700">—</span>
-                        )}
-                      </div>
-                      {/* Source */}
-                      <div className="px-3 py-2.5 flex items-center justify-center">
-                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${m.matched_by === "ai" ? "bg-violet-500/15 text-violet-400" : "bg-blue-500/15 text-blue-400"}`}>
-                          {m.matched_by === "ai" ? "AI" : "Manual"}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
+                          </td>
+                          {/* Matched amount */}
+                          <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                            <span className="text-[12px] font-mono tabular-nums text-zinc-200 font-semibold">
+                              {formatCurrency(m.amount_matched)}
+                            </span>
+                            {hasPartial && (
+                              <p className="text-[9px] text-zinc-600 mt-0.5">
+                                {amountDiff > 0 ? "partial" : "split"}
+                              </p>
+                            )}
+                          </td>
+                          {/* Fees */}
+                          <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                            {hasFee ? (
+                              <span className="text-[12px] font-mono tabular-nums text-amber-400">
+                                −{formatCurrency(m.fee_amount!)}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-zinc-700">—</span>
+                            )}
+                          </td>
+                          {/* Source */}
+                          <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${m.matched_by === "ai" ? "bg-violet-500/15 text-violet-400" : "bg-blue-500/15 text-blue-400"}`}>
+                              {m.matched_by === "ai" ? "AI" : "You"}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
