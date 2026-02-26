@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Input } from "@/components/ui/input"
-import { RefreshCw, Search, ArrowRight } from "lucide-react"
+import { RefreshCw, Search, ArrowRight, Sparkles } from "lucide-react"
 import {
   ResponsiveContainer,
   PieChart,
@@ -253,7 +253,9 @@ export default function ReconciliationPage() {
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [selectedMatches, setSelectedMatches] = useState<Array<{ reference_id: string; component_type: "ar" | "ap"; amount: number }>>([])
-
+  const [aiSummary, setAiSummary] = useState<string | null>(null)
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null)
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch("/api/ar-ap-step")
@@ -333,6 +335,55 @@ export default function ReconciliationPage() {
       setError(err instanceof Error ? err.message : "Error confirming match")
     }
   }
+
+  const fetchAiSummary = useCallback(async (d: ARAPStepResponse) => {
+    setAiSummaryLoading(true)
+    setAiSummaryError(null)
+    try {
+      const reconMatched = d.reconciled_movements?.matched || []
+      const body = {
+        totalUnmatched: (d.recon?.total_unmatched_inflows || 0) + (d.recon?.total_unmatched_outflows || 0),
+        unmatchedCount: (d.movements?.unmatched_inflows?.length || 0) + (d.movements?.unmatched_outflows?.length || 0),
+        reconciledCount: reconMatched.length,
+        reconciledAmount: reconMatched.reduce((s, m) => s + m.amount_matched, 0),
+        excludedCount: d.excluded_movements?.count || 0,
+        excludedAmount: d.excluded_movements?.total_amount || 0,
+        arTotal: d.lifetime?.ar?.total || 0,
+        arPaid: d.lifetime?.ar?.paid || 0,
+        arOutstanding: d.lifetime?.ar?.outstanding || 0,
+        arInvoiceCount: d.lifetime?.ar?.invoice_count || 0,
+        arPaidCount: d.lifetime?.ar?.paid_count || 0,
+        arOpenCount: d.lifetime?.ar?.open_count || 0,
+        arMatchRate: d.ar?.reconciliation_summary?.match_rate || 0,
+        arMatchedCount: d.ar?.reconciliation_summary?.matched_count || 0,
+        arBankVerified: d.ar?.reconciliation_summary?.bank_verified_matched || 0,
+        apTotal: d.lifetime?.ap?.total || 0,
+        apPaid: d.lifetime?.ap?.paid || 0,
+        apOutstanding: d.lifetime?.ap?.outstanding || 0,
+        apBillCount: d.lifetime?.ap?.bill_count || 0,
+        apPaidCount: d.lifetime?.ap?.paid_count || 0,
+        apOpenCount: d.lifetime?.ap?.open_count || 0,
+        apMatchRate: d.ap?.reconciliation_summary?.match_rate || 0,
+        apMatchedCount: d.ap?.reconciliation_summary?.matched_count || 0,
+        apBankVerified: d.ap?.reconciliation_summary?.bank_verified_matched || 0,
+      }
+      const res = await fetch("/api/dashboard/reconciliation/ai-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      if (res.ok) {
+        const json = await res.json()
+        setAiSummary(json.summary)
+      } else {
+        setAiSummaryError("Could not generate summary")
+      }
+    } catch {
+      setAiSummaryError("Could not generate summary")
+    } finally {
+      setAiSummaryLoading(false)
+    }
+  }, [])
 
   if (loading) {
     return (
@@ -414,6 +465,48 @@ export default function ReconciliationPage() {
             <RefreshCw className={`h-3 w-3 mr-1.5 ${data.is_reconciling || running ? "animate-spin" : ""}`} />
             Reconcile
           </Button>
+        </div>
+      </div>
+
+      {/* AI Overview Panel */}
+      <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5 text-violet-400" />
+            <span className="text-[11px] font-medium text-white uppercase tracking-wider">AI Reconciliation Overview</span>
+            <span className="text-[10px] text-zinc-600">Plain English · Updated on demand</span>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => fetchAiSummary(data)}
+            disabled={aiSummaryLoading}
+            className="bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-300 text-[10px] h-6 px-2.5"
+          >
+            {aiSummaryLoading
+              ? <><div className="h-2.5 w-2.5 border-[1.5px] border-violet-400 border-t-transparent rounded-full animate-spin mr-1.5" />Thinking...</>
+              : <><Sparkles className="h-2.5 w-2.5 mr-1.5" />{aiSummary ? "Regenerate" : "Generate Overview"}</>
+            }
+          </Button>
+        </div>
+        <div className="px-4 py-3 min-h-[52px] flex items-center">
+          {aiSummaryLoading && (
+            <div className="flex items-center gap-3 w-full">
+              <div className="space-y-2 flex-1">
+                <div className="h-2.5 bg-white/5 rounded animate-pulse w-full" />
+                <div className="h-2.5 bg-white/5 rounded animate-pulse w-4/5" />
+                <div className="h-2.5 bg-white/5 rounded animate-pulse w-3/5" />
+              </div>
+            </div>
+          )}
+          {!aiSummaryLoading && aiSummaryError && (
+            <p className="text-[12px] text-red-400">{aiSummaryError}</p>
+          )}
+          {!aiSummaryLoading && aiSummary && (
+            <p className="text-[13px] text-zinc-300 leading-relaxed">{aiSummary}</p>
+          )}
+          {!aiSummaryLoading && !aiSummary && !aiSummaryError && (
+            <p className="text-[12px] text-zinc-600 italic">Click "Generate Overview" for a plain-English summary of your reconciliation health.</p>
+          )}
         </div>
       </div>
 
@@ -614,151 +707,165 @@ export default function ReconciliationPage() {
         </TabsList>
 
         {/* Review Queue Tab */}
-        <TabsContent value="review" className="space-y-4">
+        <TabsContent value="review" className="space-y-3 mt-3">
           {unmatched_inflows.length + unmatched_outflows.length === 0 ? (
-            <div className="bg-[#141414] border border-white/10 rounded-lg p-12 text-center">
-              <div className="text-emerald-400 text-4xl mb-3">&#10003;</div>
+            <div className="bg-[#141414] border border-white/10 rounded-xl p-14 text-center">
+              <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-3">
+                <span className="text-emerald-400 text-lg">✓</span>
+              </div>
               <p className="text-white font-medium">Inbox Zero</p>
-              <p className="text-zinc-500 text-sm mt-1">All operating cash has been reconciled.</p>
+              <p className="text-zinc-500 text-[12px] mt-1">All operating cash has been reconciled.</p>
             </div>
           ) : (
-          <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-white/10">
-                    <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2 w-[32%]">Bank Movement</th>
-                    <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2 w-[14%]">Confidence</th>
-                    <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2 w-[36%]">Suggested Ledger Match</th>
-                    <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2 w-[18%]">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...unmatched_inflows, ...unmatched_outflows].map(movement => {
-                    const sm = movement.suggested_match
-                    const badge = sm ? getConfidenceBadge(sm.confidence) : null
-                    const isInflow = movement.amount > 0
-                    const entityName = sm?.entity_name
-                    const refId = sm?.invoice_id || sm?.bill_id
-                    const refLabel = sm?.invoice_id ? `Inv #${refId}` : sm?.bill_id ? `Bill #${refId}` : null
+            <div className="space-y-2">
+              {/* Column headers */}
+              <div className="grid grid-cols-[1fr_80px_1fr_140px] gap-0 px-4">
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Bank Transaction</p>
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-center">Match</p>
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider pl-4">Ledger</p>
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-right">Action</p>
+              </div>
 
-                    return (
-                      <tr key={movement.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100 group">
-                        {/* Bank Side */}
-                        <td className="px-3 py-2">
-                          <div className="flex items-start gap-3">
-                            <div className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${isInflow ? "bg-emerald-400" : "bg-red-400"}`} />
-                            <div className="min-w-0">
-                              <p className="text-[13px] font-medium text-white truncate leading-tight">{movement.description}</p>
-                              {movement.raw_description && movement.raw_description !== movement.description && (
-                                <p className="text-[11px] text-zinc-500 truncate mt-0.5">{movement.raw_description}</p>
+              {[...unmatched_inflows, ...unmatched_outflows].map((movement) => {
+                const sm = movement.suggested_match
+                const badge = sm ? getConfidenceBadge(sm.confidence) : null
+                const isInflow = movement.amount > 0
+                const entityName = sm?.entity_name
+                const refId = sm?.invoice_id || sm?.bill_id
+                const refLabel = sm?.invoice_id ? `Inv #${refId}` : sm?.bill_id ? `Bill #${refId}` : null
+                const isAR = !!sm?.invoice_id
+                const hasMatch = !!sm
+
+                return (
+                  <div
+                    key={movement.id}
+                    className="grid grid-cols-[1fr_80px_1fr_140px] items-stretch bg-[#141414] border border-white/[0.06] rounded-xl overflow-hidden hover:border-white/[0.12] transition-colors duration-150 group"
+                  >
+                    {/* Left: Bank Side */}
+                    <div className="px-4 py-3 border-r border-white/[0.06]">
+                      <div className="flex items-start gap-3">
+                        <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ring-2 ${isInflow ? "bg-emerald-500 ring-emerald-500/20" : "bg-red-500 ring-red-500/20"}`} />
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-medium text-white truncate leading-tight">{movement.description}</p>
+                          {movement.raw_description && movement.raw_description !== movement.description && (
+                            <p className="text-[11px] text-zinc-500 truncate mt-0.5 leading-tight">{movement.raw_description}</p>
+                          )}
+                          <div className="flex items-baseline gap-2 mt-1.5">
+                            <span className={`text-[15px] font-mono tabular-nums font-bold ${isInflow ? "text-emerald-400" : "text-red-400"}`}>
+                              {isInflow ? "+" : "−"}{formatCurrency(Math.abs(movement.amount))}
+                            </span>
+                            <span className="text-[11px] text-zinc-500">{formatDate(movement.date)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Middle: Confidence bridge */}
+                    <div className="flex flex-col items-center justify-center py-3 px-2 border-r border-white/[0.06] bg-[#111]">
+                      {badge ? (
+                        <>
+                          <span className={`text-[11px] font-bold font-mono ${badge.tier === "high" ? "text-emerald-400" : badge.tier === "med" ? "text-amber-400" : "text-zinc-400"}`}>
+                            {badge.label}
+                          </span>
+                          <div className="my-1.5 flex flex-col items-center gap-0.5">
+                            <div className="w-px h-2 bg-white/10" />
+                            <ArrowRight className="h-3 w-3 text-zinc-600" />
+                            <div className="w-px h-2 bg-white/10" />
+                          </div>
+                          <span className="text-[9px] text-zinc-600 uppercase tracking-wider text-center leading-tight">
+                            {badge.tier === "high" ? "Strong" : badge.tier === "med" ? "Likely" : "Possible"}
+                          </span>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-[18px] text-zinc-700">?</span>
+                          <span className="text-[9px] text-zinc-600 uppercase tracking-wider">Manual</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right: Ledger Side */}
+                    <div className="px-4 py-3 border-r border-white/[0.06]">
+                      {hasMatch ? (
+                        <div className="flex items-start gap-2.5 h-full">
+                          <div className={`mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider shrink-0 ${isAR ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>
+                            {isAR ? "AR" : "AP"}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-[13px] font-medium text-white truncate leading-tight">
+                              {entityName || (isAR ? "Invoice" : "Bill")}
+                            </p>
+                            {refLabel && <p className="text-[11px] text-zinc-500 mt-0.5">{refLabel}</p>}
+                            <div className="flex items-baseline gap-2 mt-1.5">
+                              <span className="text-[15px] font-mono tabular-nums font-bold text-zinc-200">
+                                {formatCurrency(sm.matched_amount)}
+                              </span>
+                              {sm.reason && (
+                                <span className="text-[10px] text-zinc-600 truncate">{sm.reason}</span>
                               )}
-                              <div className="flex items-baseline gap-2 mt-1">
-                                <span className={`text-[13px] font-mono tabular-nums font-semibold ${isInflow ? "text-emerald-400" : "text-red-400"}`}>
-                                  {isInflow ? "+" : ""}{formatCurrency(movement.amount)}
-                                </span>
-                                <span className="text-[11px] text-zinc-500">{formatDate(movement.date)}</span>
-                              </div>
                             </div>
                           </div>
-                        </td>
-
-                        {/* Confidence */}
-                        <td className="px-3 py-2 text-center">
-                          {badge ? (
-                            <div className="inline-flex flex-col items-center gap-1">
-                              <Badge className={`${badge.color} border text-[10px] px-1.5 py-0`}>
-                                {badge.label}
-                              </Badge>
-                              <ArrowRight className="h-3 w-3 text-zinc-600" />
-                            </div>
-                          ) : (
-                            <span className="text-[11px] text-zinc-500">No match</span>
-                          )}
-                        </td>
-
-                        {/* Ledger Side */}
-                        <td className="px-3 py-2">
-                          {sm && entityName ? (
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <Badge className={`${sm.invoice_id ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"} border text-[10px] px-1.5 py-0`}>
-                                  {sm.invoice_id ? "AR" : "AP"}
-                                </Badge>
-                                <span className="text-[13px] font-medium text-white truncate">{entityName}</span>
-                              </div>
-                              <div className="flex items-baseline gap-2 mt-1">
-                                <span className="text-[13px] font-mono tabular-nums text-zinc-300">{formatCurrency(sm.matched_amount)}</span>
-                                {refLabel && <span className="text-[11px] text-zinc-500">{refLabel}</span>}
-                              </div>
-                              <p className="text-[11px] text-zinc-500 mt-0.5">{sm.reason}</p>
-                            </div>
-                          ) : sm ? (
-                            <div className="min-w-0">
-                              <span className="text-[13px] font-mono tabular-nums text-zinc-300">{formatCurrency(sm.matched_amount)}</span>
-                              {refLabel && <span className="text-[11px] text-zinc-500 ml-2">{refLabel}</span>}
-                              <p className="text-[11px] text-zinc-500 mt-0.5">{sm.reason}</p>
-                            </div>
-                          ) : (
-                            <span className="text-[11px] text-zinc-500 italic">Needs manual matching</span>
-                          )}
-                        </td>
-
-                        {/* Action */}
-                        <td className="px-3 py-2 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            {sm && sm.confidence >= 0.75 ? (
-                              <Button
-                                size="sm"
-                                className="bg-emerald-600 hover:bg-emerald-700 text-[11px] h-7 px-2.5"
-                                onClick={async () => {
-                                  const componentType = sm.invoice_id ? "ar" : "ap"
-                                  const referenceId = sm.invoice_id || sm.bill_id
-                                  try {
-                                    const res = await fetch("/api/dashboard/reconciliation/apply-match", {
-                                      method: "POST",
-                                      headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({
-                                        movement_id: movement.id,
-                                        reference_id: referenceId,
-                                        component_type: componentType,
-                                        entity_id: "",
-                                        amount: sm.matched_amount,
-                                      }),
-                                    })
-                                    if (res.ok) await fetchData()
-                                    else setError("Failed to apply match")
-                                  } catch (err) {
-                                    setError(err instanceof Error ? err.message : "Error")
-                                  }
-                                }}
-                              >
-                                &#10003; Accept
-                              </Button>
-                            ) : null}
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="text-[11px] h-7 px-2 text-zinc-400 hover:text-white"
-                              onClick={() => {
-                                setSelectedMovement(movement)
-                                setSelectedMatches([])
-                                setSearchQuery("")
-                                setSearchResults([])
-                                setIsDrawerOpen(true)
-                              }}
-                            >
-                              Match
-                            </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center h-full">
+                          <div>
+                            <p className="text-[12px] text-zinc-500 italic">No AI match found</p>
+                            <p className="text-[11px] text-zinc-600 mt-0.5">Use "Match" to link manually</p>
                           </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action */}
+                    <div className="flex items-center justify-end gap-2 px-3 py-3">
+                      {sm && sm.confidence >= 0.75 ? (
+                        <Button
+                          size="sm"
+                          className="bg-emerald-600 hover:bg-emerald-500 text-[11px] h-7 px-3 font-medium"
+                          onClick={async () => {
+                            const componentType = sm.invoice_id ? "ar" : "ap"
+                            const referenceId = sm.invoice_id || sm.bill_id
+                            try {
+                              const res = await fetch("/api/dashboard/reconciliation/apply-match", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  movement_id: movement.id,
+                                  reference_id: referenceId,
+                                  component_type: componentType,
+                                  entity_id: "",
+                                  amount: sm.matched_amount,
+                                }),
+                              })
+                              if (res.ok) await fetchData()
+                              else setError("Failed to apply match")
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : "Error")
+                            }
+                          }}
+                        >
+                          ✓ Accept
+                        </Button>
+                      ) : null}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-[11px] h-7 px-2.5 text-zinc-400 hover:text-white border border-white/[0.06] hover:border-white/20"
+                        onClick={() => {
+                          setSelectedMovement(movement)
+                          setSelectedMatches([])
+                          setSearchQuery("")
+                          setSearchResults([])
+                          setIsDrawerOpen(true)
+                        }}
+                      >
+                        Match
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-          </div>
           )}
         </TabsContent>
 
