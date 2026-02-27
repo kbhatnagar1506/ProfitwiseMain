@@ -445,7 +445,7 @@ export async function GET(request: Request) {
   const suggestedMatches = await buildSuggestedMatches(user.id, enrichedInvoices, enrichedBills)
   
   // Build reconciled movements list
-  const reconciledMovements = await buildReconciledMovements(user.id)
+  const reconciledMovements = await buildReconciledMovements(user.id, enrichedInvoices, enrichedBills)
   
   // Build excluded movements list
   const excludedMovements = await buildExcludedMovements(user.id)
@@ -734,7 +734,11 @@ function getMatchReason(source: string, metadata: any, confidence: number): stri
 /**
  * Build list of reconciled movements
  */
-async function buildReconciledMovements(userId: string) {
+async function buildReconciledMovements(
+  userId: string,
+  invoices: OutstandingInvoice[],
+  bills: OutstandingBill[]
+) {
   const { rows } = await query<{
     movement_id: string
     reference_id: string
@@ -743,41 +747,27 @@ async function buildReconciledMovements(userId: string) {
     confidence: string
     matched_at: string
     net_amount: string
+    fee_amount: string
     movement_description: string
     movement_amount: string
     movement_date: string
-    entity_name: string | null
-    ref_number: string | null
-    fee_amount: string
   }>(
     `SELECT DISTINCT ON (a.movement_id, a.component_type, a.reference_id)
        a.movement_id, a.reference_id, a.component_type,
        a.source, a.confidence::text, a.created_at::text AS matched_at,
        COALESCE(ABS(a.net_amount::float), 0)::text AS net_amount,
-       COALESCE(m.description, m.counterparty, 'Unknown') AS movement_description,
-       COALESCE(m.amount::text, '0') AS movement_amount,
-       m.date::text AS movement_date,
-       CASE
-         WHEN a.component_type = 'ar' THEN inv.customer_name
-         WHEN a.component_type = 'ap' THEN bil.vendor_name
-         ELSE NULL
-       END AS entity_name,
-       CASE
-         WHEN a.component_type = 'ar' THEN inv.invoice_number
-         WHEN a.component_type = 'ap' THEN bil.bill_number
-         ELSE NULL
-       END AS ref_number,
        COALESCE((
          SELECT ABS(f.net_amount::float)::text
          FROM movement_attributions f
          WHERE f.movement_id = a.movement_id AND f.user_id = a.user_id
            AND f.component_type = 'fee'
          LIMIT 1
-       ), '0') AS fee_amount
+       ), '0') AS fee_amount,
+       COALESCE(m.display_name, m.counterparty, 'Unknown') AS movement_description,
+       COALESCE(m.amount::text, '0') AS movement_amount,
+       m.date::text AS movement_date
      FROM movement_attributions a
      JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
-     LEFT JOIN invoices inv ON inv.id = a.reference_id AND a.component_type = 'ar'
-     LEFT JOIN bills bil ON bil.id = a.reference_id AND a.component_type = 'ap'
      WHERE a.user_id = $1
        AND a.reference_id IS NOT NULL
        AND a.component_type IN ('ar', 'ap')
@@ -786,22 +776,31 @@ async function buildReconciledMovements(userId: string) {
     [userId]
   )
 
+  // Build lookup maps from in-memory invoice/bill arrays
+  const invoiceMap = new Map(invoices.map(i => [i.invoice_id, i]))
+  const billMap = new Map(bills.map(b => [b.bill_id, b]))
+
   return {
-    matched: rows.map(r => ({
-      movement_id: r.movement_id,
-      matched_to: r.reference_id,
-      matched_at: r.matched_at,
-      matched_by: r.source === 'user' ? 'user' : 'ai',
-      confidence: parseFloat(r.confidence),
-      amount_matched: parseFloat(r.net_amount) || 0,
-      movement_description: r.movement_description,
-      movement_amount: parseFloat(r.movement_amount) || 0,
-      movement_date: r.movement_date,
-      entity_name: r.entity_name || null,
-      ref_number: r.ref_number || null,
-      fee_amount: parseFloat(r.fee_amount) || 0,
-      component_type: r.component_type,
-    })),
+    matched: rows.map(r => {
+      const isAR = r.component_type === 'ar'
+      const invoice = isAR ? invoiceMap.get(r.reference_id) : undefined
+      const bill = !isAR ? billMap.get(r.reference_id) : undefined
+      return {
+        movement_id: r.movement_id,
+        matched_to: r.reference_id,
+        matched_at: r.matched_at,
+        matched_by: r.source === 'user' ? 'user' : 'ai' as 'user' | 'ai',
+        confidence: parseFloat(r.confidence),
+        amount_matched: parseFloat(r.net_amount) || 0,
+        movement_description: r.movement_description,
+        movement_amount: parseFloat(r.movement_amount) || 0,
+        movement_date: r.movement_date,
+        entity_name: invoice?.customer_name || bill?.vendor_name || null,
+        ref_number: null as string | null, // invoice_id/bill_id used as reference_id
+        fee_amount: parseFloat(r.fee_amount) || 0,
+        component_type: r.component_type,
+      }
+    }),
   }
 }
 
