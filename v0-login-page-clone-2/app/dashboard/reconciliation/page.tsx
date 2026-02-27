@@ -369,6 +369,16 @@ export default function ReconciliationPage() {
   const arLife = data.lifetime?.ar
   const apLife = data.lifetime?.ap
 
+  const reconMatched = data.reconciled_movements?.matched || []
+  const matchedAmount = reconMatched.reduce((s, m) => s + m.amount_matched, 0)
+  const matchedCount = reconMatched.length
+
+  const feeMovements = (data.excluded_movements?.movements || []).filter(
+    m => m.economic_class === "bank_fee" || m.economic_class === "processor_fee" || m.economic_class === "bank_fee_refund"
+  )
+  const feesTotal = feeMovements.reduce((s, m) => s + Math.abs(m.amount), 0)
+  const feesCount = feeMovements.length
+
   return (
     <div className="p-8 space-y-5 bg-[#0A0A0A] min-h-screen">
       {/* Header */}
@@ -438,12 +448,12 @@ export default function ReconciliationPage() {
         </div>
       </div>
 
-      {/* KPI Header — 3 cards */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* KPI Header — 5 cards */}
+      <div className="grid grid-cols-5 gap-3">
         {/* Unmatched Cash */}
         <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Unmatched Cash</p>
-          <p className="text-[26px] font-bold font-mono tabular-nums mt-2 text-red-400 leading-none">
+          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-red-400 leading-none">
             {formatCurrency(totalUnmatched)}
           </p>
           <p className="text-[11px] text-zinc-500 mt-1.5">
@@ -451,25 +461,47 @@ export default function ReconciliationPage() {
           </p>
         </div>
 
+        {/* Matched */}
+        <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Matched</p>
+          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-emerald-400 leading-none">
+            {formatCurrency(matchedAmount)}
+          </p>
+          <p className="text-[11px] text-zinc-500 mt-1.5">
+            {matchedCount} movements cleared
+          </p>
+        </div>
+
         {/* Open AR */}
         <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Open AR Waiting</p>
-          <p className="text-[26px] font-bold font-mono tabular-nums mt-2 text-emerald-400 leading-none">
+          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-emerald-400 leading-none">
             {formatCurrency(openAR)}
           </p>
           <p className="text-[11px] text-zinc-500 mt-1.5">
-            {arLife?.open_count || 0} invoices unpaid · {arLife?.paid_count || 0} collected
+            {arLife?.open_count || 0} unpaid · {arLife?.paid_count || 0} collected
           </p>
         </div>
 
         {/* Open AP */}
         <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Open AP Waiting</p>
-          <p className="text-[26px] font-bold font-mono tabular-nums mt-2 text-amber-400 leading-none">
+          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-amber-400 leading-none">
             {formatCurrency(openAP)}
           </p>
           <p className="text-[11px] text-zinc-500 mt-1.5">
-            {apLife?.open_count || 0} bills unpaid · {apLife?.paid_count || 0} paid
+            {apLife?.open_count || 0} unpaid · {apLife?.paid_count || 0} paid
+          </p>
+        </div>
+
+        {/* Fees */}
+        <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Bank &amp; Processing Fees</p>
+          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-zinc-400 leading-none">
+            {feesTotal > 0 ? `−${formatCurrency(feesTotal)}` : formatCurrency(0)}
+          </p>
+          <p className="text-[11px] text-zinc-500 mt-1.5">
+            {feesCount} fee transactions excluded
           </p>
         </div>
       </div>
