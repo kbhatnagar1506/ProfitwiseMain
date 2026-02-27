@@ -8,6 +8,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Input } from "@/components/ui/input"
 import { RefreshCw, Search, ArrowRight, Sparkles } from "lucide-react"
+import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+} from "recharts"
 
 interface SuggestedMatch {
   movement_id: string
@@ -39,6 +50,13 @@ interface ReconciledMovement {
   matched_by: "ai" | "user"
   confidence: number
   amount_matched: number
+  movement_description?: string
+  movement_amount?: number
+  movement_date?: string
+  entity_name?: string | null
+  ref_number?: string | null
+  fee_amount?: number
+  component_type?: string
 }
 
 interface ExcludedMovement {
@@ -169,6 +187,67 @@ function getConfidenceBadge(confidence: number) {
   return { label: `${Math.round(confidence * 100)}%`, tier: "low", color: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20" }
 }
 
+const CHART_COLORS = {
+  emerald: "#34d399",
+  amber: "#fbbf24",
+  red: "#f87171",
+  zinc: "#52525b",
+  blue: "#60a5fa",
+  emeraldMuted: "#34d39980",
+  amberMuted: "#fbbf2480",
+}
+
+function ChartTooltip({ active, payload }: any) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="bg-[#1a1a1a] border border-white/10 rounded-lg px-3 py-2 shadow-xl">
+      {payload.map((entry: any, i: number) => (
+        <div key={i} className="flex items-center gap-2 text-[11px]">
+          <div className="w-2 h-2 rounded-full" style={{ background: entry.color || entry.payload?.fill }} />
+          <span className="text-zinc-400">{entry.name}:</span>
+          <span className="text-white font-mono tabular-nums">{formatCurrency(entry.value)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function MiniDonut({ data, colors, centerLabel, centerValue }: {
+  data: { name: string; value: number }[]
+  colors: string[]
+  centerLabel: string
+  centerValue: string
+}) {
+  const hasData = data.some(d => d.value > 0)
+  if (!hasData) return null
+  return (
+    <div className="relative w-full h-[130px]">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius={38}
+            outerRadius={55}
+            paddingAngle={2}
+            dataKey="value"
+            stroke="none"
+          >
+            {data.map((_, i) => (
+              <Cell key={i} fill={colors[i % colors.length]} />
+            ))}
+          </Pie>
+          <Tooltip content={<ChartTooltip />} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+        <span className="text-[10px] text-zinc-500">{centerLabel}</span>
+        <span className="text-[13px] font-mono tabular-nums text-white font-semibold">{centerValue}</span>
+      </div>
+    </div>
+  )
+}
 
 export default function ReconciliationPage() {
   const [data, setData] = useState<ARAPStepResponse | null>(null)
@@ -369,16 +448,6 @@ export default function ReconciliationPage() {
   const arLife = data.lifetime?.ar
   const apLife = data.lifetime?.ap
 
-  const reconMatched = data.reconciled_movements?.matched || []
-  const matchedAmount = reconMatched.reduce((s, m) => s + m.amount_matched, 0)
-  const matchedCount = reconMatched.length
-
-  const feeMovements = (data.excluded_movements?.movements || []).filter(
-    m => m.economic_class === "bank_fee" || m.economic_class === "processor_fee" || m.economic_class === "bank_fee_refund"
-  )
-  const feesTotal = feeMovements.reduce((s, m) => s + Math.abs(m.amount), 0)
-  const feesCount = feeMovements.length
-
   return (
     <div className="p-8 space-y-5 bg-[#0A0A0A] min-h-screen">
       {/* Header */}
@@ -448,61 +517,196 @@ export default function ReconciliationPage() {
         </div>
       </div>
 
-      {/* KPI Header — 5 cards */}
-      <div className="grid grid-cols-5 gap-3">
-        {/* Unmatched Cash */}
-        <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Unmatched Cash</p>
-          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-red-400 leading-none">
+      {/* Row 1: Cash Overview */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Unmatched Cash</p>
+          <p className={`text-2xl font-bold font-mono tabular-nums mt-1.5 ${totalUnmatched > 0 ? "text-red-400" : "text-emerald-400"}`}>
             {formatCurrency(totalUnmatched)}
           </p>
-          <p className="text-[11px] text-zinc-500 mt-1.5">
-            {unmatched_inflows.length + unmatched_outflows.length} movements need action
+          <p className="text-[11px] text-zinc-500 mt-1">{unmatched_inflows.length + unmatched_outflows.length} movements need action</p>
+        </div>
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Reconciled Movements</p>
+          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-emerald-400">
+            {data.reconciled_movements?.matched?.length || 0}
           </p>
+          <p className="text-[11px] text-zinc-500 mt-1">
+            {formatCurrency((data.reconciled_movements?.matched || []).reduce((s, m) => s + m.amount_matched, 0))} matched to ledger
+          </p>
+          {(data.reconciled_movements?.matched || []).some(m => (m.fee_amount ?? 0) > 0) && (
+            <p className="text-[10px] text-amber-400/70 mt-0.5">
+              {formatCurrency((data.reconciled_movements?.matched || []).reduce((s, m) => s + (m.fee_amount ?? 0), 0))} in fees
+            </p>
+          )}
+        </div>
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Excluded</p>
+          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-zinc-400">
+            {data.excluded_movements?.count || 0}
+          </p>
+          <p className="text-[11px] text-zinc-500 mt-1">{formatCurrency(data.excluded_movements?.total_amount || 0)} non-operating</p>
+        </div>
+      </div>
+
+      {/* Row 2: Reconciliation Coverage Chart + Movement Breakdown */}
+      {(() => {
+        const reconMatched = (data.reconciled_movements?.matched || []).reduce((s, m) => s + m.amount_matched, 0)
+        const excludedTotal = data.excluded_movements?.total_amount || 0
+        const coverageData = [
+          { name: "Matched", value: reconMatched },
+          { name: "Unmatched", value: totalUnmatched },
+          { name: "Excluded", value: excludedTotal },
+        ]
+        const movBreakdown = [
+          { name: "Inflows", matched: arSummary?.matched_amount || 0, unmatched: arSummary?.unmatched_amount || 0 },
+          { name: "Outflows", matched: apSummary?.matched_amount || 0, unmatched: apSummary?.unmatched_amount || 0 },
+        ]
+        return (
+          <div className="grid grid-cols-5 gap-3">
+            {/* Coverage Donut */}
+            <div className="col-span-2 bg-[#141414] border border-white/10 rounded-lg p-4">
+              <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Cash Reconciliation Coverage</p>
+              <div className="flex items-center gap-4">
+                <div className="w-[140px] h-[140px] shrink-0">
+                  <MiniDonut
+                    data={coverageData}
+                    colors={[CHART_COLORS.emerald, CHART_COLORS.red, CHART_COLORS.zinc]}
+                    centerLabel="Coverage"
+                    centerValue={`${reconMatched + totalUnmatched + excludedTotal > 0 ? Math.round((reconMatched / (reconMatched + totalUnmatched + excludedTotal)) * 100) : 0}%`}
+                  />
+                </div>
+                <div className="flex flex-col gap-2 flex-1 min-w-0">
+                  {coverageData.map((d, i) => (
+                    <div key={d.name} className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="w-2 h-2 rounded-full shrink-0" style={{ background: [CHART_COLORS.emerald, CHART_COLORS.red, CHART_COLORS.zinc][i] }} />
+                        <span className="text-[11px] text-zinc-400 truncate">{d.name}</span>
+                      </div>
+                      <span className="text-[11px] font-mono tabular-nums text-zinc-300 shrink-0">{formatCurrency(d.value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* AR vs AP Stacked Bar */}
+            <div className="col-span-3 bg-[#141414] border border-white/10 rounded-lg p-4">
+              <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">AR vs AP — Matched / Unmatched</p>
+              <ResponsiveContainer width="100%" height={120}>
+                <BarChart data={movBreakdown} layout="vertical" barCategoryGap={12}>
+                  <XAxis type="number" tick={{ fill: "#52525b", fontSize: 10 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false} width={60} />
+                  <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(255,255,255,0.02)" }} />
+                  <Bar dataKey="matched" stackId="a" fill={CHART_COLORS.emerald} radius={[0, 0, 0, 0]} name="Matched" />
+                  <Bar dataKey="unmatched" stackId="a" fill={CHART_COLORS.red} radius={[0, 4, 4, 0]} name="Unmatched" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Row 3: AR & AP Breakdown with Donut Charts */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* AR Card */}
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-emerald-400" />
+              <p className="text-[11px] font-medium text-white uppercase tracking-wider">Accounts Receivable</p>
+            </div>
+            {arSummary && (
+              <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] px-1.5 py-0">
+                {Math.round(arSummary.match_rate)}% matched
+              </Badge>
+            )}
+          </div>
+          <div className="flex gap-4">
+            <div className="w-[110px] shrink-0">
+              <MiniDonut
+                data={[
+                  { name: "Paid", value: arLife?.paid || 0 },
+                  { name: "Outstanding", value: openAR },
+                ]}
+                colors={[CHART_COLORS.emerald, CHART_COLORS.amber]}
+                centerLabel="Paid"
+                centerValue={`${arLife?.paid_pct ? Math.round(arLife.paid_pct) : 0}%`}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 flex-1 content-center">
+              <div>
+                <p className="text-[10px] text-zinc-500">Total</p>
+                <p className="text-[14px] font-mono tabular-nums text-white font-semibold">{formatCurrency(arLife?.total || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{arLife?.invoice_count || 0} invoices</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-zinc-500">Paid</p>
+                <p className="text-[14px] font-mono tabular-nums text-emerald-400 font-semibold">{formatCurrency(arLife?.paid || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{arLife?.paid_count || 0} paid</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-zinc-500">Outstanding</p>
+                <p className="text-[14px] font-mono tabular-nums text-amber-400 font-semibold">{formatCurrency(openAR)}</p>
+                <p className="text-[10px] text-zinc-600">{arLife?.open_count || 0} open</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-zinc-500">Bank Verified</p>
+                <p className="text-[14px] font-mono tabular-nums text-emerald-400/70 font-semibold">{formatCurrency(arSummary?.bank_verified_matched || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{arSummary?.matched_count || 0} matched</p>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Matched */}
-        <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Matched</p>
-          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-emerald-400 leading-none">
-            {formatCurrency(matchedAmount)}
-          </p>
-          <p className="text-[11px] text-zinc-500 mt-1.5">
-            {matchedCount} movements cleared
-          </p>
-        </div>
-
-        {/* Open AR */}
-        <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Open AR Waiting</p>
-          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-emerald-400 leading-none">
-            {formatCurrency(openAR)}
-          </p>
-          <p className="text-[11px] text-zinc-500 mt-1.5">
-            {arLife?.open_count || 0} unpaid · {arLife?.paid_count || 0} collected
-          </p>
-        </div>
-
-        {/* Open AP */}
-        <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Open AP Waiting</p>
-          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-amber-400 leading-none">
-            {formatCurrency(openAP)}
-          </p>
-          <p className="text-[11px] text-zinc-500 mt-1.5">
-            {apLife?.open_count || 0} unpaid · {apLife?.paid_count || 0} paid
-          </p>
-        </div>
-
-        {/* Fees */}
-        <div className="bg-[#141414] border border-white/10 rounded-xl p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Bank &amp; Processing Fees</p>
-          <p className="text-[22px] font-bold font-mono tabular-nums mt-2 text-zinc-400 leading-none">
-            {feesTotal > 0 ? `−${formatCurrency(feesTotal)}` : formatCurrency(0)}
-          </p>
-          <p className="text-[11px] text-zinc-500 mt-1.5">
-            {feesCount} fee transactions excluded
-          </p>
+        {/* AP Card */}
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-amber-400" />
+              <p className="text-[11px] font-medium text-white uppercase tracking-wider">Accounts Payable</p>
+            </div>
+            {apSummary && (
+              <Badge className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] px-1.5 py-0">
+                {Math.round(apSummary.match_rate)}% matched
+              </Badge>
+            )}
+          </div>
+          <div className="flex gap-4">
+            <div className="w-[110px] shrink-0">
+              <MiniDonut
+                data={[
+                  { name: "Paid", value: apLife?.paid || 0 },
+                  { name: "Outstanding", value: openAP },
+                ]}
+                colors={[CHART_COLORS.emerald, CHART_COLORS.amber]}
+                centerLabel="Paid"
+                centerValue={`${apLife?.paid_pct ? Math.round(apLife.paid_pct) : 0}%`}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 flex-1 content-center">
+              <div>
+                <p className="text-[10px] text-zinc-500">Total</p>
+                <p className="text-[14px] font-mono tabular-nums text-white font-semibold">{formatCurrency(apLife?.total || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{apLife?.bill_count || 0} bills</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-zinc-500">Paid</p>
+                <p className="text-[14px] font-mono tabular-nums text-emerald-400 font-semibold">{formatCurrency(apLife?.paid || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{apLife?.paid_count || 0} paid</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-zinc-500">Outstanding</p>
+                <p className="text-[14px] font-mono tabular-nums text-amber-400 font-semibold">{formatCurrency(openAP)}</p>
+                <p className="text-[10px] text-zinc-600">{apLife?.open_count || 0} open</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-zinc-500">Bank Verified</p>
+                <p className="text-[14px] font-mono tabular-nums text-emerald-400/70 font-semibold">{formatCurrency(apSummary?.bank_verified_matched || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{apSummary?.matched_count || 0} matched</p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -885,47 +1089,81 @@ export default function ReconciliationPage() {
                 <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Bank &#8594; Ledger Matches</p>
                 <span className="text-[10px] text-zinc-600">{data.reconciled_movements!.matched.length} movements matched</span>
               </div>
-              <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-white/10">
-                        <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Movement</th>
-                        <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Matched To</th>
-                        <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Amount</th>
-                        <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Confidence</th>
-                        <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Source</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(data.reconciled_movements?.matched || []).map((m, i) => {
-                        const confBadge = getConfidenceBadge(m.confidence)
-                        return (
-                          <tr key={`${m.movement_id}-${i}`} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
-                            <td className="px-3 py-2">
-                              <p className="text-[12px] text-zinc-300 font-mono truncate">{m.movement_id.slice(0, 8)}...</p>
-                            </td>
-                            <td className="px-3 py-2">
-                              <p className="text-[13px] text-white truncate">{m.matched_to}</p>
-                              <p className="text-[11px] text-zinc-500">{formatDate(m.matched_at)}</p>
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <span className="text-[13px] font-mono tabular-nums text-zinc-300">{formatCurrency(m.amount_matched)}</span>
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              <Badge className={`${confBadge.color} border text-[10px] px-1.5 py-0`}>{confBadge.label}</Badge>
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <Badge className={`${m.matched_by === "ai" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-blue-500/10 text-blue-400 border-blue-500/20"} border text-[10px] px-1.5 py-0`}>
-                                {m.matched_by === "ai" ? "AI" : "Manual"}
-                              </Badge>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+              {/* Column headers */}
+              <div className="grid grid-cols-[1fr_1fr_120px_100px_90px] gap-0 px-4 mb-1.5">
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Bank Transaction</p>
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Matched To</p>
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-right">Matched</p>
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-right">Fees</p>
+                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-center">Source</p>
+              </div>
+              <div className="space-y-1.5">
+                {(data.reconciled_movements?.matched || []).map((m, i) => {
+                  const isAR = m.component_type === "ar"
+                  const isInflow = (m.movement_amount ?? 0) > 0
+                  const hasFee = (m.fee_amount ?? 0) > 0
+                  return (
+                    <div
+                      key={`${m.movement_id}-${i}`}
+                      className="grid grid-cols-[1fr_1fr_120px_100px_90px] items-center bg-[#141414] border border-white/[0.06] rounded-xl overflow-hidden hover:border-white/[0.12] transition-colors duration-150"
+                    >
+                      {/* Bank side */}
+                      <div className="px-4 py-2.5 border-r border-white/[0.06] flex items-center gap-2.5">
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isInflow ? "bg-emerald-500" : "bg-red-500"}`} />
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-medium text-white truncate leading-tight">
+                            {m.movement_description || m.movement_id.slice(0, 12) + "…"}
+                          </p>
+                          <div className="flex items-baseline gap-2 mt-0.5">
+                            <span className={`text-[12px] font-mono tabular-nums font-semibold ${isInflow ? "text-emerald-400" : "text-red-400"}`}>
+                              {isInflow ? "+" : "−"}{formatCurrency(Math.abs(m.movement_amount ?? 0))}
+                            </span>
+                            <span className="text-[10px] text-zinc-600">{formatDate(m.movement_date ?? null)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      {/* Ledger side */}
+                      <div className="px-4 py-2.5 border-r border-white/[0.06] flex items-center gap-2">
+                        <div className={`px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider shrink-0 ${isAR ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>
+                          {isAR ? "AR" : "AP"}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-medium text-white truncate leading-tight">
+                            {m.entity_name || (isAR ? "Invoice" : "Bill")}
+                          </p>
+                          {m.ref_number && (
+                            <p className="text-[10px] text-zinc-500 mt-0.5">
+                              {isAR ? "Inv" : "Bill"} #{m.ref_number}
+                            </p>
+                          )}
+                          <p className="text-[10px] text-zinc-600 mt-0.5">{formatDate(m.matched_at)}</p>
+                        </div>
+                      </div>
+                      {/* Matched amount */}
+                      <div className="px-3 py-2.5 text-right border-r border-white/[0.06]">
+                        <span className="text-[14px] font-mono tabular-nums font-semibold text-zinc-200">
+                          {formatCurrency(m.amount_matched)}
+                        </span>
+                      </div>
+                      {/* Fees */}
+                      <div className="px-3 py-2.5 text-right border-r border-white/[0.06]">
+                        {hasFee ? (
+                          <span className="text-[13px] font-mono tabular-nums text-amber-400">
+                            −{formatCurrency(m.fee_amount!)}
+                          </span>
+                        ) : (
+                          <span className="text-[12px] text-zinc-700">—</span>
+                        )}
+                      </div>
+                      {/* Source */}
+                      <div className="px-3 py-2.5 flex items-center justify-center">
+                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${m.matched_by === "ai" ? "bg-violet-500/15 text-violet-400" : "bg-blue-500/15 text-blue-400"}`}>
+                          {m.matched_by === "ai" ? "AI" : "Manual"}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
