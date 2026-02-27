@@ -575,7 +575,6 @@ export default function ReconciliationPage() {
         const coverageData = [
           { name: "Matched", value: reconMatched },
           { name: "Unmatched", value: totalUnmatched },
-          { name: "Excluded", value: excludedTotal },
         ]
         const movBreakdown = [
           { name: "Inflows", matched: arSummary?.matched_amount || 0, unmatched: arSummary?.unmatched_amount || 0 },
@@ -590,16 +589,16 @@ export default function ReconciliationPage() {
                 <div className="w-[140px] h-[140px] shrink-0">
                   <MiniDonut
                     data={coverageData}
-                    colors={[CHART_COLORS.emerald, CHART_COLORS.red, CHART_COLORS.zinc]}
+                    colors={[CHART_COLORS.emerald, CHART_COLORS.red]}
                     centerLabel="Coverage"
-                    centerValue={`${reconMatched + totalUnmatched + excludedTotal > 0 ? Math.round((reconMatched / (reconMatched + totalUnmatched + excludedTotal)) * 100) : 0}%`}
+                    centerValue={`${reconMatched + totalUnmatched > 0 ? Math.round((reconMatched / (reconMatched + totalUnmatched)) * 100) : 0}%`}
                   />
                 </div>
                 <div className="flex flex-col gap-2 flex-1 min-w-0">
                   {coverageData.map((d, i) => (
                     <div key={d.name} className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <div className="w-2 h-2 rounded-full shrink-0" style={{ background: [CHART_COLORS.emerald, CHART_COLORS.red, CHART_COLORS.zinc][i] }} />
+                        <div className="w-2 h-2 rounded-full shrink-0" style={{ background: [CHART_COLORS.emerald, CHART_COLORS.red][i] }} />
                         <span className="text-[11px] text-zinc-400 truncate">{d.name}</span>
                       </div>
                       <span className="text-[11px] font-mono tabular-nums text-zinc-300 shrink-0">{formatCurrency(d.value)}</span>
