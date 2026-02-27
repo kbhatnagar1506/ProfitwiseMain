@@ -763,7 +763,7 @@ async function buildReconciledMovements(
            AND f.component_type = 'fee'
          LIMIT 1
        ), '0') AS fee_amount,
-       COALESCE(m.display_name, m.counterparty, 'Unknown') AS movement_description,
+       COALESCE(m.raw_description, m.counterparty, 'Unknown') AS movement_description,
        COALESCE(m.amount::text, '0') AS movement_amount,
        m.date::text AS movement_date
      FROM movement_attributions a
