@@ -528,17 +528,32 @@ export default function ReconciliationPage() {
         </div>
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Reconciled Movements</p>
-          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-emerald-400">
-            {data.reconciled_movements?.matched?.length || 0}
-          </p>
-          <p className="text-[11px] text-zinc-500 mt-1">
-            {formatCurrency((data.reconciled_movements?.matched || []).reduce((s, m) => s + m.amount_matched, 0))} matched to ledger
-          </p>
-          {(data.reconciled_movements?.matched || []).some(m => (m.fee_amount ?? 0) > 0) && (
-            <p className="text-[10px] text-amber-400/70 mt-0.5">
-              {formatCurrency((data.reconciled_movements?.matched || []).reduce((s, m) => s + (m.fee_amount ?? 0), 0))} in fees
-            </p>
-          )}
+          {(() => {
+            const matched = data.reconciled_movements?.matched || []
+            // Deduplicate by movement_id to get real unique cash cleared
+            const uniqueMovements = new Map<string, typeof matched[0]>()
+            matched.forEach(m => {
+              if (!uniqueMovements.has(m.movement_id)) uniqueMovements.set(m.movement_id, m)
+            })
+            const uniqueCount = uniqueMovements.size
+            const cashCleared = Array.from(uniqueMovements.values()).reduce((s, m) => s + Math.abs(m.movement_amount ?? 0), 0)
+            const totalAttributed = matched.reduce((s, m) => s + m.amount_matched, 0)
+            const totalFees = matched.reduce((s, m) => s + (m.fee_amount ?? 0), 0)
+            const gap = Math.abs(cashCleared - totalAttributed)
+            return (
+              <>
+                <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-emerald-400">{uniqueCount}</p>
+                <p className="text-[11px] text-zinc-500 mt-1">{formatCurrency(cashCleared)} bank cash cleared</p>
+                <p className="text-[11px] text-zinc-400 mt-0.5">{formatCurrency(totalAttributed)} attributed to ledger</p>
+                {totalFees > 0 && (
+                  <p className="text-[10px] text-amber-400/70 mt-0.5">{formatCurrency(totalFees)} in fees</p>
+                )}
+                {gap > 1 && (
+                  <p className="text-[10px] text-zinc-600 mt-0.5">{formatCurrency(gap)} split/partial gap</p>
+                )}
+              </>
+            )
+          })()}
         </div>
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Excluded</p>
@@ -551,7 +566,11 @@ export default function ReconciliationPage() {
 
       {/* Row 2: Reconciliation Coverage Chart + Movement Breakdown */}
       {(() => {
-        const reconMatched = (data.reconciled_movements?.matched || []).reduce((s, m) => s + m.amount_matched, 0)
+        // Deduplicate by movement_id for accurate cash cleared (avoid double-counting splits)
+        const matchedRows = data.reconciled_movements?.matched || []
+        const uniqueMovMap = new Map<string, typeof matchedRows[0]>()
+        matchedRows.forEach(m => { if (!uniqueMovMap.has(m.movement_id)) uniqueMovMap.set(m.movement_id, m) })
+        const reconMatched = Array.from(uniqueMovMap.values()).reduce((s, m) => s + Math.abs(m.movement_amount ?? 0), 0)
         const excludedTotal = data.excluded_movements?.total_amount || 0
         const coverageData = [
           { name: "Matched", value: reconMatched },
@@ -1090,7 +1109,8 @@ export default function ReconciliationPage() {
                 <span className="text-[10px] text-zinc-600">{data.reconciled_movements!.matched.length} movements matched</span>
               </div>
               <div className="bg-[#141414] border border-white/[0.07] rounded-xl overflow-hidden">
-                <table className="w-full border-collapse">
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-[900px] border-collapse">
                   <thead>
                     <tr className="border-b border-white/[0.07]">
                       <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-2.5 w-[28%]">Bank Transaction</th>
@@ -1181,6 +1201,7 @@ export default function ReconciliationPage() {
                     })}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
           )}
