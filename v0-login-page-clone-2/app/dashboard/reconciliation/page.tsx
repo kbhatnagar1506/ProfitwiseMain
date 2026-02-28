@@ -643,15 +643,23 @@ export default function ReconciliationPage() {
           </div>
           <div className="flex gap-4">
             <div className="w-[110px] shrink-0">
-              <MiniDonut
-                data={[
-                  { name: "Paid", value: arLife?.paid || 0 },
-                  { name: "Outstanding", value: openAR },
-                ]}
-                colors={[CHART_COLORS.emerald, CHART_COLORS.amber]}
-                centerLabel="Paid"
-                centerValue={`${arLife?.paid_pct ? Math.round(arLife.paid_pct) : 0}%`}
-              />
+              {(() => {
+                const bankVerified = arSummary?.bank_verified_matched || 0
+                const total = arLife?.total || 0
+                const unverified = Math.max(0, total - bankVerified)
+                const pct = total > 0 ? Math.round((bankVerified / total) * 100) : 0
+                return (
+                  <MiniDonut
+                    data={[
+                      { name: "Bank Verified", value: bankVerified },
+                      { name: "Unverified", value: unverified },
+                    ]}
+                    colors={[CHART_COLORS.emerald, CHART_COLORS.amber]}
+                    centerLabel="Verified"
+                    centerValue={`${pct}%`}
+                  />
+                )
+              })()}
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 flex-1 content-center">
               <div>
@@ -660,9 +668,9 @@ export default function ReconciliationPage() {
                 <p className="text-[10px] text-zinc-600">{arLife?.invoice_count || 0} invoices</p>
               </div>
               <div>
-                <p className="text-[10px] text-zinc-500">Paid</p>
-                <p className="text-[14px] font-mono tabular-nums text-emerald-400 font-semibold">{formatCurrency(arLife?.paid || 0)}</p>
-                <p className="text-[10px] text-zinc-600">{arLife?.paid_count || 0} paid</p>
+                <p className="text-[10px] text-zinc-500">Paid (Bank Verified)</p>
+                <p className="text-[14px] font-mono tabular-nums text-emerald-400 font-semibold">{formatCurrency(arSummary?.bank_verified_matched || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{arSummary?.matched_count || 0} matched</p>
               </div>
               <div>
                 <p className="text-[10px] text-zinc-500">Outstanding</p>
@@ -670,9 +678,9 @@ export default function ReconciliationPage() {
                 <p className="text-[10px] text-zinc-600">{arLife?.open_count || 0} open</p>
               </div>
               <div>
-                <p className="text-[10px] text-zinc-500">Bank Verified</p>
-                <p className="text-[14px] font-mono tabular-nums text-emerald-400/70 font-semibold">{formatCurrency(arSummary?.bank_verified_matched || 0)}</p>
-                <p className="text-[10px] text-zinc-600">{arSummary?.matched_count || 0} matched</p>
+                <p className="text-[10px] text-zinc-500">Books Paid (QBO)</p>
+                <p className="text-[14px] font-mono tabular-nums text-zinc-500 font-semibold">{formatCurrency(arLife?.paid || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{arLife?.paid_count || 0} in books</p>
               </div>
             </div>
           </div>
@@ -693,15 +701,23 @@ export default function ReconciliationPage() {
           </div>
           <div className="flex gap-4">
             <div className="w-[110px] shrink-0">
-              <MiniDonut
-                data={[
-                  { name: "Paid", value: apLife?.paid || 0 },
-                  { name: "Outstanding", value: openAP },
-                ]}
-                colors={[CHART_COLORS.emerald, CHART_COLORS.amber]}
-                centerLabel="Paid"
-                centerValue={`${apLife?.paid_pct ? Math.round(apLife.paid_pct) : 0}%`}
-              />
+              {(() => {
+                const bankVerified = apSummary?.bank_verified_matched || 0
+                const total = apLife?.total || 0
+                const unverified = Math.max(0, total - bankVerified)
+                const pct = total > 0 ? Math.round((bankVerified / total) * 100) : 0
+                return (
+                  <MiniDonut
+                    data={[
+                      { name: "Bank Verified", value: bankVerified },
+                      { name: "Unverified", value: unverified },
+                    ]}
+                    colors={[CHART_COLORS.emerald, CHART_COLORS.amber]}
+                    centerLabel="Verified"
+                    centerValue={`${pct}%`}
+                  />
+                )
+              })()}
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 flex-1 content-center">
               <div>
@@ -710,9 +726,9 @@ export default function ReconciliationPage() {
                 <p className="text-[10px] text-zinc-600">{apLife?.bill_count || 0} bills</p>
               </div>
               <div>
-                <p className="text-[10px] text-zinc-500">Paid</p>
-                <p className="text-[14px] font-mono tabular-nums text-emerald-400 font-semibold">{formatCurrency(apLife?.paid || 0)}</p>
-                <p className="text-[10px] text-zinc-600">{apLife?.paid_count || 0} paid</p>
+                <p className="text-[10px] text-zinc-500">Paid (Bank Verified)</p>
+                <p className="text-[14px] font-mono tabular-nums text-emerald-400 font-semibold">{formatCurrency(apSummary?.bank_verified_matched || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{apSummary?.matched_count || 0} matched</p>
               </div>
               <div>
                 <p className="text-[10px] text-zinc-500">Outstanding</p>
@@ -720,9 +736,9 @@ export default function ReconciliationPage() {
                 <p className="text-[10px] text-zinc-600">{apLife?.open_count || 0} open</p>
               </div>
               <div>
-                <p className="text-[10px] text-zinc-500">Bank Verified</p>
-                <p className="text-[14px] font-mono tabular-nums text-emerald-400/70 font-semibold">{formatCurrency(apSummary?.bank_verified_matched || 0)}</p>
-                <p className="text-[10px] text-zinc-600">{apSummary?.matched_count || 0} matched</p>
+                <p className="text-[10px] text-zinc-500">Books Paid (QBO)</p>
+                <p className="text-[14px] font-mono tabular-nums text-zinc-500 font-semibold">{formatCurrency(apLife?.paid || 0)}</p>
+                <p className="text-[10px] text-zinc-600">{apLife?.paid_count || 0} in books</p>
               </div>
             </div>
           </div>
