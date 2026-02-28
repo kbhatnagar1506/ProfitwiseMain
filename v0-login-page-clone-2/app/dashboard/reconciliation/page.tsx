@@ -1,13 +1,14 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { RefreshCw, Search, ArrowRight, Sparkles } from "lucide-react"
+import { RefreshCw, Search, ArrowRight, Sparkles, Zap, ChevronRight } from "lucide-react"
 import {
   ResponsiveContainer,
   PieChart,
@@ -263,6 +264,12 @@ export default function ReconciliationPage() {
   const [aiSummary, setAiSummary] = useState<string | null>(null)
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
   const [aiSummaryError, setAiSummaryError] = useState<string | null>(null)
+  // Command Queue
+  const [cmdQueueOpen, setCmdQueueOpen] = useState(false)
+  const [cmdQueue, setCmdQueue] = useState<Movement[]>([])
+  const [cmdIndex, setCmdIndex] = useState(0)
+  const [cmdProcessed, setCmdProcessed] = useState<Map<string, "accepted" | "skipped">>(new Map())
+  const cmdSidebarRef = useRef<HTMLDivElement>(null)
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch("/api/ar-ap-step")
@@ -342,6 +349,89 @@ export default function ReconciliationPage() {
       setError(err instanceof Error ? err.message : "Error confirming match")
     }
   }
+
+  // ── Command Queue handlers ──────────────────────────────────────────────
+  const openCmdQueue = useCallback(() => {
+    if (!data) return
+    const all = [
+      ...(data.movements?.unmatched_inflows || []),
+      ...(data.movements?.unmatched_outflows || []),
+    ]
+    // Sort: high-confidence AI matches first, then by absolute amount desc
+    const sorted = [...all].sort((a, b) => {
+      const ca = a.suggested_match?.confidence ?? 0
+      const cb = b.suggested_match?.confidence ?? 0
+      if (cb !== ca) return cb - ca
+      return Math.abs(b.amount) - Math.abs(a.amount)
+    })
+    setCmdQueue(sorted)
+    setCmdIndex(0)
+    setCmdProcessed(new Map())
+    setCmdQueueOpen(true)
+  }, [data])
+
+  const advanceQueue = useCallback((queue: Movement[], idx: number, processed: Map<string, "accepted" | "skipped">) => {
+    // Find next unprocessed item after current index
+    for (let i = idx + 1; i < queue.length; i++) {
+      if (!processed.has(queue[i].id)) {
+        setCmdIndex(i)
+        // Auto-scroll sidebar
+        setTimeout(() => {
+          const el = cmdSidebarRef.current?.querySelector(`[data-idx="${i}"]`)
+          el?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+        }, 0)
+        return
+      }
+    }
+    // All processed — stay on last item
+  }, [])
+
+  const handleCmdAccept = useCallback(() => {
+    const movement = cmdQueue[cmdIndex]
+    if (!movement) return
+    const sm = movement.suggested_match
+    if (!sm || sm.confidence < 0.75) return
+    // Fire-and-forget — no await so UI is instant
+    const componentType = sm.invoice_id ? "ar" : "ap"
+    const referenceId = sm.invoice_id || sm.bill_id
+    fetch("/api/dashboard/reconciliation/apply-match", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        movement_id: movement.id,
+        reference_id: referenceId,
+        component_type: componentType,
+        entity_id: "",
+        amount: sm.matched_amount,
+      }),
+    }).catch(() => {})
+    const next = new Map(cmdProcessed)
+    next.set(movement.id, "accepted")
+    setCmdProcessed(next)
+    advanceQueue(cmdQueue, cmdIndex, next)
+  }, [cmdQueue, cmdIndex, cmdProcessed, advanceQueue])
+
+  const handleCmdSkip = useCallback(() => {
+    const movement = cmdQueue[cmdIndex]
+    if (!movement) return
+    const next = new Map(cmdProcessed)
+    next.set(movement.id, "skipped")
+    setCmdProcessed(next)
+    advanceQueue(cmdQueue, cmdIndex, next)
+  }, [cmdQueue, cmdIndex, cmdProcessed, advanceQueue])
+
+  // Keyboard engine — Y / N, guarded against input focus
+  useEffect(() => {
+    if (!cmdQueueOpen) return
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement).isContentEditable) return
+      if (e.key === "y" || e.key === "Y") { e.preventDefault(); handleCmdAccept() }
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); handleCmdSkip() }
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [cmdQueueOpen, handleCmdAccept, handleCmdSkip])
 
   const fetchAiSummary = useCallback(async (d: ARAPStepResponse) => {
     setAiSummaryLoading(true)
@@ -752,8 +842,8 @@ export default function ReconciliationPage() {
           <TabsTrigger value="excluded" className="text-[12px] h-7 px-3">Excluded ({data.excluded_movements?.count || 0})</TabsTrigger>
         </TabsList>
 
-        {/* Review Queue Tab */}
-        <TabsContent value="review" className="space-y-3 mt-3">
+        {/* Review Queue Tab — Command Queue launcher */}
+        <TabsContent value="review" className="mt-3">
           {unmatched_inflows.length + unmatched_outflows.length === 0 ? (
             <div className="bg-[#141414] border border-white/10 rounded-xl p-14 text-center">
               <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-3">
@@ -763,154 +853,59 @@ export default function ReconciliationPage() {
               <p className="text-zinc-500 text-[12px] mt-1">All operating cash has been reconciled.</p>
             </div>
           ) : (
-            <div className="space-y-2">
-              {/* Column headers */}
-              <div className="grid grid-cols-[1fr_80px_1fr_140px] gap-0 px-4">
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Bank Transaction</p>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-center">Match</p>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider pl-4">Ledger</p>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider text-right">Action</p>
-              </div>
-
-              {[...unmatched_inflows, ...unmatched_outflows].map((movement) => {
-                const sm = movement.suggested_match
-                const badge = sm ? getConfidenceBadge(sm.confidence) : null
-                const isInflow = movement.amount > 0
-                const entityName = sm?.entity_name
-                const refId = sm?.invoice_id || sm?.bill_id
-                const refLabel = sm?.invoice_id ? `Inv #${refId}` : sm?.bill_id ? `Bill #${refId}` : null
-                const isAR = !!sm?.invoice_id
-                const hasMatch = !!sm
-
+            <div className="bg-[#141414] border border-white/[0.07] rounded-xl overflow-hidden">
+              {/* Stats row */}
+              {(() => {
+                const all = [...unmatched_inflows, ...unmatched_outflows]
+                const withAI = all.filter(m => m.suggested_match && m.suggested_match.confidence >= 0.75)
+                const highConf = all.filter(m => m.suggested_match && m.suggested_match.confidence >= 0.88)
+                const manual = all.filter(m => !m.suggested_match || m.suggested_match.confidence < 0.75)
+                const totalCash = all.reduce((s, m) => s + Math.abs(m.amount), 0)
                 return (
-                  <div
-                    key={movement.id}
-                    className="grid grid-cols-[1fr_80px_1fr_140px] items-stretch bg-[#141414] border border-white/[0.06] rounded-xl overflow-hidden hover:border-white/[0.12] transition-colors duration-150 group"
-                  >
-                    {/* Left: Bank Side */}
-                    <div className="px-4 py-3 border-r border-white/[0.06]">
-                      <div className="flex items-start gap-3">
-                        <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ring-2 ${isInflow ? "bg-emerald-500 ring-emerald-500/20" : "bg-red-500 ring-red-500/20"}`} />
-                        <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-white truncate leading-tight">{movement.description}</p>
-                          {movement.raw_description && movement.raw_description !== movement.description && (
-                            <p className="text-[11px] text-zinc-500 truncate mt-0.5 leading-tight">{movement.raw_description}</p>
-                          )}
-                          <div className="flex items-baseline gap-2 mt-1.5">
-                            <span className={`text-[15px] font-mono tabular-nums font-bold ${isInflow ? "text-emerald-400" : "text-red-400"}`}>
-                              {isInflow ? "+" : "−"}{formatCurrency(Math.abs(movement.amount))}
-                            </span>
-                            <span className="text-[11px] text-zinc-500">{formatDate(movement.date)}</span>
-                          </div>
-                        </div>
+                  <>
+                    <div className="grid grid-cols-4 divide-x divide-white/[0.06] border-b border-white/[0.07]">
+                      <div className="px-5 py-4">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Needs Review</p>
+                        <p className="text-[22px] font-mono tabular-nums font-bold text-white mt-1">{all.length}</p>
+                        <p className="text-[11px] text-zinc-600 mt-0.5">{formatCurrency(totalCash)} unmatched</p>
+                      </div>
+                      <div className="px-5 py-4">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider">AI Suggested</p>
+                        <p className="text-[22px] font-mono tabular-nums font-bold text-emerald-400 mt-1">{withAI.length}</p>
+                        <p className="text-[11px] text-zinc-600 mt-0.5">ready to accept</p>
+                      </div>
+                      <div className="px-5 py-4">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider">High Confidence</p>
+                        <p className="text-[22px] font-mono tabular-nums font-bold text-emerald-400/70 mt-1">{highConf.length}</p>
+                        <p className="text-[11px] text-zinc-600 mt-0.5">≥88% · clear auto-accept</p>
+                      </div>
+                      <div className="px-5 py-4">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Need Manual</p>
+                        <p className="text-[22px] font-mono tabular-nums font-bold text-zinc-400 mt-1">{manual.length}</p>
+                        <p className="text-[11px] text-zinc-600 mt-0.5">search to link</p>
                       </div>
                     </div>
 
-                    {/* Middle: Confidence bridge */}
-                    <div className="flex flex-col items-center justify-center py-3 px-2 border-r border-white/[0.06] bg-[#111]">
-                      {badge ? (
-                        <>
-                          <span className={`text-[11px] font-bold font-mono ${badge.tier === "high" ? "text-emerald-400" : badge.tier === "med" ? "text-amber-400" : "text-zinc-400"}`}>
-                            {badge.label}
-                          </span>
-                          <div className="my-1.5 flex flex-col items-center gap-0.5">
-                            <div className="w-px h-2 bg-white/10" />
-                            <ArrowRight className="h-3 w-3 text-zinc-600" />
-                            <div className="w-px h-2 bg-white/10" />
-                          </div>
-                          <span className="text-[9px] text-zinc-600 uppercase tracking-wider text-center leading-tight">
-                            {badge.tier === "high" ? "Strong" : badge.tier === "med" ? "Likely" : "Possible"}
-                          </span>
-                        </>
-                      ) : (
-                        <div className="flex flex-col items-center gap-1">
-                          <span className="text-[18px] text-zinc-700">?</span>
-                          <span className="text-[9px] text-zinc-600 uppercase tracking-wider">Manual</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Right: Ledger Side */}
-                    <div className="px-4 py-3 border-r border-white/[0.06]">
-                      {hasMatch ? (
-                        <div className="flex items-start gap-2.5 h-full">
-                          <div className={`mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider shrink-0 ${isAR ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>
-                            {isAR ? "AR" : "AP"}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-[13px] font-medium text-white truncate leading-tight">
-                              {entityName || (isAR ? "Invoice" : "Bill")}
-                            </p>
-                            {refLabel && <p className="text-[11px] text-zinc-500 mt-0.5">{refLabel}</p>}
-                            <div className="flex items-baseline gap-2 mt-1.5">
-                              <span className="text-[15px] font-mono tabular-nums font-bold text-zinc-200">
-                                {formatCurrency(sm.matched_amount)}
-                              </span>
-                              {sm.reason && (
-                                <span className="text-[10px] text-zinc-600 truncate">{sm.reason}</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center h-full">
-                          <div>
-                            <p className="text-[12px] text-zinc-500 italic">No AI match found</p>
-                            <p className="text-[11px] text-zinc-600 mt-0.5">Use "Match" to link manually</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Action */}
-                    <div className="flex items-center justify-end gap-2 px-3 py-3">
-                      {sm && sm.confidence >= 0.75 ? (
-                        <Button
-                          size="sm"
-                          className="bg-emerald-600 hover:bg-emerald-500 text-[11px] h-7 px-3 font-medium"
-                          onClick={async () => {
-                            const componentType = sm.invoice_id ? "ar" : "ap"
-                            const referenceId = sm.invoice_id || sm.bill_id
-                            try {
-                              const res = await fetch("/api/dashboard/reconciliation/apply-match", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                  movement_id: movement.id,
-                                  reference_id: referenceId,
-                                  component_type: componentType,
-                                  entity_id: "",
-                                  amount: sm.matched_amount,
-                                }),
-                              })
-                              if (res.ok) await fetchData()
-                              else setError("Failed to apply match")
-                            } catch (err) {
-                              setError(err instanceof Error ? err.message : "Error")
-                            }
-                          }}
-                        >
-                          ✓ Accept
-                        </Button>
-                      ) : null}
+                    {/* Launch button */}
+                    <div className="px-5 py-5 flex items-center justify-between">
+                      <div>
+                        <p className="text-[13px] text-white font-medium">Process with Command Queue</p>
+                        <p className="text-[11px] text-zinc-500 mt-0.5">
+                          Full-screen split-pane · press <kbd className="inline-flex items-center px-1 py-0 rounded bg-white/[0.07] border border-white/10 text-[10px] font-mono text-emerald-400 mx-0.5">Y</kbd> to accept,{" "}
+                          <kbd className="inline-flex items-center px-1 py-0 rounded bg-white/[0.07] border border-white/10 text-[10px] font-mono text-zinc-400 mx-0.5">N</kbd> to skip · clear {all.length} items in seconds
+                        </p>
+                      </div>
                       <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-[11px] h-7 px-2.5 text-zinc-400 hover:text-white border border-white/[0.06] hover:border-white/20"
-                        onClick={() => {
-                          setSelectedMovement(movement)
-                          setSelectedMatches([])
-                          setSearchQuery("")
-                          setSearchResults([])
-                          setIsDrawerOpen(true)
-                        }}
+                        onClick={openCmdQueue}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white text-[12px] h-9 px-5 font-semibold gap-2"
                       >
-                        Match
+                        <Zap className="h-3.5 w-3.5" />
+                        Open Command Queue
                       </Button>
                     </div>
-                  </div>
+                  </>
                 )
-              })}
+              })()}
             </div>
           )}
         </TabsContent>
@@ -1279,6 +1274,264 @@ export default function ReconciliationPage() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* ── Command Queue Dialog ─────────────────────────────────────────── */}
+      <Dialog open={cmdQueueOpen} onOpenChange={(open) => {
+        if (!open) { setCmdQueueOpen(false); fetchData() }
+      }}>
+        <DialogContent className="bg-[#0d0d0d] border border-white/10 p-0 max-w-[92vw] w-[1100px] h-[88vh] flex flex-col overflow-hidden">
+          {(() => {
+            const activeMov = cmdQueue[cmdIndex] || null
+            const sm = activeMov?.suggested_match
+            const isAR = !!sm?.invoice_id
+            const isInflow = (activeMov?.amount ?? 0) > 0
+            const processedCount = cmdProcessed.size
+            const totalCount = cmdQueue.length
+            const pct = totalCount > 0 ? Math.round((processedCount / totalCount) * 100) : 0
+            const hasMatch = sm && sm.confidence >= 0.75
+            const confBadge = sm ? getConfidenceBadge(sm.confidence) : null
+            const refId = sm?.invoice_id || sm?.bill_id
+            const refLabel = sm?.invoice_id ? `Inv #${refId}` : sm?.bill_id ? `Bill #${refId}` : null
+
+            return (
+              <>
+                {/* Header bar */}
+                <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.07] shrink-0">
+                  <div className="flex items-center gap-3">
+                    <Zap className="h-3.5 w-3.5 text-emerald-400" />
+                    <span className="text-[11px] font-medium text-white uppercase tracking-wider">Command Queue</span>
+                    <span className="text-[11px] text-zinc-600">keyboard-driven · zero latency</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    {/* Hotkey hints */}
+                    <div className="flex items-center gap-2">
+                      <kbd className="inline-flex items-center px-1.5 py-0.5 rounded bg-white/[0.07] border border-white/10 text-[11px] font-mono text-emerald-400">Y</kbd>
+                      <span className="text-[11px] text-zinc-500">Accept</span>
+                      <kbd className="inline-flex items-center px-1.5 py-0.5 rounded bg-white/[0.07] border border-white/10 text-[11px] font-mono text-zinc-400 ml-2">N</kbd>
+                      <span className="text-[11px] text-zinc-500">Skip</span>
+                    </div>
+                    {/* Progress */}
+                    <div className="flex items-center gap-2">
+                      <div className="w-28 h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-500 rounded-full transition-none" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-[11px] font-mono text-zinc-400 tabular-nums">
+                        {processedCount} / {totalCount}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Body: sidebar + panel */}
+                <div className="flex flex-1 min-h-0">
+                  {/* Left sidebar — queue list */}
+                  <div ref={cmdSidebarRef} className="w-[240px] shrink-0 border-r border-white/[0.07] overflow-y-auto bg-[#0a0a0a]">
+                    <div className="px-3 py-2 border-b border-white/[0.05]">
+                      <span className="text-[9px] text-zinc-600 uppercase tracking-wider">Queue</span>
+                    </div>
+                    {cmdQueue.map((mov, idx) => {
+                      const movSm = mov.suggested_match
+                      const status = cmdProcessed.get(mov.id)
+                      const isActive = idx === cmdIndex
+                      const movIsInflow = mov.amount > 0
+                      const tier = movSm ? getConfidenceBadge(movSm.confidence).tier : null
+                      return (
+                        <button
+                          key={mov.id}
+                          data-idx={idx}
+                          onClick={() => setCmdIndex(idx)}
+                          className={`w-full text-left px-3 py-2.5 border-b border-white/[0.04] flex items-center gap-2.5 transition-none
+                            ${isActive ? "bg-white/[0.07] border-l-2 border-l-emerald-500" : "border-l-2 border-l-transparent hover:bg-white/[0.03]"}
+                            ${status ? "opacity-40" : ""}`}
+                        >
+                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${movIsInflow ? "bg-emerald-500" : "bg-red-500"}`} />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className={`text-[11px] font-mono tabular-nums font-semibold ${movIsInflow ? "text-emerald-400" : "text-red-400"} ${status ? "line-through" : ""}`}>
+                                {movIsInflow ? "+" : "−"}{formatCurrency(Math.abs(mov.amount))}
+                              </span>
+                              {tier && !status && (
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tier === "high" ? "bg-emerald-500" : tier === "med" ? "bg-amber-500" : "bg-zinc-600"}`} />
+                              )}
+                              {status === "accepted" && <span className="text-[9px] text-emerald-500">✓</span>}
+                              {status === "skipped" && <span className="text-[9px] text-zinc-600">—</span>}
+                            </div>
+                            <p className={`text-[10px] truncate mt-0.5 ${isActive ? "text-zinc-300" : "text-zinc-600"}`}>
+                              {movSm?.entity_name || mov.description}
+                            </p>
+                          </div>
+                        </button>
+                      )
+                    })}
+                    {cmdProcessed.size === cmdQueue.length && cmdQueue.length > 0 && (
+                      <div className="px-3 py-4 text-center">
+                        <p className="text-[11px] text-emerald-400">All processed ✓</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right panel */}
+                  <div className="flex-1 flex flex-col min-h-0">
+                    {!activeMov ? (
+                      <div className="flex-1 flex items-center justify-center">
+                        <div className="text-center">
+                          <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-3">
+                            <span className="text-emerald-400 text-lg">✓</span>
+                          </div>
+                          <p className="text-white font-medium">Queue Empty</p>
+                          <p className="text-zinc-500 text-[12px] mt-1">All movements processed.</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Content area */}
+                        <div className="flex-1 overflow-y-auto p-6">
+                          {/* Position indicator */}
+                          <div className="flex items-center gap-2 mb-5">
+                            <span className="text-[10px] text-zinc-600 font-mono">#{cmdIndex + 1} of {cmdQueue.length}</span>
+                            {cmdProcessed.get(activeMov.id) === "accepted" && (
+                              <span className="text-[10px] text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">Accepted</span>
+                            )}
+                            {cmdProcessed.get(activeMov.id) === "skipped" && (
+                              <span className="text-[10px] text-zinc-500 bg-white/5 px-1.5 py-0.5 rounded">Skipped</span>
+                            )}
+                          </div>
+
+                          {/* Two-column bridge */}
+                          <div className="grid grid-cols-2 gap-5">
+                            {/* Bank side */}
+                            <div className="bg-[#141414] border border-white/[0.07] rounded-xl p-5">
+                              <div className="flex items-center gap-2 mb-4">
+                                <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-medium">Bank Movement</span>
+                                <div className={`w-1.5 h-1.5 rounded-full ${isInflow ? "bg-emerald-500" : "bg-red-500"}`} />
+                              </div>
+                              <p className="text-[15px] font-medium text-white leading-snug mb-1">
+                                {activeMov.description}
+                              </p>
+                              {activeMov.raw_description && activeMov.raw_description !== activeMov.description && (
+                                <p className="text-[11px] text-zinc-500 mb-3">{activeMov.raw_description}</p>
+                              )}
+                              <p className={`text-[28px] font-mono tabular-nums font-bold mt-3 ${isInflow ? "text-emerald-400" : "text-red-400"}`}>
+                                {isInflow ? "+" : "−"}{formatCurrency(Math.abs(activeMov.amount))}
+                              </p>
+                              <p className="text-[12px] text-zinc-500 mt-1">{formatDate(activeMov.date)}</p>
+                            </div>
+
+                            {/* Ledger side */}
+                            {hasMatch ? (
+                              <div className="bg-[#141414] border border-white/[0.07] rounded-xl p-5">
+                                <div className="flex items-center gap-2 mb-4">
+                                  <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-medium">Ledger Match</span>
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${isAR ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>
+                                    {isAR ? "AR" : "AP"}
+                                  </span>
+                                </div>
+                                <p className="text-[15px] font-medium text-white leading-snug mb-1">
+                                  {sm.entity_name || (isAR ? "Invoice" : "Bill")}
+                                </p>
+                                {refLabel && <p className="text-[11px] text-zinc-500 mb-3">{refLabel}</p>}
+                                <p className="text-[28px] font-mono tabular-nums font-bold mt-3 text-zinc-200">
+                                  {formatCurrency(sm.matched_amount)}
+                                </p>
+                                {/* Confidence bar */}
+                                <div className="mt-4 space-y-1.5">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-zinc-500">AI Confidence</span>
+                                    <span className={`text-[11px] font-mono font-bold ${confBadge?.tier === "high" ? "text-emerald-400" : confBadge?.tier === "med" ? "text-amber-400" : "text-zinc-400"}`}>
+                                      {confBadge?.label} · {confBadge?.tier === "high" ? "Strong" : confBadge?.tier === "med" ? "Likely" : "Possible"}
+                                    </span>
+                                  </div>
+                                  <div className="w-full h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${confBadge?.tier === "high" ? "bg-emerald-500" : confBadge?.tier === "med" ? "bg-amber-500" : "bg-zinc-600"}`}
+                                      style={{ width: `${Math.round(sm.confidence * 100)}%` }}
+                                    />
+                                  </div>
+                                </div>
+                                {sm.reason && (
+                                  <p className="text-[11px] text-zinc-500 mt-3 leading-relaxed">{sm.reason}</p>
+                                )}
+                              </div>
+                            ) : (
+                              // No match panel
+                              <div className="bg-[#141414] border border-white/[0.07] rounded-xl p-5 flex flex-col justify-between">
+                                <div>
+                                  <div className="flex items-center gap-2 mb-4">
+                                    <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-medium">Ledger Match</span>
+                                  </div>
+                                  <p className="text-[14px] text-zinc-500 italic">No AI suggestion found</p>
+                                  <p className="text-[11px] text-zinc-600 mt-1">
+                                    {sm ? `Low confidence: ${Math.round(sm.confidence * 100)}%` : "Search manually to link this movement."}
+                                  </p>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  className="mt-4 bg-white/[0.07] hover:bg-white/[0.12] text-zinc-300 text-[12px] h-8 border border-white/10 w-full"
+                                  onClick={() => {
+                                    setSelectedMovement(activeMov)
+                                    setSelectedMatches([])
+                                    setSearchQuery("")
+                                    setSearchResults([])
+                                    setIsDrawerOpen(true)
+                                  }}
+                                >
+                                  <Search className="h-3 w-3 mr-2" />
+                                  Search &amp; Match Manually
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Action bar */}
+                        <div className="shrink-0 border-t border-white/[0.07] px-6 py-4 flex items-center justify-between bg-[#0a0a0a]">
+                          <div className="flex items-center gap-2 text-zinc-600 text-[11px]">
+                            <ChevronRight className="h-3 w-3" />
+                            <span>Click queue item to jump · or use keyboard</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={handleCmdSkip}
+                              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.07] text-zinc-300 text-[12px] font-medium transition-none"
+                            >
+                              <kbd className="inline-flex items-center px-1 py-0 rounded bg-white/[0.07] text-[10px] font-mono text-zinc-400 border border-white/10">N</kbd>
+                              Skip
+                            </button>
+                            {hasMatch && !cmdProcessed.has(activeMov.id) && (
+                              <button
+                                onClick={handleCmdAccept}
+                                className="flex items-center gap-2 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[12px] font-semibold transition-none"
+                              >
+                                <kbd className="inline-flex items-center px-1 py-0 rounded bg-white/20 text-[10px] font-mono text-white border border-white/20">Y</kbd>
+                                Accept Match
+                              </button>
+                            )}
+                            {!hasMatch && (
+                              <button
+                                onClick={() => {
+                                  setSelectedMovement(activeMov)
+                                  setSelectedMatches([])
+                                  setSearchQuery("")
+                                  setSearchResults([])
+                                  setIsDrawerOpen(true)
+                                }}
+                                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] border border-white/10 text-zinc-300 text-[12px] font-medium transition-none"
+                              >
+                                <Search className="h-3 w-3" />
+                                Search &amp; Match
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* Manual Match Sheet */}
       <Sheet open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
