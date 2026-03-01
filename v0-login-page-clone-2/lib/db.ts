@@ -1464,4 +1464,19 @@ export async function ensureUserDecisionsSchema() {
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_context_refinement_history_user ON context_refinement_history (user_id, context_version DESC)"
   )
+
+  // Period locks for month-end close (Books module)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS period_locks (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      period_year  INT NOT NULL,
+      period_month INT NOT NULL,
+      locked_at    TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, period_year, period_month)
+    )
+  `)
+  await p.query(
+    "CREATE INDEX IF NOT EXISTS idx_period_locks_user ON period_locks (user_id, period_year DESC, period_month DESC)"
+  )
 }
