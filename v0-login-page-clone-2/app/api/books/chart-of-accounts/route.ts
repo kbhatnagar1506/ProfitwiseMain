@@ -156,6 +156,12 @@ export async function GET() {
   })
 
   // P&L and other accounts from movement data
+  const countMap: Record<string, number> = {}
+  for (const r of movementRows) {
+    const key = r.economic_class
+    countMap[key] = (countMap[key] ?? 0) + parseInt(r.count)
+  }
+
   for (const [econClass, acctDef] of Object.entries(ACCOUNT_MAP)) {
     if (econClass === "customer_receipt" || econClass === "vendor_payment") continue // already handled via cash_events
     const balance = balanceMap[econClass] ?? 0
@@ -166,7 +172,7 @@ export async function GET() {
       name: acctDef.name,
       type: acctDef.type,
       balance,
-      movement_count: Math.round(balance), // approximate
+      movement_count: countMap[econClass] ?? 0,
       monthly_trend: trendMap[econClass] ?? Array(12).fill(0),
       group: acctDef.group,
     })

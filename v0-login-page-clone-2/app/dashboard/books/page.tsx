@@ -35,7 +35,7 @@ function ChartOfAccountsTab() {
     { key: "liabilities", label: "Liabilities", color: "red" },
     { key: "equity", label: "Equity", color: "blue" },
     { key: "revenue", label: "Revenue", color: "green" },
-    { key: "expenses", label: "amber" },
+    { key: "expenses", label: "Expenses", color: "amber" },
     { key: "nonOperating", label: "Non-Operating", color: "zinc" },
   ]
 
@@ -70,7 +70,7 @@ function ChartOfAccountsTab() {
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-sm text-emerald-400">{fmt(acct.balance)}</div>
-                      {acct.movement_count && <div className="text-xs text-zinc-600">{acct.movement_count} moves</div>}
+                      {acct.movement_count !== undefined && acct.movement_count !== null && <div className="text-xs text-zinc-600">{acct.movement_count} moves</div>}
                     </div>
                   </div>
                 ))}
@@ -372,25 +372,39 @@ function AIAuditorPanel() {
   const [auditor, setAuditor] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [coaData, setCoaData] = useState<any>(null)
 
   const runAudit = async () => {
     setLoading(true)
-    const res = await fetch("/api/books/ai-auditor")
-    const json = await res.json()
-    setAuditor(json)
+    const [auditorRes, coaRes] = await Promise.all([
+      fetch("/api/books/ai-auditor"),
+      fetch("/api/books/chart-of-accounts"),
+    ])
+    const auditorJson = await auditorRes.json()
+    const coaJson = await coaRes.json()
+    setAuditor(auditorJson)
+    setCoaData(coaJson)
     setExpanded(true)
     setLoading(false)
   }
 
+  // Find suspense account balance
+  const suspenseAccount = coaData?.nonOperating?.find((a: any) => a.code === "9999")
+  const suspenseBalance = suspenseAccount?.balance ?? 0
+  const hasSuspense = suspenseBalance > 0.01
+
+  // Determine if we should show error state
+  const hasAnomalies = (auditor?.anomalies?.length ?? 0) > 0 || hasSuspense
+
   return (
-    <div className="border border-white/[0.07] rounded-lg overflow-hidden">
+    <div className={`border rounded-lg overflow-hidden ${hasSuspense ? "border-red-500/20 bg-red-500/5" : "border-white/[0.07]"}`}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] flex items-center justify-between"
+        className={`w-full px-4 py-3 flex items-center justify-between ${hasSuspense ? "bg-red-500/10 hover:bg-red-500/15" : "bg-white/[0.03] hover:bg-white/[0.06]"}`}
       >
         <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-amber-400" />
-          <span className="font-medium text-white">AI Auditor</span>
+          <Sparkles className={`w-4 h-4 ${hasSuspense ? "text-red-400" : "text-amber-400"}`} />
+          <span className={`font-medium ${hasSuspense ? "text-red-400" : "text-white"}`}>AI Auditor</span>
         </div>
         {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
       </button>
@@ -403,6 +417,17 @@ function AIAuditorPanel() {
             </Button>
           ) : (
             <div className="space-y-2">
+              {hasSuspense && (
+                <div className="text-xs p-2 rounded border border-red-500/20 bg-red-500/5">
+                  <div className="flex items-start gap-2">
+                    <Badge className="bg-red-500/10 text-red-400 border-red-500/20" variant="outline">
+                      error
+                    </Badge>
+                    <span className="text-red-300">⚠️ Anomaly Detected: You have {fmt(suspenseBalance)} sitting in Suspense / Unclassified. Reconcile these unmatched transactions before closing the books.</span>
+                  </div>
+                </div>
+              )}
+
               {auditor.anomalies?.length > 0 ? (
                 <>
                   {auditor.anomalies.map((a: any, i: number) => (
@@ -417,9 +442,10 @@ function AIAuditorPanel() {
                   ))}
                   <div className="text-xs text-zinc-600 mt-3 p-2 bg-white/[0.02] rounded">{auditor.narrative}</div>
                 </>
-              ) : (
+              ) : !hasSuspense ? (
                 <div className="text-xs text-emerald-400">✓ Books look clean. No anomalies detected.</div>
-              )}
+              ) : null}
+
               <Button onClick={runAudit} disabled={loading} size="sm" variant="outline" className="w-full">
                 {loading ? "Running..." : "Re-run Audit"}
               </Button>
