@@ -62,8 +62,40 @@ export default function ReviewQueuePage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
-  const [selectedMatches, setSelectedMatches] = useState<Array<{ reference_id: string; component_type: "ar" | "ap"; amount: number }>>([])
+  const [selectedMatches, setSelectedMatches] = useState<Array<{ id: string; entity_name: string; amount: number; amount_due: number; split_amount: number }>>([])
+  const [searchType, setSearchType] = useState<"ar" | "ap">("ar")
   const cmdSidebarRef = useRef<HTMLDivElement>(null)
+
+  // Debounced search effect
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchQuery.trim()) {
+        handleSearch(searchQuery, searchType)
+      } else {
+        setSearchResults([])
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchQuery, searchType])
+
+  const handleSearch = async (query: string, type: "ar" | "ap") => {
+    if (!query.trim()) {
+      setSearchResults([])
+      return
+    }
+    setSearchLoading(true)
+    try {
+      const res = await fetch(`/api/dashboard/reconciliation/search?q=${encodeURIComponent(query)}&type=${type}&limit=50`)
+      if (res.ok) {
+        const json = await res.json()
+        setSearchResults(json.results || [])
+      }
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSearchLoading(false)
+    }
+  }
 
   const fetchData = useCallback(async () => {
     try {
@@ -413,20 +445,234 @@ export default function ReviewQueuePage() {
 
       {/* Manual Match Sheet */}
       <Sheet open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
-        <SheetContent className="bg-[#141414] border-l border-white/10 w-full sm:max-w-xl overflow-y-auto">
+        <SheetContent className="bg-[#141414] border-l border-white/10 w-full sm:max-w-2xl overflow-y-auto">
           <SheetHeader>
             <SheetTitle className="text-white text-base">Manual Match</SheetTitle>
           </SheetHeader>
           {selectedMovement && (
             <div className="space-y-4 mt-5">
+              {/* Selected Movement Card */}
               <div className="bg-[#0a0a0a] border border-white/[0.07] rounded-lg p-4">
                 <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-2">Selected Movement</p>
                 <p className="text-[13px] font-medium text-white">{selectedMovement.description}</p>
                 <p className="text-[12px] font-mono tabular-nums text-emerald-400 mt-2">
                   {selectedMovement.amount > 0 ? "+" : "−"}{formatCurrency(Math.abs(selectedMovement.amount))}
                 </p>
+                <p className="text-[11px] text-zinc-600 mt-1">{formatDate(selectedMovement.date)}</p>
               </div>
-              <p className="text-[12px] text-zinc-500 text-center py-4">Search and match functionality coming soon</p>
+
+              {/* Search Controls */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-zinc-600 uppercase tracking-wider">Match Type:</span>
+                  <button
+                    onClick={() => { setSearchQuery(""); setSearchResults([]); setSelectedMatches([]); setSearchType("ar") }}
+                    className={`px-3 py-1.5 rounded text-[11px] font-medium transition-none ${
+                      searchType === "ar"
+                        ? "bg-emerald-600 text-white"
+                        : "bg-white/[0.07] text-zinc-400 hover:bg-white/[0.12]"
+                    }`}
+                  >
+                    AR (Invoices)
+                  </button>
+                  <button
+                    onClick={() => { setSearchQuery(""); setSearchResults([]); setSelectedMatches([]); setSearchType("ap") }}
+                    className={`px-3 py-1.5 rounded text-[11px] font-medium transition-none ${
+                      searchType === "ap"
+                        ? "bg-amber-600 text-white"
+                        : "bg-white/[0.07] text-zinc-400 hover:bg-white/[0.12]"
+                    }`}
+                  >
+                    AP (Bills)
+                  </button>
+                </div>
+
+                {/* Search Input */}
+                <div className="flex gap-2">
+                  <Input
+                    placeholder={`Search ${searchType === "ar" ? "invoices" : "bills"}...`}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="bg-[#0a0a0a] border border-white/[0.07] text-white placeholder:text-zinc-600 text-[12px] h-8"
+                  />
+                  {searchLoading && <div className="w-8 h-8 border-2 border-white/10 border-t-emerald-500 rounded-full animate-spin" />}
+                </div>
+              </div>
+
+              {/* Search Results */}
+              {searchResults.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Results ({searchResults.length})</p>
+                  <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                    {searchResults.map((result) => {
+                      const isSelected = selectedMatches.some(m => m.id === result.id)
+                      return (
+                        <button
+                          key={result.id}
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedMatches(selectedMatches.filter(m => m.id !== result.id))
+                            } else {
+                              setSelectedMatches([
+                                ...selectedMatches,
+                                {
+                                  id: result.id,
+                                  entity_name: result.entity_name,
+                                  amount: result.amount,
+                                  amount_due: result.amount_due,
+                                  split_amount: result.amount_due,
+                                },
+                              ])
+                            }
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded border transition-none flex items-center gap-2 ${
+                            isSelected
+                              ? "bg-white/[0.1] border-white/20"
+                              : "bg-white/[0.03] border-white/[0.07] hover:bg-white/[0.06]"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {}}
+                            className="w-4 h-4 rounded border-white/20 cursor-pointer"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[12px] font-medium text-white truncate">{result.entity_name}</p>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-[11px] font-mono text-zinc-400">{formatCurrency(result.amount)}</span>
+                              <span className="text-[10px] text-zinc-600">Due: {formatCurrency(result.amount_due)}</span>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded ${
+                                result.status === "open"
+                                  ? "bg-amber-500/10 text-amber-400"
+                                  : result.status === "partially_paid"
+                                  ? "bg-blue-500/10 text-blue-400"
+                                  : "bg-emerald-500/10 text-emerald-400"
+                              }`}>
+                                {result.status}
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {searchQuery && !searchLoading && searchResults.length === 0 && (
+                <p className="text-[12px] text-zinc-600 text-center py-4">No results found</p>
+              )}
+
+              {/* Consumption Bar */}
+              {selectedMatches.length > 0 && (
+                <div className="space-y-2 bg-[#0a0a0a] border border-white/[0.07] rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-zinc-600 uppercase tracking-wider">Matched Amount</span>
+                    <span className="text-[12px] font-mono text-white">
+                      {formatCurrency(selectedMatches.reduce((s, m) => s + m.split_amount, 0))} / {formatCurrency(Math.abs(selectedMovement.amount))}
+                    </span>
+                  </div>
+                  {(() => {
+                    const matched = selectedMatches.reduce((s, m) => s + m.split_amount, 0)
+                    const total = Math.abs(selectedMovement.amount)
+                    const pct = total > 0 ? Math.min(100, (matched / total) * 100) : 0
+                    const isOver = matched > total
+                    return (
+                      <>
+                        <div className="w-full h-2 bg-white/[0.06] rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-none ${
+                              isOver ? "bg-red-500" : pct === 100 ? "bg-emerald-500" : "bg-amber-500"
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        {isOver && (
+                          <p className="text-[10px] text-red-400">Over by {formatCurrency(matched - total)}</p>
+                        )}
+                        {pct < 100 && (
+                          <p className="text-[10px] text-amber-400">Remaining: {formatCurrency(total - matched)}</p>
+                        )}
+                      </>
+                    )
+                  })()}
+
+                  {/* Split Amounts */}
+                  <div className="space-y-2 mt-3 pt-3 border-t border-white/[0.07]">
+                    <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Split Amounts</p>
+                    {selectedMatches.map((match, idx) => (
+                      <div key={match.id} className="flex items-center gap-2">
+                        <span className="text-[11px] text-zinc-400 flex-1 truncate">{match.entity_name}</span>
+                        <input
+                          type="number"
+                          value={match.split_amount}
+                          onChange={(e) => {
+                            const newVal = parseFloat(e.target.value) || 0
+                            const updated = [...selectedMatches]
+                            updated[idx].split_amount = Math.min(newVal, match.amount_due)
+                            setSelectedMatches(updated)
+                          }}
+                          className="w-24 px-2 py-1 rounded bg-[#141414] border border-white/[0.07] text-white text-[11px] font-mono text-right"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-2 pt-4 border-t border-white/[0.07]">
+                <Button
+                  onClick={() => {
+                    setIsDrawerOpen(false)
+                    setSelectedMovement(null)
+                    setSelectedMatches([])
+                    setSearchQuery("")
+                    setSearchResults([])
+                  }}
+                  variant="ghost"
+                  className="flex-1 text-zinc-400 hover:text-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (!selectedMovement || selectedMatches.length === 0) return
+                    try {
+                      const res = await fetch("/api/dashboard/reconciliation/split-match", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          movement_id: selectedMovement.id,
+                          matches: selectedMatches.map(m => ({
+                            reference_id: m.id,
+                            component_type: searchType,
+                            amount: m.split_amount,
+                          })),
+                        }),
+                      })
+                      if (res.ok) {
+                        setIsDrawerOpen(false)
+                        setSelectedMovement(null)
+                        setSelectedMatches([])
+                        setSearchQuery("")
+                        setSearchResults([])
+                        await fetchData()
+                        handleCmdSkip()
+                      } else {
+                        setError("Failed to apply match")
+                      }
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Error")
+                    }
+                  }}
+                  disabled={selectedMatches.length === 0 || selectedMatches.reduce((s, m) => s + m.split_amount, 0) > Math.abs(selectedMovement.amount)}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Apply Match
+                </Button>
+              </div>
             </div>
           )}
         </SheetContent>
