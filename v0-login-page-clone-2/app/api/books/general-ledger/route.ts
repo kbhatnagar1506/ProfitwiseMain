@@ -47,6 +47,7 @@ export interface JournalEntry {
   total_debit: number
   total_credit: number
   is_balanced: boolean
+  anomalies?: Array<{ type: string; severity: "warning" | "error"; message: string }>
 }
 
 export async function GET(request: Request) {
@@ -223,11 +224,35 @@ export async function GET(request: Request) {
     }
   }
 
-  // Mark balanced entries
-  const entries = Array.from(jeMap.values()).map(je => ({
-    ...je,
-    is_balanced: Math.abs(je.total_debit - je.total_credit) < 0.02,
-  }))
+  // Mark balanced entries and detect anomalies
+  const entries = Array.from(jeMap.values()).map(je => {
+    const anomalies: Array<{ type: string; severity: "warning" | "error"; message: string }> = []
+    const amount = Math.max(je.total_debit, je.total_credit)
+
+    // Check for unmatched/suspense entries
+    if (je.lines.some(l => l.component_type === "unknown")) {
+      anomalies.push({
+        type: "unmatched",
+        severity: "warning",
+        message: "This entry contains unmatched/suspense amounts. Reconcile before closing.",
+      })
+    }
+
+    // Check for low classification confidence (if available in tag_data)
+    if (je.lines.some(l => l.source === "ai" && !l.reference_id)) {
+      anomalies.push({
+        type: "low_confidence",
+        severity: "warning",
+        message: "AI-suggested classification. Verify this is correct.",
+      })
+    }
+
+    return {
+      ...je,
+      is_balanced: Math.abs(je.total_debit - je.total_credit) < 0.02,
+      anomalies: anomalies.length > 0 ? anomalies : undefined,
+    }
+  })
 
   return NextResponse.json({ entries, total, page, limit, pages: Math.ceil(total / limit) })
 }

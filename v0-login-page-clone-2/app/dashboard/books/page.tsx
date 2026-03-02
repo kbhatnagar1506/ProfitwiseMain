@@ -212,6 +212,19 @@ function GeneralLedgerTab() {
                     <span className="font-mono text-xs text-zinc-600">{je.id.slice(0, 8)}</span>
                     <span className="text-white">{formatDate(je.date)}</span>
                     <span className="text-zinc-400">{je.memo}</span>
+                    {je.anomalies && je.anomalies.length > 0 && (
+                      <div className="flex items-center gap-1">
+                        {je.anomalies.map((a: any, i: number) => (
+                          <Badge
+                            key={i}
+                            className={a.severity === "error" ? "bg-red-500/10 text-red-400 border-red-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"}
+                            title={a.message}
+                          >
+                            ⚠️
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs text-emerald-400">D: {fmt(je.total_debit)}</span>
