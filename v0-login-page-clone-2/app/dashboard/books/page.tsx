@@ -85,12 +85,35 @@ function ChartOfAccountsTab() {
   const [forecastCode, setForecastCode] = useState<string | null>(null)
   const [seasonalCode, setSeasonalCode] = useState<string | null>(null)
   const [relatedCode, setRelatedCode] = useState<string | null>(null)
+  const [trendData, setTrendData] = useState<Record<string, any[]>>({})
 
   useEffect(() => {
-    fetch("/api/books/chart-of-accounts")
-      .then(r => r.json())
-      .then(setData)
-      .finally(() => setLoading(false))
+    const fetchData = async () => {
+      try {
+        const coaRes = await fetch("/api/books/chart-of-accounts")
+        const coaJson = await coaRes.json()
+        setData(coaJson)
+        
+        // Fetch seasonal patterns for all accounts to get real trend data
+        const seasonalRes = await fetch("/api/books/seasonal-patterns")
+        const seasonalJson = await seasonalRes.json()
+        
+        // Build trend data map from seasonal patterns
+        const trends: Record<string, any[]> = {}
+        if (seasonalJson.monthly_data) {
+          Object.entries(seasonalJson.monthly_data).forEach(([accountCode, monthlyValues]: [string, any]) => {
+            trends[accountCode] = monthlyValues.map((val: number) => ({ value: val }))
+          })
+        }
+        setTrendData(trends)
+      } catch (err) {
+        console.error("Error fetching COA data:", err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    
+    fetchData()
   }, [])
 
   const fetchNarrative = async (code: string) => {
@@ -159,7 +182,7 @@ function ChartOfAccountsTab() {
                         <div className="flex items-center gap-4">
                           {/* 12-Month Trend Sparkline */}
                           <TrendSparkline 
-                            data={generateMockTrendData(acct.balance)} 
+                            data={trendData[acct.code] || generateMockTrendData(acct.balance)} 
                             trend={acct.balance > 0 ? "up" : acct.balance < 0 ? "down" : "neutral"}
                           />
                           <div className="text-right">
@@ -597,13 +620,28 @@ function MonthEndCloseTab() {
   const [locking, setLocking] = useState(false)
   const [showForecast, setShowForecast] = useState(false)
   const [showCashFlow, setShowCashFlow] = useState(false)
+  const [forecastData, setForecastData] = useState<any>(null)
+  const [cashFlowData, setCashFlowData] = useState<any>(null)
 
   const fetchStatus = useCallback(async () => {
     setLoading(true)
-    const res = await fetch(`/api/books/period-status?year=${year}&month=${month}`)
-    const json = await res.json()
-    setStatus(json)
-    setLoading(false)
+    try {
+      const [statusRes, forecastRes, cashFlowRes] = await Promise.all([
+        fetch(`/api/books/period-status?year=${year}&month=${month}`),
+        fetch("/api/books/forecast-impact"),
+        fetch("/api/books/cash-flow-impact"),
+      ])
+      const statusJson = await statusRes.json()
+      const forecastJson = await forecastRes.json()
+      const cashFlowJson = await cashFlowRes.json()
+      setStatus(statusJson)
+      setForecastData(forecastJson)
+      setCashFlowData(cashFlowJson)
+    } catch (err) {
+      console.error("Error fetching period data:", err)
+    } finally {
+      setLoading(false)
+    }
   }, [year, month])
 
   useEffect(() => {
@@ -689,9 +727,12 @@ function MonthEndCloseTab() {
         </button>
         {showForecast && (
           <div className="space-y-2 text-xs">
-            <div className="flex justify-between"><span className="text-zinc-600">Base Scenario Low:</span><span className="text-white">$12,450 on Day 18</span></div>
-            <div className="flex justify-between"><span className="text-zinc-600">Conservative Low:</span><span className="text-white">$9,960 on Day 18</span></div>
-            <div className="flex justify-between"><span className="text-zinc-600">Aggressive Low:</span><span className="text-white">$14,940 on Day 18</span></div>
+            {forecastData?.scenarios?.map((scenario: any, i: number) => (
+              <div key={i} className="flex justify-between">
+                <span className="text-zinc-600">{scenario.name}:</span>
+                <span className="text-white">{fmt(scenario.low_point)} on Day {scenario.low_day}</span>
+              </div>
+            ))}
             <div className="text-blue-400 mt-2">💡 Ensure sufficient buffer before period lock</div>
           </div>
         )}
@@ -708,10 +749,21 @@ function MonthEndCloseTab() {
         </button>
         {showCashFlow && (
           <div className="space-y-2 text-xs">
-            <div className="flex justify-between"><span className="text-zinc-600">Inflows (30d):</span><span className="text-emerald-400">+$145,230</span></div>
-            <div className="flex justify-between"><span className="text-zinc-600">Outflows (30d):</span><span className="text-red-400">−$132,450</span></div>
-            <div className="flex justify-between"><span className="text-zinc-600">Net Change:</span><span className="text-white font-mono">+$12,780</span></div>
-            <div className="text-purple-400 mt-2">📊 Positive cash generation this period</div>
+            <div className="flex justify-between">
+              <span className="text-zinc-600">Inflows (30d):</span>
+              <span className="text-emerald-400">{fmt(cashFlowData?.inflows_30d ?? 0)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-zinc-600">Outflows (30d):</span>
+              <span className="text-red-400">−{fmt(Math.abs(cashFlowData?.outflows_30d ?? 0))}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-zinc-600">Net Change:</span>
+              <span className="text-white font-mono">{fmt((cashFlowData?.inflows_30d ?? 0) + (cashFlowData?.outflows_30d ?? 0))}</span>
+            </div>
+            <div className={`mt-2 ${(cashFlowData?.inflows_30d ?? 0) + (cashFlowData?.outflows_30d ?? 0) > 0 ? "text-emerald-400" : "text-red-400"}`}>
+              📊 {(cashFlowData?.inflows_30d ?? 0) + (cashFlowData?.outflows_30d ?? 0) > 0 ? "Positive" : "Negative"} cash generation this period
+            </div>
           </div>
         )}
       </div>
@@ -738,19 +790,28 @@ function AIAuditorPanel() {
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [coaData, setCoaData] = useState<any>(null)
+  const [concentrationRisk, setConcentrationRisk] = useState<any>(null)
 
   const runAudit = async () => {
     setLoading(true)
-    const [auditorRes, coaRes] = await Promise.all([
-      fetch("/api/books/ai-auditor"),
-      fetch("/api/books/chart-of-accounts"),
-    ])
-    const auditorJson = await auditorRes.json()
-    const coaJson = await coaRes.json()
-    setAuditor(auditorJson)
-    setCoaData(coaJson)
-    setExpanded(true)
-    setLoading(false)
+    try {
+      const [auditorRes, coaRes, riskRes] = await Promise.all([
+        fetch("/api/books/ai-auditor"),
+        fetch("/api/books/chart-of-accounts"),
+        fetch("/api/books/entity-risk"),
+      ])
+      const auditorJson = await auditorRes.json()
+      const coaJson = await coaRes.json()
+      const riskJson = await riskRes.json()
+      setAuditor(auditorJson)
+      setCoaData(coaJson)
+      setConcentrationRisk(riskJson)
+      setExpanded(true)
+    } catch (err) {
+      console.error("Error running audit:", err)
+    } finally {
+      setLoading(false)
+    }
   }
 
   // Find suspense account balance
@@ -810,9 +871,22 @@ function AIAuditorPanel() {
                   {/* Bullet Charts for Concentration Risk (Micro-Visualization) */}
                   <div className="mt-3 space-y-2 p-2 bg-white/[0.02] rounded">
                     <div className="text-xs font-medium text-zinc-400 mb-2">Concentration Risk</div>
-                    <BulletChart percentage={42} label="Top Vendor (AP)" />
-                    <BulletChart percentage={28} label="Top Customer (AR)" />
-                    <BulletChart percentage={15} label="Suspense Balance" />
+                    {concentrationRisk?.top_vendor && (
+                      <BulletChart 
+                        percentage={concentrationRisk.top_vendor.concentration_percentage || 0} 
+                        label={`Top Vendor: ${concentrationRisk.top_vendor.entity_name}`}
+                      />
+                    )}
+                    {concentrationRisk?.top_customer && (
+                      <BulletChart 
+                        percentage={concentrationRisk.top_customer.concentration_percentage || 0} 
+                        label={`Top Customer: ${concentrationRisk.top_customer.entity_name}`}
+                      />
+                    )}
+                    <BulletChart 
+                      percentage={(suspenseBalance / (coaData?.assets?.reduce((s: number, a: any) => s + (a.balance ?? 0), 0) || 1)) * 100} 
+                      label="Suspense Balance %" 
+                    />
                   </div>
                 </>
               ) : !hasSuspense ? (
