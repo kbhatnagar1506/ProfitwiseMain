@@ -188,10 +188,6 @@ function ChartOfAccountsTab() {
                             <div className="text-white font-medium group-hover:text-emerald-300 transition-colors">{acct.name}</div>
                             <div className="text-xs text-zinc-600">{acct.type}</div>
                           </div>
-                          {/* Risk Badge (Layer 3) */}
-                          <div className="text-lg ml-2">
-                            {acct.code === "1100" || acct.code === "2001" ? "🟡" : "🟢"}
-                          </div>
                         </div>
                         <div className="flex items-center gap-4">
                           {/* 12-Month Trend Sparkline */}
@@ -200,35 +196,28 @@ function ChartOfAccountsTab() {
                             trend={acct.balance > 0 ? "up" : acct.balance < 0 ? "down" : "neutral"}
                           />
                           <div className="text-right min-w-fit">
-                            <div className="font-mono text-sm font-semibold text-emerald-400">{fmt(acct.balance)}</div>
+                            <div className={`font-mono text-sm font-semibold ${acct.code === "9999" && acct.balance > 0.01 ? "text-red-400" : "text-emerald-400"}`}>
+                              {fmt(acct.balance)}
+                            </div>
                             {acct.movement_count !== undefined && acct.movement_count !== null && <div className="text-xs text-zinc-600">{acct.movement_count} txns</div>}
                           </div>
                         </div>
                       </button>
                       
-                      {/* Action Buttons Row */}
-                      <div className="flex gap-2 flex-wrap mt-2">
-                        <button 
-                          onClick={() => setForecastCode(acct.code)}
-                          className="text-xs px-3 py-1.5 rounded-md bg-blue-500/15 text-blue-300 hover:bg-blue-500/25 border border-blue-500/20 hover:border-blue-500/40 transition-all font-medium"
-                        >
-                          📊 Forecast
-                        </button>
-                        <button 
-                          onClick={() => setSeasonalCode(acct.code)}
-                          className="text-xs px-3 py-1.5 rounded-md bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/20 hover:border-amber-500/40 transition-all font-medium"
-                        >
-                          📈 Seasonal
-                        </button>
-                        {(acct.code === "1100" || acct.code === "2001") && (
-                          <button 
-                            onClick={() => setRelatedCode(acct.code)}
-                            className="text-xs px-3 py-1.5 rounded-md bg-purple-500/15 text-purple-300 hover:bg-purple-500/25 border border-purple-500/20 hover:border-purple-500/40 transition-all font-medium"
-                          >
-                            🔗 Related
-                          </button>
-                        )}
-                      </div>
+                      {/* Action Buttons Row - Conditional */}
+                      {(acct.code === "1100" || acct.code === "2001") && (
+                        <div className="flex gap-2 flex-wrap mt-2">
+                          <Badge variant="secondary" className="text-xs cursor-pointer hover:bg-zinc-700" onClick={() => setForecastCode(acct.code)}>
+                            Forecast
+                          </Badge>
+                          <Badge variant="secondary" className="text-xs cursor-pointer hover:bg-zinc-700" onClick={() => setSeasonalCode(acct.code)}>
+                            Seasonal
+                          </Badge>
+                          <Badge variant="secondary" className="text-xs cursor-pointer hover:bg-zinc-700" onClick={() => setRelatedCode(acct.code)}>
+                            Related
+                          </Badge>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -851,24 +840,22 @@ function AIAuditorPanel() {
 
       {expanded && (
         <div className="px-4 py-3 space-y-3 border-t border-white/[0.07]">
-          {!auditor ? (
+          {!auditor && !coaData ? (
             <Button onClick={runAudit} disabled={loading} className="w-full bg-amber-600 hover:bg-amber-500">
               {loading ? "Running..." : "Run Audit"}
             </Button>
           ) : (
             <div className="space-y-2">
               {hasSuspense && (
-                <div className="text-xs p-2 rounded border border-red-500/20 bg-red-500/5">
+                <div className="text-xs p-3 rounded border border-red-500/30 bg-red-500/10">
                   <div className="flex items-start gap-2">
-                    <Badge className="bg-red-500/10 text-red-400 border-red-500/20" variant="outline">
-                      error
-                    </Badge>
-                    <span className="text-red-300">⚠️ Anomaly Detected: You have {fmt(suspenseBalance)} sitting in Suspense / Unclassified. Reconcile these unmatched transactions before closing the books.</span>
+                    <span className="text-red-400 font-semibold">⚠️ Anomaly Detected</span>
                   </div>
+                  <div className="text-red-300 mt-1">You have {fmt(suspenseBalance)} sitting in Suspense / Unclassified. Reconcile these unmatched transactions before closing the books.</div>
                 </div>
               )}
 
-              {auditor.anomalies?.length > 0 ? (
+              {auditor && auditor.anomalies?.length > 0 ? (
                 <>
                   {auditor.anomalies.map((a: any, i: number) => (
                     <div key={i} className={`text-xs p-2 rounded border ${a.severity === "error" ? "border-red-500/20 bg-red-500/5" : "border-amber-500/20 bg-amber-500/5"}`}>
@@ -903,13 +890,20 @@ function AIAuditorPanel() {
                     />
                   </div>
                 </>
-              ) : !hasSuspense ? (
+              ) : !hasSuspense && auditor ? (
                 <div className="text-xs text-emerald-400">✓ Books look clean. No anomalies detected.</div>
               ) : null}
 
-              <Button onClick={runAudit} disabled={loading} size="sm" variant="outline" className="w-full">
-                {loading ? "Running..." : "Re-run Audit"}
-              </Button>
+              {!auditor && (
+                <Button onClick={runAudit} disabled={loading} size="sm" className="w-full bg-amber-600 hover:bg-amber-500">
+                  {loading ? "Running..." : "Run Full Audit"}
+                </Button>
+              )}
+              {auditor && (
+                <Button onClick={runAudit} disabled={loading} size="sm" variant="outline" className="w-full">
+                  {loading ? "Running..." : "Re-run Audit"}
+                </Button>
+              )}
             </div>
           )}
         </div>
