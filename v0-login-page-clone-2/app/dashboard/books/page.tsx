@@ -106,6 +106,16 @@ function ChartOfAccountsTab() {
           })
         }
         setTrendData(trends)
+        
+        // Expand all groups on load
+        setExpanded({
+          assets: true,
+          liabilities: true,
+          equity: true,
+          revenue: true,
+          expenses: true,
+          nonOperating: true,
+        })
       } catch (err) {
         console.error("Error fetching COA data:", err)
       } finally {
@@ -145,37 +155,41 @@ function ChartOfAccountsTab() {
           const total = accounts.reduce((s: number, a: any) => s + (a.balance ?? 0), 0)
 
           return (
-            <div key={grp.key} className="border border-white/[0.07] rounded-lg overflow-hidden">
+            <div key={grp.key} className="border border-white/[0.08] rounded-lg overflow-hidden bg-gradient-to-b from-white/[0.02] to-transparent hover:border-white/[0.12] transition-all">
               <button
                 onClick={() => setExpanded(p => ({ ...p, [grp.key]: !p[grp.key] }))}
-                className="w-full px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] flex items-center justify-between text-left"
+                className="w-full px-5 py-4 bg-white/[0.04] hover:bg-white/[0.07] flex items-center justify-between text-left transition-colors group"
               >
                 <div className="flex items-center gap-3">
-                  {isExp ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                  <span className="font-medium text-white">{grp.label}</span>
-                  <span className="text-xs text-zinc-600">({accounts.length})</span>
+                  <div className="text-zinc-500 group-hover:text-zinc-400 transition-colors">
+                    {isExp ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                  </div>
+                  <div>
+                    <span className="font-semibold text-white text-base">{grp.label}</span>
+                    <span className="text-xs text-zinc-600 ml-2">({accounts.length} accounts)</span>
+                  </div>
                 </div>
-                <span className="font-mono text-sm text-emerald-400">{fmt(total)}</span>
+                <span className="font-mono text-sm font-semibold text-emerald-400">{fmt(total)}</span>
               </button>
               {isExp && (
-                <div className="divide-y divide-white/[0.07]">
+                <div className="divide-y divide-white/[0.05] bg-white/[0.01]">
                   {accounts.map((acct: any) => (
                     <div
                       key={acct.code}
-                      className="px-4 py-3 text-sm border-b border-white/[0.07] hover:bg-white/[0.02] transition-colors"
+                      className="px-5 py-3 text-sm border-b border-white/[0.05] hover:bg-white/[0.04] transition-all group"
                     >
                       <button
                         onClick={() => fetchNarrative(acct.code)}
-                        className="w-full text-left flex items-center justify-between mb-2"
+                        className="w-full text-left flex items-center justify-between mb-2 group-hover:opacity-100 opacity-90 transition-opacity"
                       >
-                        <div className="flex-1 flex items-center gap-2">
-                          <div>
-                            <div className="font-mono text-xs text-zinc-600">{acct.code}</div>
-                            <div className="text-white">{acct.name}</div>
+                        <div className="flex-1 flex items-center gap-3">
+                          <div className="flex-1">
+                            <div className="font-mono text-xs text-zinc-500 group-hover:text-zinc-400">{acct.code}</div>
+                            <div className="text-white font-medium group-hover:text-emerald-300 transition-colors">{acct.name}</div>
                             <div className="text-xs text-zinc-600">{acct.type}</div>
                           </div>
                           {/* Risk Badge (Layer 3) */}
-                          <div className="text-lg">
+                          <div className="text-lg ml-2">
                             {acct.code === "1100" || acct.code === "2001" ? "🟡" : "🟢"}
                           </div>
                         </div>
@@ -185,33 +199,33 @@ function ChartOfAccountsTab() {
                             data={trendData[acct.code] || generateMockTrendData(acct.balance)} 
                             trend={acct.balance > 0 ? "up" : acct.balance < 0 ? "down" : "neutral"}
                           />
-                          <div className="text-right">
-                            <div className="font-mono text-sm text-emerald-400">{fmt(acct.balance)}</div>
-                            {acct.movement_count !== undefined && acct.movement_count !== null && <div className="text-xs text-zinc-600">{acct.movement_count} moves</div>}
+                          <div className="text-right min-w-fit">
+                            <div className="font-mono text-sm font-semibold text-emerald-400">{fmt(acct.balance)}</div>
+                            {acct.movement_count !== undefined && acct.movement_count !== null && <div className="text-xs text-zinc-600">{acct.movement_count} txns</div>}
                           </div>
                         </div>
                       </button>
                       
                       {/* Action Buttons Row */}
-                      <div className="flex gap-1 flex-wrap">
+                      <div className="flex gap-2 flex-wrap mt-2">
                         <button 
                           onClick={() => setForecastCode(acct.code)}
-                          className="text-xs px-2 py-1 rounded bg-blue-500/10 text-blue-400 hover:bg-blue-500/20"
+                          className="text-xs px-3 py-1.5 rounded-md bg-blue-500/15 text-blue-300 hover:bg-blue-500/25 border border-blue-500/20 hover:border-blue-500/40 transition-all font-medium"
                         >
-                          Forecast
+                          📊 Forecast
                         </button>
                         <button 
                           onClick={() => setSeasonalCode(acct.code)}
-                          className="text-xs px-2 py-1 rounded bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                          className="text-xs px-3 py-1.5 rounded-md bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/20 hover:border-amber-500/40 transition-all font-medium"
                         >
-                          Seasonal
+                          📈 Seasonal
                         </button>
                         {(acct.code === "1100" || acct.code === "2001") && (
                           <button 
                             onClick={() => setRelatedCode(acct.code)}
-                            className="text-xs px-2 py-1 rounded bg-purple-500/10 text-purple-400 hover:bg-purple-500/20"
+                            className="text-xs px-3 py-1.5 rounded-md bg-purple-500/15 text-purple-300 hover:bg-purple-500/25 border border-purple-500/20 hover:border-purple-500/40 transition-all font-medium"
                           >
-                            Related
+                            🔗 Related
                           </button>
                         )}
                       </div>
@@ -226,10 +240,10 @@ function ChartOfAccountsTab() {
 
       {/* Narrative Panel */}
       {narrativeCode && (
-        <div className="col-span-1 border border-white/[0.07] rounded-lg p-4 space-y-3 h-fit sticky top-6">
+        <div className="col-span-1 border border-emerald-500/20 rounded-lg p-5 space-y-4 h-fit sticky top-6 bg-gradient-to-b from-emerald-500/5 to-transparent">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-white">Account Narrative</h3>
-            <button onClick={() => setNarrativeCode(null)} className="text-zinc-600 hover:text-white">✕</button>
+            <h3 className="text-sm font-semibold text-emerald-300">Account Narrative</h3>
+            <button onClick={() => setNarrativeCode(null)} className="text-zinc-600 hover:text-zinc-400 transition-colors">✕</button>
           </div>
 
           {narrativeLoading ? (
@@ -280,46 +294,46 @@ function ChartOfAccountsTab() {
 
       {/* Forecast Impact Panel (Layer 5) */}
       {forecastCode && (
-        <div className="col-span-1 border border-blue-500/20 rounded-lg p-4 space-y-3 h-fit sticky top-6 bg-blue-500/5">
+        <div className="col-span-1 border border-blue-500/30 rounded-lg p-5 space-y-4 h-fit sticky top-6 bg-gradient-to-b from-blue-500/10 to-transparent">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-blue-400">Forecast Impact</h3>
-            <button onClick={() => setForecastCode(null)} className="text-zinc-600 hover:text-white">✕</button>
+            <h3 className="text-sm font-semibold text-blue-300">📊 Forecast Impact</h3>
+            <button onClick={() => setForecastCode(null)} className="text-zinc-600 hover:text-zinc-400 transition-colors">✕</button>
           </div>
-          <div className="space-y-2 text-xs">
-            <div className="flex justify-between"><span className="text-zinc-600">Base Scenario:</span><span className="text-white">$12,450 low on Day 18</span></div>
-            <div className="flex justify-between"><span className="text-zinc-600">Conservative:</span><span className="text-white">$9,960 low on Day 18</span></div>
-            <div className="flex justify-between"><span className="text-zinc-600">Aggressive:</span><span className="text-white">$14,940 low on Day 18</span></div>
+          <div className="space-y-3 text-xs">
+            <div className="flex justify-between items-center p-2 bg-white/[0.03] rounded"><span className="text-zinc-500">Base Scenario:</span><span className="text-blue-300 font-mono">$12,450 low on Day 18</span></div>
+            <div className="flex justify-between items-center p-2 bg-white/[0.03] rounded"><span className="text-zinc-500">Conservative:</span><span className="text-blue-300 font-mono">$9,960 low on Day 18</span></div>
+            <div className="flex justify-between items-center p-2 bg-white/[0.03] rounded"><span className="text-zinc-500">Aggressive:</span><span className="text-blue-300 font-mono">$14,940 low on Day 18</span></div>
           </div>
         </div>
       )}
 
       {/* Seasonal Panel (Layer 6) */}
       {seasonalCode && (
-        <div className="col-span-1 border border-amber-500/20 rounded-lg p-4 space-y-3 h-fit sticky top-6 bg-amber-500/5">
+        <div className="col-span-1 border border-amber-500/30 rounded-lg p-5 space-y-4 h-fit sticky top-6 bg-gradient-to-b from-amber-500/10 to-transparent">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-amber-400">Seasonal Pattern</h3>
-            <button onClick={() => setSeasonalCode(null)} className="text-zinc-600 hover:text-white">✕</button>
+            <h3 className="text-sm font-semibold text-amber-300">📈 Seasonal Pattern</h3>
+            <button onClick={() => setSeasonalCode(null)} className="text-zinc-600 hover:text-zinc-400 transition-colors">✕</button>
           </div>
-          <div className="space-y-2 text-xs">
-            <div><span className="text-zinc-600">Peak Months:</span><span className="text-white ml-2">Nov, Dec</span></div>
-            <div><span className="text-zinc-600">Low Months:</span><span className="text-white ml-2">Jan, Feb</span></div>
-            <div><span className="text-zinc-600">Avg Monthly:</span><span className="text-white ml-2">$38,000</span></div>
+          <div className="space-y-3 text-xs">
+            <div className="p-2 bg-white/[0.03] rounded"><span className="text-zinc-500">Peak Months:</span><span className="text-amber-300 ml-2 font-medium">Nov, Dec</span></div>
+            <div className="p-2 bg-white/[0.03] rounded"><span className="text-zinc-500">Low Months:</span><span className="text-amber-300 ml-2 font-medium">Jan, Feb</span></div>
+            <div className="p-2 bg-white/[0.03] rounded"><span className="text-zinc-500">Avg Monthly:</span><span className="text-amber-300 ml-2 font-mono font-medium">$38,000</span></div>
           </div>
         </div>
       )}
 
       {/* Related Parties Panel (Layer 7) */}
       {relatedCode && (
-        <div className="col-span-1 border border-purple-500/20 rounded-lg p-4 space-y-3 h-fit sticky top-6 bg-purple-500/5">
+        <div className="col-span-1 border border-purple-500/30 rounded-lg p-5 space-y-4 h-fit sticky top-6 bg-gradient-to-b from-purple-500/10 to-transparent">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-purple-400">Related Parties</h3>
-            <button onClick={() => setRelatedCode(null)} className="text-zinc-600 hover:text-white">✕</button>
+            <h3 className="text-sm font-semibold text-purple-300">🔗 Related Parties</h3>
+            <button onClick={() => setRelatedCode(null)} className="text-zinc-600 hover:text-zinc-400 transition-colors">✕</button>
           </div>
           <div className="space-y-2 text-xs">
-            <div className="text-zinc-600">Acme Corp (68%)</div>
-            <div className="text-zinc-600">TechCorp (45%)</div>
-            <div className="text-zinc-600">Global Inc (23%)</div>
-            <div className="text-amber-400 mt-2">⚠️ Concentration: 68% from top entity</div>
+            <div className="p-2 bg-white/[0.03] rounded"><span className="text-purple-300 font-medium">Acme Corp</span><span className="text-zinc-500 ml-2">(68%)</span></div>
+            <div className="p-2 bg-white/[0.03] rounded"><span className="text-purple-300 font-medium">TechCorp</span><span className="text-zinc-500 ml-2">(45%)</span></div>
+            <div className="p-2 bg-white/[0.03] rounded"><span className="text-purple-300 font-medium">Global Inc</span><span className="text-zinc-500 ml-2">(23%)</span></div>
+            <div className="text-amber-400 mt-3 p-2 bg-amber-500/10 rounded border border-amber-500/20">⚠️ Concentration: 68% from top entity</div>
           </div>
         </div>
       )}
