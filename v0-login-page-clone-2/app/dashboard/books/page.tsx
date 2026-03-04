@@ -20,6 +20,9 @@ function ChartOfAccountsTab() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [narrativeCode, setNarrativeCode] = useState<string | null>(null)
+  const [narrative, setNarrative] = useState<any>(null)
+  const [narrativeLoading, setNarrativeLoading] = useState(false)
 
   useEffect(() => {
     fetch("/api/books/chart-of-accounts")
@@ -27,6 +30,15 @@ function ChartOfAccountsTab() {
       .then(setData)
       .finally(() => setLoading(false))
   }, [])
+
+  const fetchNarrative = async (code: string) => {
+    setNarrativeCode(code)
+    setNarrativeLoading(true)
+    const res = await fetch(`/api/books/account-narrative?code=${code}`)
+    const json = await res.json()
+    setNarrative(json)
+    setNarrativeLoading(false)
+  }
 
   if (loading) return <div className="text-zinc-500 text-sm">Loading chart of accounts...</div>
 
@@ -40,45 +52,105 @@ function ChartOfAccountsTab() {
   ]
 
   return (
-    <div className="space-y-4">
-      {groups.map(grp => {
-        const accounts = data?.[grp.key] ?? []
-        const isExp = expanded[grp.key]
-        const total = accounts.reduce((s: number, a: any) => s + (a.balance ?? 0), 0)
+    <div className="grid grid-cols-3 gap-4">
+      <div className="col-span-2 space-y-4">
+        {groups.map(grp => {
+          const accounts = data?.[grp.key] ?? []
+          const isExp = expanded[grp.key]
+          const total = accounts.reduce((s: number, a: any) => s + (a.balance ?? 0), 0)
 
-        return (
-          <div key={grp.key} className="border border-white/[0.07] rounded-lg overflow-hidden">
-            <button
-              onClick={() => setExpanded(p => ({ ...p, [grp.key]: !p[grp.key] }))}
-              className="w-full px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] flex items-center justify-between text-left"
-            >
-              <div className="flex items-center gap-3">
-                {isExp ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                <span className="font-medium text-white">{grp.label}</span>
-                <span className="text-xs text-zinc-600">({accounts.length})</span>
-              </div>
-              <span className="font-mono text-sm text-emerald-400">{fmt(total)}</span>
-            </button>
-            {isExp && (
-              <div className="divide-y divide-white/[0.07]">
-                {accounts.map((acct: any) => (
-                  <div key={acct.code} className="px-4 py-2 text-sm flex items-center justify-between hover:bg-white/[0.02]">
-                    <div className="flex-1">
-                      <div className="font-mono text-xs text-zinc-600">{acct.code}</div>
-                      <div className="text-white">{acct.name}</div>
-                      <div className="text-xs text-zinc-600">{acct.type}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-mono text-sm text-emerald-400">{fmt(acct.balance)}</div>
-                      {acct.movement_count !== undefined && acct.movement_count !== null && <div className="text-xs text-zinc-600">{acct.movement_count} moves</div>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+          return (
+            <div key={grp.key} className="border border-white/[0.07] rounded-lg overflow-hidden">
+              <button
+                onClick={() => setExpanded(p => ({ ...p, [grp.key]: !p[grp.key] }))}
+                className="w-full px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] flex items-center justify-between text-left"
+              >
+                <div className="flex items-center gap-3">
+                  {isExp ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  <span className="font-medium text-white">{grp.label}</span>
+                  <span className="text-xs text-zinc-600">({accounts.length})</span>
+                </div>
+                <span className="font-mono text-sm text-emerald-400">{fmt(total)}</span>
+              </button>
+              {isExp && (
+                <div className="divide-y divide-white/[0.07]">
+                  {accounts.map((acct: any) => (
+                    <button
+                      key={acct.code}
+                      onClick={() => fetchNarrative(acct.code)}
+                      className="w-full px-4 py-2 text-sm text-left flex items-center justify-between hover:bg-white/[0.02] transition-colors"
+                    >
+                      <div className="flex-1">
+                        <div className="font-mono text-xs text-zinc-600">{acct.code}</div>
+                        <div className="text-white">{acct.name}</div>
+                        <div className="text-xs text-zinc-600">{acct.type}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-mono text-sm text-emerald-400">{fmt(acct.balance)}</div>
+                        {acct.movement_count !== undefined && acct.movement_count !== null && <div className="text-xs text-zinc-600">{acct.movement_count} moves</div>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Narrative Panel */}
+      {narrativeCode && (
+        <div className="col-span-1 border border-white/[0.07] rounded-lg p-4 space-y-3 h-fit sticky top-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-white">Account Narrative</h3>
+            <button onClick={() => setNarrativeCode(null)} className="text-zinc-600 hover:text-white">✕</button>
           </div>
-        )
-      })}
+
+          {narrativeLoading ? (
+            <div className="text-xs text-zinc-600">Generating narrative...</div>
+          ) : narrative ? (
+            <div className="space-y-3">
+              <div>
+                <div className="text-xs text-zinc-600 uppercase tracking-wider mb-1">Account</div>
+                <div className="text-sm font-medium text-white">{narrative.account_name}</div>
+              </div>
+
+              <div>
+                <div className="text-xs text-zinc-600 uppercase tracking-wider mb-1">Narrative</div>
+                <div className="text-xs text-zinc-300 leading-relaxed">{narrative.narrative}</div>
+              </div>
+
+              {Object.keys(narrative.key_metrics).length > 0 && (
+                <div>
+                  <div className="text-xs text-zinc-600 uppercase tracking-wider mb-2">Key Metrics</div>
+                  <div className="space-y-1">
+                    {Object.entries(narrative.key_metrics).map(([k, v]) => (
+                      <div key={k} className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-600 capitalize">{k.replace(/_/g, " ")}</span>
+                        <span className="text-white font-mono">{String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {narrative.risk_flags.length > 0 && (
+                <div>
+                  <div className="text-xs text-zinc-600 uppercase tracking-wider mb-2">Risk Flags</div>
+                  <div className="space-y-1">
+                    {narrative.risk_flags.map((flag: string, i: number) => (
+                      <div key={i} className="text-xs text-red-400 flex items-start gap-2">
+                        <span className="mt-0.5">⚠️</span>
+                        <span>{flag}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
+      )}
     </div>
   )
 }
