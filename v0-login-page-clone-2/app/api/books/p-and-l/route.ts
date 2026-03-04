@@ -61,27 +61,15 @@ export async function GET(req: Request) {
       ),
       revenue_items AS (
         SELECT 
-          'customer_cash_in' as line_item,
+          COALESCE(economic_class, 'customer_cash_in') as line_item,
           SUM(amount) as total_amount,
           COUNT(DISTINCT id) as transaction_count,
           AVG(COALESCE(confidence, 0.5)) as avg_confidence
         FROM movements_in_period
         WHERE direction = 'inflow'
-          AND economic_class IN ('customer_cash_in', 'interest_income')
+          AND (economic_class IN ('customer_cash_in', 'interest_income') OR economic_class IS NULL)
           AND attribution_id IS NOT NULL
         GROUP BY economic_class
-        
-        UNION ALL
-        
-        SELECT 
-          'interest_income' as line_item,
-          SUM(amount) as total_amount,
-          COUNT(DISTINCT id) as transaction_count,
-          AVG(COALESCE(confidence, 0.5)) as avg_confidence
-        FROM movements_in_period
-        WHERE direction = 'inflow'
-          AND economic_class = 'interest_income'
-          AND attribution_id IS NOT NULL
       ),
       cogs_items AS (
         SELECT 
@@ -92,7 +80,7 @@ export async function GET(req: Request) {
         FROM movements_in_period
         WHERE direction = 'outflow'
           AND economic_class = 'vendor_cash_out'
-          AND (tag_data->>'cost_type' = 'cogs' OR tag_data->>'cost_type' IS NULL)
+          AND (tag_data->>'cost_type' = 'cogs' OR tag_data IS NULL)
           AND attribution_id IS NOT NULL
         GROUP BY tag_data->>'vendor_name'
       ),
@@ -102,7 +90,7 @@ export async function GET(req: Request) {
             WHEN economic_class = 'bank_fee' THEN 'Bank Fees'
             WHEN economic_class = 'processor_fee' THEN 'Processor Fees'
             WHEN economic_class = 'vendor_cash_out' THEN COALESCE(tag_data->>'category', 'Other OpEx')
-            ELSE 'Other OpEx'
+            ELSE COALESCE(economic_class, 'Other OpEx')
           END as line_item,
           SUM(amount) as total_amount,
           COUNT(DISTINCT id) as transaction_count,
@@ -126,11 +114,10 @@ export async function GET(req: Request) {
       ),
       totals AS (
         SELECT 
-          COALESCE(SUM(CASE WHEN direction = 'inflow' THEN amount ELSE 0 END), 0) as gross_revenue,
-          COALESCE(SUM(CASE WHEN direction = 'outflow' AND economic_class = 'vendor_cash_out' AND (tag_data->>'cost_type' = 'cogs' OR tag_data->>'cost_type' IS NULL) THEN amount ELSE 0 END), 0) as total_cogs,
-          COALESCE(SUM(CASE WHEN direction = 'outflow' AND (economic_class IN ('bank_fee', 'processor_fee') OR (economic_class = 'vendor_cash_out' AND tag_data->>'cost_type' = 'opex')) THEN amount ELSE 0 END), 0) as total_opex
+          COALESCE(SUM(CASE WHEN direction = 'inflow' AND attribution_id IS NOT NULL THEN amount ELSE 0 END), 0) as gross_revenue,
+          COALESCE(SUM(CASE WHEN direction = 'outflow' AND economic_class = 'vendor_cash_out' AND attribution_id IS NOT NULL THEN amount ELSE 0 END), 0) as total_cogs,
+          COALESCE(SUM(CASE WHEN direction = 'outflow' AND economic_class IN ('bank_fee', 'processor_fee') AND attribution_id IS NOT NULL THEN amount ELSE 0 END), 0) as total_opex
         FROM movements_in_period
-        WHERE attribution_id IS NOT NULL
       )
       SELECT 
         $2::date as period_start,
