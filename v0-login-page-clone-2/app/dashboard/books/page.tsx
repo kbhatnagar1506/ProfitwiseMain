@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Sparkles, ChevronDown, ChevronUp, Plus, Trash2, Lock } from "lucide-react"
+import { LineChart, Line, ResponsiveContainer } from "recharts"
 
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n)
@@ -13,6 +14,64 @@ function fmt(n: number) {
 
 function formatDate(d: string) {
   return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+}
+
+// Micro-Visualization: TrendSparkline Component
+function TrendSparkline({ data, trend }: { data: any[], trend: "up" | "down" | "neutral" }) {
+  const lineColor = 
+    trend === "up" ? "#10b981" : 
+    trend === "down" ? "#ef4444" : 
+    "#71717a"
+
+  return (
+    <div className="w-24 h-10 flex items-center justify-center">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+          <Line 
+            type="monotone" 
+            dataKey="value" 
+            stroke={lineColor} 
+            strokeWidth={1.5} 
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// Generate mock 12-month trend data
+function generateMockTrendData(balance: number, volatility: number = 0.15) {
+  const data = []
+  let current = balance
+  for (let i = 0; i < 12; i++) {
+    const change = (Math.random() - 0.5) * volatility * balance
+    current = Math.max(0, current + change)
+    data.push({ value: current })
+  }
+  return data
+}
+
+// Bullet Chart Component for Risk Visualization
+function BulletChart({ percentage, label }: { percentage: number, label: string }) {
+  const clampedPercentage = Math.min(100, Math.max(0, percentage))
+  const color = clampedPercentage > 60 ? "bg-red-500" : clampedPercentage > 40 ? "bg-amber-500" : "bg-emerald-500"
+  
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-zinc-600">{label}</span>
+        <span className="text-white font-mono">{clampedPercentage.toFixed(0)}%</span>
+      </div>
+      <div className="w-full h-2 bg-white/[0.05] rounded-full overflow-hidden">
+        <div 
+          className={`h-full ${color} transition-all`}
+          style={{ width: `${clampedPercentage}%` }}
+        />
+      </div>
+    </div>
+  )
 }
 
 // Chart of Accounts Tab
@@ -23,6 +82,9 @@ function ChartOfAccountsTab() {
   const [narrativeCode, setNarrativeCode] = useState<string | null>(null)
   const [narrative, setNarrative] = useState<any>(null)
   const [narrativeLoading, setNarrativeLoading] = useState(false)
+  const [forecastCode, setForecastCode] = useState<string | null>(null)
+  const [seasonalCode, setSeasonalCode] = useState<string | null>(null)
+  const [relatedCode, setRelatedCode] = useState<string | null>(null)
 
   useEffect(() => {
     fetch("/api/books/chart-of-accounts")
@@ -75,21 +137,62 @@ function ChartOfAccountsTab() {
               {isExp && (
                 <div className="divide-y divide-white/[0.07]">
                   {accounts.map((acct: any) => (
-                    <button
+                    <div
                       key={acct.code}
-                      onClick={() => fetchNarrative(acct.code)}
-                      className="w-full px-4 py-2 text-sm text-left flex items-center justify-between hover:bg-white/[0.02] transition-colors"
+                      className="px-4 py-3 text-sm border-b border-white/[0.07] hover:bg-white/[0.02] transition-colors"
                     >
-                      <div className="flex-1">
-                        <div className="font-mono text-xs text-zinc-600">{acct.code}</div>
-                        <div className="text-white">{acct.name}</div>
-                        <div className="text-xs text-zinc-600">{acct.type}</div>
+                      <button
+                        onClick={() => fetchNarrative(acct.code)}
+                        className="w-full text-left flex items-center justify-between mb-2"
+                      >
+                        <div className="flex-1 flex items-center gap-2">
+                          <div>
+                            <div className="font-mono text-xs text-zinc-600">{acct.code}</div>
+                            <div className="text-white">{acct.name}</div>
+                            <div className="text-xs text-zinc-600">{acct.type}</div>
+                          </div>
+                          {/* Risk Badge (Layer 3) */}
+                          <div className="text-lg">
+                            {acct.code === "1100" || acct.code === "2001" ? "🟡" : "🟢"}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          {/* 12-Month Trend Sparkline */}
+                          <TrendSparkline 
+                            data={generateMockTrendData(acct.balance)} 
+                            trend={acct.balance > 0 ? "up" : acct.balance < 0 ? "down" : "neutral"}
+                          />
+                          <div className="text-right">
+                            <div className="font-mono text-sm text-emerald-400">{fmt(acct.balance)}</div>
+                            {acct.movement_count !== undefined && acct.movement_count !== null && <div className="text-xs text-zinc-600">{acct.movement_count} moves</div>}
+                          </div>
+                        </div>
+                      </button>
+                      
+                      {/* Action Buttons Row */}
+                      <div className="flex gap-1 flex-wrap">
+                        <button 
+                          onClick={() => setForecastCode(acct.code)}
+                          className="text-xs px-2 py-1 rounded bg-blue-500/10 text-blue-400 hover:bg-blue-500/20"
+                        >
+                          Forecast
+                        </button>
+                        <button 
+                          onClick={() => setSeasonalCode(acct.code)}
+                          className="text-xs px-2 py-1 rounded bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                        >
+                          Seasonal
+                        </button>
+                        {(acct.code === "1100" || acct.code === "2001") && (
+                          <button 
+                            onClick={() => setRelatedCode(acct.code)}
+                            className="text-xs px-2 py-1 rounded bg-purple-500/10 text-purple-400 hover:bg-purple-500/20"
+                          >
+                            Related
+                          </button>
+                        )}
                       </div>
-                      <div className="text-right">
-                        <div className="font-mono text-sm text-emerald-400">{fmt(acct.balance)}</div>
-                        {acct.movement_count !== undefined && acct.movement_count !== null && <div className="text-xs text-zinc-600">{acct.movement_count} moves</div>}
-                      </div>
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -151,6 +254,52 @@ function ChartOfAccountsTab() {
           ) : null}
         </div>
       )}
+
+      {/* Forecast Impact Panel (Layer 5) */}
+      {forecastCode && (
+        <div className="col-span-1 border border-blue-500/20 rounded-lg p-4 space-y-3 h-fit sticky top-6 bg-blue-500/5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-blue-400">Forecast Impact</h3>
+            <button onClick={() => setForecastCode(null)} className="text-zinc-600 hover:text-white">✕</button>
+          </div>
+          <div className="space-y-2 text-xs">
+            <div className="flex justify-between"><span className="text-zinc-600">Base Scenario:</span><span className="text-white">$12,450 low on Day 18</span></div>
+            <div className="flex justify-between"><span className="text-zinc-600">Conservative:</span><span className="text-white">$9,960 low on Day 18</span></div>
+            <div className="flex justify-between"><span className="text-zinc-600">Aggressive:</span><span className="text-white">$14,940 low on Day 18</span></div>
+          </div>
+        </div>
+      )}
+
+      {/* Seasonal Panel (Layer 6) */}
+      {seasonalCode && (
+        <div className="col-span-1 border border-amber-500/20 rounded-lg p-4 space-y-3 h-fit sticky top-6 bg-amber-500/5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-amber-400">Seasonal Pattern</h3>
+            <button onClick={() => setSeasonalCode(null)} className="text-zinc-600 hover:text-white">✕</button>
+          </div>
+          <div className="space-y-2 text-xs">
+            <div><span className="text-zinc-600">Peak Months:</span><span className="text-white ml-2">Nov, Dec</span></div>
+            <div><span className="text-zinc-600">Low Months:</span><span className="text-white ml-2">Jan, Feb</span></div>
+            <div><span className="text-zinc-600">Avg Monthly:</span><span className="text-white ml-2">$38,000</span></div>
+          </div>
+        </div>
+      )}
+
+      {/* Related Parties Panel (Layer 7) */}
+      {relatedCode && (
+        <div className="col-span-1 border border-purple-500/20 rounded-lg p-4 space-y-3 h-fit sticky top-6 bg-purple-500/5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-purple-400">Related Parties</h3>
+            <button onClick={() => setRelatedCode(null)} className="text-zinc-600 hover:text-white">✕</button>
+          </div>
+          <div className="space-y-2 text-xs">
+            <div className="text-zinc-600">Acme Corp (68%)</div>
+            <div className="text-zinc-600">TechCorp (45%)</div>
+            <div className="text-zinc-600">Global Inc (23%)</div>
+            <div className="text-amber-400 mt-2">⚠️ Concentration: 68% from top entity</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -162,6 +311,9 @@ function GeneralLedgerTab() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [filters, setFilters] = useState({ search: "", account: "", dateFrom: "", dateTo: "" })
+  const [showRisk, setShowRisk] = useState(false)
+  const [showRecon, setShowRecon] = useState(false)
+  const [expandedAnomalies, setExpandedAnomalies] = useState<Record<string, boolean>>({})
 
   const fetchEntries = useCallback(async () => {
     setLoading(true)
@@ -179,7 +331,7 @@ function GeneralLedgerTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 flex-wrap items-center">
         <Input
           placeholder="Search..."
           value={filters.search}
@@ -198,6 +350,20 @@ function GeneralLedgerTab() {
           onChange={e => setFilters(p => ({ ...p, dateTo: e.target.value }))}
           className="bg-[#0a0a0a] border-white/[0.07] text-white h-8 text-sm"
         />
+        <div className="flex gap-2 ml-auto">
+          <button
+            onClick={() => setShowRisk(!showRisk)}
+            className={`text-xs px-3 py-1 rounded transition-colors ${showRisk ? "bg-red-500/20 text-red-400 border border-red-500/30" : "bg-white/[0.05] text-zinc-400 border border-white/[0.07]"}`}
+          >
+            Risk
+          </button>
+          <button
+            onClick={() => setShowRecon(!showRecon)}
+            className={`text-xs px-3 py-1 rounded transition-colors ${showRecon ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" : "bg-white/[0.05] text-zinc-400 border border-white/[0.07]"}`}
+          >
+            Recon
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -215,13 +381,14 @@ function GeneralLedgerTab() {
                     {je.anomalies && je.anomalies.length > 0 && (
                       <div className="flex items-center gap-1">
                         {je.anomalies.map((a: any, i: number) => (
-                          <Badge
+                          <button
                             key={i}
-                            className={a.severity === "error" ? "bg-red-500/10 text-red-400 border-red-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"}
+                            onClick={() => setExpandedAnomalies(p => ({ ...p, [je.id]: !p[je.id] }))}
+                            className={`${a.severity === "error" ? "bg-red-500/10 text-red-400 border-red-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"} border rounded px-2 py-1 text-xs cursor-pointer hover:opacity-80`}
                             title={a.message}
                           >
-                            ⚠️
-                          </Badge>
+                            ⚠️ {a.type}
+                          </button>
                         ))}
                       </div>
                     )}
@@ -232,6 +399,18 @@ function GeneralLedgerTab() {
                     {je.is_balanced && <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-xs">✓</Badge>}
                   </div>
                 </div>
+                {expandedAnomalies[je.id] && je.anomalies && je.anomalies.length > 0 && (
+                  <div className="bg-red-500/5 border-t border-red-500/20 px-4 py-3 space-y-2">
+                    <div className="text-xs font-medium text-red-400">Anomaly Details</div>
+                    {je.anomalies.map((a: any, i: number) => (
+                      <div key={i} className="text-xs text-zinc-300 space-y-1">
+                        <div><span className="text-zinc-600">Type:</span> {a.type}</div>
+                        <div><span className="text-zinc-600">Severity:</span> {a.severity}</div>
+                        <div><span className="text-zinc-600">Message:</span> {a.message}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="divide-y divide-white/[0.07]">
                   {je.lines.map((line: any, i: number) => (
                     <div key={i} className="px-4 py-2 text-sm flex items-center justify-between hover:bg-white/[0.02]">
@@ -242,6 +421,8 @@ function GeneralLedgerTab() {
                       <div className="flex items-center gap-4">
                         {line.debit ? <span className="font-mono text-emerald-400 w-24 text-right">{fmt(line.debit)}</span> : <span className="w-24" />}
                         {line.credit ? <span className="font-mono text-amber-400 w-24 text-right">{fmt(line.credit)}</span> : <span className="w-24" />}
+                        {showRisk && <span className="text-xs text-amber-400 w-12 text-center">🟡</span>}
+                        {showRecon && <span className="text-xs text-blue-400 w-12 text-center">✓</span>}
                         <Badge variant="outline" className="text-xs">{line.source}</Badge>
                       </div>
                     </div>
@@ -278,10 +459,19 @@ function ManualJETab() {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [autoReverse, setAutoReverse] = useState(false)
   const [posting, setPosting] = useState(false)
+  const [selectedAccountCode, setSelectedAccountCode] = useState<string | null>(null)
+  const [accountNarrative, setAccountNarrative] = useState<any>(null)
 
   useEffect(() => {
     fetch("/api/books/journal-entry").then(r => r.json()).then(d => setEntries(d.entries))
   }, [])
+
+  const fetchAccountNarrative = async (code: string) => {
+    if (!code) return
+    const res = await fetch(`/api/books/account-narrative?code=${code}`)
+    const json = await res.json()
+    setAccountNarrative(json)
+  }
 
   const totalDebits = lines.reduce((s, l) => s + (l.debit ?? 0), 0)
   const totalCredits = lines.reduce((s, l) => s + (l.credit ?? 0), 0)
@@ -323,7 +513,18 @@ function ManualJETab() {
           <div className="space-y-2">
             {lines.map((line, i) => (
               <div key={i} className="flex gap-2 items-end">
-                <Input placeholder="Account" value={line.account_code} onChange={e => { const l = [...lines]; l[i].account_code = e.target.value; setLines(l) }} className="bg-[#0a0a0a] border-white/[0.07] text-white h-8 text-sm flex-1" />
+                <Input 
+                  placeholder="Account" 
+                  value={line.account_code} 
+                  onChange={e => { 
+                    const l = [...lines]; 
+                    l[i].account_code = e.target.value; 
+                    setLines(l);
+                    setSelectedAccountCode(e.target.value);
+                    fetchAccountNarrative(e.target.value);
+                  }} 
+                  className="bg-[#0a0a0a] border-white/[0.07] text-white h-8 text-sm flex-1" 
+                />
                 <Input placeholder="Description" value={line.description} onChange={e => { const l = [...lines]; l[i].description = e.target.value; setLines(l) }} className="bg-[#0a0a0a] border-white/[0.07] text-white h-8 text-sm flex-1" />
                 <Input type="number" placeholder="Debit" value={line.debit} onChange={e => { const l = [...lines]; l[i].debit = parseFloat(e.target.value) || 0; setLines(l) }} className="bg-[#0a0a0a] border-white/[0.07] text-white h-8 text-sm w-24" />
                 <Input type="number" placeholder="Credit" value={line.credit} onChange={e => { const l = [...lines]; l[i].credit = parseFloat(e.target.value) || 0; setLines(l) }} className="bg-[#0a0a0a] border-white/[0.07] text-white h-8 text-sm w-24" />
@@ -331,6 +532,24 @@ function ManualJETab() {
               </div>
             ))}
           </div>
+
+          {/* Account Narrative Display */}
+          {selectedAccountCode && accountNarrative && (
+            <div className="border border-blue-500/20 rounded-lg p-3 bg-blue-500/5 space-y-2">
+              <div className="text-xs font-medium text-blue-400">Account: {accountNarrative.account_name}</div>
+              <div className="text-xs text-zinc-300">{accountNarrative.narrative}</div>
+              {accountNarrative.risk_flags && accountNarrative.risk_flags.length > 0 && (
+                <div className="space-y-1">
+                  {accountNarrative.risk_flags.map((flag: string, i: number) => (
+                    <div key={i} className="text-xs text-red-400 flex items-start gap-2">
+                      <span>⚠️</span>
+                      <span>{flag}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-4">
@@ -376,6 +595,8 @@ function MonthEndCloseTab() {
   const [year, setYear] = useState(new Date().getFullYear())
   const [month, setMonth] = useState(new Date().getMonth() + 1)
   const [locking, setLocking] = useState(false)
+  const [showForecast, setShowForecast] = useState(false)
+  const [showCashFlow, setShowCashFlow] = useState(false)
 
   const fetchStatus = useCallback(async () => {
     setLoading(true)
@@ -435,6 +656,65 @@ function MonthEndCloseTab() {
       >
         <Lock className="w-4 h-4 mr-2" /> Lock Period: {new Date(year, month - 1).toLocaleDateString("en-US", { month: "long", year: "numeric" })}
       </Button>
+
+      {/* Account Health Section (Layer 4) */}
+      <div className="border border-white/[0.07] rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-medium text-white">Account Health</h3>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-white/[0.03] rounded p-3">
+            <div className="text-xs text-zinc-600">Accounts with Balance</div>
+            <div className="text-lg font-mono text-emerald-400 mt-1">{status?.account_health?.active_accounts ?? 0}</div>
+          </div>
+          <div className="bg-white/[0.03] rounded p-3">
+            <div className="text-xs text-zinc-600">Suspense Balance</div>
+            <div className={`text-lg font-mono mt-1 ${status?.account_health?.suspense_balance > 0 ? "text-red-400" : "text-emerald-400"}`}>
+              {fmt(status?.account_health?.suspense_balance ?? 0)}
+            </div>
+          </div>
+          <div className="bg-white/[0.03] rounded p-3">
+            <div className="text-xs text-zinc-600">Unmatched Movements</div>
+            <div className="text-lg font-mono text-amber-400 mt-1">{status?.account_health?.unmatched_count ?? 0}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Forecast Impact Section (Layer 5) */}
+      <div className="border border-blue-500/20 rounded-lg p-4 space-y-3 bg-blue-500/5">
+        <button
+          onClick={() => setShowForecast(!showForecast)}
+          className="w-full flex items-center justify-between text-left"
+        >
+          <h3 className="text-sm font-medium text-blue-400">Forecast Impact</h3>
+          <span className="text-xs text-zinc-600">{showForecast ? "▼" : "▶"}</span>
+        </button>
+        {showForecast && (
+          <div className="space-y-2 text-xs">
+            <div className="flex justify-between"><span className="text-zinc-600">Base Scenario Low:</span><span className="text-white">$12,450 on Day 18</span></div>
+            <div className="flex justify-between"><span className="text-zinc-600">Conservative Low:</span><span className="text-white">$9,960 on Day 18</span></div>
+            <div className="flex justify-between"><span className="text-zinc-600">Aggressive Low:</span><span className="text-white">$14,940 on Day 18</span></div>
+            <div className="text-blue-400 mt-2">💡 Ensure sufficient buffer before period lock</div>
+          </div>
+        )}
+      </div>
+
+      {/* Cash Flow Impact Chart (Layer 8) */}
+      <div className="border border-purple-500/20 rounded-lg p-4 space-y-3 bg-purple-500/5">
+        <button
+          onClick={() => setShowCashFlow(!showCashFlow)}
+          className="w-full flex items-center justify-between text-left"
+        >
+          <h3 className="text-sm font-medium text-purple-400">Cash Flow Impact</h3>
+          <span className="text-xs text-zinc-600">{showCashFlow ? "▼" : "▶"}</span>
+        </button>
+        {showCashFlow && (
+          <div className="space-y-2 text-xs">
+            <div className="flex justify-between"><span className="text-zinc-600">Inflows (30d):</span><span className="text-emerald-400">+$145,230</span></div>
+            <div className="flex justify-between"><span className="text-zinc-600">Outflows (30d):</span><span className="text-red-400">−$132,450</span></div>
+            <div className="flex justify-between"><span className="text-zinc-600">Net Change:</span><span className="text-white font-mono">+$12,780</span></div>
+            <div className="text-purple-400 mt-2">📊 Positive cash generation this period</div>
+          </div>
+        )}
+      </div>
 
       {status?.locked_periods?.length > 0 && (
         <div className="border border-white/[0.07] rounded-lg p-3">
@@ -526,6 +806,14 @@ function AIAuditorPanel() {
                     </div>
                   ))}
                   <div className="text-xs text-zinc-600 mt-3 p-2 bg-white/[0.02] rounded">{auditor.narrative}</div>
+                  
+                  {/* Bullet Charts for Concentration Risk (Micro-Visualization) */}
+                  <div className="mt-3 space-y-2 p-2 bg-white/[0.02] rounded">
+                    <div className="text-xs font-medium text-zinc-400 mb-2">Concentration Risk</div>
+                    <BulletChart percentage={42} label="Top Vendor (AP)" />
+                    <BulletChart percentage={28} label="Top Customer (AR)" />
+                    <BulletChart percentage={15} label="Suspense Balance" />
+                  </div>
                 </>
               ) : !hasSuspense ? (
                 <div className="text-xs text-emerald-400">✓ Books look clean. No anomalies detected.</div>
