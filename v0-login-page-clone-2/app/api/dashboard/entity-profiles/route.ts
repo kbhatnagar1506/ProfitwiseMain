@@ -72,8 +72,11 @@ export async function GET(request: NextRequest) {
         COUNT(DISTINCT CASE WHEN e.entity_type = 'vendor' THEN e.id END)::int as total_vendors,
         COALESCE(SUM(ABS(m.amount)), 0)::numeric as total_lifetime_value,
         COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as total_ar_outstanding,
-        0::numeric as total_overdue,
-        COUNT(DISTINCT CASE WHEN ce.outstanding_amount > 0 THEN e.id END)::int as at_risk_count
+        COALESCE(SUM(
+          CASE WHEN ce.outstanding_amount > 0 AND ce.expected_date < CURRENT_DATE
+          THEN ce.outstanding_amount ELSE 0 END
+        ), 0)::numeric as total_overdue,
+        COUNT(DISTINCT CASE WHEN ce.outstanding_amount > 0 AND ce.expected_date < CURRENT_DATE THEN e.id END)::int as at_risk_count
       FROM entities e
       LEFT JOIN movements m ON e.id = m.counterparty_entity_id AND m.user_id = $1
       LEFT JOIN cash_events ce ON e.id = ce.entity_id::uuid AND ce.user_id = $1 AND ce.outstanding_amount > 0
