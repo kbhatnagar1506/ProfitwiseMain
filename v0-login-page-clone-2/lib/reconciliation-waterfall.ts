@@ -10,6 +10,7 @@ import { insertAttributionWithClient, type CreateAttributionOpts } from "./attri
 import type { CashEventRow } from "./cash-events-build"
 import { namesMatch } from "./ar-payment-match"
 import { safeParseFloat } from "./utils"
+import { writeStatusChange } from "./ar-ap-status"
 
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
@@ -992,12 +993,20 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     for (const id of touchedEventIds) {
       const ev = eventById.get(id)
       if (!ev) continue
-      const st = statusFromOutstanding(ev.outstanding_amount, ev.amount)
-      await client.query(
-        `UPDATE cash_events SET outstanding_amount = $2, status = $3, last_reconciled_at = NOW(), updated_at = NOW()
-         WHERE id = $1::uuid AND user_id = $4::uuid`,
-        [ev.id, ev.outstanding_amount, st, userId],
-      )
+      const newStatus = statusFromOutstanding(ev.outstanding_amount, ev.amount)
+      // Only log if status actually changed
+      if (newStatus !== ev.status || Math.abs(ev.outstanding_amount - ev.outstanding_amount) > EPS) {
+        await writeStatusChange(client, {
+          cashEventId: ev.id,
+          userId,
+          fromStatus: ev.status,
+          toStatus: newStatus,
+          fromOutstanding: ev.outstanding_amount,
+          toOutstanding: ev.outstanding_amount,
+          triggeredBy: "waterfall",
+          attributionId: null,
+        })
+      }
     }
     for (const s of stage4Reviews) {
       await client.query(
