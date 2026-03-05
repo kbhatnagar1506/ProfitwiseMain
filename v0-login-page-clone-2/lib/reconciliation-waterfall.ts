@@ -343,8 +343,12 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   await ensureMovementsSchema()
   const entityNormByUuid = await loadEntityNormByUuid(userId)
   const eventById = new Map<string, MutableCashEvent>()
+  const originalStatusById = new Map<string, string>()
+  const originalOutstandingById = new Map<string, number>()
   for (const e of await loadOpenCashEvents(userId)) {
     eventById.set(e.id, e)
+    originalStatusById.set(e.id, e.status)
+    originalOutstandingById.set(e.id, e.outstanding_amount)
   }
   const movements = await fetchMovementsWithAvailableCash(userId)
   const distinctCounterpartyEntityIds = [
@@ -993,15 +997,19 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     for (const id of touchedEventIds) {
       const ev = eventById.get(id)
       if (!ev) continue
+      const originalStatus = originalStatusById.get(id)
+      const originalOutstanding = originalOutstandingById.get(id)
+      if (!originalStatus || originalOutstanding === undefined) continue
+      
       const newStatus = statusFromOutstanding(ev.outstanding_amount, ev.amount)
       // Only log if status actually changed
-      if (newStatus !== ev.status || Math.abs(ev.outstanding_amount - ev.outstanding_amount) > EPS) {
+      if (newStatus !== originalStatus || Math.abs(ev.outstanding_amount - originalOutstanding) > EPS) {
         await writeStatusChange(client, {
           cashEventId: ev.id,
           userId,
-          fromStatus: ev.status,
+          fromStatus: originalStatus,
           toStatus: newStatus,
-          fromOutstanding: ev.outstanding_amount,
+          fromOutstanding: originalOutstanding,
           toOutstanding: ev.outstanding_amount,
           triggeredBy: "waterfall",
           attributionId: null,
