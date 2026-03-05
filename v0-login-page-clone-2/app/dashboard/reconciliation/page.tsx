@@ -513,7 +513,7 @@ export default function ReconciliationPage() {
       <div className="p-8 space-y-5">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-white tracking-tight">Clearing House</h1>
+            <h1 className="text-xl font-semibold text-white tracking-tight">Reconciliation</h1>
             <p className="text-[12px] text-zinc-500 mt-0.5">Running reconciliation engine...</p>
           </div>
         </div>
@@ -543,7 +543,7 @@ export default function ReconciliationPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-white tracking-tight">Clearing House</h1>
+          <h1 className="text-xl font-semibold text-white tracking-tight">Reconciliation</h1>
           <p className="text-[12px] text-zinc-500 mt-0.5">Operating cash only &middot; Excludes internal transfers</p>
         </div>
         <div className="flex items-center gap-2">
