@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSession } from "@/lib/require-session"
 import { query, withTransaction } from "@/lib/db"
+import { statusFromOutstanding, writeStatusChange } from "@/lib/ar-ap-status"
 import type { PoolClient } from "pg"
 
 export async function DELETE(request: NextRequest) {
@@ -83,11 +84,16 @@ export async function DELETE(request: NextRequest) {
           [userId, attr.entity_id, newOutstanding, newStatus, eventType]
         )
       } else {
-        // No cash_event found — restore by adding net_amount back to outstanding
-        // (fallback: just add back what was subtracted)
+        // Fallback: cash_event not found by entity_id — restore by adding net_amount back.
+        // F4: Also update status (was missing before — left status stale after unmatch).
         await client.query(
           `UPDATE cash_events
            SET outstanding_amount = LEAST(amount, outstanding_amount + $3),
+               status = CASE
+                 WHEN LEAST(amount, outstanding_amount + $3) <= 0.01   THEN 'paid'
+                 WHEN LEAST(amount, outstanding_amount + $3) < amount  THEN 'partially_paid'
+                 ELSE 'open'
+               END,
                updated_at = NOW()
            WHERE user_id = $1 AND event_type = $2
              AND entity_id LIKE $4`,

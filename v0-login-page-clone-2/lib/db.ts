@@ -1294,6 +1294,62 @@ export async function ensureMovementsSchema(): Promise<void> {
   } catch (e) {
     log("allocation.migrate.uris.error", { err: String(e) }, "db")
   }
+
+  // ─── AR/AP Audit Trail + Status Enrichment ─────────────────────────────────
+  // ar_ap_status_log: every status transition on cash_events is recorded here.
+  // Powers: audit trail, chase analytics, avg_days_to_pay accuracy.
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS ar_ap_status_log (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      cash_event_id     UUID NOT NULL REFERENCES cash_events(id) ON DELETE CASCADE,
+      user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      from_status       TEXT NOT NULL,
+      to_status         TEXT NOT NULL,
+      from_outstanding  NUMERIC,
+      to_outstanding    NUMERIC,
+      triggered_by      TEXT NOT NULL,
+      attribution_id    UUID REFERENCES movement_attributions(id) ON DELETE SET NULL,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_ar_ap_status_log_event ON ar_ap_status_log (cash_event_id, created_at DESC)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_ar_ap_status_log_user ON ar_ap_status_log (user_id, created_at DESC)")
+
+  // cash_events enrichment columns for overdue/chase/void tracking
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS overdue_notified_at TIMESTAMPTZ")
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS chase_count INT DEFAULT 0")
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS last_chased_at TIMESTAMPTZ")
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS void_reason TEXT")
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ")
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS confidence_score REAL DEFAULT 1.0")
+  // 1.0 = QBO/Xero verified, 0.5 = Stripe inferred, 0.3 = gmail-inferred
+
+  // display_status: STORED generated column for static states only.
+  // IMPORTANT: CURRENT_DATE/NOW() are VOLATILE and forbidden in STORED generated columns.
+  // 'overdue' is time-relative — compute it at query time with:
+  //   CASE WHEN display_status = 'open' AND expected_date < CURRENT_DATE THEN 'overdue' ELSE display_status END
+  try {
+    await p.query(`
+      ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS display_status TEXT
+        GENERATED ALWAYS AS (
+          CASE
+            WHEN status = 'paid'                                        THEN 'paid'
+            WHEN voided_at IS NOT NULL                                  THEN 'void'
+            WHEN outstanding_amount < amount AND outstanding_amount > 0 THEN 'partially_paid'
+            ELSE 'open'
+          END
+        ) STORED
+    `)
+  } catch (e) {
+    // Column may already exist — ignore duplicate column errors
+    const msg = String(e)
+    if (!msg.includes("already exists") && !msg.includes("duplicate column")) {
+      log("cash_events.display_status.column.error", { err: msg }, "db")
+    }
+  }
+
+  log("ar_ap_audit.schema.ensured", undefined, "db")
+
   movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }

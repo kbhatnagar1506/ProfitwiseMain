@@ -5,8 +5,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Sparkles, ChevronDown, ChevronUp, Plus, Trash2, Lock } from "lucide-react"
+import { Sparkles, ChevronDown, ChevronUp, Plus, Trash2, Lock, ExternalLink } from "lucide-react"
 import { LineChart, Line, ResponsiveContainer } from "recharts"
+import { StatusBadge } from "@/components/StatusBadge"
 
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n)
@@ -448,7 +449,14 @@ function GeneralLedgerTab() {
                         {line.debit ? <span className="font-mono text-emerald-400 w-24 text-right">{fmt(line.debit)}</span> : <span className="w-24" />}
                         {line.credit ? <span className="font-mono text-amber-400 w-24 text-right">{fmt(line.credit)}</span> : <span className="w-24" />}
                         {showRisk && <span className="text-xs text-amber-400 w-12 text-center">🟡</span>}
-                        {showRecon && <span className="text-xs text-blue-400 w-12 text-center">✓</span>}
+                        {showRecon && (
+                          <span className="w-20 text-center">
+                            {line.reconciliation_status
+                              ? <StatusBadge status={line.reconciliation_status} />
+                              : <span className="text-xs text-zinc-600">—</span>
+                            }
+                          </span>
+                        )}
                         <Badge variant="outline" className="text-xs">{line.source}</Badge>
                       </div>
                     </div>
@@ -711,6 +719,11 @@ function MonthEndCloseTab() {
             <div className={`text-lg font-mono mt-1 ${status?.account_health?.suspense_balance > 0 ? "text-red-400" : "text-emerald-400"}`}>
               {fmt(status?.account_health?.suspense_balance ?? 0)}
             </div>
+            {status?.account_health?.suspense_balance > 0 && (
+              <a href="/dashboard/reconciliation" className="flex items-center gap-1 text-[10px] text-red-400/70 hover:text-red-400 mt-1 transition-colors">
+                Reconcile <ExternalLink size={10} />
+              </a>
+            )}
           </div>
           <div className="bg-white/[0.03] rounded p-3">
             <div className="text-xs text-zinc-600">Unmatched Movements</div>

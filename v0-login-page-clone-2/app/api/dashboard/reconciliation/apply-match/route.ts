@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSession } from "@/lib/require-session"
 import { query, withTransaction } from "@/lib/db"
+import { statusFromOutstanding, writeStatusChange } from "@/lib/ar-ap-status"
 import type { PoolClient } from "pg"
 
 export async function POST(request: NextRequest) {
@@ -69,20 +70,40 @@ export async function POST(request: NextRequest) {
         ]
       )
 
-      // Decrement cash_events.outstanding_amount for the matched event
-      await client.query(
-        `UPDATE cash_events
-         SET outstanding_amount = GREATEST(0, outstanding_amount - $3),
-             status = CASE
-               WHEN GREATEST(0, outstanding_amount - $3) <= 0.01 THEN 'paid'
-               WHEN GREATEST(0, outstanding_amount - $3) < amount  THEN 'partially_paid'
-               ELSE 'open'
-             END,
-             last_reconciled_at = NOW(),
-             updated_at = NOW()
-         WHERE user_id = $1 AND entity_id = $2 AND event_type = $4`,
-        [userId, entity_id, applyAmount, component_type]
+      // F2: Lock the cash_event row before reading/writing to prevent race conditions
+      // where two simultaneous matches double-decrement outstanding_amount.
+      const lockResult = await client.query<{
+        id: string; status: string; outstanding_amount: string; amount: string
+      }>(
+        `SELECT id, status, outstanding_amount, amount
+         FROM cash_events
+         WHERE user_id = $1 AND entity_id = $2 AND event_type = $3
+         FOR UPDATE
+         LIMIT 1`,
+        [userId, entity_id, component_type]
       )
+      const ce = lockResult.rows[0]
+      if (!ce) {
+        throw new Error(`cash_event not found for entity_id=${entity_id} event_type=${component_type}`)
+      }
+
+      const prevOutstanding = parseFloat(ce.outstanding_amount)
+      const prevStatus = ce.status
+      const origAmount = parseFloat(ce.amount)
+      const newOutstanding = Math.max(0, prevOutstanding - applyAmount)
+      const newStatus = statusFromOutstanding(newOutstanding, origAmount)
+
+      // Decrement cash_events.outstanding_amount using the canonical helper
+      await writeStatusChange(client, {
+        cashEventId: ce.id,
+        userId,
+        fromStatus: prevStatus,
+        toStatus: newStatus,
+        fromOutstanding: prevOutstanding,
+        toOutstanding: newOutstanding,
+        triggeredBy: "apply_match",
+        attributionId: null,
+      })
 
       // Update entities table: decrease open_ar/open_ap, increase lifetime_value
       // Extract entity_id from cash_events to find the actual entity record

@@ -331,11 +331,16 @@ export async function syncCashEventsForUser(
         ELSE EXCLUDED.amount
       END,
       status = CASE
+        -- F3: Never overwrite a manually-verified or bank-reconciled payment back to open
+        WHEN (cash_events.metadata->>'manual_paid')::boolean = true THEN cash_events.status
+        WHEN cash_events.last_reconciled_at IS NOT NULL
+          AND COALESCE(cash_events.outstanding_amount, cash_events.amount) <= 0.01 THEN 'paid'
+        -- Normal outstanding-amount-derived status (using the already-computed new outstanding)
         WHEN (CASE
           WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
           THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
           ELSE EXCLUDED.amount
-        END) <= 0 THEN 'paid'
+        END) <= 0.01 THEN 'paid'
         WHEN (CASE
           WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
           THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
@@ -360,11 +365,16 @@ export async function syncCashEventsForUser(
         ELSE EXCLUDED.amount
       END,
       status = CASE
+        -- F3: Never overwrite a manually-verified or bank-reconciled payment back to open
+        WHEN (cash_events.metadata->>'manual_paid')::boolean = true THEN cash_events.status
+        WHEN cash_events.last_reconciled_at IS NOT NULL
+          AND COALESCE(cash_events.outstanding_amount, cash_events.amount) <= 0.01 THEN 'paid'
+        -- Normal outstanding-amount-derived status
         WHEN (CASE
           WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
           THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
           ELSE EXCLUDED.amount
-        END) <= 0 THEN 'paid'
+        END) <= 0.01 THEN 'paid'
         WHEN (CASE
           WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
           THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
