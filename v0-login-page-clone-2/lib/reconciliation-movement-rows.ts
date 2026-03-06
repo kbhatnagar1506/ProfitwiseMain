@@ -118,7 +118,7 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
         direction: r.direction,
         base: {
           movement_id: id,
-          amount: Math.abs(parseFloat(String(r.amount)) || 0),
+          amount: parseFloat(String(r.amount)) || 0,
           date: typeof r.date === "string" ? r.date.slice(0, 10) : "",
           counterparty: r.counterparty,
           display_name: r.counterparty,
@@ -137,7 +137,7 @@ export async function fetchReconciliationMovementRows(userId: string): Promise<{
       const feeMeta = feeFromMeta(r.metadata)
       g.attrs.push({
         gross,
-        fee: feeMeta || Math.max(0, gross - Math.abs(net)),
+        fee: feeMeta || Math.max(0, gross - net),
         net,
         entity_type: r.component_type,
         entity_id: r.entity_id ?? undefined,

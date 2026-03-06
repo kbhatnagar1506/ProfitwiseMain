@@ -125,7 +125,7 @@ export async function GET(request: Request) {
     `SELECT
        m.id AS movement_id,
        m.date::text,
-       ABS(m.amount)::text AS amount,
+       m.amount::text AS amount,
        m.direction,
        COALESCE(m.raw_description, m.counterparty, 'Unknown') AS raw_description,
        m.counterparty,

@@ -42,7 +42,7 @@ export async function GET() {
       `SELECT mt.economic_class,
               EXTRACT(YEAR FROM m.date)::text AS yr,
               EXTRACT(MONTH FROM m.date)::text AS mo,
-              SUM(ABS(m.amount))::text AS total
+              SUM(m.amount)::text AS total
        FROM movements m
        JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
        WHERE m.user_id = $1 AND m.duplicate_of IS NULL AND m.date >= $2
@@ -56,7 +56,7 @@ export async function GET() {
 
     // Suspense/unclassified balance
     query<{ count: string; total: string }>(
-      `SELECT COUNT(*)::text AS count, COALESCE(SUM(ABS(ma.net_amount)), 0)::text AS total
+      `SELECT COUNT(*)::text AS count, COALESCE(SUM(ma.net_amount), 0)::text AS total
        FROM movement_attributions ma
        WHERE ma.user_id = $1 AND ma.component_type = 'unknown'`,
       [user.id]
@@ -72,7 +72,7 @@ export async function GET() {
 
     // Current month totals per economic_class
     query<{ economic_class: string; total: string }>(
-      `SELECT mt.economic_class, SUM(ABS(m.amount))::text AS total
+      `SELECT mt.economic_class, SUM(m.amount)::text AS total
        FROM movements m
        JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
        WHERE m.user_id = $1 AND m.duplicate_of IS NULL AND m.date >= $2

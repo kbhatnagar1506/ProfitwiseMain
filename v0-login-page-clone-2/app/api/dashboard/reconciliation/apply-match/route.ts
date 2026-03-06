@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
 
     // Verify movement belongs to user
     const { rows: movRows } = await query<{ id: string; direction: string; amount: string }>(
-      `SELECT id, direction, ABS(amount::float)::text AS amount
+      `SELECT id, direction, amount::float::text AS amount
        FROM movements
        WHERE id = $1 AND user_id = $2 AND duplicate_of IS NULL`,
       [movement_id, userId]

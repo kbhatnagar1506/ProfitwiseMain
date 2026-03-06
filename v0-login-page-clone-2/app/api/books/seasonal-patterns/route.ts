@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   await ensureMovementsSchema()
 
   const monthlyRows = await query<{ month: string; total: string }>(
-    `SELECT EXTRACT(MONTH FROM m.date)::text AS month, SUM(ABS(m.amount))::text AS total
+    `SELECT EXTRACT(MONTH FROM m.date)::text AS month, SUM(m.amount)::text AS total
      FROM movements m
      WHERE m.user_id = $1 AND m.date >= NOW() - INTERVAL '12 months'
      GROUP BY EXTRACT(MONTH FROM m.date)

@@ -548,11 +548,11 @@ export async function getAllUnreconciledMovements(
     available_cash: string
   }>(
     `SELECT DISTINCT ON (m.id) m.id, m.direction, m.amount::float, m.date::text, m.counterparty, m.raw_description, mt.economic_class,
-            (ABS(m.amount::float) - COALESCE(alloc.allocated_sum, 0))::float AS available_cash
+            (m.amount::float - COALESCE(alloc.allocated_sum, 0))::float AS available_cash
      FROM movements m
      LEFT JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
      LEFT JOIN (
-       SELECT movement_id, SUM(ABS(net_amount::float)) FILTER (WHERE component_type != 'fee') AS allocated_sum
+       SELECT movement_id, SUM(net_amount::float) FILTER (WHERE component_type != 'fee') AS allocated_sum
        FROM movement_attributions WHERE user_id = $1::uuid GROUP BY movement_id
      ) alloc ON alloc.movement_id = m.id
      WHERE m.user_id = $1::uuid
@@ -562,7 +562,7 @@ export async function getAllUnreconciledMovements(
          WHERE ma.movement_id = m.id 
            AND ma.component_type IN ('ar', 'ap')
        )
-       AND (ABS(m.amount::float) - COALESCE(alloc.allocated_sum, 0)) > 0.01
+       AND (m.amount::float - COALESCE(alloc.allocated_sum, 0)) > 0.01
      ORDER BY m.id, mt.created_at DESC NULLS LAST`,
     [userId]
   )
@@ -577,7 +577,7 @@ export async function getAllUnreconciledMovements(
     })
     .map((r) => ({
       movement_id: r.id,
-      amount: Math.abs(safeParseFloat(r.available_cash)),
+      amount: safeParseFloat(r.available_cash),
       date: r.date,
       counterparty: r.counterparty,
       raw_description: r.raw_description,
