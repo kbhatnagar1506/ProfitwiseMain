@@ -458,12 +458,37 @@ export async function enrichBillsWithReconciliationStatus(
     // This prevents the bug where ALL vendor payments were aggregated together
   }
 
+  // Load cash_events status overrides from our database
+  // This allows the waterfall to override accounting system status
+  type CashEventRow = {
+    reference_id: string
+    status: string
+  }
+  const { rows: cashEventRows } = await query<CashEventRow>(
+    `SELECT metadata->>'bill_id' AS reference_id, status
+     FROM cash_events
+     WHERE user_id = $1
+       AND event_type = 'ap'
+       AND metadata->>'bill_id' IS NOT NULL`,
+    [userId]
+  )
+  
+  const statusByBillId = new Map<string, string>()
+  for (const row of cashEventRows) {
+    if (row.reference_id) {
+      statusByBillId.set(row.reference_id, row.status)
+    }
+  }
+
   return bills.map((bill) => {
     // Use amount_due if available, otherwise fall back to amount
     const targetAmount = (bill.amount_due != null && bill.amount_due > 0) ? bill.amount_due : bill.amount
     
     // Match by specific bill_id (reference_id) ONLY
     const byId = matchesByBillId.get(bill.bill_id)
+    
+    // Check if cash_events has overridden the status
+    const cashEventStatus = statusByBillId.get(bill.bill_id)
     
     if (byId && byId.movementIds.length > 0) {
       // We have a specific bill-level match
@@ -482,6 +507,8 @@ export async function enrichBillsWithReconciliationStatus(
 
       return {
         ...bill,
+        // Override status if cash_events has a newer value
+        status: cashEventStatus ?? bill.status,
         reconciliation_status: reconciliationStatus,
         matched_movement_ids: [...new Set(byId.movementIds)],
         matched_amount: matchedAmount,
@@ -491,6 +518,8 @@ export async function enrichBillsWithReconciliationStatus(
     // No specific match found - bill is unmatched
     return {
       ...bill,
+      // Override status if cash_events has a newer value
+      status: cashEventStatus ?? bill.status,
       reconciliation_status: "unmatched" as const,
       matched_movement_ids: [],
       matched_amount: 0,
