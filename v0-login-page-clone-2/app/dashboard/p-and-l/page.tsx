@@ -217,17 +217,17 @@ export default function PAndLPage() {
               </button>
               {expandedSections.revenue && (
                 <div className="divide-y divide-white/[0.05]">
-                  {data.revenue.line_items?.filter((item: any) => item.amount > 0.01).map((item: any, i: number) => (
+                  {data.revenue.line_items?.filter((item: any) => Math.abs(item.amount) > 0.01).map((item: any, i: number) => (
                     <div key={i} className="px-6 py-3 flex items-center justify-between text-sm hover:bg-white/[0.02]">
                       <span className="text-zinc-300 ml-8">{item.line_item}</span>
                       <div className="flex items-center gap-8">
                         <span className="text-zinc-600 text-xs">{item.count} txns</span>
-                        <span className="font-mono text-emerald-400 w-32 text-right">{fmt(item.amount)}</span>
+                        <span className={`font-mono w-32 text-right ${item.amount < 0 ? "text-red-400" : "text-emerald-400"}`}>{fmt(item.amount)}</span>
                         <span className="text-zinc-600 w-16 text-right">{pct(item.amount, grossRevenue)}</span>
                       </div>
                     </div>
                   ))}
-                  {(!data.revenue.line_items || data.revenue.line_items.filter((item: any) => item.amount > 0.01).length === 0) && (
+                  {(!data.revenue.line_items || data.revenue.line_items.filter((item: any) => Math.abs(item.amount) > 0.01).length === 0) && (
                     <div className="px-6 py-3 text-sm text-zinc-600">No revenue items</div>
                   )}
                   <div className="px-6 py-3 bg-white/[0.02] flex items-center justify-between text-sm font-semibold border-t border-white/[0.05]">
@@ -405,19 +405,19 @@ export default function PAndLPage() {
             </button>
             {expandedDetails.revenue && (
               <div className="divide-y divide-white/[0.05] px-6 py-4 space-y-3">
-                {data.revenue.line_items?.filter((item: any) => item.amount > 0.01).map((item: any, i: number) => (
+                {data.revenue.line_items?.filter((item: any) => Math.abs(item.amount) > 0.01).map((item: any, i: number) => (
                   <div key={i} className="flex items-center justify-between text-sm">
                     <div>
                       <div className="text-white font-medium">{item.line_item}</div>
                       <div className="text-xs text-zinc-600">{item.count} transactions</div>
                     </div>
                     <div className="text-right">
-                      <div className="font-mono text-emerald-400">{fmt(item.amount)}</div>
+                      <div className={`font-mono ${item.amount < 0 ? "text-red-400" : "text-emerald-400"}`}>{fmt(item.amount)}</div>
                       <div className="text-xs text-zinc-600">Confidence: {(item.confidence * 100).toFixed(0)}%</div>
                     </div>
                   </div>
                 ))}
-                {(!data.revenue.line_items || data.revenue.line_items.filter((item: any) => item.amount > 0.01).length === 0) && (
+                {(!data.revenue.line_items || data.revenue.line_items.filter((item: any) => Math.abs(item.amount) > 0.01).length === 0) && (
                   <div className="text-xs text-zinc-600">No revenue items</div>
                 )}
               </div>
@@ -508,9 +508,9 @@ export default function PAndLPage() {
               <BarChart
                 data={[
                   { name: "Revenue", value: data.revenue.gross_revenue, fill: "#10b981" },
-                  { name: "COGS", value: -Math.abs(data.cogs.total_cogs), fill: "#ef4444" },
+                  { name: "COGS", value: -data.cogs.total_cogs, fill: "#ef4444" },
                   { name: "Gross Profit", value: data.gross_profit, fill: "#3b82f6" },
-                  { name: "OpEx", value: -Math.abs(data.operating_expenses.total_opex), fill: "#f97316" },
+                  { name: "OpEx", value: -data.operating_expenses.total_opex, fill: "#f97316" },
                   { name: "Operating Income", value: data.operating_income, fill: "#06b6d4" },
                 ]}
               >
@@ -527,13 +527,13 @@ export default function PAndLPage() {
           </div>
 
           {/* Revenue Composition Pie */}
-          {data.revenue.line_items && data.revenue.line_items.filter((item: any) => item.amount > 0.01).length > 0 && (
+          {data.revenue.line_items && data.revenue.line_items.filter((item: any) => Math.abs(item.amount) > 0.01).length > 0 && (
             <div className="border border-white/[0.07] rounded-lg p-6 bg-white/[0.02]">
               <h3 className="text-sm font-semibold text-white mb-4">Revenue Composition</h3>
               <ResponsiveContainer width="100%" height={250}>
                 <PieChart>
                   <Pie
-                    data={data.revenue.line_items.filter((item: any) => item.amount > 0.01).slice(0, 5)}
+                    data={data.revenue.line_items.filter((item: any) => Math.abs(item.amount) > 0.01).slice(0, 5)}
                     dataKey="amount"
                     nameKey="line_item"
                     cx="50%"
@@ -541,7 +541,7 @@ export default function PAndLPage() {
                     outerRadius={80}
                     label={({ line_item, amount }) => `${line_item}: ${fmt(amount)}`}
                   >
-                    {data.revenue.line_items.filter((item: any) => item.amount > 0.01).slice(0, 5).map((_, index) => (
+                    {data.revenue.line_items.filter((item: any) => Math.abs(item.amount) > 0.01).slice(0, 5).map((_, index) => (
                       <Cell key={`cell-${index}`} fill={["#10b981", "#3b82f6", "#f97316", "#06b6d4", "#8b5cf6"][index]} />
                     ))}
                   </Pie>

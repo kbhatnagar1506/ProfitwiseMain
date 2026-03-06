@@ -3908,7 +3908,7 @@ export function OnboardingFlow({
                             const invExt = inv as OutstandingInvoice & { allocations?: { movement_id: string; gross: number; fee: number; net: number }[]; amount_collected?: number; amount_remaining?: number }
                             const allocs = invExt.allocations ?? []
                             const amountCollected = invExt.matched_amount ?? invExt.amount_collected ?? allocs.reduce((s: number, c: { gross: number }) => s + c.gross, 0)
-                            const pct = inv.amount > 0 ? Math.round((amountCollected / inv.amount) * 100) : 0
+                            const pct = Math.abs(inv.amount) > 0 ? Math.round((amountCollected / Math.abs(inv.amount)) * 100) : 0
                             const isExpanded = expandedInvoiceId === inv.invoice_id
                             const reconBadge = () => {
                               if (inv.reconciliation_status === "matched") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />Matched</span>
@@ -3928,12 +3928,15 @@ export function OnboardingFlow({
                                     {inv.days_overdue != null && inv.days_overdue > 0 && (
                                       <span className="block text-red-400 font-medium">{inv.days_overdue}d overdue</span>
                                     )}
+                                    {inv.days_overdue != null && inv.days_overdue < 0 && (
+                                      <span className="block text-green-400 font-medium">{Math.abs(inv.days_overdue)}d early</span>
+                                    )}
                                   </TableCell>
                                   <TableCell className="py-2.5">{statusBadge(inv.status, inv.days_overdue ?? null)}</TableCell>
                                   <TableCell className="py-2.5">{reconBadge()}</TableCell>
                                   <TableCell className={`text-right font-mono font-semibold py-2.5 ${inv.status === "overdue" ? "text-red-400" : "text-emerald-400"}`}>
                                     {moneySmall(inv.amount)}
-                                    {inv.amount_due > 0 && inv.amount_due < inv.amount && <span className="block text-[10px] text-gray-500">due: {moneySmall(inv.amount_due)}</span>}
+                                    {Math.abs(inv.amount_due) > 0 && inv.amount_due < inv.amount && <span className={`block text-[10px] ${inv.amount_due < 0 ? "text-blue-400" : "text-gray-500"}`}>{inv.amount_due < 0 ? "credit:" : "due:"} {moneySmall(inv.amount_due)}</span>}
                                     {amountCollected > 0 && <span className="block text-[10px] text-cyan-400">matched: {moneySmall(amountCollected)}</span>}
                                   </TableCell>
                                 </TableRow>
@@ -3944,6 +3947,7 @@ export function OnboardingFlow({
                                         <div className="flex gap-4">
                                           <span>Invoice Total: {moneySmall(inv.amount)}</span>
                                           {inv.amount_due > 0 && <span className="text-amber-400">Outstanding: {moneySmall(inv.amount_due)}</span>}
+                                          {inv.amount_due < 0 && <span className="text-blue-400">Credit: {moneySmall(Math.abs(inv.amount_due))}</span>}
                                           {amountCollected > 0 && <span className="text-cyan-400">Bank Matched: {moneySmall(amountCollected)}</span>}
                                         </div>
                                         {amountCollected > 0 && (
@@ -4044,7 +4048,7 @@ export function OnboardingFlow({
                         <TableBody>
                           {[...(arApData.ap.bills ?? [])].sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0)).map((bill, i) => {
                             const matchedAmount = bill.matched_amount ?? 0
-                            const pct = bill.amount > 0 ? Math.round((matchedAmount / bill.amount) * 100) : 0
+                            const pct = Math.abs(bill.amount) > 0 ? Math.round((matchedAmount / Math.abs(bill.amount)) * 100) : 0
                             const isExpanded = expandedObligationId === bill.bill_id
                             const apStatusBadge = (status: string, daysOverdue: number | null) => {
                               if (status === "paid") return <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Paid</span>
@@ -4071,12 +4075,15 @@ export function OnboardingFlow({
                                     {bill.days_overdue != null && bill.days_overdue > 0 && (
                                       <span className="block text-red-400 font-medium">{bill.days_overdue}d overdue</span>
                                     )}
+                                    {bill.days_overdue != null && bill.days_overdue < 0 && (
+                                      <span className="block text-green-400 font-medium">{Math.abs(bill.days_overdue)}d early</span>
+                                    )}
                                   </TableCell>
                                   <TableCell className="py-2.5">{apStatusBadge(bill.status, bill.days_overdue ?? null)}</TableCell>
                                   <TableCell className="py-2.5">{apReconBadge()}</TableCell>
                                   <TableCell className={`text-right font-mono font-semibold py-2.5 ${bill.status === "overdue" ? "text-red-400" : "text-red-400"}`}>
                                     {moneySmall(bill.amount)}
-                                    {bill.amount_due > 0 && bill.amount_due < bill.amount && <span className="block text-[10px] text-gray-500">due: {moneySmall(bill.amount_due)}</span>}
+                                    {Math.abs(bill.amount_due) > 0 && bill.amount_due < bill.amount && <span className={`block text-[10px] ${bill.amount_due < 0 ? "text-blue-400" : "text-gray-500"}`}>{bill.amount_due < 0 ? "credit:" : "due:"} {moneySmall(bill.amount_due)}</span>}
                                     {matchedAmount > 0 && <span className="block text-[10px] text-cyan-400">matched: {moneySmall(matchedAmount)}</span>}
                                   </TableCell>
                                 </TableRow>
@@ -4087,6 +4094,7 @@ export function OnboardingFlow({
                                         <div className="flex gap-4">
                                           <span>Bill Total: {moneySmall(bill.amount)}</span>
                                           {bill.amount_due > 0 && <span className="text-amber-400">Outstanding: {moneySmall(bill.amount_due)}</span>}
+                                          {bill.amount_due < 0 && <span className="text-blue-400">Credit: {moneySmall(Math.abs(bill.amount_due))}</span>}
                                           {matchedAmount > 0 && <span className="text-cyan-400">Bank Matched: {moneySmall(matchedAmount)}</span>}
                                         </div>
                                         {matchedAmount > 0 && (

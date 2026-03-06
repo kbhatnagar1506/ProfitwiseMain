@@ -403,10 +403,10 @@ export function CustomerDetailDrawer({
             <div className="space-y-2">
               {[
                 { label: "Lifetime Value", value: formatCurrency(liveRisk?.lifetimeValue ?? customer.lifetime_value), color: "text-emerald-400" },
-                { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : "text-neutral-400" },
+                { label: "Open AR",        value: formatCurrency(customer.ar_balance),     color: customer.ar_balance > 0 ? "text-amber-400" : customer.ar_balance < 0 ? "text-blue-400" : "text-neutral-400" },
                 { label: "Reliability",    value: `${reliabilityDisplay}%`,               color: reliabilityColor },
               ].map(({ label, value, color }) => (
-                <div key={label} className={`bg-white/[0.03] border border-white/[0.06] border-l-2 rounded-xl p-4 ${color === "text-emerald-400" ? "border-l-emerald-500/60" : color === "text-amber-400" ? "border-l-amber-500/60" : "border-l-white/20"}`}>
+                <div key={label} className={`bg-white/[0.03] border border-white/[0.06] border-l-2 rounded-xl p-4 ${color === "text-emerald-400" ? "border-l-emerald-500/60" : color === "text-amber-400" ? "border-l-amber-500/60" : color === "text-blue-400" ? "border-l-blue-500/60" : "border-l-white/20"}`}>
                   <p className="text-[11px] text-neutral-500 uppercase tracking-widest font-semibold mb-2">{label}</p>
                   <p className={`text-[28px] font-bold tabular-nums leading-none ${color}`}>{value}</p>
                 </div>

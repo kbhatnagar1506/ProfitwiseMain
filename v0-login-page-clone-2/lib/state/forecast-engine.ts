@@ -2759,7 +2759,7 @@ function generateEvents30d(models: BehavioralModels, components: CashflowCompone
   for (const c of models.customers) {
     if (c.probability_of_next < cal.event_generation.min_customer_prob) continue
 
-    const openInvs = c.outstanding_invoices.filter((i) => i.amount_due > 0)
+    const openInvs = c.outstanding_invoices.filter((i) => Math.abs(i.amount_due) > 0.01)
     const baseReasoning: EventReasoning = {
       basis: `${c.archetype} archetype, ${c.payment_count} prior payments`,
       payment_history: c.payment_count > 0
@@ -4055,7 +4055,7 @@ function computeForecastConfidence(
 
   // ── 2. Outflow model confidence (weight: 0.20) ──
   const vendTotal = models.vendors.length
-  const apOpenBills = bills.filter((b) => b.amount_due > 0)
+  const apOpenBills = bills.filter((b) => Math.abs(b.amount_due) > 0.01)
   const apOutComp = components.find((c) => c.category === "vendor_payments" && c.direction === "out")
   let outflowScore = 0
   if (vendTotal > 0) {

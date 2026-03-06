@@ -220,7 +220,7 @@ function MiniDonut({ data, colors, centerLabel, centerValue }: {
   centerLabel: string
   centerValue: string
 }) {
-  const hasData = data.some(d => d.value > 0)
+  const hasData = data.some(d => Math.abs(d.value) > 0.01)
   if (!hasData) return null
   return (
     <div className="relative w-full h-[130px]">
@@ -974,11 +974,11 @@ export default function ReconciliationPage() {
                       <tbody>
                         {allInvoices.map((inv, idx) => {
                           const isMatched = inv.reconciliation_status === "matched" || inv.reconciliation_status === "partial"
-                          const effectiveStatus = inv.status === "open" && inv.days_overdue > 0 ? "overdue" : inv.status
+                          const effectiveStatus = inv.status === "open" && inv.days_overdue > 0 ? "overdue" : (inv.status === "open" && (inv.outstanding_amount ?? inv.amount_due) < 0 ? "credit" : inv.status)
                           return (
                             <tr key={inv.invoice_id || idx} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
                               <td className="px-3 py-2">
-                                <p className={`text-[13px] truncate max-w-[180px] ${inv.days_overdue > 0 ? "text-red-300" : "text-white"}`}>{inv.customer_name || "—"}</p>
+                                <p className={`text-[13px] truncate max-w-[180px] ${inv.days_overdue > 0 ? "text-red-300" : inv.days_overdue < 0 ? "text-emerald-300" : "text-white"}`}>{inv.customer_name || "—"}</p>
                               </td>
                               <td className="px-3 py-2">
                                 <p className="text-[12px] text-zinc-400 font-mono">{inv.invoice_id || "—"}</p>
@@ -987,7 +987,7 @@ export default function ReconciliationPage() {
                                 <span className="text-[13px] font-mono tabular-nums text-white">{formatCurrency(inv.amount)}</span>
                               </td>
                               <td className="px-3 py-2 text-right">
-                                <span className={`text-[13px] font-mono tabular-nums ${inv.amount_due > 0 ? "text-amber-400" : "text-zinc-500"}`}>
+                                <span className={`text-[13px] font-mono tabular-nums ${inv.amount_due > 0 ? "text-amber-400" : inv.amount_due < 0 ? "text-blue-400" : "text-zinc-500"}`}>
                                   {formatCurrency(inv.amount_due)}
                                 </span>
                               </td>
@@ -1057,11 +1057,11 @@ export default function ReconciliationPage() {
                       <tbody>
                         {allBills.map((bill, idx) => {
                           const isMatched = bill.reconciliation_status === "matched" || bill.reconciliation_status === "partial"
-                          const effectiveStatus = bill.status === "open" && bill.days_overdue > 0 ? "overdue" : bill.status
+                          const effectiveStatus = bill.status === "open" && bill.days_overdue > 0 ? "overdue" : (bill.status === "open" && (bill.outstanding_amount ?? bill.amount_due) < 0 ? "credit" : bill.status)
                           return (
                             <tr key={bill.bill_id || idx} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
                               <td className="px-3 py-2">
-                                <p className={`text-[13px] truncate max-w-[180px] ${bill.days_overdue > 0 ? "text-red-300" : "text-white"}`}>{bill.vendor_name || "—"}</p>
+                                <p className={`text-[13px] truncate max-w-[180px] ${bill.days_overdue > 0 ? "text-red-300" : bill.days_overdue < 0 ? "text-emerald-300" : "text-white"}`}>{bill.vendor_name || "—"}</p>
                               </td>
                               <td className="px-3 py-2">
                                 <p className="text-[12px] text-zinc-400 font-mono">{bill.bill_id || "—"}</p>
@@ -1070,7 +1070,7 @@ export default function ReconciliationPage() {
                                 <span className="text-[13px] font-mono tabular-nums text-white">{formatCurrency(bill.amount)}</span>
                               </td>
                               <td className="px-3 py-2 text-right">
-                                <span className={`text-[13px] font-mono tabular-nums ${bill.amount_due > 0 ? "text-amber-400" : "text-zinc-500"}`}>
+                                <span className={`text-[13px] font-mono tabular-nums ${bill.amount_due > 0 ? "text-amber-400" : bill.amount_due < 0 ? "text-blue-400" : "text-zinc-500"}`}>
                                   {formatCurrency(bill.amount_due)}
                                 </span>
                               </td>
