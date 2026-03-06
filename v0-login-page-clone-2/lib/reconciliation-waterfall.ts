@@ -15,6 +15,125 @@ import { writeStatusChange } from "./ar-ap-status"
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
 
+// LLM-based semantic entity matching
+const LLM_API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
+const LLM_API_KEY = process.env.FORECAST_LLM_API_KEY ?? process.env.OPENAI_API_KEY
+const LLM_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
+
+async function validateEntityMatchWithLLM(
+  bankDescription: string,
+  entityName: string,
+  invoiceAmount: number,
+  bankAmount: number
+): Promise<boolean> {
+  if (!LLM_API_KEY) return true // Fallback to fuzzy match if no LLM
+  
+  try {
+    const prompt = `Does this bank transaction semantically match this invoice?
+
+Bank Description: "${bankDescription}"
+Invoice Entity: "${entityName}"
+Bank Amount: $${bankAmount.toFixed(2)}
+Invoice Amount: $${invoiceAmount.toFixed(2)}
+
+Rules:
+- Bank description MUST semantically match the entity name
+- Different vendors/organizations = NO MATCH (e.g., "Spread The Love Foods" ≠ "High Brew")
+- Same vendor with name variations = YES (e.g., "ABC Corp" = "ABC")
+- Amount within 5% = acceptable
+- Amount mismatch + name mismatch = NO MATCH
+
+Respond with only "YES" or "NO".`
+
+    const res = await fetch(LLM_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${LLM_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 10,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(5000),
+    })
+
+    if (!res.ok) return true // Fallback on error
+    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
+    const response = data.choices?.[0]?.message?.content?.trim().toUpperCase() ?? ""
+    return response.includes("YES")
+  } catch (e) {
+    console.warn("[LLM-Entity-Match] Error:", e instanceof Error ? e.message : String(e))
+    return true // Fallback to fuzzy match on error
+  }
+}
+
+/**
+ * Validate attributions using LLM semantic matching.
+ * Filters out false positives where bank description doesn't match entity name.
+ */
+async function validateAttributionsWithLLM(
+  attributions: CreateAttributionOpts[],
+  movements: Map<string, { raw_description: string | null; counterparty: string | null; amount: number }>,
+  invoices: Map<string, { customer_name: string; amount_due: number }>,
+  bills: Map<string, { vendor_name: string; amount_due: number }>
+): Promise<CreateAttributionOpts[]> {
+  if (!LLM_API_KEY) return attributions // Skip if no LLM
+  
+  const validated: CreateAttributionOpts[] = []
+  
+  for (const attr of attributions) {
+    const movement = movements.get(attr.movementId)
+    if (!movement) {
+      validated.push(attr)
+      continue
+    }
+    
+    const bankDesc = movement.raw_description || movement.counterparty || "Unknown"
+    let entityName = ""
+    let invoiceAmount = 0
+    
+    if (attr.component_type === "ar") {
+      const invoice = invoices.get(attr.reference_id ?? "")
+      if (!invoice) {
+        validated.push(attr)
+        continue
+      }
+      entityName = invoice.customer_name
+      invoiceAmount = invoice.amount_due
+    } else if (attr.component_type === "ap") {
+      const bill = bills.get(attr.reference_id ?? "")
+      if (!bill) {
+        validated.push(attr)
+        continue
+      }
+      entityName = bill.vendor_name
+      invoiceAmount = bill.amount_due
+    } else {
+      validated.push(attr)
+      continue
+    }
+    
+    // Use LLM to validate semantic match
+    const isValid = await validateEntityMatchWithLLM(
+      bankDesc,
+      entityName,
+      invoiceAmount,
+      movement.amount
+    )
+    
+    if (isValid) {
+      validated.push(attr)
+    } else {
+      console.log(`[LLM-Validation] Rejected match: "${bankDesc}" → "${entityName}" ($${movement.amount.toFixed(2)})`)
+    }
+  }
+  
+  return validated
+}
+
 // Economic class filtering for reconciliation
 // AR-eligible: movements that can match to invoices (customer receipts)
 const AR_ELIGIBLE_CLASSES = new Set<string | null>([

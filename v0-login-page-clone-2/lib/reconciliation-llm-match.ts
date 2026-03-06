@@ -138,16 +138,31 @@ export async function batchLLMMatch(
 
   const systemPrompt = `You are a financial reconciliation assistant. Match bank transactions to invoices/bills.
 
+CRITICAL RULE: SEMANTIC NAME MATCHING IS MANDATORY
+- Bank description MUST semantically match the customer/vendor name
+- If bank shows "Spread The Love Foods", it can ONLY match invoices from "Spread The Love Foods"
+- Do NOT split payments across vendors with different names (e.g., "Spread The Love" cannot pay "High Brew")
+- If names don't match, confidence is AUTOMATICALLY low or rejected
+
 CONTEXT:
 - Bank transactions often show organization names while invoices are under contact names
 - Example: Bank shows "ABC Corp" but invoice is under "John Smith (ABC Corp)"
-- Aggregated payments may cover multiple invoices from the same customer
+- Aggregated payments may cover multiple invoices from the SAME customer/vendor only
 - Payment amounts may differ slightly due to processor fees (typically 2-4%)
 
 MATCHING RULES:
-1. Entity match: Organization name in bank description should match organization in parentheses of customer/vendor name, OR be a clear variation
-2. Amount: Payment within ±5% of invoice amount (accounts for fees). For aggregated payments, sum of matched invoices should approximate payment
+1. SEMANTIC ENTITY MATCH (MANDATORY):
+   - Organization name in bank description MUST match organization in parentheses of customer/vendor name
+   - OR be a clear semantic variation (e.g., "ABC" = "ABC Corp", "Acme Inc" = "Acme")
+   - REJECT if names are completely different (e.g., "Spread The Love" ≠ "High Brew")
+   - REJECT if bank shows person name (e.g., "Sarah Katz") but invoice is under different entity (e.g., "Jack")
+
+2. Amount: Payment within ±5% of invoice amount (accounts for fees)
+   - For aggregated payments: ALL matched invoices must be from the SAME customer/vendor
+   - Sum of matched invoices should approximate payment
+
 3. Date: Payment should be within reasonable time of due date (45 days for AR, 14 days for AP)
+
 4. Prefer exact or near-exact amount matches over partial matches
 
 OUTPUT FORMAT (one line per match):
@@ -155,11 +170,17 @@ AR: [movement_id] -> [invoice_id]: [high|medium|low]: [brief reason]
 AP: [movement_id] -> [obligation_id]: [high|medium|low]: [brief reason]
 
 CONFIDENCE LEVELS:
-- high: Clear entity match AND amount within 3%
-- medium: Likely entity match OR amount within 5%
-- low: Possible match requiring human review
+- high: Clear entity name match AND amount within 3% AND same customer/vendor
+- medium: Likely entity match AND amount within 5% AND same customer/vendor
+- low: Possible match requiring human review (name mismatch, unclear aggregation, etc.)
+- REJECT: Names don't match semantically OR splitting across different vendors
 
-Only output matches you're confident about. Do not guess.`
+REJECTION EXAMPLES (output nothing for these):
+- Bank: "Spread The Love Foods" → Invoice: "High Brew" (different vendors)
+- Bank: "Sarah Katz (Marlins)" → Invoice: "Jack" (different entities)
+- Bank: "Tyler Hines" → Invoices: "Clemson", "USC", "Bay FC" (aggregation across unrelated entities)
+
+Only output matches you're confident about. Do not guess. When in doubt, reject and let human review.`
 
   const inflowSection = inflows.length > 0
     ? `UNMATCHED BANK DEPOSITS (AR):
