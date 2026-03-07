@@ -4,7 +4,8 @@ import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
+import { StatusBadge } from "@/components/StatusBadge"
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -67,6 +68,7 @@ export default function InvoicesPage() {
   })
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
   const [limit] = useState(20)
   const [status, setStatus] = useState("all")
   const [search, setSearch] = useState("")
@@ -100,6 +102,7 @@ export default function InvoicesPage() {
       setInvoices(data.invoices)
       setTotals(data.totals)
       setSummaryByStatus(data.summary_by_status)
+      setTotalPages(data.pagination?.pages ?? 1)
     } catch (error) {
       console.error("Error fetching invoices:", error)
     } finally {
@@ -123,14 +126,14 @@ export default function InvoicesPage() {
 
   const getStatusColor = (status: string, daysOverdue: number | null) => {
     if (status === "paid") return "text-emerald-400/90"
-    if (status === "overdue" || (daysOverdue !== null && daysOverdue > 0)) return "text-red-400/80"
+    if (status === "overdue") return "text-red-400/80"
     if (status === "partially_paid") return "text-amber-400/80"
     return "text-neutral-300"
   }
 
   const getStatusBadgeVariant = (status: string, daysOverdue: number | null) => {
     if (status === "paid") return "bg-emerald-400/10 text-emerald-300 border-emerald-400/20"
-    if (status === "overdue" || (daysOverdue !== null && daysOverdue > 0)) return "bg-red-400/10 text-red-300 border-red-400/20"
+    if (status === "overdue") return "bg-red-400/10 text-red-300 border-red-400/20"
     if (status === "partially_paid") return "bg-amber-400/10 text-amber-300 border-amber-400/20"
     return "bg-white/5 text-zinc-300 border-white/10"
   }
@@ -242,14 +245,7 @@ export default function InvoicesPage() {
                         {invoice.days_overdue !== null ? `-${invoice.days_overdue}` : `${invoice.days_until_due}`}
                       </td>
                       <td className="px-4 py-3">
-                        <Badge
-                          variant="secondary"
-                          className={`text-[11px] font-medium border ${getStatusBadgeVariant(invoice.status, invoice.days_overdue)}`}
-                        >
-                          {invoice.status === "overdue" || (invoice.days_overdue !== null && invoice.days_overdue > 0)
-                            ? "Overdue"
-                            : invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
-                        </Badge>
+                        <StatusBadge status={invoice.status} />
                       </td>
                       <td className="px-4 py-3 text-sm text-neutral-500 capitalize">{invoice.source}</td>
                     </tr>
@@ -281,6 +277,31 @@ export default function InvoicesPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-4 border-t border-white/[0.06]">
+            <p className="text-[12px] text-zinc-500">
+              Page {page} of {totalPages}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[12px] text-zinc-300 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft size={14} /> Prev
+              </button>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[12px] text-zinc-300 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Next <ChevronRight size={14} />
+              </button>
+            </div>
           </div>
         )}
       </div>

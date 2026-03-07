@@ -45,7 +45,8 @@ export async function aggregateEntityTransactions(
       COALESCE(
         (qe.data->>'DueDate')::text,
         (xe.data->>'DueDateString')::text,
-        (xe.data->>'DueDate')::text
+        (xe.data->>'DueDate')::text,
+        ce.expected_date::text        -- F7: fallback when no source document has a due date
       ) as ref_due_date
     FROM movement_attributions a
     JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
@@ -57,6 +58,8 @@ export async function aggregateEntityTransactions(
       ON xe.entity_id = a.reference_id
       AND xe.entity_type IN ('Invoice', 'Bill')
       AND a.reference_id IS NOT NULL
+    LEFT JOIN cash_events ce
+      ON ce.user_id = a.user_id AND ce.entity_id = a.entity_id
     WHERE a.user_id = $1::uuid
       AND m.counterparty_entity_id = $2::uuid
       AND a.component_type IN ('ar', 'ap')

@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { RefreshCw, Search, ArrowRight, Sparkles, Zap, ChevronRight } from "lucide-react"
+import { StatusBadge } from "@/components/StatusBadge"
 import {
   ResponsiveContainer,
   PieChart,
@@ -973,11 +974,11 @@ export default function ReconciliationPage() {
                       <tbody>
                         {allInvoices.slice(0, 30).map((inv, idx) => {
                           const isMatched = inv.reconciliation_status === "matched" || inv.reconciliation_status === "partial"
-                          const isPaid = inv.status === "paid"
+                          const effectiveStatus = inv.status === "open" && inv.days_overdue > 0 ? "overdue" : inv.status
                           return (
                             <tr key={inv.invoice_id || idx} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
                               <td className="px-3 py-2">
-                                <p className="text-[13px] text-white truncate max-w-[180px]">{inv.customer_name || "—"}</p>
+                                <p className={`text-[13px] truncate max-w-[180px] ${inv.days_overdue > 0 ? "text-red-300" : "text-white"}`}>{inv.customer_name || "—"}</p>
                               </td>
                               <td className="px-3 py-2">
                                 <p className="text-[12px] text-zinc-400 font-mono">{inv.invoice_id || "—"}</p>
@@ -993,11 +994,7 @@ export default function ReconciliationPage() {
                               <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(inv.due_date)}</td>
                               <td className="px-3 py-2">
                                 <div className="flex items-center gap-1.5">
-                                  {isPaid ? (
-                                    <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] px-1.5 py-0">Paid</Badge>
-                                  ) : (
-                                    <Badge className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] px-1.5 py-0">Open</Badge>
-                                  )}
+                                  <StatusBadge status={effectiveStatus} />
                                   {isMatched ? (
                                     <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] px-1.5 py-0">
                                       {inv.reconciliation_status === "partial" ? "Partial" : "Matched"}
@@ -1060,11 +1057,11 @@ export default function ReconciliationPage() {
                       <tbody>
                         {allBills.slice(0, 30).map((bill, idx) => {
                           const isMatched = bill.reconciliation_status === "matched" || bill.reconciliation_status === "partial"
-                          const isPaid = bill.status === "paid"
+                          const effectiveStatus = bill.status === "open" && bill.days_overdue > 0 ? "overdue" : bill.status
                           return (
                             <tr key={bill.bill_id || idx} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
                               <td className="px-3 py-2">
-                                <p className="text-[13px] text-white truncate max-w-[180px]">{bill.vendor_name || "—"}</p>
+                                <p className={`text-[13px] truncate max-w-[180px] ${bill.days_overdue > 0 ? "text-red-300" : "text-white"}`}>{bill.vendor_name || "—"}</p>
                               </td>
                               <td className="px-3 py-2">
                                 <p className="text-[12px] text-zinc-400 font-mono">{bill.bill_id || "—"}</p>
@@ -1080,11 +1077,7 @@ export default function ReconciliationPage() {
                               <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(bill.due_date)}</td>
                               <td className="px-3 py-2">
                                 <div className="flex items-center gap-1.5">
-                                  {isPaid ? (
-                                    <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] px-1.5 py-0">Paid</Badge>
-                                  ) : (
-                                    <Badge className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] px-1.5 py-0">Open</Badge>
-                                  )}
+                                  <StatusBadge status={effectiveStatus} />
                                   {isMatched ? (
                                     <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] px-1.5 py-0">
                                       {bill.reconciliation_status === "partial" ? "Partial" : "Matched"}

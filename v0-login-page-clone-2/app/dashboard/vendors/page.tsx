@@ -295,8 +295,8 @@ export default function VendorsPage() {
 
       {/* Macro KPI Row */}
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          {[1, 2, 3, 4, 5].map((i) => (
             <div key={i} className="bg-[#141414] border border-white/[0.06] rounded-xl p-5">
               <Skeleton className="h-3 w-20 mb-3" />
               <Skeleton className="h-7 w-24" />
@@ -304,7 +304,7 @@ export default function VendorsPage() {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="bg-[#141414] border border-white/[0.08] rounded-xl p-5 hover:border-white/[0.1] transition-colors">
             <p className="text-[12px] text-neutral-500 font-medium uppercase tracking-wide">Total Vendors</p>
             <p className="text-3xl font-semibold text-white mt-3 tracking-tight">
@@ -333,6 +333,18 @@ export default function VendorsPage() {
             }`}>
               {formatCompactCurrency(summary?.total_overdue || 0)}
             </p>
+          </div>
+
+          <div className={`bg-[#141414] border rounded-xl p-5 transition-colors ${
+            (summary?.at_risk_count || 0) > 0 ? "border-red-500/20 hover:border-red-500/30" : "border-white/[0.08] hover:border-white/[0.1]"
+          }`}>
+            <p className="text-[12px] text-neutral-500 font-medium uppercase tracking-wide">At Risk</p>
+            <p className={`text-3xl font-semibold mt-3 tracking-tight tabular-nums ${
+              (summary?.at_risk_count || 0) > 0 ? "text-red-400" : "text-zinc-500"
+            }`}>
+              {summary?.at_risk_count || 0}
+            </p>
+            <p className="text-[11px] text-zinc-600 mt-1">vendors w/ overdue</p>
           </div>
         </div>
       )}

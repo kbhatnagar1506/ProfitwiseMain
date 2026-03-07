@@ -91,7 +91,10 @@ export async function GET(request: NextRequest) {
         COUNT(DISTINCT m.id)::int as transaction_count,
         COALESCE(SUM(ABS(m.amount)), 0)::numeric as lifetime_value,
         COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as ar_balance,
-        0::numeric as overdue_balance,
+        COALESCE(SUM(
+          CASE WHEN ce.outstanding_amount > 0 AND ce.expected_date < CURRENT_DATE
+          THEN ce.outstanding_amount ELSE 0 END
+        ), 0)::numeric as overdue_balance,
         MAX(m.date)::text as last_transaction_date,
         e.metadata,
         (SELECT ea.alias FROM entity_aliases ea WHERE ea.entity_id = e.id AND ea.alias_type = 'email' LIMIT 1) AS contact_email
