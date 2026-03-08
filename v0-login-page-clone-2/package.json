@@ -8,7 +8,11 @@
     "lint": "eslint .",
     "start": "next start",
     "worker": "tsx lib/queue/worker.ts",
-    "seed:classification-signatures": "tsx scripts/seed-user-classification-signatures.ts"
+    "seed:classification-signatures": "tsx scripts/seed-user-classification-signatures.ts",
+    "test:reconciliation": "tsx scripts/test-reconciliation.ts",
+    "seed:reconciliation-test-cases": "tsx scripts/seed-reconciliation-test-cases.ts",
+    "canary:health-check": "tsx scripts/canary-health-check.ts",
+    "deploy:full-rollout": "tsx scripts/full-rollout.ts"
   },
   "dependencies": {
     "@google-cloud/cloud-sql-connector": "^1.9.1",

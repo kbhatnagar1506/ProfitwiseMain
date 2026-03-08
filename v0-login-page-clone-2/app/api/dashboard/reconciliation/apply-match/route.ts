@@ -3,6 +3,8 @@ import { getSession } from "@/lib/require-session"
 import { query, withTransaction } from "@/lib/db"
 import { statusFromOutstanding, writeStatusChange } from "@/lib/ar-ap-status"
 import type { PoolClient } from "pg"
+import { writeAuditLogWithClient } from "@/lib/reconciliation-audit-log"
+import { validateSemanticMatch } from "@/lib/semantic-validation-supermemory"
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,14 +20,39 @@ export async function POST(request: NextRequest) {
       component_type: "ar" | "ap"
       entity_id: string        // entity URI e.g. "ar://invoice/qbo/214"
       amount: number
+      entity_name?: string     // Optional: for semantic validation warning
+      bank_description?: string // Optional: for semantic validation warning
     }
 
-    const { movement_id, reference_id, component_type, entity_id, amount } = body
+    const { movement_id, reference_id, component_type, entity_id, amount, entity_name, bank_description } = body
     if (!movement_id || !reference_id || !component_type || !entity_id || !amount) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
     }
     if (!["ar", "ap"].includes(component_type)) {
       return NextResponse.json({ error: "component_type must be ar or ap" }, { status: 400 })
+    }
+
+    // Phase 6: Entity validation — compute semantic confidence for the manual match
+    let semanticValidation: { valid: boolean; score: number; reasoning: string } | null = null
+    let semanticWarning: string | null = null
+    if (entity_name && bank_description) {
+      try {
+        const validation = await validateSemanticMatch(
+          bank_description,
+          entity_id,
+          entity_name,
+          amount,
+          userId
+        )
+        semanticValidation = { valid: validation.valid, score: validation.score, reasoning: validation.reasoning }
+        if (!validation.valid) {
+          semanticWarning = `Low entity confidence: ${validation.reasoning}`
+        } else if (validation.score < 0.75) {
+          semanticWarning = `Moderate entity confidence (${(validation.score * 100).toFixed(0)}%): ${validation.reasoning}`
+        }
+      } catch {
+        // Never block manual match on validation failure
+      }
     }
 
     // Verify movement belongs to user
@@ -66,9 +93,25 @@ export async function POST(request: NextRequest) {
           JSON.stringify({
             match_method: "manual_user",
             applied_at: new Date().toISOString(),
+            semantic_validation: semanticValidation,
+            semantic_warning: semanticWarning,
           }),
         ]
       )
+
+      // Write audit log for the manual match
+      await writeAuditLogWithClient(client, {
+        userId,
+        movementId: movement_id,
+        matchMethod: "manual_user",
+        waterfallStage: "manual",
+        confidence: semanticValidation?.score ?? 1.0,
+        entityId: entity_id,
+        referenceId: reference_id,
+        amountMatched: applyAmount,
+        semanticValid: semanticValidation?.valid ?? true,
+        crossEntityFlag: false,
+      })
 
       // F2: Lock the cash_event row before reading/writing to prevent race conditions
       // where two simultaneous matches double-decrement outstanding_amount.
@@ -142,7 +185,7 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, semantic_warning: semanticWarning ?? undefined })
   } catch (err) {
     console.error("[reconciliation/apply-match] Error:", err)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })

@@ -932,6 +932,11 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user ON movement_attributions (user_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_component_entity ON movement_attributions (component_type, entity_id)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_user_component ON movement_attributions (user_id, component_type)")
+  // Phase 2: Category-based matching columns (prevent cross-category matches)
+  await p.query("ALTER TABLE movement_attributions ADD COLUMN IF NOT EXISTS category TEXT")
+  await p.query("ALTER TABLE movement_attributions ADD COLUMN IF NOT EXISTS cost_type TEXT")
+  await p.query("ALTER TABLE movement_attributions ADD COLUMN IF NOT EXISTS vendor_id TEXT")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_category ON movement_attributions (user_id, category) WHERE category IS NOT NULL")
   // Clean up duplicate attributions before creating unique indexes
   // Keep only the most recent attribution for each (movement_id, component_type, entity_id, source) combination
   try {
@@ -1011,8 +1016,27 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS outstanding_amount NUMERIC")
   await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'open'")
   await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS last_reconciled_at TIMESTAMPTZ")
+  // Phase 1 polarity: signed amount (inflow=positive, outflow=negative) and credit classification
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS amount_signed NUMERIC")
+  await p.query("ALTER TABLE cash_events ADD COLUMN IF NOT EXISTS credit_type TEXT DEFAULT 'none'")
   await p.query(`
     UPDATE cash_events SET outstanding_amount = amount WHERE outstanding_amount IS NULL
+  `)
+  // Backfill amount_signed: inflow events are positive, outflow (ap) events are negative
+  await p.query(`
+    UPDATE cash_events
+    SET amount_signed = CASE WHEN event_type = 'ar' THEN amount ELSE -amount END
+    WHERE amount_signed IS NULL
+  `)
+  // Backfill credit_type: cash events with negative outstanding_amount indicate a credit
+  await p.query(`
+    UPDATE cash_events
+    SET credit_type = CASE
+      WHEN event_type = 'ap' AND outstanding_amount < 0 THEN 'vendor_credit'
+      WHEN event_type = 'ar' AND outstanding_amount < 0 THEN 'customer_overpayment'
+      ELSE 'none'
+    END
+    WHERE credit_type IS NULL OR credit_type = ''
   `)
   await p.query(`
     UPDATE cash_events SET status = CASE
@@ -1029,6 +1053,16 @@ export async function ensureMovementsSchema(): Promise<void> {
     `)
   } catch {
     /* constraint may already exist */
+  }
+  // Phase 1: Drop and recreate constraint to allow 'credit' status for vendor credits / overpayments
+  try {
+    await p.query(`ALTER TABLE cash_events DROP CONSTRAINT IF EXISTS cash_events_status_check`)
+    await p.query(`
+      ALTER TABLE cash_events ADD CONSTRAINT cash_events_status_check
+      CHECK (status IN ('open', 'partially_paid', 'paid', 'credit'))
+    `)
+  } catch {
+    /* ignore */
   }
   try {
     const del = await p.query(`
@@ -1535,4 +1569,40 @@ export async function ensureUserDecisionsSchema() {
   await p.query(
     "CREATE INDEX IF NOT EXISTS idx_period_locks_user ON period_locks (user_id, period_year DESC, period_month DESC)"
   )
+
+  // Reconciliation audit log — lightweight per-match decision record
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS reconciliation_audit_log (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID REFERENCES users(id) ON DELETE CASCADE,
+      movement_id       UUID REFERENCES movements(id) ON DELETE SET NULL,
+      match_method      TEXT NOT NULL,
+      waterfall_stage   TEXT,
+      confidence        REAL,
+      entity_id         TEXT,
+      reference_id      TEXT,
+      amount_matched    NUMERIC,
+      semantic_valid    BOOLEAN,
+      cross_entity_flag BOOLEAN DEFAULT false,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_user ON reconciliation_audit_log (user_id, created_at DESC)")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_movement ON reconciliation_audit_log (movement_id)")
+
+  // Reconciliation test cases — golden dataset for regression testing
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS reconciliation_test_cases (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           UUID REFERENCES users(id) ON DELETE CASCADE,
+      description       TEXT NOT NULL,
+      movement_id       UUID REFERENCES movements(id) ON DELETE SET NULL,
+      expected_entity   TEXT,
+      expected_invoice  TEXT,
+      expected_match    BOOLEAN NOT NULL DEFAULT true,
+      failure_mode      TEXT,
+      notes             TEXT,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
 }

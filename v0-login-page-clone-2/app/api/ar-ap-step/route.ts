@@ -7,6 +7,7 @@ import { fetchBillsForReconciliation, enrichBillsWithReconciliationStatus } from
 import { computeARState, computeAPStateFromBills } from "@/lib/state/ar-ap"
 import { query } from "@/lib/db"
 import { runFinancialBrain } from "@/lib/financial-brain"
+import { runFullReconciliation } from "@/lib/full-reconciliation"
 import {
   fetchReconciliationMovementRows,
   type ReconMovementRow,
@@ -16,7 +17,6 @@ import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
 import { refreshMovementEntityIds } from "@/lib/movement-classify"
 import { tagMovements } from "@/lib/movement-tag-enrich"
 import { runLLMStage4, getAllUnreconciledMovements, type InvoiceForMatch, type BillForMatch } from "@/lib/reconciliation-llm-match"
-import { toEntityUriApBill } from "@/lib/entity-uri"
 import type { OutstandingInvoice, OutstandingBill } from "@/lib/state/types"
 import { buildEntityProfiles } from "@/lib/entity-profiles"
 import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
@@ -207,101 +207,43 @@ async function runReconciliationInBackground(userId: string) {
     
     if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
     
-    // Run rule-based waterfall (Stages 0-3)
-    console.log("[ar-ap-step] Step 6: Running financial brain...")
-    await runFinancialBrain(userId, {
-      outstandingInvoices: invoices,
-      apObligations: obligations,
+    // Run unified reconciliation (Stages 0-4)
+    console.log("[ar-ap-step] Step 6: Running unified reconciliation (Stages 0-4)...")
+    const reconResult = await runFullReconciliation(userId)
+    console.log("[ar-ap-step] Step 6 complete in", reconResult.executionTimeMs, "ms")
+    console.log("[ar-ap-step] Reconciliation result:", {
+      totalAttributions: reconResult.totalAttributions,
+      remainingUnmatched: reconResult.remainingUnmatched,
+      warnings: reconResult.warnings.length,
     })
-    console.log("[ar-ap-step] Step 6 complete in", Date.now() - startTime, "ms")
     
-    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
-    
-    // Run LLM Stage 4 on ALL unreconciled movements (not just flagged ones)
-    console.log("[ar-ap-step] Step 7: Running LLM Stage 4...")
-    const unreconciledMovements = await getAllUnreconciledMovements(userId)
-    console.log("[ar-ap-step] Step 7a: Found", unreconciledMovements.length, "unreconciled movements in", Date.now() - startTime, "ms")
-    
-    if (unreconciledMovements.length > 0) {
-      console.log("[ar-ap-step] Step 7b: Preparing invoice/bill data for LLM...")
-      
-      if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
-      
-      // Prepare invoice/bill data for LLM matching
-      // Filter to only open/overdue invoices and bills (exclude paid ones)
-      const invoicesForLLM: InvoiceForMatch[] = invoices
-        .filter((i) => i.status !== "paid" && i.amount_due > 0)
-        .map((i) => ({
-          invoice_id: i.invoice_id,
-          customer_name: i.customer_name,
-          amount_due: i.amount_due,
-          due_date: i.due_date,
-          entity_id: i.entity_uri,
-          source: i.source,
-        }))
-
-      const billsForLLM: BillForMatch[] = bills
-        .filter((b) => b.status !== "paid" && b.amount_due > 0)
-        .map((b) => ({
-          bill_id: b.bill_id,
-          obligation_id: b.entity_uri ?? toEntityUriApBill(b.source, b.bill_id),
-          vendor_name: b.vendor_name,
-          amount_due: b.amount_due,
-          due_date: b.due_date,
-          entity_id: b.entity_uri,
-          source: b.source,
-        }))
-      
-      console.log("[ar-ap-step] Step 7c: Calling runLLMStage4 with", invoicesForLLM.length, "invoices and", billsForLLM.length, "bills...")
-      const llmResult = await runLLMStage4(
-        userId,
-        unreconciledMovements,
-        invoicesForLLM,
-        billsForLLM,
-        "high" // Only auto-apply high-confidence matches
-      )
-      console.log("[ar-ap-step] Step 7c complete in", Date.now() - startTime, "ms")
-      
-      console.log("[ar-ap-step] LLM Stage 4 result:", {
-        unreconciledCount: unreconciledMovements.length,
-        arMatches: llmResult.matches.ar.length,
-        apMatches: llmResult.matches.ap.length,
-        applied: llmResult.applied.applied,
-        skipped: llmResult.applied.skipped,
-        errors: llmResult.applied.errors.length,
-      })
-      
-      // Track LLM errors as warnings
-      if (llmResult.applied.errors.length > 0) {
-        warnings.push(`LLM matching had ${llmResult.applied.errors.length} errors`)
-      }
-    } else {
-      console.log("[ar-ap-step] No unreconciled movements for LLM Stage 4")
+    if (reconResult.warnings.length > 0) {
+      warnings.push(...reconResult.warnings)
     }
     
     if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
     
     // Build entity profiles after reconciliation completes
-    console.log("[ar-ap-step] Step 8: Building entity profiles...")
+    console.log("[ar-ap-step] Step 7: Building entity profiles...")
     let profilesBuilt = 0
     let narrativesRefreshed = 0
     try {
       profilesBuilt = await buildEntityProfiles(userId)
-      console.log("[ar-ap-step] Step 8 complete: Entity profiles built:", profilesBuilt, "in", Date.now() - startTime, "ms")
+      console.log("[ar-ap-step] Step 7 complete: Entity profiles built:", profilesBuilt, "in", Date.now() - startTime, "ms")
       
       if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
       
       // Generate AI narratives for top entities - await to ensure completion before lock release
-      console.log("[ar-ap-step] Step 9: Refreshing entity narratives...")
+      console.log("[ar-ap-step] Step 8: Refreshing entity narratives...")
       try {
         narrativesRefreshed = await refreshEntityNarratives(userId, { maxEntities: 25 })
-        console.log("[ar-ap-step] Step 9 complete: Entity narratives refreshed:", narrativesRefreshed, "in", Date.now() - startTime, "ms")
+        console.log("[ar-ap-step] Step 8 complete: Entity narratives refreshed:", narrativesRefreshed, "in", Date.now() - startTime, "ms")
       } catch (narrativeErr) {
-        console.warn("[ar-ap-step] Step 9 failed:", narrativeErr)
+        console.warn("[ar-ap-step] Step 8 failed:", narrativeErr)
         warnings.push("Failed to refresh entity narratives")
       }
     } catch (e) {
-      console.warn("[ar-ap-step] Step 8 failed:", e)
+      console.warn("[ar-ap-step] Step 7 failed:", e)
       warnings.push("Failed to build entity profiles")
     }
     
@@ -660,10 +602,11 @@ async function buildSuggestedMatches(
     confidence: string
     source: string
     metadata: any
+    confidence_detail: any
   }>(
     `SELECT DISTINCT ON (movement_id, component_type, reference_id)
        a.movement_id, a.reference_id, a.component_type, 
-       a.confidence::text, a.source, a.metadata
+       a.confidence::text, a.source, a.metadata, a.confidence_detail
      FROM movement_attributions a
      WHERE a.user_id = $1 
        AND a.source IN ('rule', 'llm', 'model')
@@ -682,6 +625,7 @@ async function buildSuggestedMatches(
         movement_id: a.movement_id,
         invoice_id: a.reference_id,
         confidence,
+        confidence_detail: a.confidence_detail ?? null,
         reason: getMatchReason(a.source, a.metadata, confidence),
         matched_amount: invoice?.amount || 0,
         entity_name: invoice?.customer_name || null,
@@ -699,6 +643,7 @@ async function buildSuggestedMatches(
         movement_id: a.movement_id,
         bill_id: a.reference_id,
         confidence,
+        confidence_detail: a.confidence_detail ?? null,
         reason: getMatchReason(a.source, a.metadata, confidence),
         matched_amount: bill?.amount || 0,
         entity_name: bill?.vendor_name || null,

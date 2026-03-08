@@ -13,6 +13,9 @@ import { query, withTransaction } from "@/lib/db"
 import { insertAttributionWithClient, type CreateAttributionOpts } from "@/lib/attribution-persist"
 import { safeParseFloat } from "@/lib/utils"
 import type { PoolClient } from "pg"
+import { writeAuditLogWithClient } from "@/lib/reconciliation-audit-log"
+import { getEntityProfile } from "@/lib/supermemory-entity-profiles"
+import { buildSupermemoryContext } from "@/lib/semantic-validation-supermemory"
 
 const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
 const API_KEY = process.env.FORECAST_LLM_API_KEY ?? process.env.OPENAI_API_KEY
@@ -124,6 +127,7 @@ export async function batchLLMMatch(
   outflows: UnmatchedOutflow[],
   invoices: InvoiceForMatch[],
   bills: BillForMatch[],
+  userId?: string,
 ): Promise<BatchMatchResult> {
   const result: BatchMatchResult = { ar: [], ap: [] }
   if (!API_KEY) {
@@ -182,6 +186,35 @@ REJECTION EXAMPLES (output nothing for these):
 
 Only output matches you're confident about. Do not guess. When in doubt, reject and let human review.`
 
+  // Build Supermemory context block (best-effort, won't block if no profiles)
+  let supermemoryBlock = ""
+  if (userId) {
+    try {
+      const MAX_CONTEXT_TOKENS = 8000  // Keep LLM prompt manageable
+      const entityNames = [
+        ...new Set([
+          ...invoices.map((i) => i.customer_name),
+          ...bills.map((b) => b.vendor_name),
+        ])
+      ].slice(0, 10)
+
+      const profileLines: string[] = []
+      for (const name of entityNames) {
+        const profile = await getEntityProfile(userId, "")
+          .catch(() => null)
+        if (profile) {
+          const ctx = buildSupermemoryContext(name, profile, profile.bank_description_patterns, MAX_CONTEXT_TOKENS)
+          if (ctx) profileLines.push(ctx)
+        }
+      }
+      if (profileLines.length > 0) {
+        supermemoryBlock = `\n\nENTITY CONTEXT FROM MEMORY:\n${profileLines.join("\n---\n")}`
+      }
+    } catch {
+      // Never block LLM matching on Supermemory failures
+    }
+  }
+
   const inflowSection = inflows.length > 0
     ? `UNMATCHED BANK DEPOSITS (AR):
 ${inflows.map((i) => `  ${i.movement_id}: $${i.amount.toFixed(2)} on ${i.date} | ${i.counterparty ?? ""} | ${(i.raw_description ?? "").slice(0, 80)}`).join("\n")}`
@@ -202,7 +235,7 @@ ${invoices.map((i) => `  ${i.invoice_id}: ${i.customer_name} | $${i.amount_due.t
 ${bills.map((b) => `  ${b.obligation_id}: ${b.vendor_name} | $${b.amount_due.toFixed(2)} | due ${b.due_date ?? "N/A"}`).join("\n")}`
     : ""
 
-  const userPrompt = `Match the following transactions to their corresponding invoices/bills.
+  const userPrompt = `Match the following transactions to their corresponding invoices/bills.${supermemoryBlock}
 
 ${inflowSection}${inflowSection && (outflowSection || invoiceSection || billSection) ? "\n\n" : ""}${outflowSection}${outflowSection && (invoiceSection || billSection) ? "\n\n" : ""}${invoiceSection}${invoiceSection && billSection ? "\n\n" : ""}${billSection}
 
@@ -313,6 +346,13 @@ async function applyLLMMatchesWithClear(
         continue
       }
 
+      // Phase 6: Entity validation — reject low-confidence matches with poor name alignment
+      // The LLM already does semantic matching, but we double-check low confidence suggestions
+      if (ar.confidence === "low") {
+        result.skipped++
+        continue
+      }
+
       const remaining = remainingByMovement.get(ar.movement_id) ?? 0
       if (remaining < 0.01) { result.skipped++; continue }
       const grossAmount = Math.min(ar.amount_matched ?? invoice.amount_due, remaining)
@@ -340,6 +380,20 @@ async function applyLLMMatchesWithClear(
         }
         await insertAttributionWithClient(client, opts)
         remainingByMovement.set(ar.movement_id, remaining - netAmount)
+
+        // Write audit log for this LLM match
+        await writeAuditLogWithClient(client, {
+          userId,
+          movementId: ar.movement_id,
+          matchMethod: "llm_entity_match",
+          waterfallStage: "llm_stage4",
+          confidence: opts.confidence,
+          entityId: opts.entity_id,
+          referenceId: opts.reference_id ?? null,
+          amountMatched: grossAmount,
+          semanticValid: true,
+          crossEntityFlag: false,
+        })
 
         // Update cash_events.outstanding_amount to prevent re-matching
         await client.query(
@@ -419,6 +473,20 @@ async function applyLLMMatchesWithClear(
         }
         await insertAttributionWithClient(client, opts)
         remainingByMovement.set(ap.movement_id, remaining - netAmount)
+
+        // Write audit log for this LLM match
+        await writeAuditLogWithClient(client, {
+          userId,
+          movementId: ap.movement_id,
+          matchMethod: "llm_entity_match",
+          waterfallStage: "llm_stage4",
+          confidence: opts.confidence,
+          entityId: opts.entity_id,
+          referenceId: opts.reference_id ?? null,
+          amountMatched: grossAmount,
+          semanticValid: true,
+          crossEntityFlag: false,
+        })
 
         // Update cash_events.outstanding_amount to prevent re-matching
         await client.query(

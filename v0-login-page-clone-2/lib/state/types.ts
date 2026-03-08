@@ -209,7 +209,7 @@ export type OutstandingInvoice = {
   due_date: string | null
   days_until_due: number | null
   days_overdue: number | null
-  status: "open" | "overdue" | "partially_paid" | "paid"
+  status: "open" | "overdue" | "partially_paid" | "paid" | "credit"
   reconciliation_status?: "matched" | "unmatched" | "partial"
   matched_movement_ids?: string[]
   matched_amount?: number
@@ -729,7 +729,7 @@ export type OutstandingBill = {
   due_date: string | null
   days_until_due: number | null
   days_overdue: number | null
-  status: "open" | "overdue" | "partially_paid" | "paid"
+  status: "open" | "overdue" | "partially_paid" | "paid" | "credit"
   reconciliation_status?: "matched" | "unmatched" | "partial"
   matched_movement_ids?: string[]
   matched_amount?: number
