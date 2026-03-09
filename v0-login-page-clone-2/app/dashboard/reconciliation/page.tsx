@@ -972,7 +972,7 @@ export default function ReconciliationPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {allInvoices.slice(0, 30).map((inv, idx) => {
+                        {allInvoices.map((inv, idx) => {
                           const isMatched = inv.reconciliation_status === "matched" || inv.reconciliation_status === "partial"
                           const effectiveStatus = inv.status === "open" && inv.days_overdue > 0 ? "overdue" : inv.status
                           return (
@@ -1009,9 +1009,9 @@ export default function ReconciliationPage() {
                         })}
                       </tbody>
                     </table>
-                    {allInvoices.length > 30 && (
+                    {allInvoices.length > 0 && (
                       <div className="px-3 py-2 text-[11px] text-zinc-500 text-center border-t border-white/5">
-                        Showing 30 of {allInvoices.length} invoices
+                        Showing all {allInvoices.length} invoices
                       </div>
                     )}
                   </div>
@@ -1055,7 +1055,7 @@ export default function ReconciliationPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {allBills.slice(0, 30).map((bill, idx) => {
+                        {allBills.map((bill, idx) => {
                           const isMatched = bill.reconciliation_status === "matched" || bill.reconciliation_status === "partial"
                           const effectiveStatus = bill.status === "open" && bill.days_overdue > 0 ? "overdue" : bill.status
                           return (
@@ -1092,9 +1092,9 @@ export default function ReconciliationPage() {
                         })}
                       </tbody>
                     </table>
-                    {allBills.length > 30 && (
+                    {allBills.length > 0 && (
                       <div className="px-3 py-2 text-[11px] text-zinc-500 text-center border-t border-white/5">
-                        Showing 30 of {allBills.length} bills
+                        Showing all {allBills.length} bills
                       </div>
                     )}
                   </div>
