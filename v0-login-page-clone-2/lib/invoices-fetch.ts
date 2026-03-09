@@ -681,12 +681,37 @@ export async function enrichInvoicesWithReconciliationStatus(
     // This prevents the bug where ALL customer payments were aggregated together
   }
 
+  // Load cash_events status overrides from our database
+  // This allows the waterfall to override accounting system status
+  type CashEventRow = {
+    reference_id: string
+    status: string
+  }
+  const { rows: cashEventRows } = await query<CashEventRow>(
+    `SELECT metadata->>'invoice_id' AS reference_id, status
+     FROM cash_events
+     WHERE user_id = $1
+       AND event_type = 'ar'
+       AND metadata->>'invoice_id' IS NOT NULL`,
+    [userId]
+  )
+  
+  const statusByInvoiceId = new Map<string, string>()
+  for (const row of cashEventRows) {
+    if (row.reference_id) {
+      statusByInvoiceId.set(row.reference_id, row.status)
+    }
+  }
+
   return invoices.map((inv) => {
     // Use amount_due if available, otherwise fall back to amount
     const targetAmount = (inv.amount_due != null && inv.amount_due > 0) ? inv.amount_due : inv.amount
     
     // Match by specific invoice_id (reference_id) ONLY
     const byId = matchesByInvoiceId.get(inv.invoice_id)
+    
+    // Check if cash_events has overridden the status
+    const cashEventStatus = statusByInvoiceId.get(inv.invoice_id)
     
     if (byId && byId.movementIds.length > 0) {
       // We have a specific invoice-level match
@@ -705,6 +730,8 @@ export async function enrichInvoicesWithReconciliationStatus(
 
       return {
         ...inv,
+        // Override status if cash_events has a newer value
+        status: cashEventStatus ?? inv.status,
         reconciliation_status: reconciliationStatus,
         matched_movement_ids: [...new Set(byId.movementIds)],
         matched_amount: matchedAmount,
@@ -714,6 +741,8 @@ export async function enrichInvoicesWithReconciliationStatus(
     // No specific match found - invoice is unmatched
     return {
       ...inv,
+      // Override status if cash_events has a newer value
+      status: cashEventStatus ?? inv.status,
       reconciliation_status: "unmatched" as const,
       matched_movement_ids: [],
       matched_amount: 0,
