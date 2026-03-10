@@ -846,7 +846,20 @@ async function runMigrationIfNeeded(
 }
 
 export async function ensureMovementsSchema(): Promise<void> {
-  if (movementsSchemaEnsured) return
+  if (movementsSchemaEnsured) {
+    // Double-check that the table actually exists (in case of deployment issues)
+    const p = await getPoolAsync()
+    if (p) {
+      try {
+        await p.query("SELECT 1 FROM reconciliation_audit_log LIMIT 1")
+      } catch (err) {
+        // Table doesn't exist, reset flag and continue
+        console.log("[DB] reconciliation_audit_log missing, resetting schema flag");
+        movementsSchemaEnsured = false
+      }
+    }
+    if (movementsSchemaEnsured) return
+  }
   const p = await getPoolAsync()
   if (!p) return
   await ensureAuthSchema()
