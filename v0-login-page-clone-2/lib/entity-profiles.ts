@@ -38,14 +38,7 @@ export async function aggregateEntityTransactions(
   }>(
     `SELECT 
       m.id as movement_id,
-      ABS(a.net_amount::float) as amount,
-      m.direction,
-      m.date as transaction_date,
-      a.component_type,
-      COALESCE(
-        (qe.data->>'DueDate')::text,
-        (xe.data->>'DueDateString')::text,
-        (xe.data->>'DueDate')::text,
+      a.net_amount::float as amount,
         ce.expected_date::text        -- F7: fallback when no source document has a due date
       ) as ref_due_date
     FROM movement_attributions a
@@ -123,7 +116,7 @@ export async function getEntitiesWithTransactions(
       e.display_name,
       e.entity_type,
       COUNT(DISTINCT m.id)::text as transaction_count,
-      COALESCE(SUM(ABS(a.net_amount::float)), 0)::text as total_amount,
+      COALESCE(SUM(a.net_amount::float), 0)::text as total_amount,
       CASE 
         WHEN SUM(CASE WHEN m.direction = 'inflow' THEN 1 ELSE 0 END) > 
              SUM(CASE WHEN m.direction = 'outflow' THEN 1 ELSE 0 END)
@@ -137,7 +130,7 @@ export async function getEntitiesWithTransactions(
       AND a.component_type IN ('ar', 'ap')
     GROUP BY e.id, e.canonical_name, e.display_name, e.entity_type
     HAVING COUNT(DISTINCT m.id) > 0
-    ORDER BY SUM(ABS(a.net_amount::float)) DESC`,
+    ORDER BY SUM(a.net_amount::float) DESC`,
     [userId]
   )
 

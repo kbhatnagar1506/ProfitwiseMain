@@ -52,7 +52,7 @@ export async function calculatePaymentMetrics(
     }>(
       `WITH payment_data AS (
         SELECT 
-          ABS(a.net_amount::float) as amount,
+          a.net_amount::float as amount,
           m.date as transaction_date,
           COALESCE(
             (qe.data->>'DueDate')::text,
@@ -149,7 +149,7 @@ export async function calculateTrends(
         SELECT
           DATE_TRUNC('month', m.date)::date as month,
           COUNT(*) as txn_count,
-          AVG(ABS(m.amount)) as avg_amount
+          AVG(m.amount) as avg_amount
         FROM movements m
         WHERE m.counterparty_entity_id = $1 AND m.user_id = $2
         GROUP BY DATE_TRUNC('month', m.date)

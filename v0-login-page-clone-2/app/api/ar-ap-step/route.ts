@@ -756,9 +756,9 @@ async function buildReconciledMovements(
     `SELECT DISTINCT ON (a.movement_id, a.component_type, a.reference_id)
        a.movement_id, a.reference_id, a.component_type,
        a.source, a.confidence::text, a.created_at::text AS matched_at,
-       COALESCE(ABS(a.net_amount::float), 0)::text AS net_amount,
+       COALESCE(a.net_amount::float, 0)::text AS net_amount,
        COALESCE((
-         SELECT ABS(f.net_amount::float)::text
+         SELECT f.net_amount::float::text
          FROM movement_attributions f
          WHERE f.movement_id = a.movement_id AND f.user_id = a.user_id
            AND f.component_type = 'fee'
@@ -788,8 +788,9 @@ async function buildReconciledMovements(
       const isInflow = r.direction === 'inflow'
       const invoice = isAR ? invoiceMap.get(r.reference_id) : undefined
       const bill = !isAR ? billMap.get(r.reference_id) : undefined
-      // Apply sign based on direction: inflow is positive, outflow is negative
-      const signedAmount = isInflow ? Math.abs(parseFloat(r.movement_amount) || 0) : -(Math.abs(parseFloat(r.movement_amount) || 0))
+      // Build signed amount: inflow = positive, outflow = negative
+      const rawAmount = parseFloat(r.movement_amount) || 0
+      const signedAmount = isInflow ? rawAmount : -rawAmount
       return {
         movement_id: r.movement_id,
         matched_to: r.reference_id,
@@ -820,7 +821,7 @@ async function buildExcludedMovements(userId: string) {
     description: string
     economic_class: string
   }>(
-    `SELECT m.id, m.date::text, ABS(m.amount::float)::text AS amount, 
+    `SELECT m.id, m.date::text, m.amount::float::text AS amount, 
             COALESCE(m.raw_description, m.counterparty, 'Unknown') AS description,
             mt.economic_class
      FROM movements m
@@ -878,9 +879,9 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
     fees: string
   }>(
     `SELECT
-       COALESCE(SUM(CASE WHEN m.direction = 'inflow'  AND a.component_type IN ('ar', 'settlement') THEN ABS(a.net_amount::float) ELSE 0 END), 0)::text AS inflow,
-       COALESCE(SUM(CASE WHEN m.direction = 'outflow' AND a.component_type IN ('ap', 'settlement') THEN ABS(a.net_amount::float) ELSE 0 END), 0)::text AS outflow,
-       COALESCE(SUM(CASE WHEN a.component_type = 'fee' THEN ABS(a.net_amount::float) ELSE 0 END), 0)::text AS fees
+       COALESCE(SUM(CASE WHEN m.direction = 'inflow'  AND a.component_type IN ('ar', 'settlement') THEN a.net_amount::float ELSE 0 END), 0)::text AS inflow,
+       COALESCE(SUM(CASE WHEN m.direction = 'outflow' AND a.component_type IN ('ap', 'settlement') THEN a.net_amount::float ELSE 0 END), 0)::text AS outflow,
+       COALESCE(SUM(CASE WHEN a.component_type = 'fee' THEN a.net_amount::float ELSE 0 END), 0)::text AS fees
      FROM movement_attributions a
      JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
      WHERE a.user_id = $1 AND m.duplicate_of IS NULL`,
@@ -894,10 +895,10 @@ async function fetchReconTotals(userId: string): Promise<ReconTotals> {
 
   const lists = await fetchReconciliationMovementRows(userId)
   // Fix: Use dollar amounts instead of counts for unmatched totals
-  totals.total_unmatched_inflows = r2(lists.unmatched_inflows.reduce((s, r) => s + Math.abs(r.amount), 0))
-  totals.total_unmatched_outflows = r2(lists.unmatched_outflows.reduce((s, r) => s + Math.abs(r.amount), 0))
-  totals.total_excluded_inflows = r2(lists.excluded_inflows.reduce((s, r) => s + Math.abs(r.amount), 0))
-  totals.total_excluded_outflows = r2(lists.excluded_outflows.reduce((s, r) => s + Math.abs(r.amount), 0))
+  totals.total_unmatched_inflows = r2(lists.unmatched_inflows.reduce((s, r) => s + r.amount, 0))
+  totals.total_unmatched_outflows = r2(lists.unmatched_outflows.reduce((s, r) => s + r.amount, 0))
+  totals.total_excluded_inflows = r2(lists.excluded_inflows.reduce((s, r) => s + r.amount, 0))
+  totals.total_excluded_outflows = r2(lists.excluded_outflows.reduce((s, r) => s + r.amount, 0))
   // Keep counts as separate fields for reference
   totals.count_matched_inflows = lists.matched_inflows.length
   totals.count_matched_outflows = lists.matched_outflows.length
@@ -956,7 +957,7 @@ async function fetchExcludedCategories(userId: string): Promise<ExcludedCategori
     economic_class: string
     cashflow_bucket: string | null
   }>(
-    `SELECT m.id, ABS(m.amount::float)::text AS amount, m.date::text, m.counterparty, m.direction,
+    `SELECT m.id, m.amount::float::text AS amount, m.date::text, m.counterparty, m.direction,
             mt.economic_class, mt.cashflow_bucket
      FROM movements m
      JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
@@ -1052,14 +1053,14 @@ async function fetchTransferPairs(userId: string): Promise<TransferPairsResult> 
     SELECT 
       m1.id as outflow_id, 
       m2.id as inflow_id,
-      ABS(m1.amount::float)::text AS amount, 
+      m1.amount::float::text AS amount, 
       m1.date::text as outflow_date,
       m2.date::text as inflow_date,
       COALESCE(m1.counterparty, m2.counterparty) as counterparty,
       ABS(m2.date - m1.date)::text as days_apart
     FROM transfer_movements m1
     JOIN transfer_movements m2 ON 
-      ABS(ABS(m1.amount::float) - ABS(m2.amount::float)) < 0.01
+      ABS(m1.amount::float - m2.amount::float) < 0.01
       AND m1.direction = 'outflow' 
       AND m2.direction = 'inflow'
       AND ABS(m2.date - m1.date) <= 3
@@ -1095,7 +1096,7 @@ async function fetchTransferPairs(userId: string): Promise<TransferPairsResult> 
     economic_class: string
     cashflow_bucket: string | null
   }>(
-    `SELECT m.id, ABS(m.amount::float)::text AS amount, m.date::text, m.counterparty, m.direction,
+    `SELECT m.id, m.amount::float::text AS amount, m.date::text, m.counterparty, m.direction,
             mt.economic_class, mt.cashflow_bucket
      FROM movements m
      JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id

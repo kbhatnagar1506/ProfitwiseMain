@@ -213,7 +213,7 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
     `SELECT m.id, m.user_id, m.direction, m.amount::float, m.date::text, m.movement_type,
             m.counterparty, m.counterparty_entity_id::text AS counterparty_entity_id, m.raw_description, m.metadata,
             mt.economic_class, mt.tag_data,
-            (ABS(m.amount::float) - COALESCE(allocated.allocated_sum, 0))::float AS available_cash
+            (m.amount::float - COALESCE(allocated.allocated_sum, 0))::float AS available_cash
      FROM movements m
      LEFT JOIN LATERAL (
        SELECT economic_class, tag_data, cashflow_bucket
@@ -221,13 +221,13 @@ export async function fetchMovementsWithAvailableCash(userId: string): Promise<M
      ) mt ON true
      LEFT JOIN (
        SELECT movement_id,
-              SUM(ABS(net_amount::float)) FILTER (WHERE component_type != 'fee') AS allocated_sum
+              SUM(net_amount::float) FILTER (WHERE component_type != 'fee') AS allocated_sum
        FROM movement_attributions
        WHERE user_id = $1::uuid
        GROUP BY movement_id
      ) allocated ON allocated.movement_id = m.id
     WHERE m.user_id = $1::uuid AND m.duplicate_of IS NULL
-      AND (ABS(m.amount::float) - COALESCE(allocated.allocated_sum, 0)) > $2
+      AND (m.amount::float - COALESCE(allocated.allocated_sum, 0)) > $2
     ORDER BY m.date ASC, m.id ASC`,
     [userId, EPS],
   )
@@ -1197,7 +1197,7 @@ export async function getMovementsPendingWaterfallReview(userId: string): Promis
         : {}
     return {
       movement_id: r.id,
-      amount: Math.abs(parseFloat(String(r.amount))),
+      amount: parseFloat(String(r.amount)),
       date: r.date,
       counterparty: r.counterparty,
       raw_description: r.raw_description,

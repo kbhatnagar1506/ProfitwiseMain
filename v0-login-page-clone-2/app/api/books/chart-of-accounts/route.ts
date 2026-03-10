@@ -65,7 +65,7 @@ export async function GET() {
     query<{ economic_class: string; direction: string; total: string; count: string }>(
       `SELECT mt.economic_class,
               m.direction,
-              SUM(ABS(m.amount))::text AS total,
+              SUM(m.amount)::text AS total,
               COUNT(*)::text AS count
        FROM movements m
        JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
@@ -79,7 +79,7 @@ export async function GET() {
       `SELECT mt.economic_class,
               EXTRACT(YEAR FROM m.date)::text AS yr,
               EXTRACT(MONTH FROM m.date)::text AS mo,
-              SUM(ABS(m.amount))::text AS total
+              SUM(m.amount)::text AS total
        FROM movements m
        JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
        WHERE m.user_id = $1 AND m.duplicate_of IS NULL AND m.date >= $2

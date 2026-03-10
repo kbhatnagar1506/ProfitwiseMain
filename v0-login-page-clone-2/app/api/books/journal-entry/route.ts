@@ -170,7 +170,7 @@ export async function GET() {
     amount: string
     metadata: unknown
   }>(
-    `SELECT id, date::text, raw_description, ABS(amount)::text AS amount, metadata
+    `SELECT id, date::text, raw_description, amount::text AS amount, metadata
      FROM movements
      WHERE user_id = $1
        AND movement_type = 'manual_je'

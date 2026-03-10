@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
       `SELECT 
         COUNT(DISTINCT CASE WHEN e.entity_type = 'customer' THEN e.id END)::int as total_customers,
         COUNT(DISTINCT CASE WHEN e.entity_type = 'vendor' THEN e.id END)::int as total_vendors,
-        COALESCE(SUM(ABS(m.amount)), 0)::numeric as total_lifetime_value,
+        COALESCE(SUM(m.amount), 0)::numeric as total_lifetime_value,
         COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as total_ar_outstanding,
         COALESCE(SUM(
           CASE WHEN ce.outstanding_amount > 0 AND ce.expected_date < CURRENT_DATE
@@ -92,7 +92,7 @@ export async function GET(request: NextRequest) {
         e.canonical_name,
         e.display_name,
         COUNT(DISTINCT m.id)::int as transaction_count,
-        COALESCE(SUM(ABS(m.amount)), 0)::numeric as lifetime_value,
+        COALESCE(SUM(m.amount), 0)::numeric as lifetime_value,
         COALESCE(SUM(CASE WHEN ce.outstanding_amount > 0 THEN ce.outstanding_amount ELSE 0 END), 0)::numeric as ar_balance,
         COALESCE(SUM(
           CASE WHEN ce.outstanding_amount > 0 AND ce.expected_date < CURRENT_DATE

@@ -28,7 +28,7 @@ export async function GET(request: Request) {
   ] = await Promise.all([
     // 1. Unmatched operating movements in period
     query<{ count: string; total: string }>(
-      `SELECT COUNT(*)::text AS count, COALESCE(SUM(ABS(m.amount)), 0)::text AS total
+      `SELECT COUNT(*)::text AS count, COALESCE(SUM(m.amount), 0)::text AS total
        FROM movements m
        LEFT JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
        WHERE m.user_id = $1
@@ -44,7 +44,7 @@ export async function GET(request: Request) {
 
     // 2. Suspense balance (unknown attributions)
     query<{ count: string; total: string }>(
-      `SELECT COUNT(*)::text AS count, COALESCE(SUM(ABS(ma.net_amount)), 0)::text AS total
+      `SELECT COUNT(*)::text AS count, COALESCE(SUM(ma.net_amount), 0)::text AS total
        FROM movement_attributions ma
        JOIN movements m ON m.id = ma.movement_id
        WHERE ma.user_id = $1

@@ -158,7 +158,7 @@ export async function GET(
 
     // Compute lifetime value live from movements (same source as the list page)
     const ltvResult = await query<{ lifetime_value: string }>(
-      `SELECT COALESCE(SUM(ABS(amount)), 0)::numeric as lifetime_value
+      `SELECT COALESCE(SUM(amount), 0)::numeric as lifetime_value
        FROM movements
        WHERE counterparty_entity_id = $1::uuid AND user_id = $2`,
       [entityId, userId]
@@ -176,7 +176,7 @@ export async function GET(
       `SELECT 
         m.id,
         m.date::text,
-        ABS(m.amount)::numeric as amount,
+        m.amount::numeric as amount,
         m.raw_description,
         NULL::int as days_to_pay
        FROM movements m
