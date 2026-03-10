@@ -165,10 +165,10 @@ export default function InvoicesPage() {
           <div className="flex items-start justify-between">
             <div>
               <p className={`text-[11px] ${totals.total_overdue > 0 ? 'text-red-400/70' : 'text-zinc-400/70'} font-medium uppercase tracking-wide mb-2`}>Overdue</p>
-              <p className={`text-2xl font-bold tabular-nums ${totals.total_overdue > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{formatCurrency(totals.total_overdue)}</p>
-              <p className={`text-[11px] ${totals.total_overdue > 0 ? 'text-red-400/50' : 'text-emerald-400/50'} mt-2`}>{totals.overdue_count} overdue</p>
+              <p className={`text-2xl font-bold tabular-nums ${totals.total_overdue > 0 ? 'text-red-400' : 'text-zinc-400'}`}>{formatCurrency(totals.total_overdue)}</p>
+              <p className={`text-[11px] ${totals.total_overdue > 0 ? 'text-red-400/50' : 'text-zinc-400/50'} mt-2`}>{totals.overdue_count} overdue</p>
             </div>
-            <AlertCircle size={20} className={totals.total_overdue > 0 ? 'text-red-400/40' : 'text-emerald-400/40'} />
+            <AlertCircle size={20} className={totals.total_overdue > 0 ? 'text-red-400/40' : 'text-zinc-400/40'} />
           </div>
         </div>
 
@@ -303,7 +303,7 @@ export default function InvoicesPage() {
                           </td>
                           <td className="px-4 py-3 text-right">
                             <p className={`text-sm font-semibold tabular-nums ${
-                              invoice.outstanding_amount > 0 ? 'text-amber-400' : 'text-emerald-400'
+                              invoice.outstanding_amount > 0 ? 'text-amber-400' : invoice.outstanding_amount < 0 ? 'text-blue-400' : 'text-emerald-400'
                             }`}>
                               {formatCurrency(invoice.outstanding_amount)}
                             </p>
@@ -327,7 +327,9 @@ export default function InvoicesPage() {
                             <span className={`text-sm font-mono ${
                               invoice.days_overdue !== null && invoice.days_overdue > 0
                                 ? 'text-red-400 font-semibold'
-                                : 'text-neutral-400'
+                                : invoice.days_overdue !== null && invoice.days_overdue < 0
+                                  ? 'text-emerald-400'
+                                  : 'text-neutral-400'
                             }`}>
                               {invoice.days_overdue !== null ? `-${invoice.days_overdue}` : `+${invoice.days_until_due}`}
                             </span>
@@ -360,7 +362,7 @@ export default function InvoicesPage() {
                                 <div>
                                   <p className="text-[11px] text-neutral-600 font-medium mb-2 uppercase tracking-wide">Outstanding</p>
                                   <p className={`font-semibold tabular-nums ${
-                                    invoice.outstanding_amount > 0 ? 'text-amber-400' : 'text-emerald-400'
+                                    invoice.outstanding_amount > 0 ? 'text-amber-400' : invoice.outstanding_amount < 0 ? 'text-blue-400' : 'text-emerald-400'
                                   }`}>
                                     {formatCurrency(invoice.outstanding_amount)}
                                   </p>

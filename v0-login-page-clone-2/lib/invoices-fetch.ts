@@ -109,7 +109,7 @@ export async function fetchOutstandingInvoices(
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (balance < totalAmt && balance > 0 && status !== "overdue") status = "partially_paid"
+      if (balance < totalAmt && Math.abs(balance) > 0.01 && status !== "overdue") status = balance < 0 ? "credit" : "partially_paid"
       const entityId = custSourceId ? (sourceIdToEntity.get(custSourceId) ?? null) : null
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "qbo",
@@ -149,7 +149,7 @@ export async function fetchOutstandingInvoices(
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
+      if (amountDue < total && Math.abs(amountDue) > 0.01 && status !== "overdue") status = amountDue < 0 ? "credit" : "partially_paid"
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "xero",
         customer_name: custName, customer_source_id: contactId,
@@ -226,7 +226,7 @@ export async function fetchOutstandingInvoices(
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
+      if (amountDue < total && Math.abs(amountDue) > 0.01 && status !== "overdue") status = amountDue < 0 ? "credit" : "partially_paid"
       const entityId = custSourceId ? (stripeCustomerToEntity.get(custSourceId) ?? null) : null
       outstandingInvoices.push({
         invoice_id: row.entity_id, source: "stripe",
@@ -407,7 +407,7 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
       const balance = safeParseFloat(d.Balance)
       const totalAmt = safeParseFloat(d.TotalAmt, balance)
       const txnDate = (d.TxnDate as string) ?? ""
-      if (balance > 0) continue
+      if (Math.abs(balance) < 0.01) continue
       if (txnDate < cutoffStr) continue
       const custRef = d.CustomerRef as Record<string, unknown> | undefined
       const custName = String(custRef?.name ?? custRef?.value ?? "Unknown")
@@ -705,7 +705,7 @@ export async function enrichInvoicesWithReconciliationStatus(
 
   return invoices.map((inv) => {
     // Use amount_due if available, otherwise fall back to amount
-    const targetAmount = (inv.amount_due != null && inv.amount_due > 0) ? inv.amount_due : inv.amount
+    const targetAmount = (inv.amount_due != null && Math.abs(inv.amount_due) > 0.01) ? inv.amount_due : inv.amount
     
     // Match by specific invoice_id (reference_id) ONLY
     const byId = matchesByInvoiceId.get(inv.invoice_id)

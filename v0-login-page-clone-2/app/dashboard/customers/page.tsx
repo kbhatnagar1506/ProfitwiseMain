@@ -436,7 +436,9 @@ export default function CustomersPage() {
                     className={`hover:bg-white/[0.03] transition-colors cursor-pointer ${
                       customer.ar_balance > 0 || customer.overdue_balance > 0
                         ? "border-l-2 border-l-amber-500/50"
-                        : ""
+                        : customer.ar_balance < 0
+                          ? "border-l-2 border-l-blue-500/50"
+                          : ""
                     }`}
                   >
                     <TableCell className="text-[12px] text-neutral-300 py-2 px-4 truncate max-w-[180px]">
@@ -456,7 +458,9 @@ export default function CustomersPage() {
                     <TableCell className={`text-[12px] font-medium py-2 px-4 text-right tabular-nums ${
                       customer.ar_balance > 0 
                         ? "text-zinc-100" 
-                        : "text-zinc-500"
+                        : customer.ar_balance < 0
+                          ? "text-blue-400"
+                          : "text-zinc-500"
                     }`}>
                       {formatCurrency(customer.ar_balance)}
                     </TableCell>

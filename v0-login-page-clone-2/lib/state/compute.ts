@@ -465,7 +465,7 @@ export function computeLiquidityState(
     runway_days: runwayDays,
     bank_account_count: bankAccountCount,
     largest_account_balance: r2(cashByAccount.length > 0
-      ? Math.max(...cashByAccount.map(a => Math.abs(a.net_flow)))
+      ? Math.max(...cashByAccount.map(a => a.net_flow))
       : 0),
     transfer_count: transferCount,
     period_days: periodDays,

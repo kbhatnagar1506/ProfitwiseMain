@@ -258,6 +258,11 @@ export function EntitiesPage({
                         {formatCurrency(entity.outstanding_amount)} outstanding
                       </div>
                     )}
+                    {entity.outstanding_amount !== null && entity.outstanding_amount < 0 && (
+                      <div className="text-xs text-blue-400">
+                        {formatCurrency(Math.abs(entity.outstanding_amount))} credit
+                      </div>
+                    )}
                     {entity.overdue_amount !== null && entity.overdue_amount > 0 && (
                       <div className="text-xs text-red-400">
                         {formatCurrency(entity.overdue_amount)} overdue

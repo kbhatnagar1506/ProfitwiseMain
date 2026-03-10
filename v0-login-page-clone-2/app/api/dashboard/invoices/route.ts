@@ -125,18 +125,19 @@ export async function GET(request?: NextRequest) {
     const totals = {
       total_outstanding: filteredInvoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
       total_overdue: filteredInvoices
-        .filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0))
+        .filter((inv) => inv.status === "overdue")
         .reduce((sum, inv) => sum + inv.outstanding_amount, 0),
       invoice_count: filteredInvoices.length,
-      overdue_count: filteredInvoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
+      overdue_count: filteredInvoices.filter((inv) => inv.status === "overdue").length,
     }
 
     // Summary by status
     const summaryByStatus = {
       open: filteredInvoices.filter((inv) => inv.status === "open").length,
-      overdue: filteredInvoices.filter((inv) => inv.status === "overdue" || (inv.days_overdue !== null && inv.days_overdue > 0)).length,
+      overdue: filteredInvoices.filter((inv) => inv.status === "overdue").length,
       partially_paid: filteredInvoices.filter((inv) => inv.status === "partially_paid").length,
       paid: filteredInvoices.filter((inv) => inv.status === "paid").length,
+      credit: filteredInvoices.filter((inv) => inv.status === "credit").length,
     }
 
     log("dashboard.invoices.success", { userId, invoiceCount: filteredInvoices.length, totalCount })

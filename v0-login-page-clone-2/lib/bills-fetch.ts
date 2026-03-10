@@ -68,7 +68,7 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (balance < totalAmt && balance > 0 && status !== "overdue") status = "partially_paid"
+      if (balance < totalAmt && Math.abs(balance) > 0.01 && status !== "overdue") status = balance < 0 ? "credit" : "partially_paid"
       const entityId = vendSourceId ? (sourceIdToEntity.get(vendSourceId) ?? null) : null
       outstandingBills.push({
         bill_id: row.entity_id, source: "qbo",
@@ -111,7 +111,7 @@ export async function fetchOutstandingBills(userId: string): Promise<Outstanding
         if (diff < 0) { daysOverdue = Math.abs(diff); status = "overdue" }
         else daysToDue = diff
       }
-      if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
+      if (amountDue < total && Math.abs(amountDue) > 0.01 && status !== "overdue") status = amountDue < 0 ? "credit" : "partially_paid"
       outstandingBills.push({
         bill_id: row.entity_id, source: "xero",
         vendor_name: vendName, vendor_source_id: contactId,
@@ -266,7 +266,7 @@ export async function fetchBillsForReconciliation(userId: string): Promise<Outst
         if (diff < 0 && status !== "paid") { daysOverdue = Math.abs(diff); status = "overdue" }
         else if (status !== "paid") daysToDue = diff
       }
-      if (balance < totalAmt && balance > 0 && status !== "overdue") status = "partially_paid"
+      if (balance < totalAmt && Math.abs(balance) > 0.01 && status !== "overdue") status = balance < 0 ? "credit" : "partially_paid"
       
       const entityId = vendSourceId ? (sourceIdToEntity.get(vendSourceId) ?? null) : null
       bills.push({
@@ -315,7 +315,7 @@ export async function fetchBillsForReconciliation(userId: string): Promise<Outst
         if (diff < 0 && status !== "paid") { daysOverdue = Math.abs(diff); status = "overdue" }
         else if (status !== "paid") daysToDue = diff
       }
-      if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
+      if (amountDue < total && Math.abs(amountDue) > 0.01 && status !== "overdue") status = amountDue < 0 ? "credit" : "partially_paid"
       
       bills.push({
         bill_id: row.entity_id, source: "xero",
@@ -358,7 +358,7 @@ export async function fetchBillsForReconciliation(userId: string): Promise<Outst
         if (diff < 0 && status !== "paid") { daysOverdue = Math.abs(diff); status = "overdue" }
         else if (status !== "paid") daysToDue = diff
       }
-      if (amountDue < total && amountDue > 0 && status !== "overdue") status = "partially_paid"
+      if (amountDue < total && Math.abs(amountDue) > 0.01 && status !== "overdue") status = amountDue < 0 ? "credit" : "partially_paid"
       
       const billId = `gmail_ap_${row.message_id}`
       bills.push({
@@ -482,7 +482,7 @@ export async function enrichBillsWithReconciliationStatus(
 
   return bills.map((bill) => {
     // Use amount_due if available, otherwise fall back to amount
-    const targetAmount = (bill.amount_due != null && bill.amount_due > 0) ? bill.amount_due : bill.amount
+    const targetAmount = (bill.amount_due != null && Math.abs(bill.amount_due) > 0.01) ? bill.amount_due : bill.amount
     
     // Match by specific bill_id (reference_id) ONLY
     const byId = matchesByBillId.get(bill.bill_id)
