@@ -89,25 +89,27 @@ export async function bulkWriteAuditLog(
   entries: AuditLogEntry[]
 ): Promise<void> {
   if (entries.length === 0) return
+  const values = entries
+    .map(
+      (_, i) =>
+        `($${i * 10 + 1}, $${i * 10 + 2}, $${i * 10 + 3}, $${i * 10 + 4}, $${i * 10 + 5}, $${i * 10 + 6}, $${i * 10 + 7}, $${i * 10 + 8}, $${i * 10 + 9}, $${i * 10 + 10})`
+    )
+    .join(", ")
+  const params = entries.flatMap((e) => [
+    userId,
+    e.movementId,
+    e.matchMethod,
+    e.waterfallStage ?? null,
+    e.confidence ?? null,
+    e.entityId ?? null,
+    e.referenceId ?? null,
+    e.amountMatched ?? null,
+    e.semanticValid ?? null,
+    e.crossEntityFlag ?? false,
+  ])
+  // #region agent log - hypothesis G: detailed logging for bulkWriteAuditLog
+  console.log("[bulkWriteAuditLog] Inserting", entries.length, "audit entries");
   try {
-    const values = entries
-      .map(
-        (_, i) =>
-          `($${i * 10 + 1}, $${i * 10 + 2}, $${i * 10 + 3}, $${i * 10 + 4}, $${i * 10 + 5}, $${i * 10 + 6}, $${i * 10 + 7}, $${i * 10 + 8}, $${i * 10 + 9}, $${i * 10 + 10})`
-      )
-      .join(", ")
-    const params = entries.flatMap((e) => [
-      userId,
-      e.movementId,
-      e.matchMethod,
-      e.waterfallStage ?? null,
-      e.confidence ?? null,
-      e.entityId ?? null,
-      e.referenceId ?? null,
-      e.amountMatched ?? null,
-      e.semanticValid ?? null,
-      e.crossEntityFlag ?? false,
-    ])
     await client.query(
       `INSERT INTO reconciliation_audit_log
          (user_id, movement_id, match_method, waterfall_stage, confidence, entity_id,
@@ -115,7 +117,11 @@ export async function bulkWriteAuditLog(
        VALUES ${values}`,
       params
     )
-  } catch {
-    // Never block reconciliation
+    console.log("[bulkWriteAuditLog] Successfully inserted", entries.length, "audit entries");
+  } catch (err) {
+    console.error("[bulkWriteAuditLog] Error:", err instanceof Error ? err.message : String(err));
+    // Don't swallow—let it propagate so we can see the real error
+    throw err;
   }
+  // #endregion
 }
