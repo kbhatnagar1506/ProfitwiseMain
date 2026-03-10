@@ -1310,16 +1310,25 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     }
 
     try {
+      console.log("[waterfall] writeStatusChange loop: touchedEventIds.size =", touchedEventIds.size);
+      let statusChangeCount = 0;
       for (const id of touchedEventIds) {
         const ev = eventById.get(id)
-        if (!ev) continue
+        if (!ev) {
+          console.log("[waterfall] writeStatusChange: event not found for id", id);
+          continue;
+        }
         const originalStatus = originalStatusById.get(id)
         const originalOutstanding = originalOutstandingById.get(id)
-        if (!originalStatus || originalOutstanding === undefined) continue
+        if (!originalStatus || originalOutstanding === undefined) {
+          console.log("[waterfall] writeStatusChange: missing original status/outstanding for id", id);
+          continue;
+        }
         
         const newStatus = statusFromOutstanding(ev.outstanding_amount, ev.amount)
         // Only log if status actually changed
         if (newStatus !== originalStatus || Math.abs(ev.outstanding_amount - originalOutstanding) > EPS) {
+          console.log("[waterfall] writeStatusChange: calling for id", id, "from", originalStatus, "to", newStatus);
           await writeStatusChange(client, {
             cashEventId: ev.id,
             userId,
@@ -1330,9 +1339,10 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             triggeredBy: "waterfall",
             attributionId: null,
           })
+          statusChangeCount++;
         }
       }
-      console.log("[waterfall] writeStatusChange loop succeeded");
+      console.log("[waterfall] writeStatusChange loop succeeded, statusChangeCount =", statusChangeCount);
     } catch (err) {
       console.error("[waterfall] writeStatusChange loop failed:", err instanceof Error ? err.message : String(err));
       throw err;
