@@ -41,6 +41,10 @@ export type CreateAttributionOpts = {
   metadata?: Record<string, unknown>
   confidenceEnvelope?: ConfidenceEnvelope | null
   migrated_from_allocation_id?: string | null
+  /** Phase 2: category-based matching fields */
+  category?: string | null
+  cost_type?: string | null
+  vendor_id?: string | null
 }
 
 export function matchMethodToAttributionSource(method: MatchMethod): AttributionSource {
@@ -269,8 +273,9 @@ export async function insertAttributionWithClient(
   >(
     `INSERT INTO movement_attributions (
       user_id, movement_id, component_type, entity_id, reference_id,
-      gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12)
+      gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id,
+      category, cost_type, vendor_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15)
     RETURNING id, user_id, movement_id, component_type, entity_id, reference_id,
       gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id, created_at`,
     [
@@ -286,6 +291,9 @@ export async function insertAttributionWithClient(
       JSON.stringify(metadata),
       confDetail ? JSON.stringify(confDetail) : null,
       opts.migrated_from_allocation_id ?? null,
+      opts.category ?? null,
+      opts.cost_type ?? null,
+      opts.vendor_id ?? null,
     ],
   )
   const row = result.rows[0]

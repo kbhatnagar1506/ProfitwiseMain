@@ -10,6 +10,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { RefreshCw, Search, ArrowRight, Sparkles, Zap, ChevronRight } from "lucide-react"
 import { StatusBadge } from "@/components/StatusBadge"
+import { ConfidenceBreakdown } from "@/components/confidence-breakdown"
 import {
   ResponsiveContainer,
   PieChart,
@@ -27,6 +28,29 @@ interface SuggestedMatch {
   invoice_id?: string
   bill_id?: string
   confidence: number
+  confidence_detail?: {
+    score: number
+    kind: string
+    components?: {
+      amount?: number
+      date?: number
+      entity?: number
+      history?: number
+      breakdown?: {
+        summary: string
+        components: {
+          amount: { score: number; weight: number; reasoning: string }
+          entity_name: { score: number; weight: number; reasoning: string }
+          date_proximity: { score: number; weight: number; reasoning: string }
+          history: { score: number; weight: number; reasoning: string }
+          category: { score: number; weight: number; reasoning: string }
+          match_sequence: { score: number; weight: number; reasoning: string }
+        }
+        waterfall_stage?: string
+        match_method?: string
+      }
+    }
+  } | null
   reason: string
   matched_amount: number
   entity_name?: string | null
@@ -270,6 +294,7 @@ export default function ReconciliationPage() {
   const [cmdQueue, setCmdQueue] = useState<Movement[]>([])
   const [cmdIndex, setCmdIndex] = useState(0)
   const [cmdProcessed, setCmdProcessed] = useState<Map<string, "accepted" | "skipped">>(new Map())
+  const [showConfBreakdown, setShowConfBreakdown] = useState(false)
   const cmdSidebarRef = useRef<HTMLDivElement>(null)
   const fetchData = useCallback(async () => {
     try {
@@ -1430,9 +1455,19 @@ export default function ReconciliationPage() {
                                 <div className="mt-4 space-y-1.5">
                                   <div className="flex items-center justify-between">
                                     <span className="text-[10px] text-zinc-500">AI Confidence</span>
-                                    <span className={`text-[11px] font-mono font-bold ${confBadge?.tier === "high" ? "text-emerald-400" : confBadge?.tier === "med" ? "text-amber-400" : "text-zinc-400"}`}>
-                                      {confBadge?.label} · {confBadge?.tier === "high" ? "Strong" : confBadge?.tier === "med" ? "Likely" : "Possible"}
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`text-[11px] font-mono font-bold ${confBadge?.tier === "high" ? "text-emerald-400" : confBadge?.tier === "med" ? "text-amber-400" : "text-zinc-400"}`}>
+                                        {confBadge?.label} · {confBadge?.tier === "high" ? "Strong" : confBadge?.tier === "med" ? "Likely" : "Possible"}
+                                      </span>
+                                      {sm.confidence_detail?.components?.breakdown && (
+                                        <button
+                                          onClick={() => setShowConfBreakdown(v => !v)}
+                                          className="text-[9px] text-zinc-600 hover:text-zinc-400 transition-colors px-1.5 py-0.5 rounded border border-white/[0.07] hover:border-white/[0.12]"
+                                        >
+                                          {showConfBreakdown ? "hide" : "signals"}
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="w-full h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
                                     <div
@@ -1444,6 +1479,12 @@ export default function ReconciliationPage() {
                                 {sm.reason && (
                                   <p className="text-[11px] text-zinc-500 mt-3 leading-relaxed">{sm.reason}</p>
                                 )}
+                                {/* Phase 7/8: Signal breakdown */}
+                                <ConfidenceBreakdown
+                                  breakdown={sm.confidence_detail?.components?.breakdown}
+                                  expanded={showConfBreakdown}
+                                  className="mt-2"
+                                />
                               </div>
                             ) : (
                               // No match panel

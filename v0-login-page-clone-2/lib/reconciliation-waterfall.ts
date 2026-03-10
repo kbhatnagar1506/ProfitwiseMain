@@ -11,9 +11,49 @@ import type { CashEventRow } from "./cash-events-build"
 import { namesMatch } from "./ar-payment-match"
 import { safeParseFloat } from "./utils"
 import { writeStatusChange } from "./ar-ap-status"
+import { bulkWriteAuditLog, type AuditLogEntry } from "./reconciliation-audit-log"
+import { buildSyncConfidenceBreakdown, breakdownToEnvelope } from "./confidence-scoring"
 
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
+
+// ─── Phase 2: Category-Based Matching ────────────────────────────────────────
+// Map economic_class to a broad category bucket for confidence scoring.
+// Movements in different category buckets get a confidence penalty.
+const ECON_CLASS_CATEGORY: Record<string, string> = {
+  product_sale: "product",
+  services: "services",
+  payroll: "payroll",
+  consulting: "services",
+  contractor: "services",
+  software_subscription: "software",
+  marketing: "marketing",
+  advertising: "marketing",
+  supplies: "supplies",
+  equipment: "equipment",
+  rent: "real_estate",
+  utilities: "utilities",
+  insurance: "insurance",
+  raw_materials: "raw_materials",
+  wholesale: "wholesale",
+}
+
+const CATEGORY_CONFIDENCE_BOOST = 0.05
+const CATEGORY_CONFIDENCE_PENALTY = 0.10
+
+/** Return confidence adjustment based on movement economic_class vs event category metadata. */
+function computeCategoryConfidenceAdjust(
+  movementEconClass: string | null | undefined,
+  eventMetadata: Record<string, unknown> | undefined
+): { adjustment: number; movCategory: string | null; eventCategory: string | null } {
+  if (!movementEconClass || !eventMetadata) return { adjustment: 0, movCategory: null, eventCategory: null }
+  const movCategory = ECON_CLASS_CATEGORY[movementEconClass] ?? null
+  const eventCategory = (eventMetadata.category as string | null) ?? null
+  if (!movCategory || !eventCategory) return { adjustment: 0, movCategory, eventCategory }
+  if (movCategory === eventCategory) return { adjustment: CATEGORY_CONFIDENCE_BOOST, movCategory, eventCategory }
+  return { adjustment: -CATEGORY_CONFIDENCE_PENALTY, movCategory, eventCategory }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // LLM-based semantic entity matching
 const LLM_API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
@@ -494,6 +534,39 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   // Track paid events that have been matched in this run to prevent re-matching
   const usedPaidEventIds = new Set<string>()
 
+  // ─── Phase 3: Anti-Greedy-Sweep Guards ──────────────────────────────────────
+  // Per-movement match counters to prevent one movement from consuming many
+  // unrelated invoices/bills across different entities.
+  const MAX_MATCHES_PER_MOVEMENT = 3
+  const MAX_PARTIAL_MATCHES_PER_MOVEMENT = 1
+  const matchCountByMovement = new Map<string, number>()      // total AR/AP matches
+  const partialCountByMovement = new Map<string, number>()    // partial matches only
+  const matchedEntityByMovement = new Map<string, string>()   // first matched entity per movement
+
+  function getMovementMatchCount(movId: string): number {
+    return matchCountByMovement.get(movId) ?? 0
+  }
+  function getMovementPartialCount(movId: string): number {
+    return partialCountByMovement.get(movId) ?? 0
+  }
+  function getMovementFirstEntity(movId: string): string | undefined {
+    return matchedEntityByMovement.get(movId)
+  }
+  function recordMovementMatch(movId: string, entityId: string, isPartial: boolean): void {
+    matchCountByMovement.set(movId, (matchCountByMovement.get(movId) ?? 0) + 1)
+    if (isPartial) partialCountByMovement.set(movId, (partialCountByMovement.get(movId) ?? 0) + 1)
+    if (!matchedEntityByMovement.has(movId)) matchedEntityByMovement.set(movId, entityId)
+  }
+
+  /** Get confidence penalty for Nth match on same movement. */
+  function getMatchCountPenalty(matchCount: number): number {
+    if (matchCount === 0) return 0        // 1st match: no penalty
+    if (matchCount === 1) return -0.05    // 2nd match: -0.05
+    if (matchCount === 2) return -0.10    // 3rd match: -0.10
+    return -99                            // 4th+: reject
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   // #region agent log
   const debugWf = {
     openEvents: eventById.size,
@@ -898,12 +971,51 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       const eventAmount = isHistoricalFifo ? event.amount : event.outstanding_amount
       if (eventAmount <= EPS) continue
 
+      // ─── Phase 3: Greedy Sweep Guards ──
+      const currentMatchCount = getMovementMatchCount(movement.id)
+      const currentPartialCount = getMovementPartialCount(movement.id)
+      const firstMatchedEntity = getMovementFirstEntity(movement.id)
+
+      // Reject if over match limit
+      if (currentMatchCount >= MAX_MATCHES_PER_MOVEMENT) break
+
+      // Enforce one-entity-per-movement: reject cross-entity matches
+      if (firstMatchedEntity && firstMatchedEntity !== event.entity_id) {
+        // Different entity — skip to avoid cross-entity contamination
+        continue
+      }
+
+      // Reject if partial match limit reached (partial = movement < event amount)
+      const wouldBePartial = (feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash) + EPS < eventAmount
+      if (wouldBePartial && currentPartialCount >= MAX_PARTIAL_MATCHES_PER_MOVEMENT) break
+
+      // Apply count-based confidence penalty
+      const countPenalty = getMatchCountPenalty(currentMatchCount)
+      if (countPenalty <= -99) break  // 4th+ match — hard reject
+      // ────────────────────────────────────
+
       const purchasingPower = feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash
 
       if (purchasingPower + EPS >= eventAmount) {
         const gross = eventAmount
         const netApplied = feeAssumed > 0 ? gross * (1 - feeAssumed) : gross
         const feeAmt = Math.max(0, gross - netApplied)
+        const catAdj = computeCategoryConfidenceAdjust(econ, event.metadata)
+        const fifoConfidence = Math.min(0.92, Math.max(0.50, 0.82 + catAdj.adjustment + countPenalty))
+        // Phase 7: Build confidence breakdown for JSONB storage
+        const entityNameForConf = (event.metadata?.customer_name ?? event.metadata?.vendor_name ?? event.entity_id ?? "") as string
+        const fifoBreakdown = buildSyncConfidenceBreakdown({
+          movementAmount: movement.amount,
+          targetAmount: gross,
+          bankDescription: resolvedBankForMove ?? "",
+          entityName: entityNameForConf,
+          movementDate: movement.date ?? null,
+          invoiceDueDate: event.expected_date ?? null,
+          categoryAdjustment: catAdj.adjustment,
+          matchSequenceIndex: currentMatchCount,
+          waterfallStage: isHistoricalFifo ? "fifo_historical" : "fifo",
+          matchMethod: "tolerance",
+        })
         pushAttr({
           userId,
           movementId: movement.id,
@@ -915,15 +1027,20 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
               : (event.metadata?.bill_id as string) ?? null,
           gross_amount: gross,
           net_amount: netApplied,
-          confidence: 0.82,
+          confidence: fifoConfidence,
           source: "rule",
           metadata: {
             fee_amount: feeAmt,
             match_method: "tolerance",
             waterfall_stage: isHistoricalFifo ? "fifo_historical" : "fifo",
             is_historical_reconciliation: isHistoricalFifo,
+            category_adjustment: catAdj.adjustment !== 0 ? catAdj : undefined,
+            match_sequence: currentMatchCount + 1,
           },
+          confidenceEnvelope: breakdownToEnvelope(fifoBreakdown) as any,
+          category: catAdj.movCategory ?? undefined,
         }, event.id)
+        recordMovementMatch(movement.id, event.entity_id, false)
         if (feeAmt > EPS && targetType === "ar") {
           const processor = isProcessorLikeMovement(movement) ? "stripe" : "processor"
           pushAttr({
@@ -959,6 +1076,22 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         const grossApplied = Math.min(rawGross, eventAmount)
         const netApplied = feeAssumed > 0 ? grossApplied * (1 - feeAssumed) : grossApplied
         const feeAmt = Math.max(0, grossApplied - netApplied)
+        const catAdjPartial = computeCategoryConfidenceAdjust(econ, event.metadata)
+        const fifoPartialConf = Math.min(0.90, Math.max(0.50, 0.80 + catAdjPartial.adjustment + countPenalty))
+        // Phase 7: Build confidence breakdown for partial match
+        const entityNameForPartial = (event.metadata?.customer_name ?? event.metadata?.vendor_name ?? event.entity_id ?? "") as string
+        const fifoPartialBreakdown = buildSyncConfidenceBreakdown({
+          movementAmount: movement.amount,
+          targetAmount: eventAmount,
+          bankDescription: resolvedBankForMove ?? "",
+          entityName: entityNameForPartial,
+          movementDate: movement.date ?? null,
+          invoiceDueDate: event.expected_date ?? null,
+          categoryAdjustment: catAdjPartial.adjustment,
+          matchSequenceIndex: currentMatchCount,
+          waterfallStage: isHistoricalFifo ? "fifo_partial_historical" : "fifo_partial",
+          matchMethod: "tolerance",
+        })
         pushAttr({
           userId,
           movementId: movement.id,
@@ -970,15 +1103,20 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
               : (event.metadata?.bill_id as string) ?? null,
           gross_amount: grossApplied,
           net_amount: netApplied,
-          confidence: 0.8,
+          confidence: fifoPartialConf,
           source: "rule",
           metadata: {
             fee_amount: feeAmt,
             match_method: "tolerance",
             waterfall_stage: isHistoricalFifo ? "fifo_partial_historical" : "fifo_partial",
             is_historical_reconciliation: isHistoricalFifo,
+            category_adjustment: catAdjPartial.adjustment !== 0 ? catAdjPartial : undefined,
+            match_sequence: currentMatchCount + 1,
           },
+          confidenceEnvelope: breakdownToEnvelope(fifoPartialBreakdown) as any,
+          category: catAdjPartial.movCategory ?? undefined,
         }, event.id)
+        recordMovementMatch(movement.id, event.entity_id, true)
         if (feeAmt > EPS && targetType === "ar") {
           const processor = isProcessorLikeMovement(movement) ? "stripe" : "processor"
           pushAttr({
@@ -1113,6 +1251,26 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     for (const opts of pendingAttributions) {
       await insertAttributionWithClient(client, opts)
     }
+
+    // Write audit log entries for all pending attributions (best-effort, never blocks)
+    const auditEntries: AuditLogEntry[] = pendingAttributions
+      .filter((opts) => opts.component_type === "ar" || opts.component_type === "ap")
+      .map((opts) => {
+        const meta = opts.metadata as Record<string, unknown> | undefined
+        return {
+          userId,
+          movementId: opts.movementId,
+          matchMethod: String(meta?.match_method ?? "waterfall"),
+          waterfallStage: meta?.waterfall_stage ? String(meta.waterfall_stage) : null,
+          confidence: typeof opts.confidence === "number" ? opts.confidence : null,
+          entityId: opts.entity_id ?? null,
+          referenceId: opts.reference_id ?? null,
+          amountMatched: typeof opts.gross_amount === "number" ? opts.gross_amount : null,
+          semanticValid: null,
+          crossEntityFlag: false,
+        }
+      })
+    await bulkWriteAuditLog(client, userId, auditEntries)
     for (const id of touchedEventIds) {
       const ev = eventById.get(id)
       if (!ev) continue

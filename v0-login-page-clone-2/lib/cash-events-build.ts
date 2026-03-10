@@ -28,7 +28,11 @@ export type CashEventRow = {
   amount: number
   /** Remaining obligation (expectation layer); defaults to amount when unset. */
   outstanding_amount?: number
-  status?: "open" | "partially_paid" | "paid"
+  /** Signed amount: positive for AR (inflows), negative for AP (outflows). */
+  amount_signed?: number
+  /** Credit classification for zero/negative outstanding amounts. */
+  credit_type?: "none" | "vendor_credit" | "customer_overpayment"
+  status?: "open" | "partially_paid" | "paid" | "credit"
   probability: number
   expected_date: string
   source: "invoice" | "inferred" | "model" | "attribution"
