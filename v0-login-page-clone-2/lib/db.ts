@@ -1171,9 +1171,8 @@ export async function ensureMovementsSchema(): Promise<void> {
     const client = await pool.connect()
     try {
       await client.query("BEGIN")
-      // Lock the table exclusively while backfilling to prevent concurrent writes
-      // from seeing a mixed signed/null state. This is a maintenance-window operation.
-      await client.query("LOCK TABLE cash_events IN EXCLUSIVE MODE")
+      // Backfill amount_signed: inflow events are positive, outflow (ap) events are negative
+      // No exclusive lock needed — just update with a transaction for atomicity
       await client.query(`
         UPDATE cash_events
         SET amount_signed = CASE WHEN event_type = 'ar' THEN amount ELSE -amount END
