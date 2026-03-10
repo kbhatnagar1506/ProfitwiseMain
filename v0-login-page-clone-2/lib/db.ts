@@ -1591,7 +1591,30 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
     await client.query("COMMIT")
     return result
   } catch (e) {
-    await client.query("ROLLBACK")
+    // #region agent log - hypothesis B: capture transaction error details
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    console.error("[withTransaction] Transaction error:", errorMsg);
+    try {
+      await fetch('http://127.0.0.1:7742/ingest/b0bb6c9e-7e1d-4674-9db3-ac21c3d4fa72', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'fee5c4' },
+        body: JSON.stringify({
+          sessionId: 'fee5c4',
+          location: 'db.ts:withTransaction',
+          message: 'transaction_error',
+          data: { error: errorMsg, code: (e as any)?.code },
+          timestamp: Date.now(),
+          runId: 'debug-run-2',
+          hypothesisId: 'B',
+        }),
+      }).catch(() => {});
+    } catch {}
+    // #endregion
+    try {
+      await client.query("ROLLBACK")
+    } catch (rollbackErr) {
+      console.error("[withTransaction] Rollback failed:", rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr))
+    }
     throw e
   } finally {
     client.release()

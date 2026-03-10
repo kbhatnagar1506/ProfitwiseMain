@@ -292,38 +292,64 @@ export async function insertAttributionWithClient(
   } catch {}
   // #endregion
 
-  // Insert new attribution
-  const result = await client.query<
-    MovementAttributionRow & { gross_amount: string; net_amount: string }
-  >(
-    `INSERT INTO movement_attributions (
-      user_id, movement_id, component_type, entity_id, reference_id,
-      gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id,
-      category, cost_type, vendor_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15)
-    RETURNING id, user_id, movement_id, component_type, entity_id, reference_id,
-      gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id, created_at`,
-    [
-      opts.userId,
-      opts.movementId,
-      opts.component_type,
-      opts.entity_id,
-      opts.reference_id ?? null,
-      opts.gross_amount,
-      opts.net_amount,
-      opts.confidence,
-      opts.source,
-      JSON.stringify(metadata),
-      confDetail ? JSON.stringify(confDetail) : null,
-      opts.migrated_from_allocation_id ?? null,
-      opts.category ?? null,
-      opts.cost_type ?? null,
-      opts.vendor_id ?? null,
-    ],
-  )
-  const row = result.rows[0]
-  if (!row) throw new Error("Failed to create attribution")
-  return normalizeAttributionRow(row as MovementAttributionRow)
+  // #region agent log - hypothesis C: catch insert errors
+  try {
+    const result = await client.query<
+      MovementAttributionRow & { gross_amount: string; net_amount: string }
+    >(
+      `INSERT INTO movement_attributions (
+        user_id, movement_id, component_type, entity_id, reference_id,
+        gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id,
+        category, cost_type, vendor_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15)
+      RETURNING id, user_id, movement_id, component_type, entity_id, reference_id,
+        gross_amount, net_amount, confidence, source, metadata, confidence_detail, migrated_from_allocation_id, created_at`,
+      [
+        opts.userId,
+        opts.movementId,
+        opts.component_type,
+        opts.entity_id,
+        opts.reference_id ?? null,
+        opts.gross_amount,
+        opts.net_amount,
+        opts.confidence,
+        opts.source,
+        JSON.stringify(metadata),
+        confDetail ? JSON.stringify(confDetail) : null,
+        opts.migrated_from_allocation_id ?? null,
+        opts.category ?? null,
+        opts.cost_type ?? null,
+        opts.vendor_id ?? null,
+      ],
+    )
+    const row = result.rows[0]
+    if (!row) throw new Error("Failed to create attribution")
+    return normalizeAttributionRow(row as MovementAttributionRow)
+  } catch (err) {
+    console.error("[insertAttributionWithClient] Insert failed:", err instanceof Error ? err.message : String(err));
+    try {
+      await fetch('http://127.0.0.1:7742/ingest/b0bb6c9e-7e1d-4674-9db3-ac21c3d4fa72', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'fee5c4' },
+        body: JSON.stringify({
+          sessionId: 'fee5c4',
+          location: 'attribution-persist.ts:insertAttributionWithClient',
+          message: 'insert_error',
+          data: { 
+            error: err instanceof Error ? err.message : String(err),
+            code: (err as any)?.code,
+            movementId: opts.movementId,
+            componentType: opts.component_type,
+          },
+          timestamp: Date.now(),
+          runId: 'debug-run-2',
+          hypothesisId: 'C',
+        }),
+      }).catch(() => {});
+    } catch {}
+    throw err;
+  }
+  // #endregion
 }
 
 export async function getAttributionsByMovement(movementId: string): Promise<MovementAttributionRow[]> {
