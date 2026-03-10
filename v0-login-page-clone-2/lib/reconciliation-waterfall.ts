@@ -1202,29 +1202,49 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
   }
 
   return withTransaction(async (client: PoolClient) => {
-    // D4: Clear stale Stage 4 review metadata from previous runs
-    await client.query(
-      `UPDATE movements SET metadata = metadata - 'reconciliation_waterfall_review'
-       WHERE user_id = $1::uuid AND metadata ? 'reconciliation_waterfall_review'`,
-      [userId],
-    )
-
-    // D5: Delete previous waterfall attributions to ensure idempotency on re-run
-    await client.query(
-      `DELETE FROM movement_attributions
-       WHERE user_id = $1 AND source = 'rule'
-         AND metadata->>'waterfall_stage' IS NOT NULL`,
-      [userId],
-    )
-
-    // D6: Re-load cash events inside transaction to avoid TOCTOU race.
-    // Outstanding amounts may have changed since the initial load if a concurrent
-    // waterfall was committed. Rebuild eventById from fresh data inside the txn.
-    // Re-load cash events with row-level locking to prevent concurrent modification
-    eventById.clear()
-    for (const e of await loadOpenCashEventsWithLock(userId, client)) {
-      eventById.set(e.id, e)
+    // #region agent log - hypothesis D: wrap queries to find the failing one
+    try {
+      // D4: Clear stale Stage 4 review metadata from previous runs
+      await client.query(
+        `UPDATE movements SET metadata = metadata - 'reconciliation_waterfall_review'
+         WHERE user_id = $1::uuid AND metadata ? 'reconciliation_waterfall_review'`,
+        [userId],
+      )
+      console.log("[waterfall] D4 query succeeded");
+    } catch (err) {
+      console.error("[waterfall] D4 query failed:", err instanceof Error ? err.message : String(err));
+      throw err;
     }
+
+    try {
+      // D5: Delete previous waterfall attributions to ensure idempotency on re-run
+      await client.query(
+        `DELETE FROM movement_attributions
+         WHERE user_id = $1 AND source = 'rule'
+           AND metadata->>'waterfall_stage' IS NOT NULL`,
+        [userId],
+      )
+      console.log("[waterfall] D5 query succeeded");
+    } catch (err) {
+      console.error("[waterfall] D5 query failed:", err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+
+    try {
+      // D6: Re-load cash events inside transaction to avoid TOCTOU race.
+      // Outstanding amounts may have changed since the initial load if a concurrent
+      // waterfall was committed. Rebuild eventById from fresh data inside the txn.
+      // Re-load cash events with row-level locking to prevent concurrent modification
+      eventById.clear()
+      for (const e of await loadOpenCashEventsWithLock(userId, client)) {
+        eventById.set(e.id, e)
+      }
+      console.log("[waterfall] D6 query succeeded");
+    } catch (err) {
+      console.error("[waterfall] D6 query failed:", err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+    // #endregion
 
     // D7: Replay pending attributions against fresh cash events to compute correct outstanding amounts.
     // Use specific matched_event_id to avoid corrupting sibling events for the same entity.
@@ -1248,9 +1268,19 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       }
     }
 
-    for (const opts of pendingAttributions) {
-      await insertAttributionWithClient(client, opts)
+    // #region agent log - hypothesis D: wrap insertAttributionWithClient
+    for (let i = 0; i < pendingAttributions.length; i++) {
+      const opts = pendingAttributions[i];
+      try {
+        await insertAttributionWithClient(client, opts)
+        console.log(`[waterfall] insertAttributionWithClient ${i}/${pendingAttributions.length} succeeded`);
+      } catch (err) {
+        console.error(`[waterfall] insertAttributionWithClient ${i}/${pendingAttributions.length} failed:`, err instanceof Error ? err.message : String(err));
+        console.error(`[waterfall] Failed attribution opts:`, { movementId: opts.movementId, componentType: opts.component_type, entityId: opts.entity_id });
+        throw err;
+      }
     }
+    // #endregion
 
     // Write audit log entries for all pending attributions (best-effort, never blocks)
     const auditEntries: AuditLogEntry[] = pendingAttributions
