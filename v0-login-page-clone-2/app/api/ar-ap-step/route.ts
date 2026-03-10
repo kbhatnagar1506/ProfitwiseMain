@@ -751,6 +751,7 @@ async function buildReconciledMovements(
     movement_description: string
     movement_amount: string
     movement_date: string
+    direction: string
   }>(
     `SELECT DISTINCT ON (a.movement_id, a.component_type, a.reference_id)
        a.movement_id, a.reference_id, a.component_type,
@@ -765,7 +766,8 @@ async function buildReconciledMovements(
        ), '0') AS fee_amount,
        COALESCE(m.raw_description, m.counterparty, 'Unknown') AS movement_description,
        COALESCE(m.amount::text, '0') AS movement_amount,
-       m.date::text AS movement_date
+       m.date::text AS movement_date,
+       m.direction
      FROM movement_attributions a
      JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
      WHERE a.user_id = $1
@@ -783,8 +785,11 @@ async function buildReconciledMovements(
   return {
     matched: rows.map(r => {
       const isAR = r.component_type === 'ar'
+      const isInflow = r.direction === 'inflow'
       const invoice = isAR ? invoiceMap.get(r.reference_id) : undefined
       const bill = !isAR ? billMap.get(r.reference_id) : undefined
+      // Apply sign based on direction: inflow is positive, outflow is negative
+      const signedAmount = isInflow ? Math.abs(parseFloat(r.movement_amount) || 0) : -(Math.abs(parseFloat(r.movement_amount) || 0))
       return {
         movement_id: r.movement_id,
         matched_to: r.reference_id,
@@ -793,7 +798,7 @@ async function buildReconciledMovements(
         confidence: parseFloat(r.confidence),
         amount_matched: parseFloat(r.net_amount) || 0,
         movement_description: r.movement_description,
-        movement_amount: parseFloat(r.movement_amount) || 0,
+        movement_amount: signedAmount,
         movement_date: r.movement_date,
         entity_name: invoice?.customer_name || bill?.vendor_name || null,
         ref_number: null as string | null, // invoice_id/bill_id used as reference_id
