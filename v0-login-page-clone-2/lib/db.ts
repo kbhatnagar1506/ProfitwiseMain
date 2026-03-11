@@ -1581,7 +1581,10 @@ export async function ensureMovementsSchema(): Promise<void> {
 
   log("ar_ap_audit.schema.ensured", undefined, "db")
 
-  movementsSchemaEnsured = true
+  // NOTE: Do NOT set movementsSchemaEnsured = true here!
+  // The reconciliation_audit_log table is created later in this function.
+  // Setting the flag here causes the table to be skipped on subsequent calls.
+  // The flag is set at the END of this function after ALL tables are created.
   log("movements.schema.ensured", undefined, "db")
 }
 
