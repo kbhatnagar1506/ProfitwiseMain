@@ -1787,8 +1787,9 @@ export async function ensureUserDecisionsSchema() {
   )
 
   // Reconciliation audit log — lightweight per-match decision record
+  console.log("[DB] Creating reconciliation_audit_log table...");
   try {
-    await p.query(`
+    const result = await p.query(`
       CREATE TABLE IF NOT EXISTS reconciliation_audit_log (
         id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id           UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -1804,12 +1805,19 @@ export async function ensureUserDecisionsSchema() {
         created_at        TIMESTAMPTZ DEFAULT NOW()
       )
     `)
-    console.log("[DB] reconciliation_audit_log table created/verified");
+    console.log("[DB] reconciliation_audit_log table created/verified, result:", result.command);
   } catch (err) {
     console.error("[DB] reconciliation_audit_log creation failed:", err instanceof Error ? err.message : String(err));
+    throw err;
   }
-  await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_user ON reconciliation_audit_log (user_id, created_at DESC)")
-  await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_movement ON reconciliation_audit_log (movement_id)")
+  console.log("[DB] Creating reconciliation_audit_log indexes...");
+  try {
+    await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_user ON reconciliation_audit_log (user_id, created_at DESC)")
+    await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_movement ON reconciliation_audit_log (movement_id)")
+    console.log("[DB] reconciliation_audit_log indexes created");
+  } catch (err) {
+    console.error("[DB] reconciliation_audit_log index creation failed:", err instanceof Error ? err.message : String(err));
+  }
 
   // Reconciliation test cases — golden dataset for regression testing
   await p.query(`
