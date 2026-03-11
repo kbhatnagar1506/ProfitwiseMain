@@ -759,12 +759,102 @@ const MOVEMENT_FAMILIES_SQL = `
 
 let movementsSchemaEnsured = false
 
+// ─── Schema Migration Versioning ───────────────────────────────────────────────
+// Replaces the in-memory `movementsSchemaEnsured` boolean for migrations that
+// must run exactly once (or only when a newer version is available).
+
+const CURRENT_MIGRATION_VERSION = 8  // increment when adding a new numbered migration
+
+interface MigrationRecord {
+  version: number
+  name: string
+  status: "pending" | "running" | "completed" | "failed"
+}
+
+let migrationVersionTableEnsured = false
+
+async function ensureMigrationTable(p: Pool): Promise<void> {
+  if (migrationVersionTableEnsured) return
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id           SERIAL PRIMARY KEY,
+      version      INT UNIQUE NOT NULL,
+      name         TEXT NOT NULL,
+      executed_at  TIMESTAMPTZ DEFAULT NOW(),
+      duration_ms  INT,
+      status       TEXT NOT NULL DEFAULT 'pending'
+                   CHECK (status IN ('pending', 'running', 'completed', 'failed'))
+    )
+  `)
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_schema_migrations_version
+      ON schema_migrations (version DESC)
+  `)
+  migrationVersionTableEnsured = true
+}
+
+async function getMaxMigrationVersion(p: Pool): Promise<number> {
+  const { rows } = await p.query<{ version: number }>(
+    `SELECT COALESCE(MAX(version), 0) AS version
+     FROM schema_migrations
+     WHERE status = 'completed'`
+  )
+  return rows[0]?.version ?? 0
+}
+
+async function recordMigration(
+  p: Pool,
+  version: number,
+  name: string,
+  status: MigrationRecord["status"],
+  durationMs?: number
+): Promise<void> {
+  await p.query(
+    `INSERT INTO schema_migrations (version, name, status, duration_ms)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (version) DO UPDATE
+       SET status = EXCLUDED.status,
+           duration_ms = EXCLUDED.duration_ms,
+           executed_at = NOW()`,
+    [version, name, status, durationMs ?? null]
+  )
+}
+
+/**
+ * Run a numbered migration exactly once.
+ * Skips if max completed version >= this version number.
+ */
+async function runMigrationIfNeeded(
+  p: Pool,
+  maxVersion: number,
+  version: number,
+  name: string,
+  fn: (p: Pool) => Promise<void>
+): Promise<void> {
+  if (maxVersion >= version) return
+  const startMs = Date.now()
+  try {
+    await recordMigration(p, version, name, "running")
+    await fn(p)
+    await recordMigration(p, version, name, "completed", Date.now() - startMs)
+    log(`migration.v${version}.completed`, { name, durationMs: Date.now() - startMs }, "db")
+  } catch (err) {
+    await recordMigration(p, version, name, "failed", Date.now() - startMs).catch(() => {})
+    log(`migration.v${version}.failed`, { name, err: String(err) }, "db")
+    throw err
+  }
+}
+
 export async function ensureMovementsSchema(): Promise<void> {
   if (movementsSchemaEnsured) return
   const p = await getPoolAsync()
   if (!p) return
   await ensureAuthSchema()
   await ensureIdentitySchema()
+
+  // Ensure the migration versioning table exists before any numbered migrations
+  await ensureMigrationTable(p)
+  const maxVersion = await getMaxMigrationVersion(p)
   await p.query(MOVEMENTS_V5_MIGRATE_SQL)
   await p.query(MOVEMENTS_V5_SQL)
   await p.query(MOVEMENT_OBSERVATIONS_SQL)
@@ -937,6 +1027,37 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query("ALTER TABLE movement_attributions ADD COLUMN IF NOT EXISTS cost_type TEXT")
   await p.query("ALTER TABLE movement_attributions ADD COLUMN IF NOT EXISTS vendor_id TEXT")
   await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_category ON movement_attributions (user_id, category) WHERE category IS NOT NULL")
+  // B3: Composite indexes on cost_type and vendor_id for category-based queries
+  await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_cost_type ON movement_attributions (user_id, cost_type) WHERE cost_type IS NOT NULL")
+  await p.query("CREATE INDEX IF NOT EXISTS idx_attributions_vendor_id ON movement_attributions (user_id, vendor_id) WHERE vendor_id IS NOT NULL")
+  // B3: NOT EMPTY constraints on new string columns — use numbered migration so they run exactly once
+  await runMigrationIfNeeded(p, maxVersion, 1, "attributions_not_empty_constraints", async (pool) => {
+    const client = await pool.connect()
+    try {
+      await client.query("BEGIN")
+      await client.query(`
+        ALTER TABLE movement_attributions
+          ADD CONSTRAINT IF NOT EXISTS category_not_empty
+          CHECK (category IS NULL OR category <> '')
+      `)
+      await client.query(`
+        ALTER TABLE movement_attributions
+          ADD CONSTRAINT IF NOT EXISTS cost_type_not_empty
+          CHECK (cost_type IS NULL OR cost_type <> '')
+      `)
+      await client.query(`
+        ALTER TABLE movement_attributions
+          ADD CONSTRAINT IF NOT EXISTS vendor_id_not_empty
+          CHECK (vendor_id IS NULL OR vendor_id <> '')
+      `)
+      await client.query("COMMIT")
+    } catch (err) {
+      await client.query("ROLLBACK")
+      throw err
+    } finally {
+      client.release()
+    }
+  })
   // Clean up duplicate attributions before creating unique indexes
   // Keep only the most recent attribution for each (movement_id, component_type, entity_id, source) combination
   try {
@@ -1022,7 +1143,28 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(`
     UPDATE cash_events SET outstanding_amount = amount WHERE outstanding_amount IS NULL
   `)
-  // Backfill amount_signed: inflow events are positive, outflow (ap) events are negative
+  // B2: Atomic backfill with table locking — runs exactly once via migration versioning
+  await runMigrationIfNeeded(p, maxVersion, 2, "cash_events_amount_signed_atomic_backfill", async (pool) => {
+    const client = await pool.connect()
+    try {
+      await client.query("BEGIN")
+      // Lock the table exclusively while backfilling to prevent concurrent writes
+      // from seeing a mixed signed/null state. This is a maintenance-window operation.
+      await client.query("LOCK TABLE cash_events IN EXCLUSIVE MODE")
+      await client.query(`
+        UPDATE cash_events
+        SET amount_signed = CASE WHEN event_type = 'ar' THEN amount ELSE -amount END
+        WHERE amount_signed IS NULL
+      `)
+      await client.query("COMMIT")
+    } catch (err) {
+      await client.query("ROLLBACK")
+      throw err
+    } finally {
+      client.release()
+    }
+  })
+  // Non-atomic fallback for rows added after migration (idempotent)
   await p.query(`
     UPDATE cash_events
     SET amount_signed = CASE WHEN event_type = 'ar' THEN amount ELSE -amount END
@@ -1032,8 +1174,8 @@ export async function ensureMovementsSchema(): Promise<void> {
   await p.query(`
     UPDATE cash_events
     SET credit_type = CASE
-      WHEN event_type = 'ap' AND outstanding_amount < 0 THEN 'vendor_credit'
-      WHEN event_type = 'ar' AND outstanding_amount < 0 THEN 'customer_overpayment'
+      WHEN event_type = 'ap' AND outstanding_amount < -0.01 THEN 'vendor_credit'
+      WHEN event_type = 'ar' AND outstanding_amount < -0.01 THEN 'customer_overpayment'
       ELSE 'none'
     END
     WHERE credit_type IS NULL OR credit_type = ''
@@ -1604,5 +1746,21 @@ export async function ensureUserDecisionsSchema() {
       notes             TEXT,
       created_at        TIMESTAMPTZ DEFAULT NOW()
     )
+  `)
+
+  // Phase C2: Reconciliation metrics table for comprehensive monitoring
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS reconciliation_metrics (
+      id           SERIAL PRIMARY KEY,
+      user_id      UUID REFERENCES users(id) ON DELETE CASCADE,
+      run_id       UUID,
+      metric_name  TEXT NOT NULL,
+      metric_value NUMERIC NOT NULL,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_reconciliation_metrics_user_metric
+      ON reconciliation_metrics (user_id, metric_name, created_at DESC)
   `)
 }

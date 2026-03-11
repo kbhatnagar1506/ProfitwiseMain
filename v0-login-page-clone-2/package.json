@@ -12,7 +12,11 @@
     "test:reconciliation": "tsx scripts/test-reconciliation.ts",
     "seed:reconciliation-test-cases": "tsx scripts/seed-reconciliation-test-cases.ts",
     "canary:health-check": "tsx scripts/canary-health-check.ts",
-    "deploy:full-rollout": "tsx scripts/full-rollout.ts"
+    "deploy:full-rollout": "tsx scripts/full-rollout.ts",
+    "test:load-reconciliation": "tsx scripts/load-test-reconciliation.ts",
+    "test:chaos-reconciliation": "CHAOS_TEST_MODE=true tsx scripts/chaos-test-reconciliation.ts",
+    "db:list-migrations": "tsx -e \"require('./lib/db-rollback').listMigrations().then(ms => console.table(ms))\"",
+    "db:rollback": "tsx -e \"const v = parseInt(process.argv[2] ?? '0'); require('./lib/db-rollback').rollbackToVersion(v).then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1) })\" --"
   },
   "dependencies": {
     "@google-cloud/cloud-sql-connector": "^1.9.1",

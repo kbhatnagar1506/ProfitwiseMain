@@ -16,6 +16,10 @@ import type { PoolClient } from "pg"
 import { writeAuditLogWithClient } from "@/lib/reconciliation-audit-log"
 import { getEntityProfile } from "@/lib/supermemory-entity-profiles"
 import { buildSupermemoryContext } from "@/lib/semantic-validation-supermemory"
+import { escapePromptText, escapeEntityName, escapeBankDescription, escapeReferenceId } from "@/lib/llm-prompt-sanitizer"
+import { withCircuitBreaker, llmCircuitBreaker } from "@/lib/llm-circuit-breaker"
+import { withRateLimit, llmRateLimiter } from "@/lib/llm-rate-limiter"
+import { logLLMCall } from "@/lib/llm-logging"
 
 const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
 const API_KEY = process.env.FORECAST_LLM_API_KEY ?? process.env.OPENAI_API_KEY
@@ -38,26 +42,41 @@ export type LLMMatchApplyResult = {
 }
 
 const LLM_TIMEOUT_MS = 60000 // 60 second timeout for LLM calls
+const MAX_RETRIES = 3
 
-async function callLLM(messages: { role: string; content: string }[], maxTokens = 4000): Promise<string | null> {
+/** Inner fetch — one attempt, no retry. Returns null on any failure. */
+async function callLLMOnce(
+  messages: { role: string; content: string }[],
+  maxTokens = 4000
+): Promise<string | null> {
   if (!API_KEY) return null
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS)
   try {
-    const res = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages,
-        max_tokens: maxTokens,
-        temperature: 0,
-      }),
-      signal: controller.signal,
-    })
+    const res = await withRateLimit(() =>
+      fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          messages,
+          max_tokens: maxTokens,
+          temperature: 0,
+        }),
+        signal: controller.signal,
+      })
+    )
+
+    // Handle rate limiting — notify rate limiter of 429
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("Retry-After")
+      llmRateLimiter.notifyRateLimit(retryAfter ? parseInt(retryAfter) * 1000 : 60_000)
+      return null
+    }
+
     if (!res.ok) {
       console.error("[LLM-Match] API error:", res.status, await res.text().catch(() => ""))
       return null
@@ -74,6 +93,84 @@ async function callLLM(messages: { role: string; content: string }[], maxTokens 
   } finally {
     clearTimeout(timeoutId)
   }
+}
+
+/**
+ * Call the LLM with:
+ *  - Circuit breaker (short-circuits if LLM is failing)
+ *  - Retry with exponential backoff (max 3 retries, 1s/2s/4s)
+ *  - Rate limiting (token bucket, max 10 concurrent / 60 per minute)
+ *  - Structured logging (sampled)
+ */
+async function callLLM(
+  messages: { role: string; content: string }[],
+  maxTokens = 4000,
+  userId: string | null = null
+): Promise<string | null> {
+  if (!API_KEY) return null
+
+  const promptLength = messages.reduce((n, m) => n + m.content.length, 0)
+  const startMs = Date.now()
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const result = await withCircuitBreaker(
+      () => callLLMOnce(messages, maxTokens),
+      null
+    )
+
+    if (result !== null) {
+      logLLMCall({
+        userId,
+        requestHash: "",
+        promptLength,
+        responseLength: result.length,
+        latencyMs: Date.now() - startMs,
+        status: "success",
+        errorMessage: null,
+        retryCount: attempt,
+        circuitBreakerState: llmCircuitBreaker.getState(),
+        model: MODEL,
+      }, messages[0]?.content ?? "")
+      return result
+    }
+
+    // Circuit OPEN means we should not retry
+    if (llmCircuitBreaker.getState() === "OPEN") {
+      logLLMCall({
+        userId,
+        requestHash: "",
+        promptLength,
+        responseLength: 0,
+        latencyMs: Date.now() - startMs,
+        status: "circuit_open",
+        errorMessage: "Circuit breaker OPEN",
+        retryCount: attempt,
+        circuitBreakerState: "OPEN",
+        model: MODEL,
+      })
+      return null
+    }
+
+    if (attempt < MAX_RETRIES) {
+      const backoffMs = Math.pow(2, attempt) * 1000
+      console.warn(`[LLM-Match] Retry ${attempt + 1}/${MAX_RETRIES} after ${backoffMs}ms`)
+      await new Promise(r => setTimeout(r, backoffMs))
+    }
+  }
+
+  logLLMCall({
+    userId,
+    requestHash: "",
+    promptLength,
+    responseLength: 0,
+    latencyMs: Date.now() - startMs,
+    status: "failure",
+    errorMessage: `Failed after ${MAX_RETRIES} retries`,
+    retryCount: MAX_RETRIES,
+    circuitBreakerState: llmCircuitBreaker.getState(),
+    model: MODEL,
+  })
+  return null
 }
 
 function parseARMatchLines(content: string, movementIds: Set<string>, invoiceIds: Set<string>): ARMatchSuggestion[] {
@@ -200,7 +297,12 @@ Only output matches you're confident about. Do not guess. When in doubt, reject 
 
       const profileLines: string[] = []
       for (const name of entityNames) {
-        const profile = await getEntityProfile(userId, "")
+        // A4 FIX: was passing "" as entityId — now derive from invoice/bill entity_id
+        const entityId = invoices.find(i => i.customer_name === name)?.entity_id
+          ?? bills.find(b => b.vendor_name === name)?.entity_id
+          ?? name
+        if (!entityId) continue
+        const profile = await getEntityProfile(userId, entityId)
           .catch(() => null)
         if (profile) {
           const ctx = buildSupermemoryContext(name, profile, profile.bank_description_patterns, MAX_CONTEXT_TOKENS)
@@ -217,22 +319,22 @@ Only output matches you're confident about. Do not guess. When in doubt, reject 
 
   const inflowSection = inflows.length > 0
     ? `UNMATCHED BANK DEPOSITS (AR):
-${inflows.map((i) => `  ${i.movement_id}: $${i.amount.toFixed(2)} on ${i.date} | ${i.counterparty ?? ""} | ${(i.raw_description ?? "").slice(0, 80)}`).join("\n")}`
+${inflows.map((i) => `  ${escapeReferenceId(i.movement_id)}: $${i.amount.toFixed(2)} on ${i.date} | ${escapePromptText(i.counterparty)} | ${escapeBankDescription(i.raw_description)}`).join("\n")}`
     : ""
 
   const outflowSection = outflows.length > 0
     ? `UNMATCHED BANK PAYMENTS (AP):
-${outflows.map((o) => `  ${o.movement_id}: $${o.amount.toFixed(2)} on ${o.date} | ${o.counterparty ?? ""} | ${(o.raw_description ?? "").slice(0, 80)}`).join("\n")}`
+${outflows.map((o) => `  ${escapeReferenceId(o.movement_id)}: $${o.amount.toFixed(2)} on ${o.date} | ${escapePromptText(o.counterparty)} | ${escapeBankDescription(o.raw_description)}`).join("\n")}`
     : ""
 
   const invoiceSection = invoices.length > 0
     ? `OUTSTANDING INVOICES (AR):
-${invoices.map((i) => `  ${i.invoice_id}: ${i.customer_name} | $${i.amount_due.toFixed(2)} | due ${i.due_date ?? "N/A"}`).join("\n")}`
+${invoices.map((i) => `  ${escapeReferenceId(i.invoice_id)}: ${escapeEntityName(i.customer_name)} | $${i.amount_due.toFixed(2)} | due ${i.due_date ?? "N/A"}`).join("\n")}`
     : ""
 
   const billSection = bills.length > 0
     ? `OUTSTANDING BILLS (AP):
-${bills.map((b) => `  ${b.obligation_id}: ${b.vendor_name} | $${b.amount_due.toFixed(2)} | due ${b.due_date ?? "N/A"}`).join("\n")}`
+${bills.map((b) => `  ${escapeReferenceId(b.obligation_id)}: ${escapeEntityName(b.vendor_name)} | $${b.amount_due.toFixed(2)} | due ${b.due_date ?? "N/A"}`).join("\n")}`
     : ""
 
   const userPrompt = `Match the following transactions to their corresponding invoices/bills.${supermemoryBlock}
@@ -246,7 +348,7 @@ Output matches (one per line):`
   const content = await callLLM([
     { role: "system", content: systemPrompt },
     { role: "user", content: userPrompt },
-  ])
+  ], 4000, userId ?? null)
   
   if (!content) {
     console.warn("[LLM-Match] No response from LLM")
