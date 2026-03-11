@@ -1035,20 +1035,43 @@ export async function ensureMovementsSchema(): Promise<void> {
     const client = await pool.connect()
     try {
       await client.query("BEGIN")
+      // PostgreSQL doesn't support IF NOT EXISTS in ALTER TABLE ADD CONSTRAINT,
+      // so we use a PL/pgSQL block to check before adding
       await client.query(`
-        ALTER TABLE movement_attributions
-          ADD CONSTRAINT IF NOT EXISTS category_not_empty
-          CHECK (category IS NULL OR category <> '')
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.constraint_column_usage
+            WHERE table_name = 'movement_attributions' AND constraint_name = 'category_not_empty'
+          ) THEN
+            ALTER TABLE movement_attributions
+              ADD CONSTRAINT category_not_empty
+              CHECK (category IS NULL OR category <> '');
+          END IF;
+        END $$;
       `)
       await client.query(`
-        ALTER TABLE movement_attributions
-          ADD CONSTRAINT IF NOT EXISTS cost_type_not_empty
-          CHECK (cost_type IS NULL OR cost_type <> '')
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.constraint_column_usage
+            WHERE table_name = 'movement_attributions' AND constraint_name = 'cost_type_not_empty'
+          ) THEN
+            ALTER TABLE movement_attributions
+              ADD CONSTRAINT cost_type_not_empty
+              CHECK (cost_type IS NULL OR cost_type <> '');
+          END IF;
+        END $$;
       `)
       await client.query(`
-        ALTER TABLE movement_attributions
-          ADD CONSTRAINT IF NOT EXISTS vendor_id_not_empty
-          CHECK (vendor_id IS NULL OR vendor_id <> '')
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.constraint_column_usage
+            WHERE table_name = 'movement_attributions' AND constraint_name = 'vendor_id_not_empty'
+          ) THEN
+            ALTER TABLE movement_attributions
+              ADD CONSTRAINT vendor_id_not_empty
+              CHECK (vendor_id IS NULL OR vendor_id <> '');
+          END IF;
+        END $$;
       `)
       await client.query("COMMIT")
     } catch (err) {
