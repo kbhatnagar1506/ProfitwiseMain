@@ -1581,10 +1581,7 @@ export async function ensureMovementsSchema(): Promise<void> {
 
   log("ar_ap_audit.schema.ensured", undefined, "db")
 
-  // NOTE: Do NOT set movementsSchemaEnsured = true here!
-  // The reconciliation_audit_log table is created later in this function.
-  // Setting the flag here causes the table to be skipped on subsequent calls.
-  // The flag is set at the END of this function after ALL tables are created.
+  movementsSchemaEnsured = true
   log("movements.schema.ensured", undefined, "db")
 }
 
@@ -1795,10 +1792,8 @@ export async function ensureUserDecisionsSchema() {
 
   // Reconciliation audit log — lightweight per-match decision record
   console.log("[DB] Creating reconciliation_audit_log table...");
-  
-  // Always attempt to create the table, regardless of flag state
   try {
-    await p.query(`
+    const result = await p.query(`
       CREATE TABLE IF NOT EXISTS reconciliation_audit_log (
         id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id           UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -1814,16 +1809,11 @@ export async function ensureUserDecisionsSchema() {
         created_at        TIMESTAMPTZ DEFAULT NOW()
       )
     `)
-    console.log("[DB] reconciliation_audit_log table ensured");
-    
-    // Verify table exists
-    await p.query("SELECT 1 FROM reconciliation_audit_log LIMIT 1")
-    console.log("[DB] reconciliation_audit_log table verified");
+    console.log("[DB] reconciliation_audit_log table created/verified, result:", result.command);
   } catch (err) {
-    console.error("[DB] reconciliation_audit_log creation/verification failed:", err instanceof Error ? err.message : String(err));
+    console.error("[DB] reconciliation_audit_log creation failed:", err instanceof Error ? err.message : String(err));
     throw err;
   }
-  
   console.log("[DB] Creating reconciliation_audit_log indexes...");
   try {
     await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_user ON reconciliation_audit_log (user_id, created_at DESC)")

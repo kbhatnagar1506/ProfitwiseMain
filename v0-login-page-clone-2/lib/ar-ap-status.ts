@@ -73,58 +73,43 @@ export async function writeStatusChange(
   client: PoolClient,
   opts: WriteStatusChangeOpts
 ): Promise<void> {
-  // #region agent log - hypothesis F: detailed logging for writeStatusChange
-  try {
+  await client.query(
+    `UPDATE cash_events
+     SET outstanding_amount = $1,
+         status             = $2,
+         last_reconciled_at = CASE
+           WHEN $2 IN ('paid', 'partially_paid') OR $5 = true THEN NOW()
+           ELSE last_reconciled_at
+         END,
+         updated_at = NOW()
+     WHERE id = $3 AND user_id = $4`,
+    [
+      opts.toOutstanding,
+      opts.toStatus,
+      opts.cashEventId,
+      opts.userId,
+      opts.forceReconciledAt ?? false,
+    ]
+  )
+
+  if (opts.fromStatus !== opts.toStatus || Math.abs(opts.fromOutstanding - opts.toOutstanding) > EPS) {
     await client.query(
-      `UPDATE cash_events
-       SET outstanding_amount = $1,
-           status             = $2,
-           last_reconciled_at = CASE
-             WHEN $2 IN ('paid', 'partially_paid') OR $5 = true THEN NOW()
-             ELSE last_reconciled_at
-           END,
-           updated_at = NOW()
-       WHERE id = $3 AND user_id = $4`,
+      `INSERT INTO ar_ap_status_log
+       (cash_event_id, user_id, from_status, to_status,
+        from_outstanding, to_outstanding, triggered_by, attribution_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
-        opts.toOutstanding,
-        opts.toStatus,
         opts.cashEventId,
         opts.userId,
-        opts.forceReconciledAt ?? false,
+        opts.fromStatus,
+        opts.toStatus,
+        opts.fromOutstanding,
+        opts.toOutstanding,
+        opts.triggeredBy,
+        opts.attributionId ?? null,
       ]
     )
-    console.log("[writeStatusChange] UPDATE succeeded for cashEventId:", opts.cashEventId);
-  } catch (err) {
-    console.error("[writeStatusChange] UPDATE failed:", err instanceof Error ? err.message : String(err));
-    throw err;
   }
-
-  // Only log if status actually changed — avoids noise from no-op updates
-  if (opts.fromStatus !== opts.toStatus || Math.abs(opts.fromOutstanding - opts.toOutstanding) > EPS) {
-    try {
-      await client.query(
-        `INSERT INTO ar_ap_status_log
-         (cash_event_id, user_id, from_status, to_status,
-          from_outstanding, to_outstanding, triggered_by, attribution_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [
-          opts.cashEventId,
-          opts.userId,
-          opts.fromStatus,
-          opts.toStatus,
-          opts.fromOutstanding,
-          opts.toOutstanding,
-          opts.triggeredBy,
-          opts.attributionId ?? null,
-        ]
-      )
-      console.log("[writeStatusChange] INSERT succeeded for cashEventId:", opts.cashEventId);
-    } catch (err) {
-      console.error("[writeStatusChange] INSERT failed for cashEventId:", opts.cashEventId, "error:", err instanceof Error ? err.message : String(err));
-      throw err;
-    }
-  }
-  // #endregion
 }
 
 /**
