@@ -267,6 +267,31 @@ export async function insertAttributionWithClient(
     return normalizeAttributionRow(row as MovementAttributionRow)
   }
 
+  // #region agent log - hypothesis A: constraint violation on category/cost_type/vendor_id
+  const logPayload = {
+    sessionId: 'fee5c4',
+    location: 'attribution-persist.ts:270',
+    message: 'insertAttributionWithClient: about to insert',
+    data: {
+      movementId: opts.movementId,
+      componentType: opts.component_type,
+      category: opts.category ?? null,
+      costType: opts.cost_type ?? null,
+      vendorId: opts.vendor_id ?? null,
+    },
+    timestamp: Date.now(),
+    runId: 'debug-run-1',
+    hypothesisId: 'A',
+  };
+  try {
+    await fetch('http://127.0.0.1:7742/ingest/b0bb6c9e-7e1d-4674-9db3-ac21c3d4fa72', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'fee5c4' },
+      body: JSON.stringify(logPayload),
+    }).catch(() => {});
+  } catch {}
+  // #endregion
+
   // Insert new attribution
   const result = await client.query<
     MovementAttributionRow & { gross_amount: string; net_amount: string }

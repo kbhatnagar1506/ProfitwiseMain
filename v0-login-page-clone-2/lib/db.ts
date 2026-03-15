@@ -1035,6 +1035,22 @@ export async function ensureMovementsSchema(): Promise<void> {
     const client = await pool.connect()
     try {
       await client.query("BEGIN")
+      // First, clean up any existing empty strings before adding constraints
+      await client.query(`
+        UPDATE movement_attributions
+        SET category = NULL
+        WHERE category = ''
+      `)
+      await client.query(`
+        UPDATE movement_attributions
+        SET cost_type = NULL
+        WHERE cost_type = ''
+      `)
+      await client.query(`
+        UPDATE movement_attributions
+        SET vendor_id = NULL
+        WHERE vendor_id = ''
+      `)
       // PostgreSQL doesn't support IF NOT EXISTS in ALTER TABLE ADD CONSTRAINT,
       // so we use a PL/pgSQL block to check before adding
       await client.query(`
