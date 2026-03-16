@@ -1282,63 +1282,85 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     }
     // #endregion
 
-    // Write audit log entries for all pending attributions (best-effort, never blocks)
-    const auditEntries: AuditLogEntry[] = pendingAttributions
-      .filter((opts) => opts.component_type === "ar" || opts.component_type === "ap")
-      .map((opts) => {
-        const meta = opts.metadata as Record<string, unknown> | undefined
-        return {
-          userId,
-          movementId: opts.movementId,
-          matchMethod: String(meta?.match_method ?? "waterfall"),
-          waterfallStage: meta?.waterfall_stage ? String(meta.waterfall_stage) : null,
-          confidence: typeof opts.confidence === "number" ? opts.confidence : null,
-          entityId: opts.entity_id ?? null,
-          referenceId: opts.reference_id ?? null,
-          amountMatched: typeof opts.gross_amount === "number" ? opts.gross_amount : null,
-          semanticValid: null,
-          crossEntityFlag: false,
-        }
-      })
-    await bulkWriteAuditLog(client, userId, auditEntries)
-    for (const id of touchedEventIds) {
-      const ev = eventById.get(id)
-      if (!ev) continue
-      const originalStatus = originalStatusById.get(id)
-      const originalOutstanding = originalOutstandingById.get(id)
-      if (!originalStatus || originalOutstanding === undefined) continue
-      
-      const newStatus = statusFromOutstanding(ev.outstanding_amount, ev.amount)
-      // Only log if status actually changed
-      if (newStatus !== originalStatus || Math.abs(ev.outstanding_amount - originalOutstanding) > EPS) {
-        await writeStatusChange(client, {
-          cashEventId: ev.id,
-          userId,
-          fromStatus: originalStatus,
-          toStatus: newStatus,
-          fromOutstanding: originalOutstanding,
-          toOutstanding: ev.outstanding_amount,
-          triggeredBy: "waterfall",
-          attributionId: null,
+    // #region agent log - hypothesis E: wrap post-insertion queries
+    try {
+      // Write audit log entries for all pending attributions (best-effort, never blocks)
+      const auditEntries: AuditLogEntry[] = pendingAttributions
+        .filter((opts) => opts.component_type === "ar" || opts.component_type === "ap")
+        .map((opts) => {
+          const meta = opts.metadata as Record<string, unknown> | undefined
+          return {
+            userId,
+            movementId: opts.movementId,
+            matchMethod: String(meta?.match_method ?? "waterfall"),
+            waterfallStage: meta?.waterfall_stage ? String(meta.waterfall_stage) : null,
+            confidence: typeof opts.confidence === "number" ? opts.confidence : null,
+            entityId: opts.entity_id ?? null,
+            referenceId: opts.reference_id ?? null,
+            amountMatched: typeof opts.gross_amount === "number" ? opts.gross_amount : null,
+            semanticValid: null,
+            crossEntityFlag: false,
+          }
         })
+      await bulkWriteAuditLog(client, userId, auditEntries)
+      console.log("[waterfall] bulkWriteAuditLog succeeded");
+    } catch (err) {
+      console.error("[waterfall] bulkWriteAuditLog failed:", err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+
+    try {
+      for (const id of touchedEventIds) {
+        const ev = eventById.get(id)
+        if (!ev) continue
+        const originalStatus = originalStatusById.get(id)
+        const originalOutstanding = originalOutstandingById.get(id)
+        if (!originalStatus || originalOutstanding === undefined) continue
+        
+        const newStatus = statusFromOutstanding(ev.outstanding_amount, ev.amount)
+        // Only log if status actually changed
+        if (newStatus !== originalStatus || Math.abs(ev.outstanding_amount - originalOutstanding) > EPS) {
+          await writeStatusChange(client, {
+            cashEventId: ev.id,
+            userId,
+            fromStatus: originalStatus,
+            toStatus: newStatus,
+            fromOutstanding: originalOutstanding,
+            toOutstanding: ev.outstanding_amount,
+            triggeredBy: "waterfall",
+            attributionId: null,
+          })
+        }
       }
+      console.log("[waterfall] writeStatusChange loop succeeded");
+    } catch (err) {
+      console.error("[waterfall] writeStatusChange loop failed:", err instanceof Error ? err.message : String(err));
+      throw err;
     }
-    for (const s of stage4Reviews) {
-      await client.query(
-        `UPDATE movements
-         SET metadata = COALESCE(metadata, '{}'::jsonb) ||
-           jsonb_build_object(
-             'reconciliation_waterfall_review',
+
+    try {
+      for (const s of stage4Reviews) {
+        await client.query(
+          `UPDATE movements
+           SET metadata = COALESCE(metadata, '{}'::jsonb) ||
              jsonb_build_object(
-               'remaining_cash', $2::float,
-               'queued_at', to_jsonb(NOW()::text),
-               'threshold', $3::float
+               'reconciliation_waterfall_review',
+               jsonb_build_object(
+                 'remaining_cash', $2::float,
+                 'queued_at', to_jsonb(NOW()::text),
+                 'threshold', $3::float
+               )
              )
-           )
-         WHERE id = $1::uuid`,
-        [s.movementId, s.remainingCash, STAGE4_REVIEW_THRESHOLD],
-      )
+           WHERE id = $1::uuid`,
+          [s.movementId, s.remainingCash, STAGE4_REVIEW_THRESHOLD],
+        )
+      }
+      console.log("[waterfall] stage4Reviews update succeeded");
+    } catch (err) {
+      console.error("[waterfall] stage4Reviews update failed:", err instanceof Error ? err.message : String(err));
+      throw err;
     }
+    // #endregion
     return {
       movementsProcessed: movements.length,
       attributionsCreated: pendingAttributions.length,
