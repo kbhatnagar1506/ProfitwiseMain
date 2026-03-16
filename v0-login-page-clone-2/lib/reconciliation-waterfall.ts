@@ -13,6 +13,11 @@ import { safeParseFloat } from "./utils"
 import { writeStatusChange } from "./ar-ap-status"
 import { bulkWriteAuditLog, type AuditLogEntry } from "./reconciliation-audit-log"
 import { buildSyncConfidenceBreakdown, breakdownToEnvelope } from "./confidence-scoring"
+import {
+  filterCandidatesByEntityName,
+  createEntityValidationCache,
+  type EntityValidationResult,
+} from "./reconciliation-entity-validator"
 
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
@@ -526,6 +531,9 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     })),
   )
 
+  /** Per-run cache for entity validation results — shared across all movements. */
+  const entityValidationCache = createEntityValidationCache()
+
   const pendingAttributions: CreateAttributionOpts[] = []
   const touchedEventIds = new Set<string>()
   const stage4Reviews: { movementId: string; remainingCash: number }[] = []
@@ -669,6 +677,33 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
     let entityEvents = filterForMovement(movement).sort(
       (a, b) => a.expected_date.localeCompare(b.expected_date) || a.id.localeCompare(b.id),
     )
+
+    // ─── Stage 0 (NEW): AI Semantic Entity Name Validation ───────────────────
+    // Filter candidates to only those whose entity name semantically matches the
+    // bank description. This prevents wrong-entity matches like "BOBOS" → "MUSH".
+    // Uses fast-path (string similarity) for obvious accepts/rejects, falls back
+    // to LLM for ambiguous cases. Per-run cache avoids redundant calls.
+    let entityValidationMap = new Map<string, EntityValidationResult>()
+    if (entityEvents.length > 0) {
+      const bankDescForValidation = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description
+      if (bankDescForValidation) {
+        const validationResult = await filterCandidatesByEntityName(
+          bankDescForValidation,
+          entityEvents,
+          entityValidationCache
+        )
+        entityEvents = validationResult.accepted
+        entityValidationMap = validationResult.validationMap
+        if (validationResult.rejected.length > 0) {
+          console.log(
+            `[waterfall:entity-filter] movement=${movement.id} bank="${bankDescForValidation}" ` +
+            `rejected ${validationResult.rejected.length} candidates: ` +
+            validationResult.rejected.map(r => `${r.event.entity_id}(${r.reason})`).join(", ")
+          )
+        }
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // #region agent log
     const nCand = entityEvents.length
@@ -958,8 +993,9 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
 
     // --- Stage 3: FIFO ---
     // Prioritize open events first, then paid events for historical matching
-    const feeAssumed =
-      isInflow && isProcessorLikeMovement(movement) && targetType === "ar" ? 0.03 : 0
+    // Dynamic fee detection: calculate actual implied fee % per candidate event
+    // rather than assuming a static 3%. Reject matches with fee > 8% as likely wrong entity.
+    const isProcessorMovement = isInflow && isProcessorLikeMovement(movement) && targetType === "ar"
     const openEvents = entityEvents.filter((e) => e.status !== "paid" && e.outstanding_amount > EPS)
     const paidEvents = entityEvents.filter((e) => e.status === "paid")
     const sortedEvents = [...openEvents, ...paidEvents]
@@ -970,6 +1006,24 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       const isHistoricalFifo = event.status === "paid"
       const eventAmount = isHistoricalFifo ? event.amount : event.outstanding_amount
       if (eventAmount <= EPS) continue
+
+      // Dynamic fee calculation for this specific candidate
+      // If movement is from a processor and bank < invoice, detect actual fee %
+      let feeAssumed = 0
+      if (isProcessorMovement && remainingCash < eventAmount && eventAmount > 0) {
+        const impliedFee = (eventAmount - remainingCash) / eventAmount
+        if (impliedFee >= 0.005 && impliedFee <= 0.08) {
+          // Plausible processor fee (0.5% – 8%)
+          feeAssumed = impliedFee
+        } else if (impliedFee > 0.08) {
+          // Fee too high — likely wrong entity, skip this candidate
+          console.log(
+            `[waterfall:fee-reject] movement=${movement.id} event=${event.id} ` +
+            `implied_fee=${(impliedFee * 100).toFixed(1)}% > 8% — skipping`
+          )
+          continue
+        }
+      }
 
       // ─── Phase 3: Greedy Sweep Guards ──
       const currentMatchCount = getMovementMatchCount(movement.id)
@@ -1001,7 +1055,13 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         const netApplied = feeAssumed > 0 ? gross * (1 - feeAssumed) : gross
         const feeAmt = Math.max(0, gross - netApplied)
         const catAdj = computeCategoryConfidenceAdjust(econ, event.metadata)
-        const fifoConfidence = Math.min(0.92, Math.max(0.50, 0.82 + catAdj.adjustment + countPenalty))
+        // Factor in entity validation confidence: boost if AI confirmed, no change if fallback
+        const entityValidation = entityValidationMap.get(event.entity_id)
+        const entityValidationBoost =
+          entityValidation?.method === "llm_accept" ? 0.05
+          : entityValidation?.method === "fast_accept" ? 0.03
+          : 0
+        const fifoConfidence = Math.min(0.95, Math.max(0.50, 0.82 + catAdj.adjustment + countPenalty + entityValidationBoost))
         // Phase 7: Build confidence breakdown for JSONB storage
         const entityNameForConf = (event.metadata?.customer_name ?? event.metadata?.vendor_name ?? event.entity_id ?? "") as string
         const fifoBreakdown = buildSyncConfidenceBreakdown({
@@ -1015,6 +1075,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           matchSequenceIndex: currentMatchCount,
           waterfallStage: isHistoricalFifo ? "fifo_historical" : "fifo",
           matchMethod: "tolerance",
+          entityValidationConfidence: entityValidation?.confidence,
         })
         pushAttr({
           userId,
@@ -1036,6 +1097,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             is_historical_reconciliation: isHistoricalFifo,
             category_adjustment: catAdj.adjustment !== 0 ? catAdj : undefined,
             match_sequence: currentMatchCount + 1,
+            entity_validation_confidence: entityValidation?.confidence ?? null,
+            entity_validation_method: entityValidation?.method ?? null,
           },
           confidenceEnvelope: breakdownToEnvelope(fifoBreakdown) as any,
           category: catAdj.movCategory ?? undefined,
@@ -1055,6 +1118,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             source: "rule",
             metadata: {
               fee_amount: feeAmt,
+              fee_pct: feeAssumed > 0 ? parseFloat((feeAssumed * 100).toFixed(2)) : null,
               match_method: "tolerance",
               waterfall_stage: isHistoricalFifo ? "fifo_fee_historical" : "fifo_fee",
               is_historical_reconciliation: isHistoricalFifo,
@@ -1077,7 +1141,12 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         const netApplied = feeAssumed > 0 ? grossApplied * (1 - feeAssumed) : grossApplied
         const feeAmt = Math.max(0, grossApplied - netApplied)
         const catAdjPartial = computeCategoryConfidenceAdjust(econ, event.metadata)
-        const fifoPartialConf = Math.min(0.90, Math.max(0.50, 0.80 + catAdjPartial.adjustment + countPenalty))
+        const entityValidationPartial = entityValidationMap.get(event.entity_id)
+        const entityValidationBoostPartial =
+          entityValidationPartial?.method === "llm_accept" ? 0.05
+          : entityValidationPartial?.method === "fast_accept" ? 0.03
+          : 0
+        const fifoPartialConf = Math.min(0.92, Math.max(0.50, 0.80 + catAdjPartial.adjustment + countPenalty + entityValidationBoostPartial))
         // Phase 7: Build confidence breakdown for partial match
         const entityNameForPartial = (event.metadata?.customer_name ?? event.metadata?.vendor_name ?? event.entity_id ?? "") as string
         const fifoPartialBreakdown = buildSyncConfidenceBreakdown({
@@ -1091,6 +1160,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           matchSequenceIndex: currentMatchCount,
           waterfallStage: isHistoricalFifo ? "fifo_partial_historical" : "fifo_partial",
           matchMethod: "tolerance",
+          entityValidationConfidence: entityValidationPartial?.confidence,
         })
         pushAttr({
           userId,
@@ -1112,6 +1182,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
             is_historical_reconciliation: isHistoricalFifo,
             category_adjustment: catAdjPartial.adjustment !== 0 ? catAdjPartial : undefined,
             match_sequence: currentMatchCount + 1,
+            entity_validation_confidence: entityValidationPartial?.confidence ?? null,
+            entity_validation_method: entityValidationPartial?.method ?? null,
           },
           confidenceEnvelope: breakdownToEnvelope(fifoPartialBreakdown) as any,
           category: catAdjPartial.movCategory ?? undefined,

@@ -95,7 +95,7 @@ async function getPoolAsync(): Promise<Pool | null> {
         })
       }
       pool = p
-      return pool
+  return pool
     })()
   }
   return poolPromise
@@ -1795,24 +1795,33 @@ export async function ensureUserDecisionsSchema() {
   try {
     const result = await p.query(`
       CREATE TABLE IF NOT EXISTS reconciliation_audit_log (
-        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id           UUID REFERENCES users(id) ON DELETE CASCADE,
-        movement_id       UUID REFERENCES movements(id) ON DELETE SET NULL,
-        match_method      TEXT NOT NULL,
-        waterfall_stage   TEXT,
-        confidence        REAL,
-        entity_id         TEXT,
-        reference_id      TEXT,
-        amount_matched    NUMERIC,
-        semantic_valid    BOOLEAN,
-        cross_entity_flag BOOLEAN DEFAULT false,
-        created_at        TIMESTAMPTZ DEFAULT NOW()
+        id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id                     UUID REFERENCES users(id) ON DELETE CASCADE,
+        movement_id                 UUID REFERENCES movements(id) ON DELETE SET NULL,
+        match_method                TEXT NOT NULL,
+        waterfall_stage             TEXT,
+        confidence                  REAL,
+        entity_id                   TEXT,
+        reference_id                TEXT,
+        amount_matched              NUMERIC,
+        semantic_valid              BOOLEAN,
+        cross_entity_flag           BOOLEAN DEFAULT false,
+        entity_validation_confidence REAL,
+        entity_validation_method    TEXT,
+        created_at                  TIMESTAMPTZ DEFAULT NOW()
       )
     `)
     console.log("[DB] reconciliation_audit_log table created/verified, result:", result.command);
   } catch (err) {
     console.error("[DB] reconciliation_audit_log creation failed:", err instanceof Error ? err.message : String(err));
     throw err;
+  }
+  // Add new columns to existing tables via ALTER TABLE IF NOT EXISTS (idempotent)
+  try {
+    await p.query(`ALTER TABLE reconciliation_audit_log ADD COLUMN IF NOT EXISTS entity_validation_confidence REAL`)
+    await p.query(`ALTER TABLE reconciliation_audit_log ADD COLUMN IF NOT EXISTS entity_validation_method TEXT`)
+  } catch {
+    // Ignore — columns may already exist
   }
   console.log("[DB] Creating reconciliation_audit_log indexes...");
   try {
