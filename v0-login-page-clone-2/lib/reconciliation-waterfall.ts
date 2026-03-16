@@ -16,6 +16,7 @@ import { buildSyncConfidenceBreakdown, breakdownToEnvelope } from "./confidence-
 import {
   filterCandidatesByEntityName,
   createEntityValidationCache,
+  recordConfirmedBankPattern,
   type EntityValidationResult,
 } from "./reconciliation-entity-validator"
 
@@ -690,7 +691,8 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         const validationResult = await filterCandidatesByEntityName(
           bankDescForValidation,
           entityEvents,
-          entityValidationCache
+          entityValidationCache,
+          userId
         )
         entityEvents = validationResult.accepted
         entityValidationMap = validationResult.validationMap
@@ -844,6 +846,12 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         usedPaidEventIds.add(directLinkMatch.id)
       }
       touchedEventIds.add(directLinkMatch.id)
+      // Write-back confirmed bank pattern to Supermemory (highest confidence match)
+      const bankDescS0 = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description
+      if (bankDescS0) {
+        const entityNameS0 = (directLinkMatch.metadata?.customer_name ?? directLinkMatch.metadata?.vendor_name ?? "") as string
+        void recordConfirmedBankPattern(userId, directLinkMatch.entity_id, entityNameS0, bankDescS0)
+      }
       continue
     }
 
@@ -1135,6 +1143,13 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         }
         touchedEventIds.add(event.id)
         fifoTouched = true
+        // Write-back: record the bank description as a confirmed pattern for this entity
+        // This builds up Supermemory over time so future runs take the fast memory path
+        const bankDescForWriteBack = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description
+        if (bankDescForWriteBack) {
+          const entityNameForWB = (event.metadata?.customer_name ?? event.metadata?.vendor_name ?? "") as string
+          void recordConfirmedBankPattern(userId, event.entity_id, entityNameForWB, bankDescForWriteBack)
+        }
       } else {
         const rawGross = feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash
         const grossApplied = Math.min(rawGross, eventAmount)
@@ -1218,6 +1233,12 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
           usedPaidEventIds.add(event.id)
         }
         touchedEventIds.add(event.id)
+        // Write-back: record bank description pattern even for partial matches
+        const bankDescForWBPartial = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description
+        if (bankDescForWBPartial) {
+          const entityNameForWBPartial = (event.metadata?.customer_name ?? event.metadata?.vendor_name ?? "") as string
+          void recordConfirmedBankPattern(userId, event.entity_id, entityNameForWBPartial, bankDescForWBPartial)
+        }
         remainingCash = 0
         fifoTouched = true
         break
