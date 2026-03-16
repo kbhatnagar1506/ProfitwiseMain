@@ -696,13 +696,6 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         )
         entityEvents = validationResult.accepted
         entityValidationMap = validationResult.validationMap
-        if (validationResult.rejected.length > 0) {
-          console.log(
-            `[waterfall:entity-filter] movement=${movement.id} bank="${bankDescForValidation}" ` +
-            `rejected ${validationResult.rejected.length} candidates: ` +
-            validationResult.rejected.map(r => `${r.event.entity_id}(${r.reason})`).join(", ")
-          )
-        }
       }
     }
     // ─────────────────────────────────────────────────────────────────────────

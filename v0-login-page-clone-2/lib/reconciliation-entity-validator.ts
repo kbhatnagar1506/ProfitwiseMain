@@ -39,9 +39,27 @@ const LLM_MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
 const ENTITY_FILTER_ENABLED =
   (process.env.RECONCILIATION_ENTITY_FILTER ?? "true") === "true"
 
-const FAST_PATH_ACCEPT_THRESHOLD = 0.72
-const FAST_PATH_REJECT_THRESHOLD = 0.10
+const FAST_PATH_ACCEPT_THRESHOLD = 0.65
+const FAST_PATH_REJECT_THRESHOLD = 0.08
 const MAX_CANDIDATES_PER_LLM_CALL = 20
+
+// Generic / mechanical bank descriptions that carry no entity name signal.
+// When the bank description matches these patterns, skip entity filtering entirely —
+// the existing matchesEntity() filtering in filterForMovement is sufficient.
+const GENERIC_BANK_DESC_PATTERNS = [
+  /^(mobile\s+deposit|deposit|wire transfer|incoming wire|transfer|zelle|ach credit|ach debit|preauthorized ach|preauth)/i,
+  /^(interest\s+(credit|paid)|miscellaneous\s+(credit|debit))/i,
+  /^(order\s+id\s*:?\s*\d+|order\s+#)/i,
+  /\b(bill\.com|shopify|paypal|venmo)\b/i,
+  // ACH with long reference codes — entity name is buried in suffix, not the primary signal
+  /preauthorized\s+ach\s+(credit|debit)\s+\S+/i,
+]
+
+function hasEntitySignal(bankDescription: string): boolean {
+  if (!bankDescription || bankDescription.trim().length < 3) return false
+  const trimmed = bankDescription.trim()
+  return !GENERIC_BANK_DESC_PATTERNS.some((p) => p.test(trimmed))
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -263,9 +281,14 @@ Rules:
 - Processor prefixes ("SP ", "ACH ", "PREAUTHORIZED ACH ") are common and should be ignored when matching
 - "Neve Foods" does NOT match "Think Jerky" — completely different vendors
 - "Harmless Harvest" does NOT match "Belle's Gourmet Popcorn" — different vendors
+- IMPORTANT: "Bryant Novick" MATCHES "Bryant Novick (UAB Football)" — the part in parentheses is just an org qualifier, not a different person
+- IMPORTANT: "Sarah Katz" MATCHES "Sarah Katz (Marlins)" — parenthetical is just context
+- IMPORTANT: "David Vaugh" MATCHES "David Vaugh (Troubadour)" — typos and parentheticals are fine
+- When entity name starts with or contains the bank description as a significant substring → YES
 - Match by VENDOR/CUSTOMER NAME ONLY, ignore amounts and dates
 - If memory context says this bank description maps to a canonical name, trust it
-- When truly uncertain, return false (prefer precision)
+- When truly uncertain about completely different names, return false (prefer precision)
+- When the bank desc is a person's name, match any entity with the same surname+given name regardless of org suffix
 
 Respond ONLY with valid JSON (no markdown):
 {"matches": {"<entity_id>": true_or_false, ...}}`
@@ -327,6 +350,14 @@ Respond ONLY with valid JSON (no markdown):
 
 // ─── Fast-path: pure string similarity ────────────────────────────────────────
 
+/**
+ * Strip parenthetical organization qualifiers: "Bryant Novick (UAB Football)" → "Bryant Novick"
+ * These are contact metadata, not part of the person/vendor name itself.
+ */
+function stripOrgQualifier(s: string): string {
+  return s.replace(/\s*\([^)]*\)\s*$/, "").trim()
+}
+
 function fastPathValidate(
   bankDescription: string,
   candidate: CandidateEntity
@@ -334,7 +365,7 @@ function fastPathValidate(
   const bankLow = bankDescription.toLowerCase().trim()
   const nameLow = candidate.display_name.toLowerCase().trim()
 
-  // Exact substring match
+  // Exact substring match (both directions)
   if (bankLow.includes(nameLow) && nameLow.length >= 4) {
     return { isValid: true, confidence: 0.97, reason: "Exact substring match" }
   }
@@ -342,12 +373,29 @@ function fastPathValidate(
     return { isValid: true, confidence: 0.95, reason: "Entity contains bank description" }
   }
 
+  // Strip parenthetical org qualifiers: "Bryant Novick (UAB Football)" → "Bryant Novick"
+  // This is the most common false-rejection case.
+  const nameCore = stripOrgQualifier(nameLow)
+  const bankCore = stripOrgQualifier(bankLow)
+
+  if (nameCore && nameCore.length >= 4) {
+    if (bankLow.includes(nameCore)) {
+      return { isValid: true, confidence: 0.95, reason: "Core name (no org) is substring of bank" }
+    }
+    if (nameCore.includes(bankCore) && bankCore.length >= 4) {
+      return { isValid: true, confidence: 0.95, reason: "Bank is substring of core name (no org)" }
+    }
+    if (bankCore.includes(nameCore)) {
+      return { isValid: true, confidence: 0.93, reason: "Core name substring of bank (no org)" }
+    }
+  }
+
   // Strip common bank prefixes + corporate suffixes
-  const bankStripped = bankLow
+  const bankStripped = bankCore
     .replace(/^(sp|ach|wire|preauthorized|preauth|pos|chk|check|debit|credit|deposit)\s+/i, "")
     .replace(/\s*(inc|llc|ltd|corp|co|wholesale|foods?|group)\b/gi, "")
     .trim()
-  const nameStripped = nameLow
+  const nameStripped = nameCore
     .replace(/\s*(inc|llc|ltd|corp|co|wholesale|foods?|group)\b/gi, "")
     .trim()
 
@@ -360,17 +408,23 @@ function fastPathValidate(
     }
   }
 
-  // Combined similarity score
-  const simScore = entityNameSimilarity(bankDescription, candidate.display_name)
+  // Combined similarity score — compare stripped versions for better accuracy
+  const simScore = Math.max(
+    entityNameSimilarity(bankDescription, candidate.display_name),
+    entityNameSimilarity(bankCore || bankLow, nameCore || nameLow)
+  )
   const levScore = levenshteinSimilarity(
-    bankStripped || bankLow,
-    nameStripped || nameLow
+    bankStripped || bankCore || bankLow,
+    nameStripped || nameCore || nameLow
   )
 
   // Check aliases
   let bestAliasScore = 0
   for (const alias of candidate.aliases ?? []) {
-    const aliasSim = entityNameSimilarity(bankDescription, alias)
+    const aliasSim = Math.max(
+      entityNameSimilarity(bankDescription, alias),
+      entityNameSimilarity(bankCore || bankLow, stripOrgQualifier(alias.toLowerCase()))
+    )
     if (aliasSim > bestAliasScore) bestAliasScore = aliasSim
   }
 
@@ -551,32 +605,63 @@ export async function filterCandidatesByEntityName<
   rejected: Array<{ event: T; reason: string; confidence: number }>
   validationMap: Map<string, EntityValidationResult>
 }> {
+  // No bank description or no candidates → pass everything through
   if (!bankDescription || candidates.length === 0) {
+    return { accepted: candidates, rejected: [], validationMap: new Map() }
+  }
+
+  // If the bank description is a generic/mechanical string with no entity name signal
+  // (e.g. "PREAUTHORIZED ACH CREDIT ...", "MOBILE DEPOSIT", "DEPOSIT"), skip filtering.
+  // The existing matchesEntity() in filterForMovement is sufficient for these.
+  if (!hasEntitySignal(bankDescription)) {
     return { accepted: candidates, rejected: [], validationMap: new Map() }
   }
 
   const entityList: CandidateEntity[] = candidates.map((c) => {
     const meta = (c.metadata ?? {}) as Record<string, unknown>
+    // Extract best available display name — fall back to undefined (not entity_id)
+    // so that when metadata is missing we skip validation (accept) rather than reject
     const displayName =
-      (typeof meta.customer_name === "string" ? meta.customer_name : null) ??
-      (typeof meta.vendor_name === "string" ? meta.vendor_name : null) ??
-      (typeof meta.canonical_name === "string" ? meta.canonical_name : null) ??
-      c.entity_id
+      (typeof meta.customer_name === "string" && meta.customer_name ? meta.customer_name : null) ??
+      (typeof meta.vendor_name === "string" && meta.vendor_name ? meta.vendor_name : null) ??
+      (typeof meta.canonical_name === "string" && meta.canonical_name ? meta.canonical_name : null) ??
+      null
 
-    return { entity_id: c.entity_id, display_name: displayName }
+    // If we can't extract a name, we can't validate — use entity_id as marker
+    // so we know to skip validation for this candidate (accept it)
+    return {
+      entity_id: c.entity_id,
+      display_name: displayName ?? c.entity_id,
+      _skipValidation: displayName === null,
+    } as CandidateEntity & { _skipValidation: boolean }
   })
 
-  const validationMap = await validateEntitiesForBankDescription(
-    bankDescription,
-    entityList,
-    runCache,
-    userId
-  )
+  // Separate candidates we can validate from those we cannot (no display name)
+  const validatable = entityList.filter((e) => !(e as unknown as Record<string, unknown>)._skipValidation)
+  const skipValidation = entityList.filter((e) => !!(e as unknown as Record<string, unknown>)._skipValidation)
+
+  let validationMap = new Map<string, EntityValidationResult>()
+
+  if (validatable.length > 0) {
+    validationMap = await validateEntitiesForBankDescription(
+      bankDescription,
+      validatable,
+      runCache,
+      userId
+    )
+  }
 
   const accepted: T[] = []
   const rejected: Array<{ event: T; reason: string; confidence: number }> = []
 
   for (const candidate of candidates) {
+    const isSkipped = skipValidation.some(s => s.entity_id === candidate.entity_id)
+    if (isSkipped) {
+      // No display name → can't validate → accept (don't silently drop)
+      accepted.push(candidate)
+      continue
+    }
+
     const validation = validationMap.get(candidate.entity_id)
     const isValid = validation?.isValid ?? true
 
@@ -594,11 +679,26 @@ export async function filterCandidatesByEntityName<
         reason: validation?.reason ?? "Entity validation failed",
         confidence: validation?.confidence ?? 0,
       })
-      console.log(
-        `[EntityValidator] Rejected entity=${candidate.entity_id} ` +
-          `method=${validation?.method} reason="${validation?.reason}" bank="${bankDescription}"`
-      )
     }
+  }
+
+  // Safety net: if the validator rejected EVERYTHING (including candidates with valid names),
+  // it's a sign the validator is being too aggressive. Revert to the original candidate list
+  // so reconciliation can still proceed via amount matching.
+  if (accepted.length === 0 && candidates.length > 0) {
+    console.log(
+      `[EntityValidator:fallback] All ${candidates.length} candidates rejected for bank="${bankDescription}" — reverting to original list to prevent full miss`
+    )
+    return { accepted: candidates, rejected: [], validationMap }
+  }
+
+  if (rejected.length > 0) {
+    console.log(
+      `[waterfall:entity-filter] bank="${bankDescription}" ` +
+      `accepted=${accepted.length} rejected=${rejected.length} candidates: ` +
+      rejected.slice(0, 10).map(r => `${r.event.entity_id}(${r.reason})`).join(", ") +
+      (rejected.length > 10 ? ` ... +${rejected.length - 10} more` : "")
+    )
   }
 
   return { accepted, rejected, validationMap }

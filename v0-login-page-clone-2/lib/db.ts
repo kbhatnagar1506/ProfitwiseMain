@@ -868,6 +868,8 @@ export async function ensureMovementsSchema(): Promise<void> {
   if (!p) return
   await ensureAuthSchema()
   await ensureIdentitySchema()
+  // Ensure user decisions/audit tables are created (contains reconciliation_audit_log)
+  await ensureUserDecisionsSchema()
 
   // Ensure the migration versioning table exists before any numbered migrations
   await ensureMigrationTable(p)
