@@ -17,6 +17,7 @@
 
 import { runReconciliationWaterfall } from "./reconciliation-waterfall"
 import { runLLMStage4, getAllUnreconciledMovements, type InvoiceForMatch, type BillForMatch } from "./reconciliation-llm-match"
+import { runFusionReconciliation } from "./reconciliation-fusion-engine"
 import { fetchInvoicesForReconciliation } from "./invoices-fetch"
 import { fetchBillsForReconciliation } from "./bills-fetch"
 import { toEntityUriApBill } from "./entity-uri"
@@ -43,21 +44,31 @@ export interface FullReconciliationResult {
 /**
  * Run the complete reconciliation pipeline for a user.
  *
- * Phase C (Weeks 6-7): Stage 4 is DISABLED by default for the initial
- * deterministic-only rollout. Set ENABLE_LLM_STAGE4=true in env to enable.
+ * Supports two engines:
+ * - RECONCILIATION_ENGINE=fusion: New parallel fusion engine (Math + AI + Memory)
+ * - RECONCILIATION_ENGINE=waterfall (default): Sequential waterfall stages 0-4
  *
- * Phase E (Weeks 15-16): Stage 4 will be enabled for all users once the
- * LLM hardening from Phase A+D is fully validated.
+ * Phase C/E: Stage 4 gating — disabled by default, enabled via env flag
  */
 export async function runFullReconciliation(userId: string): Promise<FullReconciliationResult> {
   const startTime = Date.now()
   const warnings: string[] = []
 
-  // Phase C/E: Stage 4 gating — disabled by default, enabled via env flag
+  // Check which engine to use
+  const engine = process.env.RECONCILIATION_ENGINE ?? "waterfall"
   const stage4Enabled = process.env.ENABLE_LLM_STAGE4 === "true"
 
   try {
-    console.log("[full-reconciliation] Starting unified reconciliation for user:", userId, `stage4=${stage4Enabled}`)
+    console.log("[full-reconciliation] Starting reconciliation for user:", userId, `engine=${engine} stage4=${stage4Enabled}`)
+
+    // Route to appropriate engine
+    if (engine === "fusion") {
+      console.log("[full-reconciliation] Using FUSION engine")
+      return await runFusionReconciliation(userId)
+    }
+
+    // Default: waterfall engine
+    console.log("[full-reconciliation] Using WATERFALL engine")
 
     // ─── Stage 0-3: Deterministic Waterfall ───────────────────────────────────
     const waterfallStart = Date.now()
