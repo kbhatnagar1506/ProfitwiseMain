@@ -852,13 +852,17 @@ export async function ensureMovementsSchema(): Promise<void> {
     if (p) {
       try {
         await p.query("SELECT 1 FROM reconciliation_audit_log LIMIT 1")
+        // Table exists, we're good
+        return
       } catch (err) {
-        // Table doesn't exist, reset flag and continue
+        // Table doesn't exist, reset flag and continue to create it
         console.log("[DB] reconciliation_audit_log missing, resetting schema flag");
         movementsSchemaEnsured = false
       }
+    } else {
+      // No pool, can't check, assume we're good
+      return
     }
-    if (movementsSchemaEnsured) return
   }
   const p = await getPoolAsync()
   if (!p) return
