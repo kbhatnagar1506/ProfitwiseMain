@@ -80,6 +80,9 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
 
     // Build entity lookup
     const eventsByEntity = new Map<string, MutableCashEvent[]>()
+    if (!Array.isArray(cashEvents)) {
+      throw new Error(`cashEvents is not an array: ${typeof cashEvents}`)
+    }
     for (const event of cashEvents) {
       if (!eventsByEntity.has(event.entity_id)) {
         eventsByEntity.set(event.entity_id, [])
@@ -716,6 +719,10 @@ async function fetchMovementsWithAvailableCash(userId: string): Promise<Movement
   )
 
   const rows = result.rows || []
+  if (!Array.isArray(rows)) {
+    console.error("[fusion-engine] fetchMovementsWithAvailableCash: rows is not an array:", typeof rows)
+    return []
+  }
   return rows.map((r) => ({
     ...r,
     amount: safeParseFloat(r.amount),
@@ -742,6 +749,10 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
   )
 
   const rows = result.rows || []
+  if (!Array.isArray(rows)) {
+    console.error("[fusion-engine] loadOpenCashEvents: rows is not an array:", typeof rows)
+    return []
+  }
   return rows.map((r) => ({
     id: r.id,
     user_id: r.user_id,
