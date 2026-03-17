@@ -20,7 +20,7 @@ import { buildSyncConfidenceBreakdown, breakdownToEnvelope } from "./confidence-
 import { recordConfirmedBankPattern } from "./reconciliation-entity-validator"
 import { writeStatusChange } from "./ar-ap-status"
 import { bulkWriteAuditLog, type AuditLogEntry } from "./reconciliation-audit-log"
-import { resolveReconciliationBankLabelsForMatch } from "./display-name-resolve"
+import { resolveReconciliationBankLabelsForMatch, type DisplayNameInput } from "./display-name-resolve"
 import { entityNameSimilarity } from "./levenshtein"
 import { safeParseFloat } from "./utils"
 import { getAllUnreconciledMovements } from "./reconciliation-llm-match"
@@ -78,11 +78,18 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
 
     console.log(`[fusion-engine] Loaded ${movements.length} movements, ${cashEvents.length} cash events`)
 
+    // Bulk-resolve bank display labels for all movements at once (single DB round-trip)
+    const bankLabelInputs: DisplayNameInput[] = movements.map((m) => ({
+      movement_id: m.id,
+      user_id: m.user_id,
+      counterparty: m.counterparty,
+      counterparty_entity_id: m.counterparty_entity_id,
+    }))
+    const bankLabelMap = await resolveReconciliationBankLabelsForMatch(bankLabelInputs)
+    console.log(`[fusion-engine] Resolved ${bankLabelMap.size} bank labels`)
+
     // Build entity lookup
     const eventsByEntity = new Map<string, MutableCashEvent[]>()
-    if (!Array.isArray(cashEvents)) {
-      throw new Error(`cashEvents is not an array: ${typeof cashEvents}`)
-    }
     for (const event of cashEvents) {
       if (!eventsByEntity.has(event.entity_id)) {
         eventsByEntity.set(event.entity_id, [])
@@ -99,7 +106,9 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
       if (movement.available_cash <= EPS) continue
 
       const targetType = movement.direction === "inflow" ? "ar" : "ap"
-      const resolvedBankForMove = await resolveReconciliationBankLabelsForMatch(movement.id)
+      // Look up pre-resolved bank label from bulk-loaded map
+      const resolvedLabel = bankLabelMap.get(movement.id)
+      const resolvedBankForMove = resolvedLabel?.display_name ?? movement.counterparty ?? movement.raw_description
 
       // ─── Phase 1: Fast-Path (Direct Link + Exact Match) ───
       const fastPathResult = tryFastPath(movement, cashEvents, eventsByEntity, targetType, resolvedBankForMove)
@@ -719,10 +728,6 @@ async function fetchMovementsWithAvailableCash(userId: string): Promise<Movement
   )
 
   const rows = result.rows || []
-  if (!Array.isArray(rows)) {
-    console.error("[fusion-engine] fetchMovementsWithAvailableCash: rows is not an array:", typeof rows)
-    return []
-  }
   return rows.map((r) => ({
     ...r,
     amount: safeParseFloat(r.amount),
@@ -749,10 +754,6 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
   )
 
   const rows = result.rows || []
-  if (!Array.isArray(rows)) {
-    console.error("[fusion-engine] loadOpenCashEvents: rows is not an array:", typeof rows)
-    return []
-  }
   return rows.map((r) => ({
     id: r.id,
     user_id: r.user_id,
