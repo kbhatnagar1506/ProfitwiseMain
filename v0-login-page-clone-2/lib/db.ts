@@ -1774,22 +1774,27 @@ export async function ensureUserDecisionsSchema() {
   )
 
   // Reconciliation audit log — lightweight per-match decision record
-  await p.query(`
-    CREATE TABLE IF NOT EXISTS reconciliation_audit_log (
-      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id           UUID REFERENCES users(id) ON DELETE CASCADE,
-      movement_id       UUID REFERENCES movements(id) ON DELETE SET NULL,
-      match_method      TEXT NOT NULL,
-      waterfall_stage   TEXT,
-      confidence        REAL,
-      entity_id         TEXT,
-      reference_id      TEXT,
-      amount_matched    NUMERIC,
-      semantic_valid    BOOLEAN,
-      cross_entity_flag BOOLEAN DEFAULT false,
-      created_at        TIMESTAMPTZ DEFAULT NOW()
-    )
-  `)
+  try {
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS reconciliation_audit_log (
+        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id           UUID REFERENCES users(id) ON DELETE CASCADE,
+        movement_id       UUID REFERENCES movements(id) ON DELETE SET NULL,
+        match_method      TEXT NOT NULL,
+        waterfall_stage   TEXT,
+        confidence        REAL,
+        entity_id         TEXT,
+        reference_id      TEXT,
+        amount_matched    NUMERIC,
+        semantic_valid    BOOLEAN,
+        cross_entity_flag BOOLEAN DEFAULT false,
+        created_at        TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    console.log("[DB] reconciliation_audit_log table created/verified");
+  } catch (err) {
+    console.error("[DB] reconciliation_audit_log creation failed:", err instanceof Error ? err.message : String(err));
+  }
   await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_user ON reconciliation_audit_log (user_id, created_at DESC)")
   await p.query("CREATE INDEX IF NOT EXISTS idx_audit_log_movement ON reconciliation_audit_log (movement_id)")
 
@@ -1824,4 +1829,5 @@ export async function ensureUserDecisionsSchema() {
     CREATE INDEX IF NOT EXISTS idx_reconciliation_metrics_user_metric
       ON reconciliation_metrics (user_id, metric_name, created_at DESC)
   `)
+  movementsSchemaEnsured = true
 }
