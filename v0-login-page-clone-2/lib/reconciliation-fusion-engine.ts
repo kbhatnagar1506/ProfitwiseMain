@@ -452,6 +452,8 @@ function scoreMemory(
  * Judge B: AI Semantic Scoring (batched)
  * Uses GPT-4o to score entity name similarity for each candidate
  */
+const AI_BATCH_SIZE = 8 // max candidates per LLM call to keep prompts small
+
 async function scoreAIBatch(
   movement: MovementWithAvailableCash,
   candidates: MutableCashEvent[],
@@ -469,16 +471,19 @@ async function scoreAIBatch(
   const bankDesc = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description ?? "Unknown"
   if (!bankDesc) return scores
 
-  try {
-    // Build candidate list with IDs for mapping
-    const candidateList = candidates
-      .map((c, idx) => {
-        const name = (c.metadata?.customer_name ?? c.metadata?.vendor_name ?? c.entity_id) as string
-        return `${idx + 1}. ${name} (amount: $${c.outstanding_amount.toFixed(2)})`
-      })
-      .join("\n")
+  // Chunk candidates to avoid oversized prompts causing ECONNRESET
+  for (let chunkStart = 0; chunkStart < candidates.length; chunkStart += AI_BATCH_SIZE) {
+    const chunk = candidates.slice(chunkStart, chunkStart + AI_BATCH_SIZE)
 
-    const prompt = `You are a financial reconciliation expert. Given a bank transaction description and a list of potential matches, score each candidate's likelihood of being the correct match.
+    try {
+      const candidateList = chunk
+        .map((c, idx) => {
+          const name = (c.metadata?.customer_name ?? c.metadata?.vendor_name ?? c.entity_id) as string
+          return `${idx + 1}. ${name} (amount: $${c.outstanding_amount.toFixed(2)})`
+        })
+        .join("\n")
+
+      const prompt = `You are a financial reconciliation expert. Given a bank transaction description and a list of potential matches, score each candidate's likelihood of being the correct match.
 
 Bank Transaction: "${bankDesc}"
 Amount: $${movement.available_cash.toFixed(2)}
@@ -493,46 +498,47 @@ Consider:
 - Whether the bank description could plausibly refer to this entity
 
 Return ONLY a JSON object with numeric indices as keys and scores as values, like:
-{"1": 0.95, "2": 0.15, "3": 0.42}
+{"1": 0.95, "2": 0.15, "3": 0.42}`
 
-No explanation, no markdown, just JSON.`
-
-    const response = await callLLMForScoring(prompt)
-    if (response) {
-      try {
-        // Strip markdown code fences if model wraps response despite response_format instruction
-        const cleaned = response.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim()
-        const parsed = JSON.parse(cleaned)
-        for (let i = 0; i < candidates.length; i++) {
-          const score = parsed[String(i + 1)]
-          if (typeof score === "number" && score >= 0 && score <= 1) {
-            scores.set(candidates[i].id, score)
+      const response = await callLLMForScoring(prompt)
+      if (response) {
+        try {
+          // Strip markdown code fences if model ignores response_format
+          const cleaned = response.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim()
+          const parsed = JSON.parse(cleaned)
+          for (let i = 0; i < chunk.length; i++) {
+            const score = parsed[String(i + 1)]
+            if (typeof score === "number" && score >= 0 && score <= 1) {
+              scores.set(chunk[i].id, score)
+            }
           }
+        } catch (parseErr) {
+          console.error("[fusion-engine] Failed to parse AI scores:", parseErr)
         }
-      } catch (parseErr) {
-        console.error("[fusion-engine] Failed to parse AI scores:", parseErr)
       }
+    } catch (err) {
+      console.error("[fusion-engine] AI scoring error for chunk:", err)
+      // Leave defaults (0.5) for this chunk and continue
     }
-  } catch (err) {
-    console.error("[fusion-engine] AI scoring error:", err)
   }
 
   return scores
 }
 
 /**
- * Call LLM for scoring with circuit breaker and rate limiting
+ * Call LLM for scoring with circuit breaker, rate limiting, and retry on transient errors
  */
-async function callLLMForScoring(prompt: string): Promise<string | null> {
+async function callLLMForScoring(prompt: string, attempt = 1): Promise<string | null> {
   const API_KEY = process.env.FORECAST_LLM_API_KEY ?? process.env.OPENAI_API_KEY
   const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
-  const MODEL = process.env.OPENAI_COMPANY_CONTEXT_MODEL ?? "gpt-4o"
+  // Use gpt-4o-mini for scoring — fast, cheap, accurate enough for 8-candidate batches
+  const MODEL = process.env.RECON_SCORING_MODEL ?? "gpt-4o-mini"
 
   if (!API_KEY) return null
 
   try {
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 30000)
+    const timeoutId = setTimeout(() => controller.abort(), 20000)
 
     const res = await fetch(API_URL, {
       method: "POST",
@@ -543,7 +549,7 @@ async function callLLMForScoring(prompt: string): Promise<string | null> {
       body: JSON.stringify({
         model: MODEL,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 1000,
+        max_tokens: 256,
         temperature: 0,
         response_format: { type: "json_object" },
       }),
@@ -560,6 +566,19 @@ async function callLLMForScoring(prompt: string): Promise<string | null> {
     const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
     return data.choices?.[0]?.message?.content?.trim() ?? null
   } catch (err) {
+    const isTransient =
+      err instanceof Error &&
+      (err.message.includes("ECONNRESET") ||
+        err.message.includes("fetch failed") ||
+        err.message.includes("aborted"))
+
+    if (isTransient && attempt < 3) {
+      const delay = attempt * 1500
+      console.warn(`[fusion-engine] LLM transient error (attempt ${attempt}), retrying in ${delay}ms...`)
+      await new Promise((r) => setTimeout(r, delay))
+      return callLLMForScoring(prompt, attempt + 1)
+    }
+
     console.error("[fusion-engine] LLM call failed:", err)
     return null
   }
