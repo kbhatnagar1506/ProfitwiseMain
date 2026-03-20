@@ -1,15 +1,18 @@
 /**
  * Fusion Reconciliation Engine
  *
- * Runs deterministic math, AI semantic matching, and Supermemory history
+ * Runs deterministic math, AI semantic matching (powered by Supermemory), and Levenshtein similarity
  * SIMULTANEOUSLY (not sequentially), combining them into a single fused confidence score.
  *
  * Architecture:
  * 1. Fast-path: Direct link + exact match (no AI cost)
- * 2. Parallel scoring: Math Judge A, AI Judge B, Memory Judge C
+ * 2. Parallel scoring: Math Judge, AI Judge (enriched with Supermemory context), Levenshtein Judge
  * 3. Entity gate: Prevents wrong entity matches
- * 4. Fused score: Weighted combination with thresholds
+ * 4. Fused score: Weighted combination (40% Math + 40% AI + 20% Levenshtein)
  * 5. Learning write-back: Store patterns in Supermemory
+ *
+ * Key insight: Supermemory is a knowledge graph that the LLM uses to understand entity relationships.
+ * We don't score Supermemory separately; we pass it as context to the AI judge.
  */
 
 import type { PoolClient } from "pg"
@@ -24,6 +27,7 @@ import { resolveReconciliationBankLabelsForMatch, type DisplayNameInput } from "
 import { entityNameSimilarity } from "./levenshtein"
 import { safeParseFloat } from "./utils"
 import { getAllUnreconciledMovements } from "./reconciliation-llm-match"
+import { searchEntityContextFromSupermemory } from "./supermemory"
 
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
@@ -165,25 +169,21 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
 
       // Score all candidates in parallel
       const mathScores = new Map<string, number>()
-      const memoryScores = new Map<string, number>()
       const levenshteinScores = new Map<string, number>()
 
       for (const candidate of candidates) {
         const mathScore = scoreMath(movement, candidate)
         mathScores.set(candidate.id, mathScore)
 
-        const memoryScore = scoreMemory(movement, candidate, bankPatternMap, resolvedBankForMove)
-        memoryScores.set(candidate.id, memoryScore)
-
-        // NEW: Levenshtein entity name similarity (deterministic, no LLM cost)
+        // Levenshtein entity name similarity (deterministic, no LLM cost)
         const entityName = (candidate.metadata?.customer_name ?? candidate.metadata?.vendor_name ?? "") as string
         const bankLabel = resolvedBankForMove ?? movement.counterparty ?? ""
         const levScore = entityNameSimilarity(bankLabel, entityName)
         levenshteinScores.set(candidate.id, levScore)
       }
 
-      // Batch AI scoring
-      const aiScores = await scoreAIBatch(movement, candidates, resolvedBankForMove)
+      // Batch AI scoring (enriched with Supermemory context)
+      const aiScores = await scoreAIBatch(movement, candidates, resolvedBankForMove, userId)
 
       // ─── Phase 3: Fuse Scores + Entity Gate ───
       let bestMatch: (typeof candidates)[0] | null = null
@@ -192,40 +192,31 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
       for (const candidate of candidates) {
         const mathScore = mathScores.get(candidate.id) ?? 0
         const aiScore = aiScores.get(candidate.id) ?? 0
-        const memoryScore = memoryScores.get(candidate.id) ?? 0
         const levenshteinScore = levenshteinScores.get(candidate.id) ?? 0
         const hasDirectEntityLink = movement.counterparty_entity_id === candidate.entity_id
 
         // Entity signals - CRITICAL: Use > 0.50 for AI to exclude passive LLM default
         // The LLM returns 0.50 on failure/timeout, which is NOT an active validation.
         // Real LLM validations return 0.85+ for matches, 0.15- for non-matches.
-        const hasStrongEntitySignal = 
+        // Supermemory is used BY the LLM to make better decisions, not scored separately.
+        const hasEntitySignal = 
           aiScore > 0.50 ||            // AI ACTIVELY confirms (not default 0.50)
-          memoryScore >= 0.80 ||       // Known Supermemory pattern
           levenshteinScore >= 0.70 ||  // Strong name similarity
           hasDirectEntityLink          // Pre-linked entity from classification
 
-        const hasWeakEntitySignal =
-          aiScore >= 0.50 ||           // AI at least neutral (not rejecting)
-          memoryScore >= 0.60 ||       // Some pattern match
-          levenshteinScore >= 0.50 ||  // Moderate name similarity
-          hasDirectEntityLink          // Pre-linked entity
-
-        // Gate logic: 
-        // - Same-amount conflict: STRICT (must have strong entity signal)
-        // - Normal case: Allow if (strong entity signal) OR (weak entity signal + strong math)
+        // Gate logic: stricter when same-amount conflict exists
         const entityGatePassed = hasSameAmountConflict
-          ? hasStrongEntitySignal                                    // STRICT: Must have ACTIVE entity signal
-          : (hasStrongEntitySignal || (hasWeakEntitySignal && mathScore >= 0.75))  // NORMAL: Math can compensate
+          ? hasEntitySignal                           // STRICT: Must have ACTIVE entity signal
+          : (hasEntitySignal || mathScore >= 0.80)    // NORMAL: Math fallback allowed
         
         if (!entityGatePassed) continue
 
-        // Fused score (4 signals, rebalanced weights)
+        // Fused score (3 signals: Math + AI + Levenshtein)
+        // AI judge is enriched with Supermemory context, so it's more powerful
         const fusedScore = 
           mathScore * 0.40 +        // Amount + date compatibility
-          aiScore * 0.30 +          // LLM entity semantic match
-          memoryScore * 0.15 +      // Historical pattern match
-          levenshteinScore * 0.15   // Deterministic name similarity
+          aiScore * 0.40 +          // LLM entity semantic match (powered by Supermemory)
+          levenshteinScore * 0.20   // Deterministic name similarity
 
         if (fusedScore > bestFusedScore) {
           bestFusedScore = fusedScore
@@ -233,7 +224,7 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         }
       }
 
-      if (!bestMatch || bestFusedScore < 0.50) {
+      if (!bestMatch || bestFusedScore < 0.55) {
         if (movement.available_cash > STAGE4_REVIEW_THRESHOLD) {
           stage4Queued++
         }
@@ -243,7 +234,6 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
       // ─── Phase 4: Apply Match ───
       const mathScore = mathScores.get(bestMatch.id) ?? 0
       const aiScore = aiScores.get(bestMatch.id) ?? 0
-      const memoryScore = memoryScores.get(bestMatch.id) ?? 0
       const levenshteinScore = levenshteinScores.get(bestMatch.id) ?? 0
 
       const attr = buildAttribution(
@@ -254,7 +244,6 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         bestFusedScore,
         mathScore,
         aiScore,
-        memoryScore,
         levenshteinScore,
         resolvedBankForMove
       )
@@ -468,38 +457,18 @@ function scoreMath(movement: MovementWithAvailableCash, candidate: MutableCashEv
 /**
  * Judge C: Supermemory History Scoring
  */
-function scoreMemory(
-  movement: MovementWithAvailableCash,
-  candidate: MutableCashEvent,
-  bankPatternMap: Map<string, string>,
-  resolvedBankForMove: string | null
-): number {
-  const bankDesc = (resolvedBankForMove ?? movement.counterparty ?? movement.raw_description ?? "").toLowerCase()
-  if (!bankDesc) return 0
-
-  const matchedEntityId = bankPatternMap.get(bankDesc)
-  if (matchedEntityId === candidate.entity_id) return 0.99
-
-  // Substring match
-  for (const [pattern, entityId] of bankPatternMap.entries()) {
-    if (entityId === candidate.entity_id && (bankDesc.includes(pattern) || pattern.includes(bankDesc))) {
-      return 0.9
-    }
-  }
-
-  return 0
-}
-
 /**
  * Judge B: AI Semantic Scoring (batched)
- * Uses GPT-4o to score entity name similarity for each candidate
+ * Uses GPT-4o to score entity name similarity for each candidate.
+ * Enriched with Supermemory context for better entity understanding.
  */
 const AI_BATCH_SIZE = 8 // max candidates per LLM call to keep prompts small
 
 async function scoreAIBatch(
   movement: MovementWithAvailableCash,
   candidates: MutableCashEvent[],
-  resolvedBankForMove: string | null
+  resolvedBankForMove: string | null,
+  userId: string
 ): Promise<Map<string, number>> {
   const scores = new Map<string, number>()
 
@@ -513,6 +482,15 @@ async function scoreAIBatch(
   const bankDesc = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description ?? "Unknown"
   if (!bankDesc) return scores
 
+  // Query Supermemory for entity context (best-effort, won't block if unavailable)
+  let supermemoryContext = ""
+  try {
+    supermemoryContext = await searchEntityContextFromSupermemory(userId, bankDesc)
+  } catch (err) {
+    console.warn("[fusion-engine] Supermemory context fetch failed:", err)
+    // Continue without context
+  }
+
   // Chunk candidates to avoid oversized prompts causing ECONNRESET
   for (let chunkStart = 0; chunkStart < candidates.length; chunkStart += AI_BATCH_SIZE) {
     const chunk = candidates.slice(chunkStart, chunkStart + AI_BATCH_SIZE)
@@ -525,19 +503,24 @@ async function scoreAIBatch(
         })
         .join("\n")
 
+      const supermemoryBlock = supermemoryContext 
+        ? `\n\nEntity Context from Memory:\n${supermemoryContext.slice(0, 1000)}`
+        : ""
+
       const prompt = `You are a financial reconciliation expert. Given a bank transaction description and a list of potential matches, score each candidate's likelihood of being the correct match.
 
 Bank Transaction: "${bankDesc}"
 Amount: $${movement.available_cash.toFixed(2)}
 
 Candidates:
-${candidateList}
+${candidateList}${supermemoryBlock}
 
 For each candidate, provide a confidence score from 0.0 (definitely not a match) to 1.0 (definitely a match).
 Consider:
 - Entity name similarity
 - Amount reasonableness (within 0.5-5% for processor fees)
 - Whether the bank description could plausibly refer to this entity
+- Entity context from memory (if provided)
 
 Return ONLY a JSON object with numeric indices as keys and scores as values, like:
 {"1": 0.95, "2": 0.15, "3": 0.42}`
@@ -647,7 +630,6 @@ function buildAttribution(
   fusedScore: number,
   mathScore: number,
   aiScore: number,
-  memoryScore: number,
   levenshteinScore: number,
   resolvedBankForMove: string | null
 ): CreateAttributionOpts | null {
@@ -667,10 +649,9 @@ function buildAttribution(
   const confidenceDetail = {
     mathScore: Math.round(mathScore * 100) / 100,
     aiScore: Math.round(aiScore * 100) / 100,
-    memoryScore: Math.round(memoryScore * 100) / 100,
     levenshteinScore: Math.round(levenshteinScore * 100) / 100,
     fusedScore: Math.round(fusedScore * 100) / 100,
-    explanation: `Math ${(mathScore * 100).toFixed(0)}% | AI ${(aiScore * 100).toFixed(0)}% | Memory ${(memoryScore * 100).toFixed(0)}% | Lev ${(levenshteinScore * 100).toFixed(0)}%`,
+    explanation: `Math ${(mathScore * 100).toFixed(0)}% | AI ${(aiScore * 100).toFixed(0)}% (with Supermemory) | Lev ${(levenshteinScore * 100).toFixed(0)}%`,
   }
 
   // gross_amount = invoice/bill amount (what was expected)
