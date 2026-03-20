@@ -228,12 +228,18 @@ Last Matched: ${profile.last_matched_at ?? "never"}`
     // Import dynamically to avoid breaking if Supermemory is not configured
     const { default: Supermemory } = await import("supermemory")
     const sm = new Supermemory({ apiKey: process.env.SUPERMEMORY_API_KEY })
-    await sm.memories.add({
+    
+    // Use customId for idempotency - updates same document instead of creating duplicates
+    const safeEntityId = profile.entity_id.replace(/[^a-zA-Z0-9_-]/g, "_")
+    await sm.add({
       content,
+      customId: `entity_profile_${safeEntityId}`,
       metadata: {
         type: "entity_reconciliation_profile",
         entity_id: profile.entity_id,
         entity_name: profile.entity_name,
+        timestamp: new Date().toISOString(),
+        version: 1,
       },
       containerTags: [tag],
     })

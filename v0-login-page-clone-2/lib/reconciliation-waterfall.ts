@@ -843,7 +843,11 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
       const bankDescS0 = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description
       if (bankDescS0) {
         const entityNameS0 = (directLinkMatch.metadata?.customer_name ?? directLinkMatch.metadata?.vendor_name ?? "") as string
-        void recordConfirmedBankPattern(userId, directLinkMatch.entity_id, entityNameS0, bankDescS0)
+        try {
+          await recordConfirmedBankPattern(userId, directLinkMatch.entity_id, entityNameS0, bankDescS0)
+        } catch (err) {
+          console.error("[waterfall] Failed to record bank pattern (direct link):", err)
+        }
       }
       continue
     }
@@ -1141,7 +1145,11 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         const bankDescForWriteBack = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description
         if (bankDescForWriteBack) {
           const entityNameForWB = (event.metadata?.customer_name ?? event.metadata?.vendor_name ?? "") as string
-          void recordConfirmedBankPattern(userId, event.entity_id, entityNameForWB, bankDescForWriteBack)
+          try {
+            await recordConfirmedBankPattern(userId, event.entity_id, entityNameForWB, bankDescForWriteBack)
+          } catch (err) {
+            console.error("[waterfall] Failed to record bank pattern (stage 2):", err)
+          }
         }
       } else {
         const rawGross = feeAssumed > 0 ? remainingCash / (1 - feeAssumed) : remainingCash
@@ -1230,7 +1238,11 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
         const bankDescForWBPartial = resolvedBankForMove ?? movement.counterparty ?? movement.raw_description
         if (bankDescForWBPartial) {
           const entityNameForWBPartial = (event.metadata?.customer_name ?? event.metadata?.vendor_name ?? "") as string
-          void recordConfirmedBankPattern(userId, event.entity_id, entityNameForWBPartial, bankDescForWBPartial)
+          try {
+            await recordConfirmedBankPattern(userId, event.entity_id, entityNameForWBPartial, bankDescForWBPartial)
+          } catch (err) {
+            console.error("[waterfall] Failed to record bank pattern (stage 2 partial):", err)
+          }
         }
         remainingCash = 0
         fifoTouched = true

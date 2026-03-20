@@ -743,6 +743,9 @@ Use this to normalize "${bankDescription}" → "${entityName}" in future reconci
         entity_id: entityId,
         entity_name: entityName,
         bank_description: bankDescription,
+        confirmed_at: new Date().toISOString(),
+        confidence_score: 0.95,
+        source: "reconciliation",
       },
     })
 

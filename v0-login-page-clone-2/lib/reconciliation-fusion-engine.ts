@@ -146,7 +146,11 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         }
         // Write-back to Supermemory
         if (fastPathResult.bankDesc && fastPathResult.entityId && fastPathResult.entityName) {
-          void recordConfirmedBankPattern(userId, fastPathResult.entityId, fastPathResult.entityName, fastPathResult.bankDesc)
+          try {
+            await recordConfirmedBankPattern(userId, fastPathResult.entityId, fastPathResult.entityName, fastPathResult.bankDesc)
+          } catch (err) {
+            console.error("[fusion-engine] Failed to record bank pattern (fast path):", err)
+          }
         }
         continue
       }
@@ -257,7 +261,11 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         // Write-back
         const entityName = (bestMatch.metadata?.customer_name ?? bestMatch.metadata?.vendor_name ?? "") as string
         if (resolvedBankForMove && entityName) {
-          void recordConfirmedBankPattern(userId, bestMatch.entity_id, entityName, resolvedBankForMove)
+          try {
+            await recordConfirmedBankPattern(userId, bestMatch.entity_id, entityName, resolvedBankForMove)
+          } catch (err) {
+            console.error("[fusion-engine] Failed to record bank pattern (fusion match):", err)
+          }
         }
       }
     }
