@@ -243,14 +243,23 @@ interface LLMValidationResponse {
   matches: Record<string, boolean>
 }
 
+/**
+ * Batch validate candidates with LLM.
+ * Returns Map<entity_id, boolean | null>
+ * - true = LLM confirmed match
+ * - false = LLM rejected match
+ * - null = validation skipped (LLM unavailable/failed) - caller should apply stricter thresholds
+ */
 async function batchValidateWithLLM(
   bankDescription: string,
   candidates: CandidateEntity[],
   memoryContext: string
-): Promise<Map<string, boolean>> {
+): Promise<Map<string, boolean | null>> {
   if (!LLM_API_KEY || candidates.length === 0) {
-    const fallback = new Map<string, boolean>()
-    for (const c of candidates) fallback.set(c.entity_id, true)
+    // No LLM available - return null to indicate validation was skipped
+    // Caller should apply stricter deterministic thresholds
+    const fallback = new Map<string, boolean | null>()
+    for (const c of candidates) fallback.set(c.entity_id, null) // null = validation_skipped
     return fallback
   }
 
@@ -312,9 +321,9 @@ Respond ONLY with valid JSON (no markdown):
     })
 
     if (!res.ok) {
-      console.warn(`[EntityValidator] LLM HTTP ${res.status} for "${bankDescription}"`)
-      const fallback = new Map<string, boolean>()
-      for (const c of candidates) fallback.set(c.entity_id, true)
+      console.warn(`[EntityValidator] LLM HTTP ${res.status} for "${bankDescription}" - validation skipped`)
+      const fallback = new Map<string, boolean | null>()
+      for (const c of candidates) fallback.set(c.entity_id, null) // null = validation_skipped
       return fallback
     }
 
@@ -327,9 +336,9 @@ Respond ONLY with valid JSON (no markdown):
     try {
       parsed = JSON.parse(raw) as LLMValidationResponse
     } catch {
-      console.warn(`[EntityValidator] Failed to parse LLM response for "${bankDescription}": ${raw}`)
-      const fallback = new Map<string, boolean>()
-      for (const c of candidates) fallback.set(c.entity_id, true)
+      console.warn(`[EntityValidator] Failed to parse LLM response for "${bankDescription}": ${raw} - validation skipped`)
+      const fallback = new Map<string, boolean | null>()
+      for (const c of candidates) fallback.set(c.entity_id, null) // null = validation_skipped
       return fallback
     }
 
@@ -341,10 +350,11 @@ Respond ONLY with valid JSON (no markdown):
   } catch (err) {
     console.warn(
       `[EntityValidator] LLM call failed for "${bankDescription}":`,
-      err instanceof Error ? err.message : String(err)
+      err instanceof Error ? err.message : String(err),
+      "- validation skipped"
     )
-    const fallback = new Map<string, boolean>()
-    for (const c of candidates) fallback.set(c.entity_id, true)
+    const fallback = new Map<string, boolean | null>()
+    for (const c of candidates) fallback.set(c.entity_id, null) // null = validation_skipped
     return fallback
   }
 }
@@ -365,12 +375,16 @@ function fastPathValidate(
 ): { isValid: boolean; confidence: number; reason: string } | null {
   const bankLow = bankDescription.toLowerCase().trim()
   const nameLow = candidate.display_name.toLowerCase().trim()
+  
+  // P3: Lower minimum to 3 chars for entities with aliases (known entities)
+  const hasAliases = (candidate.aliases?.length ?? 0) > 0
+  const minLength = hasAliases ? 3 : 4
 
   // Exact substring match (both directions)
-  if (bankLow.includes(nameLow) && nameLow.length >= 4) {
+  if (bankLow.includes(nameLow) && nameLow.length >= minLength) {
     return { isValid: true, confidence: 0.97, reason: "Exact substring match" }
   }
-  if (nameLow.includes(bankLow) && bankLow.length >= 4) {
+  if (nameLow.includes(bankLow) && bankLow.length >= minLength) {
     return { isValid: true, confidence: 0.95, reason: "Entity contains bank description" }
   }
 
@@ -379,11 +393,11 @@ function fastPathValidate(
   const nameCore = stripOrgQualifier(nameLow)
   const bankCore = stripOrgQualifier(bankLow)
 
-  if (nameCore && nameCore.length >= 4) {
+  if (nameCore && nameCore.length >= minLength) {
     if (bankLow.includes(nameCore)) {
       return { isValid: true, confidence: 0.95, reason: "Core name (no org) is substring of bank" }
     }
-    if (nameCore.includes(bankCore) && bankCore.length >= 4) {
+    if (nameCore.includes(bankCore) && bankCore.length >= minLength) {
       return { isValid: true, confidence: 0.95, reason: "Bank is substring of core name (no org)" }
     }
     if (bankCore.includes(nameCore)) {
@@ -401,10 +415,10 @@ function fastPathValidate(
     .trim()
 
   if (bankStripped && nameStripped) {
-    if (bankStripped.includes(nameStripped) && nameStripped.length >= 4) {
+    if (bankStripped.includes(nameStripped) && nameStripped.length >= minLength) {
       return { isValid: true, confidence: 0.93, reason: "Substring match after prefix strip" }
     }
-    if (nameStripped.includes(bankStripped) && bankStripped.length >= 4) {
+    if (nameStripped.includes(bankStripped) && bankStripped.length >= minLength) {
       return { isValid: true, confidence: 0.91, reason: "Reverse substring match after strip" }
     }
   }
@@ -563,23 +577,38 @@ export async function validateEntitiesForBankDescription(
     const llmResults = await batchValidateWithLLM(bankDescription, chunk, memoryContext)
 
     for (const candidate of chunk) {
-      const llmValid = llmResults.get(candidate.entity_id) ?? true
+      const llmResult = llmResults.get(candidate.entity_id)
+      const validationSkipped = llmResult === null
+      const llmValid = llmResult === true
       const simScore = entityNameSimilarity(bankDescription, candidate.display_name)
       const hasMemoryContext = memoryContext.length > 0
+      
+      // When LLM validation is skipped, apply stricter deterministic thresholds
+      // Only accept if similarity score is high enough
+      const effectiveValid = validationSkipped 
+        ? simScore >= 0.70  // Stricter threshold when LLM unavailable
+        : llmValid
+      
       const result: EntityValidationResult = {
         entity_id: candidate.entity_id,
-        isValid: llmValid,
-        confidence: llmValid ? Math.max(simScore, 0.70) : Math.max(1 - simScore, 0.70),
-        method: hasMemoryContext
-          ? llmValid ? "memory_llm_accept" : "memory_llm_reject"
-          : llmValid ? "llm_accept" : "llm_reject",
-        reason: llmValid
-          ? hasMemoryContext
-            ? `Supermemory+LLM confirmed entity match`
-            : `LLM confirmed entity match`
+        isValid: effectiveValid,
+        confidence: effectiveValid ? Math.max(simScore, 0.70) : Math.max(1 - simScore, 0.70),
+        method: validationSkipped
+          ? effectiveValid ? "deterministic_accept_llm_skipped" : "deterministic_reject_llm_skipped"
           : hasMemoryContext
-            ? `Supermemory+LLM rejected: "${bankDescription}" ≠ "${candidate.display_name}"`
-            : `LLM rejected: "${bankDescription}" ≠ "${candidate.display_name}"`,
+            ? effectiveValid ? "memory_llm_accept" : "memory_llm_reject"
+            : effectiveValid ? "llm_accept" : "llm_reject",
+        reason: validationSkipped
+          ? effectiveValid
+            ? `LLM unavailable, accepted via high similarity (${(simScore * 100).toFixed(0)}%)`
+            : `LLM unavailable, rejected due to low similarity (${(simScore * 100).toFixed(0)}%)`
+          : effectiveValid
+            ? hasMemoryContext
+              ? `Supermemory+LLM confirmed entity match`
+              : `LLM confirmed entity match`
+            : hasMemoryContext
+              ? `Supermemory+LLM rejected: "${bankDescription}" ≠ "${candidate.display_name}"`
+              : `LLM rejected: "${bankDescription}" ≠ "${candidate.display_name}"`,
       }
       results.set(candidate.entity_id, result)
       runCache?.set(`${bankDescription}::${candidate.entity_id}`, result)

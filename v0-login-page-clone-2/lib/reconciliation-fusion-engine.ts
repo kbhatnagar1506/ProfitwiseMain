@@ -199,28 +199,27 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         const levenshteinScore = levenshteinScores.get(candidate.id) ?? 0
         const hasDirectEntityLink = movement.counterparty_entity_id === candidate.entity_id
 
-        // Entity signals - CRITICAL: Use > 0.50 for AI to exclude passive LLM default
-        // The LLM returns 0.50 on failure/timeout, which is NOT an active validation.
-        // Real LLM validations return 0.85+ for matches, 0.15- for non-matches.
-        // Supermemory is used BY the LLM to make better decisions, not scored separately.
-        const hasEntitySignal = 
-          aiScore > 0.50 ||            // AI ACTIVELY confirms (not default 0.50)
-          levenshteinScore >= 0.70 ||  // Strong name similarity
-          hasDirectEntityLink          // Pre-linked entity from classification
+        // Count independent entity signals
+        // Each signal must be strong enough to count independently
+        const aiSignal = aiScore > 0.50           // AI ACTIVELY confirms (not default 0.50)
+        const levSignal = levenshteinScore >= 0.70 // Strong name similarity
+        const linkSignal = hasDirectEntityLink     // Pre-linked entity from classification
+        
+        const entitySignalCount = (aiSignal ? 1 : 0) + (levSignal ? 1 : 0) + (linkSignal ? 1 : 0)
+        const hasEntitySignal = entitySignalCount >= 1
 
-        // Gate logic: stricter when same-amount conflict exists
+        // Gate logic: STRICTER when same-amount conflict exists
+        // Require 2 independent signals to disambiguate between same-amount candidates
         const entityGatePassed = hasSameAmountConflict
-          ? hasEntitySignal                           // STRICT: Must have ACTIVE entity signal
-          : (hasEntitySignal || mathScore >= 0.80)    // NORMAL: Math fallback allowed
+          ? entitySignalCount >= 2                 // STRICT: Must have 2+ independent signals
+          : (hasEntitySignal || mathScore >= 0.80) // NORMAL: 1 signal or strong math
         
         if (!entityGatePassed) continue
 
-        // Fused score (3 signals: Math + AI + Levenshtein)
-        // AI judge is enriched with Supermemory context, so it's more powerful
-        const fusedScore = 
-          mathScore * 0.40 +        // Amount + date compatibility
-          aiScore * 0.40 +          // LLM entity semantic match (powered by Supermemory)
-          levenshteinScore * 0.20   // Deterministic name similarity
+        // P2: Dynamic scoring weights based on signal confidence
+        // When one signal is very strong, give it more weight
+        // When signals disagree, be more conservative
+        const fusedScore = calculateDynamicFusedScore(mathScore, aiScore, levenshteinScore)
 
         if (fusedScore > bestFusedScore) {
           bestFusedScore = fusedScore
@@ -228,12 +227,19 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         }
       }
 
-      if (!bestMatch || bestFusedScore < 0.55) {
+      // P0: Raise confidence threshold - 0.65 for auto-apply, 0.55-0.65 for review
+      const AUTO_APPLY_THRESHOLD = 0.65
+      const REVIEW_THRESHOLD = 0.55
+      
+      if (!bestMatch || bestFusedScore < REVIEW_THRESHOLD) {
         if (movement.available_cash > STAGE4_REVIEW_THRESHOLD) {
           stage4Queued++
         }
         continue
       }
+      
+      // If score is between review and auto-apply threshold, flag for review but still apply
+      const needsReview = bestFusedScore >= REVIEW_THRESHOLD && bestFusedScore < AUTO_APPLY_THRESHOLD
 
       // ─── Phase 4: Apply Match ───
       const mathScore = mathScores.get(bestMatch.id) ?? 0
@@ -249,14 +255,18 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         mathScore,
         aiScore,
         levenshteinScore,
-        resolvedBankForMove
+        resolvedBankForMove,
+        needsReview
       )
 
       if (attr) {
         pendingAttributions.push(attr)
         touchedEventIds.add(bestMatch.id)
-        bestMatch.outstanding_amount = 0
-        bestMatch.status = "paid"
+        
+        // P1: Support partial payments - only reduce outstanding by the amount applied
+        const appliedAmount = attr.net_amount
+        bestMatch.outstanding_amount = Math.max(0, bestMatch.outstanding_amount - appliedAmount)
+        bestMatch.status = bestMatch.outstanding_amount <= 0.01 ? "paid" : "partially_paid"
 
         // Write-back
         const entityName = (bestMatch.metadata?.customer_name ?? bestMatch.metadata?.vendor_name ?? "") as string
@@ -446,6 +456,7 @@ function buildCandidateList(
 
 /**
  * Judge A: Deterministic Math Scoring
+ * P1: Different date tolerances - 45 days for AR, 90 days for AP (vendors often pay slower)
  */
 function scoreMath(movement: MovementWithAvailableCash, candidate: MutableCashEvent): number {
   const amountRatio = movement.available_cash / candidate.outstanding_amount
@@ -455,11 +466,36 @@ function scoreMath(movement: MovementWithAvailableCash, candidate: MutableCashEv
   const movementDate = new Date(movement.date).getTime()
   const candidateDate = new Date(candidate.expected_date ?? "").getTime()
   const daysDiff = Math.abs(movementDate - candidateDate) / (1000 * 60 * 60 * 24)
-  const dateScore = Math.max(0, 1 - daysDiff / 45)
+  
+  // P1: Different date tolerances - AR (customers) 45 days, AP (vendors) 90 days
+  const isAP = candidate.event_type === "ap"
+  const dateTolerance = isAP ? 90 : 45
+  const dateScore = Math.max(0, 1 - daysDiff / dateTolerance)
+
+  // P1: Early payment discount detection (1-3%)
+  // If payment is 1-3% less than invoice and within 10 days, likely early payment discount
+  const earlyPaymentDiscount = detectEarlyPaymentDiscount(movement, candidate)
+  const discountBonus = earlyPaymentDiscount ? 0.10 : 0
 
   const feeScore = detectProcessorFee(movement, candidate) ? 0.15 : 0
 
-  return amountScore * 0.65 + dateScore * 0.25 + feeScore * 0.1
+  return amountScore * 0.60 + dateScore * 0.25 + feeScore * 0.10 + discountBonus * 0.05
+}
+
+/**
+ * P1: Detect early payment discount (1-3% discount for paying early)
+ */
+function detectEarlyPaymentDiscount(movement: MovementWithAvailableCash, candidate: MutableCashEvent): boolean {
+  const ratio = movement.available_cash / candidate.outstanding_amount
+  // Early payment discount: payment is 97-99% of invoice (1-3% discount)
+  if (ratio < 0.97 || ratio > 0.99) return false
+  
+  // Must be paid early (before or within 10 days of due date)
+  const movementDate = new Date(movement.date).getTime()
+  const dueDate = new Date(candidate.expected_date ?? "").getTime()
+  const daysDiff = (movementDate - dueDate) / (1000 * 60 * 60 * 24)
+  
+  return daysDiff <= 10 // Paid within 10 days of due date
 }
 
 /**
@@ -618,13 +654,57 @@ async function callLLMForScoring(prompt: string, attempt = 1): Promise<string | 
 }
 
 /**
+ * P2: Dynamic scoring weights based on signal confidence
+ * When signals strongly agree, boost confidence
+ * When signals disagree, be more conservative
+ */
+function calculateDynamicFusedScore(mathScore: number, aiScore: number, levenshteinScore: number): number {
+  // Base weights
+  let mathWeight = 0.40
+  let aiWeight = 0.40
+  let levWeight = 0.20
+  
+  // Boost weight for very strong signals (> 0.85)
+  if (mathScore > 0.85) mathWeight += 0.10
+  if (aiScore > 0.85) aiWeight += 0.10
+  if (levenshteinScore > 0.85) levWeight += 0.05
+  
+  // Penalize when signals strongly disagree
+  const signalVariance = Math.abs(mathScore - aiScore) + Math.abs(aiScore - levenshteinScore) + Math.abs(mathScore - levenshteinScore)
+  const disagreementPenalty = signalVariance > 1.0 ? 0.10 : signalVariance > 0.5 ? 0.05 : 0
+  
+  // Normalize weights
+  const totalWeight = mathWeight + aiWeight + levWeight
+  mathWeight /= totalWeight
+  aiWeight /= totalWeight
+  levWeight /= totalWeight
+  
+  // Calculate fused score with penalty for disagreement
+  const rawScore = mathScore * mathWeight + aiScore * aiWeight + levenshteinScore * levWeight
+  return Math.max(0, rawScore - disagreementPenalty)
+}
+
+/**
  * Detect processor fee (0.5-5% band)
+ * P2: Configurable fee tolerance per processor
  */
 function detectProcessorFee(movement: MovementWithAvailableCash, candidate: MutableCashEvent): boolean {
   if (movement.available_cash >= candidate.outstanding_amount) return false
 
   const impliedFee = (candidate.outstanding_amount - movement.available_cash) / candidate.outstanding_amount
-  return impliedFee >= 0.005 && impliedFee <= 0.05
+  
+  // P2: Different fee tolerances based on processor
+  // Stripe/Square: 2.9% + $0.30 → typically 2.5-4%
+  // ACH: 0.5-1%
+  // Wire: 0-0.5%
+  const counterparty = (movement.counterparty ?? "").toLowerCase()
+  const isStripeSquare = counterparty.includes("stripe") || counterparty.includes("square")
+  const isACH = counterparty.includes("ach")
+  
+  const minFee = 0.005  // 0.5% minimum
+  const maxFee = isStripeSquare ? 0.10 : isACH ? 0.03 : 0.05  // 10% for card processors, 3% for ACH, 5% default
+  
+  return impliedFee >= minFee && impliedFee <= maxFee
 }
 
 /**
@@ -639,7 +719,8 @@ function buildAttribution(
   mathScore: number,
   aiScore: number,
   levenshteinScore: number,
-  resolvedBankForMove: string | null
+  resolvedBankForMove: string | null,
+  needsReview: boolean = false
 ): CreateAttributionOpts | null {
   const entityName = (candidate.metadata?.customer_name ?? candidate.metadata?.vendor_name ?? "") as string
   const breakdown = buildSyncConfidenceBreakdown({
@@ -660,6 +741,7 @@ function buildAttribution(
     levenshteinScore: Math.round(levenshteinScore * 100) / 100,
     fusedScore: Math.round(fusedScore * 100) / 100,
     explanation: `Math ${(mathScore * 100).toFixed(0)}% | AI ${(aiScore * 100).toFixed(0)}% (with Supermemory) | Lev ${(levenshteinScore * 100).toFixed(0)}%`,
+    needsReview,
   }
 
   // gross_amount = invoice/bill amount (what was expected)
@@ -682,6 +764,7 @@ function buildAttribution(
     metadata: {
       match_method: "fusion_parallel",
       waterfall_stage: "fusion",
+      needs_review: needsReview,
     },
     confidenceDetail: confidenceDetail,
     confidenceEnvelope: breakdownToEnvelope(breakdown) as any,
