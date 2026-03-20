@@ -109,12 +109,19 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
 
     console.log(`[fusion-engine] Loaded ${movements.length} movements, ${cashEvents.length} cash events`)
     // #region agent log
+    const arEvents = cashEvents.filter(e => e.event_type === 'ar');
+    const apEvents = cashEvents.filter(e => e.event_type === 'ap');
     debugLog('fusion-engine.ts:110', 'Data loaded', { 
       movementCount: movements.length, 
       cashEventCount: cashEvents.length,
+      arEventCount: arEvents.length,
+      apEventCount: apEvents.length,
       movementsWithCash: movements.filter(m => m.available_cash > EPS).length,
+      inflowMovements: movements.filter(m => m.direction === 'inflow').length,
+      outflowMovements: movements.filter(m => m.direction === 'outflow').length,
       sampleMovement: movements[0] ? { id: movements[0].id, amount: movements[0].available_cash, direction: movements[0].direction, counterparty: movements[0].counterparty } : null,
-      sampleCashEvent: cashEvents[0] ? { id: cashEvents[0].id, amount: cashEvents[0].outstanding_amount, type: cashEvents[0].event_type, entity: cashEvents[0].entity_id } : null
+      sampleAREvent: arEvents[0] ? { id: arEvents[0].id, amount: arEvents[0].outstanding_amount, entity: arEvents[0].entity_id, name: arEvents[0].metadata?.customer_name } : null,
+      sampleAPEvent: apEvents[0] ? { id: apEvents[0].id, amount: apEvents[0].outstanding_amount, entity: apEvents[0].entity_id, name: apEvents[0].metadata?.vendor_name } : null
     }, 'H1');
     // #endregion
 
@@ -523,7 +530,7 @@ function tryFastPath(
 }
 
 /**
- * Build candidate list: top 15 by date proximity
+ * Build candidate list: top 15 by date proximity, filtered by target type
  */
 function buildCandidateList(
   movement: MovementWithAvailableCash,
@@ -534,6 +541,8 @@ function buildCandidateList(
 
   for (const events of eventsByEntity.values()) {
     for (const event of events) {
+      // Filter by target type (ar for inflows, ap for outflows)
+      if (event.event_type !== targetType) continue
       if (event.outstanding_amount <= EPS) continue
       candidates.push(event)
     }
@@ -1043,7 +1052,10 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
     `SELECT id, user_id, entity_id, event_type, amount::float, outstanding_amount::float, status,
             probability::float, expected_date::text, source, movement_id, attribution_id, metadata
      FROM cash_events
-     WHERE user_id = $1::uuid AND event_type IN ('ar', 'ap')
+     WHERE user_id = $1::uuid 
+       AND event_type IN ('ar', 'ap')
+       AND status != 'paid'
+       AND COALESCE(outstanding_amount, amount) > 0.01
      ORDER BY expected_date ASC`,
     [userId]
   )
@@ -1055,7 +1067,7 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
     entity_id: r.entity_id,
     event_type: r.event_type,
     amount: safeParseFloat(r.amount),
-    outstanding_amount: safeParseFloat(r.outstanding_amount),
+    outstanding_amount: safeParseFloat(r.outstanding_amount) || safeParseFloat(r.amount),
     status: (r.status as "open" | "partially_paid" | "paid") ?? "open",
     probability: safeParseFloat(r.probability),
     expected_date: r.expected_date,
