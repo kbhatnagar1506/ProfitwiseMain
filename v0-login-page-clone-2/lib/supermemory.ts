@@ -177,11 +177,20 @@ export async function addFinalContextToSupermemory(content: string, customId: st
   const client = getClient()
   const containerTag = getUserFinanceTag(userId)
   const id = customId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 100)
+  if (!id) {
+    console.warn("[supermemory] addFinalContextToSupermemory: customId is empty after sanitization, skipping")
+    return
+  }
   await client.add({
     content,
     containerTag,
-    customId: id || `final_context_${Date.now()}`,
-    metadata: { source: "profitwise_final_context" },
+    customId: id,
+    metadata: { 
+      source: "profitwise_final_context",
+      timestamp: new Date().toISOString(),
+      user_id: userId,
+      version: 1,
+    },
   })
   log("supermemory.final_context.added", { customId: id }, "supermemory")
 }
@@ -209,7 +218,13 @@ export async function addEntitiesToSupermemory(
       content,
       containerTag,
       customId: `entities_${userId}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
-      metadata: { source: "profitwise_entities" },
+      metadata: { 
+        source: "profitwise_entities",
+        timestamp: new Date().toISOString(),
+        user_id: userId,
+        entity_count: entityHints.length,
+        version: 1,
+      },
     })
     log("supermemory.entities.added", { userId, count: entityHints.length }, "supermemory")
   } catch (err) {
@@ -254,7 +269,12 @@ export async function searchEntityContextFromSupermemory(
     }
     if (snippets.length === 0) return ""
     return `Existing entities (use as hints — prefer these canonical names when a raw description matches):\n${snippets.join("\n\n")}\n\nWhen a raw description clearly refers to an existing entity, set normalized to that entity's canonical name.`
-  } catch {
+  } catch (err) {
+    log("supermemory.entity_context_search.failed", { 
+      userId, 
+      query: merchantStrings.slice(0, 100),
+      error: err instanceof Error ? err.message : String(err) 
+    }, "supermemory")
     return ""
   }
 }
@@ -422,6 +442,12 @@ AI Summary: ${profile.aiSummary || "No summary available"}
         source: "profitwise_entity_profile",
         entity_type: profile.entityType || "unknown",
         entity_name: profile.canonicalName,
+        entity_id: profile.entityId,
+        timestamp: new Date().toISOString(),
+        user_id: userId,
+        risk_score: profile.riskScore,
+        lifetime_value: profile.lifetimeValue,
+        version: 1,
       },
     })
     
@@ -457,7 +483,17 @@ export async function addMerchantOverrideToSupermemory(
     content,
     containerTag,
     customId,
-    metadata: { source: "profitwise_merchant_override" },
+    metadata: { 
+      source: "profitwise_merchant_override",
+      timestamp: new Date().toISOString(),
+      user_id: userId,
+      account_id: accountId,
+      raw_name: rawName,
+      normalized_name: normalizedName,
+      tag,
+      transaction_type: transactionType,
+      version: 1,
+    },
   })
   log("supermemory.merchant_override.added", { customId }, "supermemory")
 }
