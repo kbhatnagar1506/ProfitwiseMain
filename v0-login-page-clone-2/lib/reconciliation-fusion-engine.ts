@@ -199,16 +199,24 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         // Entity signals - CRITICAL: Use > 0.50 for AI to exclude passive LLM default
         // The LLM returns 0.50 on failure/timeout, which is NOT an active validation.
         // Real LLM validations return 0.85+ for matches, 0.15- for non-matches.
-        const hasEntitySignal = 
+        const hasStrongEntitySignal = 
           aiScore > 0.50 ||            // AI ACTIVELY confirms (not default 0.50)
           memoryScore >= 0.80 ||       // Known Supermemory pattern
           levenshteinScore >= 0.70 ||  // Strong name similarity
           hasDirectEntityLink          // Pre-linked entity from classification
 
-        // Gate logic: stricter when same-amount conflict exists
+        const hasWeakEntitySignal =
+          aiScore >= 0.50 ||           // AI at least neutral (not rejecting)
+          memoryScore >= 0.60 ||       // Some pattern match
+          levenshteinScore >= 0.50 ||  // Moderate name similarity
+          hasDirectEntityLink          // Pre-linked entity
+
+        // Gate logic: 
+        // - Same-amount conflict: STRICT (must have strong entity signal)
+        // - Normal case: Allow if (strong entity signal) OR (weak entity signal + strong math)
         const entityGatePassed = hasSameAmountConflict
-          ? hasEntitySignal                           // STRICT: Must have ACTIVE entity signal
-          : (hasEntitySignal || mathScore >= 0.80)    // NORMAL: Math fallback allowed
+          ? hasStrongEntitySignal                                    // STRICT: Must have ACTIVE entity signal
+          : (hasStrongEntitySignal || (hasWeakEntitySignal && mathScore >= 0.75))  // NORMAL: Math can compensate
         
         if (!entityGatePassed) continue
 
@@ -225,7 +233,7 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         }
       }
 
-      if (!bestMatch || bestFusedScore < 0.55) {
+      if (!bestMatch || bestFusedScore < 0.50) {
         if (movement.available_cash > STAGE4_REVIEW_THRESHOLD) {
           stage4Queued++
         }
