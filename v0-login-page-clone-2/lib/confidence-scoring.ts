@@ -31,6 +31,7 @@ export interface ConfidenceBreakdown {
   components: {
     amount: ConfidenceComponent
     entity_name: ConfidenceComponent
+    entity_name_validation: ConfidenceComponent
     date_proximity: ConfidenceComponent
     history: ConfidenceComponent
     category: ConfidenceComponent
@@ -43,9 +44,10 @@ export interface ConfidenceBreakdown {
 }
 
 const WEIGHTS = {
-  amount: 0.40,
-  entity_name: 0.30,
-  date_proximity: 0.20,
+  amount: 0.30,           // Reduced from 0.40 — amount alone is not enough
+  entity_name: 0.20,      // Levenshtein/token similarity (fast heuristic)
+  entity_name_validation: 0.25,  // NEW: AI semantic validation score
+  date_proximity: 0.15,   // Reduced from 0.20
   history: 0.05,
   category: 0.03,
   match_sequence: 0.02,
@@ -78,6 +80,8 @@ export async function buildConfidenceBreakdown(params: {
   matchSequenceIndex?: number
   waterfallStage?: string
   matchMethod?: string
+  /** Optional AI semantic validation score from reconciliation-entity-validator */
+  entityValidationConfidence?: number
 }): Promise<ConfidenceBreakdown> {
   const {
     movementAmount,
@@ -92,14 +96,19 @@ export async function buildConfidenceBreakdown(params: {
     matchSequenceIndex = 0,
     waterfallStage,
     matchMethod,
+    entityValidationConfidence,
   } = params
 
   // Amount component
   const amountScore = computeAmountScore(movementAmount, targetAmount)
   const amountPct = Math.abs(movementAmount - targetAmount) / Math.max(targetAmount, 0.01) * 100
 
-  // Entity name component
+  // Entity name component (Levenshtein/token heuristic)
   const entityScore = entityNameSimilarity(bankDescription, entityName)
+
+  // Entity name validation component (AI semantic score)
+  // If not provided, fall back to the heuristic score as a neutral proxy
+  const entityValidationScore = entityValidationConfidence ?? entityScore
 
   // Date proximity component
   const dateScore = computeDateProximityScore(movementDate ?? null, invoiceDueDate ?? null)
@@ -120,8 +129,9 @@ export async function buildConfidenceBreakdown(params: {
   const total =
     WEIGHTS.amount * amountScore +
     WEIGHTS.entity_name * entityScore +
+    WEIGHTS.entity_name_validation * entityValidationScore +
     WEIGHTS.date_proximity * dateScore +
-    (WEIGHTS.history + WEIGHTS.category + WEIGHTS.match_sequence) * 0.5  // Adjustment signals contribute smaller share
+    (WEIGHTS.history + WEIGHTS.category + WEIGHTS.match_sequence) * 0.5
 
   const adjustedTotal = total + historyAdj + categoryAdjustment + (matchSequenceIndex === 0 ? 0 : -0.05 * matchSequenceIndex)
   const finalScore = Math.min(0.99, Math.max(0.40, adjustedTotal))
@@ -148,6 +158,13 @@ export async function buildConfidenceBreakdown(params: {
         : entityScore >= 0.60
         ? `Moderate name similarity (${(entityScore * 100).toFixed(0)}%)`
         : `Weak name match (${(entityScore * 100).toFixed(0)}%) — verify manually`,
+    },
+    entity_name_validation: {
+      score: entityValidationScore,
+      weight: WEIGHTS.entity_name_validation,
+      reasoning: entityValidationConfidence !== undefined
+        ? `AI entity validation score: ${(entityValidationScore * 100).toFixed(0)}%`
+        : `AI validation not run — using heuristic (${(entityValidationScore * 100).toFixed(0)}%)`,
     },
     date_proximity: {
       score: dateScore,
@@ -211,6 +228,8 @@ export function buildSyncConfidenceBreakdown(params: {
   matchSequenceIndex?: number
   waterfallStage?: string
   matchMethod?: string
+  /** Optional AI semantic validation score from reconciliation-entity-validator */
+  entityValidationConfidence?: number
 }): ConfidenceBreakdown {
   const {
     movementAmount,
@@ -223,11 +242,13 @@ export function buildSyncConfidenceBreakdown(params: {
     matchSequenceIndex = 0,
     waterfallStage,
     matchMethod,
+    entityValidationConfidence,
   } = params
 
   const amountScore = computeAmountScore(movementAmount, targetAmount)
   const amountPct = Math.abs(movementAmount - targetAmount) / Math.max(targetAmount, 0.01) * 100
   const entityScore = entityNameSimilarity(bankDescription, entityName)
+  const entityValidationScore = entityValidationConfidence ?? entityScore
   const dateScore = computeDateProximityScore(movementDate ?? null, invoiceDueDate ?? null)
   const categoryScore = 0.5 + categoryAdjustment
   const sequenceScore = matchSequenceIndex === 0 ? 1.0 : matchSequenceIndex === 1 ? 0.8 : 0.6
@@ -235,6 +256,7 @@ export function buildSyncConfidenceBreakdown(params: {
   const total =
     WEIGHTS.amount * amountScore +
     WEIGHTS.entity_name * entityScore +
+    WEIGHTS.entity_name_validation * entityValidationScore +
     WEIGHTS.date_proximity * dateScore +
     WEIGHTS.category * categoryScore +
     WEIGHTS.match_sequence * sequenceScore +
@@ -265,6 +287,13 @@ export function buildSyncConfidenceBreakdown(params: {
           : entityScore >= 0.75
           ? `Good name match (${(entityScore * 100).toFixed(0)}%)`
           : `Moderate name similarity (${(entityScore * 100).toFixed(0)}%)`,
+      },
+      entity_name_validation: {
+        score: entityValidationScore,
+        weight: WEIGHTS.entity_name_validation,
+        reasoning: entityValidationConfidence !== undefined
+          ? `AI entity validation score: ${(entityValidationScore * 100).toFixed(0)}%`
+          : `AI validation not run — using heuristic (${(entityValidationScore * 100).toFixed(0)}%)`,
       },
       date_proximity: {
         score: dateScore,
@@ -311,6 +340,7 @@ export function breakdownToEnvelope(breakdown: ConfidenceBreakdown): {
     amount?: number
     date?: number
     entity?: number
+    entity_validation?: number
     history?: number
     category?: number
     match_sequence?: number
@@ -324,6 +354,7 @@ export function breakdownToEnvelope(breakdown: ConfidenceBreakdown): {
       amount: breakdown.components.amount.score,
       date: breakdown.components.date_proximity.score,
       entity: breakdown.components.entity_name.score,
+      entity_validation: breakdown.components.entity_name_validation.score,
       history: breakdown.components.history.score,
       category: breakdown.components.category.score,
       match_sequence: breakdown.components.match_sequence.score,

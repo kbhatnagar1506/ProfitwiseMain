@@ -18,6 +18,10 @@ export interface AuditLogEntry {
   amountMatched?: number | null
   semanticValid?: boolean | null
   crossEntityFlag?: boolean
+  /** AI entity name validation confidence (0.0 – 1.0) */
+  entityValidationConfidence?: number | null
+  /** Method used for entity validation (fast_accept, llm_reject, etc.) */
+  entityValidationMethod?: string | null
 }
 
 /**
@@ -33,8 +37,9 @@ export async function writeAuditLogWithClient(
     await client.query(
       `INSERT INTO reconciliation_audit_log
          (user_id, movement_id, match_method, waterfall_stage, confidence, entity_id,
-          reference_id, amount_matched, semantic_valid, cross_entity_flag)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          reference_id, amount_matched, semantic_valid, cross_entity_flag,
+          entity_validation_confidence, entity_validation_method)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         entry.userId ?? null,
         entry.movementId,
@@ -46,6 +51,8 @@ export async function writeAuditLogWithClient(
         entry.amountMatched ?? null,
         entry.semanticValid ?? null,
         entry.crossEntityFlag ?? false,
+        entry.entityValidationConfidence ?? null,
+        entry.entityValidationMethod ?? null,
       ]
     )
     await client.query("RELEASE SAVEPOINT audit_single_sp")
@@ -62,8 +69,9 @@ export async function writeAuditLog(entry: AuditLogEntry): Promise<void> {
     await query(
       `INSERT INTO reconciliation_audit_log
          (user_id, movement_id, match_method, waterfall_stage, confidence, entity_id,
-          reference_id, amount_matched, semantic_valid, cross_entity_flag)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          reference_id, amount_matched, semantic_valid, cross_entity_flag,
+          entity_validation_confidence, entity_validation_method)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         entry.userId ?? null,
         entry.movementId,
@@ -75,6 +83,8 @@ export async function writeAuditLog(entry: AuditLogEntry): Promise<void> {
         entry.amountMatched ?? null,
         entry.semanticValid ?? null,
         entry.crossEntityFlag ?? false,
+        entry.entityValidationConfidence ?? null,
+        entry.entityValidationMethod ?? null,
       ]
     )
   } catch {
@@ -93,10 +103,11 @@ export async function bulkWriteAuditLog(
   entries: AuditLogEntry[]
 ): Promise<void> {
   if (entries.length === 0) return
+  const COLS = 12
   const values = entries
     .map(
       (_, i) =>
-        `($${i * 10 + 1}, $${i * 10 + 2}, $${i * 10 + 3}, $${i * 10 + 4}, $${i * 10 + 5}, $${i * 10 + 6}, $${i * 10 + 7}, $${i * 10 + 8}, $${i * 10 + 9}, $${i * 10 + 10})`
+        `(${Array.from({ length: COLS }, (__, j) => `$${i * COLS + j + 1}`).join(", ")})`
     )
     .join(", ")
   const params = entries.flatMap((e) => [
@@ -110,13 +121,16 @@ export async function bulkWriteAuditLog(
     e.amountMatched ?? null,
     e.semanticValid ?? null,
     e.crossEntityFlag ?? false,
+    e.entityValidationConfidence ?? null,
+    e.entityValidationMethod ?? null,
   ])
   try {
     await client.query("SAVEPOINT audit_log_sp")
     await client.query(
       `INSERT INTO reconciliation_audit_log
          (user_id, movement_id, match_method, waterfall_stage, confidence, entity_id,
-          reference_id, amount_matched, semantic_valid, cross_entity_flag)
+          reference_id, amount_matched, semantic_valid, cross_entity_flag,
+          entity_validation_confidence, entity_validation_method)
        VALUES ${values}`,
       params
     )
