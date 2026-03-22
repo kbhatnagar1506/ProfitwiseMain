@@ -91,6 +91,7 @@ export interface Candidate {
   outstanding_amount: number
   due_date: string | null
   match_type: MatchType
+  secondary_match_types: MatchType[]
   amount_diff: number
   fee_implied: number | null
   is_direct_link: boolean
@@ -183,10 +184,30 @@ function extractDirectLinkId(tagData: Record<string, unknown> | null): string | 
   return (tagData.invoice_id as string) || (tagData.bill_id as string) || null
 }
 
-function extractReferenceFromDescription(description: string | null): string | null {
-  if (!description) return null
-  const refMatch = description.match(/(?:inv|invoice|bill|ref|reference|#)[\s#]*(\d+)/i)
-  return refMatch ? refMatch[1] : null
+function extractReferenceFromDescription(description: string | null): string[] {
+  if (!description) return []
+
+  const references: string[] = []
+
+  // Extract invoice/bill numbers
+  const invMatch = description.match(/(?:inv|invoice|bill|ref|reference|#)[\s#]*(\d+)/gi)
+  if (invMatch) {
+    references.push(...invMatch.map((m) => m.replace(/\D/g, "")))
+  }
+
+  // Extract PO numbers
+  const poMatch = description.match(/(?:po|purchase order)[\s#]*(\d+)/gi)
+  if (poMatch) {
+    references.push(...poMatch.map((m) => m.replace(/\D/g, "")))
+  }
+
+  // Extract check numbers
+  const checkMatch = description.match(/(?:check|chk)[\s#]*(\d+)/gi)
+  if (checkMatch) {
+    references.push(...checkMatch.map((m) => m.replace(/\D/g, "")))
+  }
+
+  return [...new Set(references)] // Remove duplicates
 }
 
 function detectFeeAmount(movement: MovementWithAvailableCash, candidate: CashEventRow): number | null {
@@ -213,9 +234,10 @@ function isEarlyDiscount(movement: MovementWithAvailableCash, candidate: CashEve
 
   const movDate = new Date(movement.date).getTime()
   const dueDate = new Date(candidate.expected_date).getTime()
-  const daysDiff = (dueDate - movDate) / (1000 * 60 * 60 * 24)
+  const daysDiff = (movDate - dueDate) / (1000 * 60 * 60 * 24) // Payment date - due date
 
-  if (daysDiff < 0 || daysDiff > 10) return false
+  // Payment must be BEFORE due date (negative daysDiff) and within 10 days
+  if (daysDiff > 0 || daysDiff < -10) return false
 
   const discountRatio = (candidate.amount - Math.abs(movement.available_cash)) / candidate.amount
   return discountRatio >= 0.01 && discountRatio <= 0.03
@@ -224,7 +246,21 @@ function isEarlyDiscount(movement: MovementWithAvailableCash, candidate: CashEve
 function isReversal(movement: MovementWithAvailableCash, candidate: CashEventRow): boolean {
   const movAmount = Math.abs(movement.available_cash)
   const candAmount = Math.abs(candidate.amount)
-  return Math.abs(movAmount - candAmount) < EPS && movement.direction !== (candidate.event_type === "ar" ? "inflow" : "outflow")
+
+  // Amounts must match
+  if (Math.abs(movAmount - candAmount) >= EPS) return false
+
+  // Direction must be opposite
+  const expectedDirection = candidate.event_type === "ar" ? "outflow" : "inflow"
+  if (movement.direction !== expectedDirection) return false
+
+  // Optional: Check if reversal is recent (within 30 days)
+  const movDate = new Date(movement.date).getTime()
+  const candDate = new Date(candidate.expected_date || "").getTime()
+  if (candDate === 0) return true // No date to check
+
+  const daysDiff = Math.abs(movDate - candDate) / (1000 * 60 * 60 * 24)
+  return daysDiff <= 30
 }
 
 function isRounding(movement: MovementWithAvailableCash, candidate: CashEventRow): boolean {
@@ -239,12 +275,13 @@ function isRounding(movement: MovementWithAvailableCash, candidate: CashEventRow
 function buildCandidates(
   movement: MovementWithAvailableCash,
   cashEvents: CashEventRow[],
-  targetType: "ar" | "ap"
+  targetType: "ar" | "ap",
+  maxCandidates: number = 20
 ): Candidate[] {
   const candidates: Candidate[] = []
   const movAmount = Math.abs(movement.available_cash)
   const directLinkId = extractDirectLinkId(movement.tag_data)
-  const refFromDesc = extractReferenceFromDescription(movement.counterparty)
+  const refsFromDesc = extractReferenceFromDescription(movement.counterparty)
 
   for (const event of cashEvents) {
     if (event.event_type !== targetType) continue
@@ -254,23 +291,36 @@ function buildCandidates(
     const amountDiff = Math.abs(event.amount - movAmount)
     const feeImplied = detectFeeAmount(movement, event)
     const isDirectLink = directLinkId === event.id || directLinkId === event.metadata?.invoice_id || directLinkId === event.metadata?.bill_id
-    const refMatch = refFromDesc && String(event.metadata?.invoice_number || event.metadata?.bill_number || "").includes(refFromDesc)
+    const refMatch = refsFromDesc.some((ref) => {
+      const candRef = String(event.metadata?.invoice_number || event.metadata?.bill_number || "")
+      return candRef === ref // Exact match
+    })
 
-    // Determine match type
-    let matchType: MatchType = "EXACT"
+    // Determine all applicable match types
+    const matchTypes: MatchType[] = []
+
     if (isDirectLink) {
-      matchType = "DIRECT_LINK"
-    } else if (feeImplied) {
-      matchType = "FEE"
-    } else if (isReversal(movement, event)) {
-      matchType = "REVERSAL"
-    } else if (isRounding(movement, event)) {
-      matchType = "ROUNDING"
-    } else if (isEarlyDiscount(movement, event)) {
-      matchType = "DISCOUNT"
-    } else if (movAmount < event.amount - EPS) {
-      matchType = "PARTIAL"
+      matchTypes.push("DIRECT_LINK")
     }
+    if (feeImplied) {
+      matchTypes.push("FEE")
+    }
+    if (isReversal(movement, event)) {
+      matchTypes.push("REVERSAL")
+    }
+    if (isRounding(movement, event)) {
+      matchTypes.push("ROUNDING")
+    }
+    if (isEarlyDiscount(movement, event)) {
+      matchTypes.push("DISCOUNT")
+    }
+    if (movAmount < event.amount - EPS) {
+      matchTypes.push("PARTIAL")
+    }
+
+    // Primary is the first (highest priority), secondary are the rest
+    const primaryMatchType = matchTypes[0] || "EXACT"
+    const secondaryMatchTypes = matchTypes.slice(1)
 
     candidates.push({
       id: event.id,
@@ -279,7 +329,8 @@ function buildCandidates(
       amount: event.amount,
       outstanding_amount: event.outstanding_amount,
       due_date: event.expected_date,
-      match_type: matchType,
+      match_type: primaryMatchType,
+      secondary_match_types: secondaryMatchTypes,
       amount_diff: amountDiff,
       fee_implied: feeImplied,
       is_direct_link: isDirectLink,
@@ -295,7 +346,14 @@ function buildCandidates(
     return a.amount_diff - b.amount_diff
   })
 
-  return candidates
+  // Filter out low-quality matches (amount diff > 20%)
+  const qualityCandidates = candidates.filter((c) => {
+    const diffRatio = c.amount_diff / c.amount
+    return diffRatio <= 0.2 || c.match_type === "DIRECT_LINK" || c.match_type === "EXACT"
+  })
+
+  // Return top N candidates
+  return qualityCandidates.slice(0, maxCandidates)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -311,16 +369,29 @@ function detectFlags(
   const feeCandidates = candidates.filter((c) => c.match_type === "FEE")
   const reversalCandidates = candidates.filter((c) => c.match_type === "REVERSAL")
   const partialCandidates = candidates.filter((c) => c.match_type === "PARTIAL")
-  const aggregationSum = candidates.reduce((sum, c) => sum + c.amount, 0)
+
+  // Only sum candidates that are truly matchable (EXACT or FEE matches)
+  const matchableCandidates = candidates.filter((c) => c.match_type === "EXACT" || c.match_type === "FEE")
+  const aggregationSum = matchableCandidates.reduce((sum, c) => sum + c.amount, 0)
+
+  // Improved conflict detection: account for fees
+  const potentialConflicts = [
+    ...exactCandidates,
+    ...feeCandidates.filter((fc) => {
+      // A fee candidate conflicts if its amount (minus fee) matches movement
+      const amountAfterFee = fc.amount - (fc.fee_implied || 0)
+      return Math.abs(amountAfterFee - Math.abs(movement.available_cash)) < EPS
+    }),
+  ]
 
   return {
     has_direct_link: directLinkCandidates.length > 0,
     has_reference: candidates.some((c) => c.reference_match),
     has_fee: feeCandidates.length > 0,
     is_partial: partialCandidates.length > 0,
-    is_aggregation: Math.abs(aggregationSum - Math.abs(movement.available_cash)) < EPS && candidates.length > 1,
+    is_aggregation: matchableCandidates.length > 1 && Math.abs(aggregationSum - Math.abs(movement.available_cash)) < EPS,
     is_reversal: reversalCandidates.length > 0,
-    same_amount_conflict: exactCandidates.length > 1,
+    same_amount_conflict: potentialConflicts.length > 1,
     cross_entity: candidates.length > 0 && new Set(candidates.map((c) => c.entity_id)).size > 1,
     is_zero_amount: Math.abs(movement.available_cash) < 0.1,
     is_duplicate: false, // Would need historical data to detect
@@ -417,10 +488,23 @@ function resolveCase(
 
   // Overpayment cases
   if (candidates.length > 0) {
-    const maxCandidate = candidates.reduce((max, c) => (c.amount > max.amount ? c : max))
-    if (Math.abs(movement.available_cash) > maxCandidate.amount + EPS) {
+    // Find the best matching candidate (first one after sorting)
+    const bestCandidate = candidates[0]
+    const overpaymentAmount = Math.abs(movement.available_cash) - bestCandidate.amount
+
+    if (overpaymentAmount > EPS) {
+      // Check if overpayment could be offset by credit memo
+      const creditMemos = candidates.filter((c) => c.amount < 0) // Negative amounts = credits
+      const creditSum = creditMemos.reduce((sum, c) => sum + Math.abs(c.amount), 0)
+
+      if (creditSum >= overpaymentAmount - EPS) {
+        return "OVERPAYMENT_CREDIT_MEMO"
+      }
       return "OVERPAYMENT_SINGLE"
     }
+  } else if (Math.abs(movement.available_cash) > EPS) {
+    // Payment with no matching invoice
+    return "OVERPAYMENT_PREPAYMENT"
   }
 
   // No match cases
@@ -470,15 +554,85 @@ export function classifyMovement(
   // Resolve case type
   const caseType = resolveCase(movement, candidates, flags)
 
-  // Determine suggested action
-  let suggestedAction: "auto_match" | "review" | "manual" | "exclude" = "manual"
-  if (caseType.startsWith("DIRECT_LINK") || caseType === "EXACT_SINGLE" || caseType === "EXACT_WITH_REFERENCE") {
-    suggestedAction = "auto_match"
-  } else if (caseType.includes("MULTI") || caseType.includes("CONFLICT") || caseType === "NO_MATCH_HAS_CANDIDATES") {
-    suggestedAction = "review"
-  } else if (caseType.startsWith("NO_MATCH")) {
-    suggestedAction = "manual"
+  // Determine suggested action based on case type
+  const caseActionMap: Record<CaseType, "auto_match" | "review" | "manual" | "exclude"> = {
+    // Direct links - auto match
+    DIRECT_LINK_SINGLE: "auto_match",
+    DIRECT_LINK_MULTI_SAME_ENTITY: "auto_match",
+    DIRECT_LINK_MULTI_DIFF_ENTITY: "review",
+    DIRECT_LINK_WITH_FEE: "auto_match",
+    DIRECT_LINK_PARTIAL: "review",
+
+    // Exact matches
+    EXACT_SINGLE: "auto_match",
+    EXACT_MULTI_SAME_ENTITY: "auto_match", // Same entity, exact amounts
+    EXACT_MULTI_DIFF_ENTITY: "review", // Conflict
+    EXACT_WITH_REFERENCE: "auto_match",
+
+    // Fee cases
+    FEE_IMPLIED_SINGLE: "auto_match",
+    FEE_IMPLIED_MULTI: "review",
+    FEE_FROM_TAG_DATA: "auto_match",
+    FEE_SEPARATE_TRANSACTION: "review",
+    FEE_STRIPE_SQUARE: "auto_match",
+    FEE_ACH: "auto_match",
+
+    // Partial payments
+    PARTIAL_SINGLE: "auto_match",
+    PARTIAL_MULTI_SAME_ENTITY: "review",
+    PARTIAL_MULTI_DIFF_ENTITY: "review",
+    PARTIAL_WITH_FEE: "review",
+
+    // Aggregation
+    AGGREGATION_SAME_ENTITY: "auto_match",
+    AGGREGATION_DIFF_ENTITY: "review",
+    AGGREGATION_WITH_FEE: "review",
+    AGGREGATION_PARTIAL: "review",
+
+    // Rounding - auto match (small diff)
+    ROUNDING_UNDER: "auto_match",
+    ROUNDING_OVER: "auto_match",
+
+    // Discounts
+    EARLY_DISCOUNT: "auto_match",
+    VOLUME_DISCOUNT: "review",
+
+    // Reversals
+    REVERSAL_FULL: "review", // Verify it's intentional
+    REVERSAL_PARTIAL: "review",
+    CHARGEBACK: "review",
+
+    // Overpayments
+    OVERPAYMENT_SINGLE: "review",
+    OVERPAYMENT_PREPAYMENT: "manual",
+    OVERPAYMENT_CREDIT_MEMO: "review",
+
+    // Special cases
+    DUPLICATE_PAYMENT: "review",
+    CROSS_ENTITY_PAYMENT: "review",
+    SETTLEMENT_BREAKDOWN: "review",
+    ZERO_AMOUNT: "manual",
+
+    // No match
+    NO_MATCH_HAS_CANDIDATES: "manual",
+    NO_MATCH_NO_CANDIDATES: "manual",
+
+    // Non-operational
+    INTERCOMPANY_TRANSFER: "exclude",
+    LOAN_PAYMENT: "exclude",
+    LOAN_PROCEEDS: "exclude",
+    PAYROLL: "exclude",
+    TAX_PAYMENT: "exclude",
+    OWNER_DRAW: "exclude",
+    OWNER_CONTRIBUTION: "exclude",
+    BANK_FEE: "exclude",
+    INTEREST_INCOME: "exclude",
+    CREDIT_CARD_PAYMENT: "exclude",
+    MERCHANT_DEPOSIT: "exclude",
+    UNCLASSIFIED_NON_OP: "exclude",
   }
+
+  const suggestedAction = caseActionMap[caseType] || "manual"
 
   return {
     movement_id: movement.id,
