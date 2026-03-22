@@ -1,0 +1,423 @@
+"use client"
+
+import { useState, useEffect, useCallback } from "react"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { RefreshCw, Search, ChevronRight } from "lucide-react"
+import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
+
+interface ClassifiedMovement {
+  id: string
+  date: string
+  amount: number
+  direction: "inflow" | "outflow"
+  counterparty: string | null
+  economic_class: string | null
+  classification: ClassificationResult
+}
+
+interface CaseSummary {
+  total: number
+  by_case_type: Record<CaseType, number>
+  operational: number
+  non_operational: number
+  auto_matchable: number
+  needs_review: number
+}
+
+interface ResponseData {
+  movements: ClassifiedMovement[]
+  summary: CaseSummary
+}
+
+function formatCurrency(n: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n)
+}
+
+function formatDate(d: string | null) {
+  if (!d) return "—"
+  return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
+
+function getCaseTypeColor(caseType: CaseType): string {
+  if (caseType.startsWith("DIRECT_LINK")) return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+  if (caseType.startsWith("EXACT")) return "bg-blue-500/10 text-blue-400 border-blue-500/20"
+  if (caseType.startsWith("FEE")) return "bg-amber-500/10 text-amber-400 border-amber-500/20"
+  if (caseType.startsWith("PARTIAL")) return "bg-purple-500/10 text-purple-400 border-purple-500/20"
+  if (caseType.startsWith("AGGREGATION")) return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
+  if (caseType.startsWith("NO_MATCH")) return "bg-red-500/10 text-red-400 border-red-500/20"
+  if (caseType.startsWith("REVERSAL")) return "bg-orange-500/10 text-orange-400 border-orange-500/20"
+  return "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
+}
+
+function getActionColor(action: string): string {
+  if (action === "auto_match") return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+  if (action === "review") return "bg-amber-500/10 text-amber-400 border-amber-500/20"
+  if (action === "manual") return "bg-blue-500/10 text-blue-400 border-blue-500/20"
+  return "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
+}
+
+function getMatchTypeColor(matchType: string): string {
+  switch (matchType) {
+    case "EXACT":
+      return "bg-emerald-500/10 text-emerald-400"
+    case "FEE":
+      return "bg-amber-500/10 text-amber-400"
+    case "PARTIAL":
+      return "bg-purple-500/10 text-purple-400"
+    case "AGGREGATION":
+      return "bg-cyan-500/10 text-cyan-400"
+    case "ROUNDING":
+      return "bg-blue-500/10 text-blue-400"
+    case "DISCOUNT":
+      return "bg-pink-500/10 text-pink-400"
+    case "REVERSAL":
+      return "bg-orange-500/10 text-orange-400"
+    case "DIRECT_LINK":
+      return "bg-emerald-500/10 text-emerald-400"
+    default:
+      return "bg-zinc-500/10 text-zinc-400"
+  }
+}
+
+export default function ReconciliationCandidatesPage() {
+  const [data, setData] = useState<ResponseData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<"all" | "operational" | "non_op">("all")
+  const [searchQuery, setSearchQuery] = useState("")
+  const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
+  const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
+
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true)
+      const params = new URLSearchParams()
+      if (filter !== "all") params.append("filter", filter)
+      if (searchQuery) params.append("search", searchQuery)
+
+      const res = await fetch(`/api/dashboard/reconciliation-candidates?${params.toString()}`)
+      if (!res.ok) throw new Error("Failed to fetch")
+      const json = await res.json()
+      setData(json)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error")
+    } finally {
+      setLoading(false)
+    }
+  }, [filter, searchQuery])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  const handleSelectMovement = (movement: ClassifiedMovement) => {
+    setSelectedMovement(movement)
+    setIsDetailsPanelOpen(true)
+  }
+
+  if (loading) {
+    return (
+      <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
+        <Skeleton className="h-12 w-64" />
+        <div className="grid grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-24" />
+          ))}
+        </div>
+        <Skeleton className="h-96" />
+      </div>
+    )
+  }
+
+  if (!data) {
+    return (
+      <div className="p-8 bg-[#0A0A0A] min-h-screen">
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6 text-red-400">
+          <p className="font-semibold">Error loading reconciliation candidates</p>
+          <p className="text-sm mt-2">{error || "Unknown error"}</p>
+          <Button onClick={() => fetchData()} className="mt-4 bg-red-600 hover:bg-red-700">
+            Retry
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-8 space-y-5 bg-[#0A0A0A] min-h-screen">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-white tracking-tight">Reconciliation Candidates</h1>
+          <p className="text-[12px] text-zinc-500 mt-0.5">Deterministic case classification · Data-driven matching</p>
+        </div>
+        <Button
+          size="sm"
+          onClick={() => fetchData()}
+          disabled={loading}
+          className="bg-white/10 hover:bg-white/15 text-white text-[11px] h-7 px-3"
+        >
+          <RefreshCw className={`h-3 w-3 mr-1.5 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
+      </div>
+
+      {/* Summary Stats */}
+      <div className="grid grid-cols-5 gap-3">
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Total Movements</p>
+          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-white">{data.summary.total}</p>
+        </div>
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Operational</p>
+          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-emerald-400">{data.summary.operational}</p>
+        </div>
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Non-Operational</p>
+          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-zinc-400">{data.summary.non_operational}</p>
+        </div>
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Auto-Matchable</p>
+          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-emerald-400">{data.summary.auto_matchable}</p>
+        </div>
+        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Needs Review</p>
+          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-amber-400">{data.summary.needs_review}</p>
+        </div>
+      </div>
+
+      {/* Filter Bar */}
+      <div className="bg-[#141414] border border-white/10 rounded-lg p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "operational" | "non_op")} className="w-full">
+            <TabsList className="bg-[#0A0A0A] border border-white/10 h-8">
+              <TabsTrigger value="all" className="text-[11px] h-6 px-3">
+                All ({data.summary.total})
+              </TabsTrigger>
+              <TabsTrigger value="operational" className="text-[11px] h-6 px-3">
+                Operational ({data.summary.operational})
+              </TabsTrigger>
+              <TabsTrigger value="non_op" className="text-[11px] h-6 px-3">
+                Non-Op ({data.summary.non_operational})
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+
+        {/* Search */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+          <Input
+            placeholder="Search by description, counterparty, or case type..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="bg-[#0A0A0A] border-white/10 pl-9 h-8 text-[12px]"
+          />
+        </div>
+      </div>
+
+      {/* Movements Table */}
+      <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
+        {data.movements.length === 0 ? (
+          <div className="p-12 text-center">
+            <p className="text-zinc-500 text-sm">No movements found matching your filters.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-white/10">
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Date</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Description</th>
+                  <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Amount</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Direction</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Case Type</th>
+                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Candidates</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Action</th>
+                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.movements.map((movement) => (
+                  <tr key={movement.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
+                    <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(movement.date)}</td>
+                    <td className="px-3 py-2">
+                      <p className="text-[12px] text-white truncate max-w-[250px]">{movement.counterparty || movement.id.slice(0, 12)}</p>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <span className={`text-[12px] font-mono tabular-nums font-semibold ${movement.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                        {movement.direction === "inflow" ? "+" : "−"}{formatCurrency(Math.abs(movement.amount))}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider ${movement.direction === "inflow" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                        {movement.direction === "inflow" ? "AR" : "AP"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Badge className={`text-[10px] px-2 py-0.5 border ${getCaseTypeColor(movement.classification.case_type)}`}>
+                        {movement.classification.case_type.replace(/_/g, " ")}
+                      </Badge>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <span className="text-[12px] font-mono text-zinc-300">{movement.classification.candidates.length}</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Badge className={`text-[10px] px-2 py-0.5 border capitalize ${getActionColor(movement.classification.suggested_action)}`}>
+                        {movement.classification.suggested_action}
+                      </Badge>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <button
+                        onClick={() => handleSelectMovement(movement)}
+                        className="text-zinc-500 hover:text-zinc-300 transition-colors"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Details Panel */}
+      <Sheet open={isDetailsPanelOpen} onOpenChange={setIsDetailsPanelOpen}>
+        <SheetContent className="bg-[#141414] border-l border-white/10 w-full sm:max-w-2xl overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="text-white text-base">Movement Details</SheetTitle>
+          </SheetHeader>
+
+          {selectedMovement && (
+            <div className="space-y-5 mt-5">
+              {/* Movement Card */}
+              <div className="bg-[#0A0A0A] border border-white/10 rounded-lg p-4">
+                <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-3">Bank Movement</p>
+                <div className="space-y-2">
+                  <div className="flex items-baseline justify-between">
+                    <p className="text-[13px] font-medium text-white">{selectedMovement.counterparty || "Unknown"}</p>
+                    <p className={`text-lg font-mono tabular-nums font-semibold ${selectedMovement.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                      {selectedMovement.direction === "inflow" ? "+" : "−"}{formatCurrency(Math.abs(selectedMovement.amount))}
+                    </p>
+                  </div>
+                  <p className="text-[11px] text-zinc-500">{formatDate(selectedMovement.date)}</p>
+                  {selectedMovement.economic_class && (
+                    <p className="text-[11px] text-zinc-600">Class: {selectedMovement.economic_class}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Classification Info */}
+              <div className="bg-[#0A0A0A] border border-white/10 rounded-lg p-4">
+                <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-3">Classification</p>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-zinc-400">Case Type:</span>
+                    <Badge className={`text-[10px] px-2 py-0.5 border ${getCaseTypeColor(selectedMovement.classification.case_type)}`}>
+                      {selectedMovement.classification.case_type.replace(/_/g, " ")}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-zinc-400">Suggested Action:</span>
+                    <Badge className={`text-[10px] px-2 py-0.5 border capitalize ${getActionColor(selectedMovement.classification.suggested_action)}`}>
+                      {selectedMovement.classification.suggested_action}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-zinc-400">Operational:</span>
+                    <Badge className={`text-[10px] px-2 py-0.5 border ${selectedMovement.classification.is_operational ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"}`}>
+                      {selectedMovement.classification.is_operational ? "Yes" : "No"}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+
+              {/* Flags */}
+              {Object.values(selectedMovement.classification.flags).some((v) => v) && (
+                <div className="bg-[#0A0A0A] border border-white/10 rounded-lg p-4">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-3">Flags</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedMovement.classification.flags.has_direct_link && (
+                      <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px]">Direct Link</Badge>
+                    )}
+                    {selectedMovement.classification.flags.has_reference && (
+                      <Badge className="bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[10px]">Reference Match</Badge>
+                    )}
+                    {selectedMovement.classification.flags.has_fee && (
+                      <Badge className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px]">Has Fee</Badge>
+                    )}
+                    {selectedMovement.classification.flags.is_partial && (
+                      <Badge className="bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[10px]">Partial</Badge>
+                    )}
+                    {selectedMovement.classification.flags.is_aggregation && (
+                      <Badge className="bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-[10px]">Aggregation</Badge>
+                    )}
+                    {selectedMovement.classification.flags.is_reversal && (
+                      <Badge className="bg-orange-500/10 text-orange-400 border border-orange-500/20 text-[10px]">Reversal</Badge>
+                    )}
+                    {selectedMovement.classification.flags.same_amount_conflict && (
+                      <Badge className="bg-red-500/10 text-red-400 border border-red-500/20 text-[10px]">Conflict</Badge>
+                    )}
+                    {selectedMovement.classification.flags.cross_entity && (
+                      <Badge className="bg-pink-500/10 text-pink-400 border border-pink-500/20 text-[10px]">Cross-Entity</Badge>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Candidates Table */}
+              {selectedMovement.classification.candidates.length > 0 ? (
+                <div className="bg-[#0A0A0A] border border-white/10 rounded-lg overflow-hidden">
+                  <div className="px-4 py-3 border-b border-white/5">
+                    <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Candidates ({selectedMovement.classification.candidates.length})</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr className="border-b border-white/5">
+                          <th className="text-left text-[10px] text-zinc-600 uppercase tracking-wider px-3 py-2">Entity</th>
+                          <th className="text-right text-[10px] text-zinc-600 uppercase tracking-wider px-3 py-2">Amount</th>
+                          <th className="text-right text-[10px] text-zinc-600 uppercase tracking-wider px-3 py-2">Outstanding</th>
+                          <th className="text-left text-[10px] text-zinc-600 uppercase tracking-wider px-3 py-2">Match Type</th>
+                          <th className="text-right text-[10px] text-zinc-600 uppercase tracking-wider px-3 py-2">Diff</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedMovement.classification.candidates.map((candidate: Candidate) => (
+                          <tr key={candidate.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                            <td className="px-3 py-2">
+                              <p className="text-white truncate">{candidate.entity_name}</p>
+                              <p className="text-[10px] text-zinc-600">{candidate.id.slice(0, 12)}</p>
+                            </td>
+                            <td className="px-3 py-2 text-right text-zinc-300 font-mono tabular-nums">{formatCurrency(candidate.amount)}</td>
+                            <td className="px-3 py-2 text-right text-zinc-300 font-mono tabular-nums">{formatCurrency(candidate.outstanding_amount)}</td>
+                            <td className="px-3 py-2">
+                              <Badge className={`text-[9px] px-1.5 py-0 ${getMatchTypeColor(candidate.match_type)}`}>{candidate.match_type}</Badge>
+                            </td>
+                            <td className="px-3 py-2 text-right text-zinc-400 font-mono tabular-nums">{formatCurrency(candidate.amount_diff)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-[#0A0A0A] border border-white/10 rounded-lg p-4 text-center">
+                  <p className="text-[12px] text-zinc-500">No candidates found for this movement.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+    </div>
+  )
+}
