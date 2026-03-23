@@ -603,7 +603,7 @@ async function preloadBankPatternMap(userId: string): Promise<Map<string, string
   const map = new Map<string, string>()
 
   try {
-    const { rows } = await query<{ entity_id: string; patterns: string[] }>(
+    const result = await query<{ entity_id: string; patterns: string[] }>(
       `SELECT DISTINCT ma.entity_id,
               ARRAY_AGG(DISTINCT COALESCE(m.raw_description, m.counterparty, '')) FILTER (WHERE COALESCE(m.raw_description, m.counterparty, '') != '') AS patterns
        FROM movement_attributions ma
@@ -613,10 +613,13 @@ async function preloadBankPatternMap(userId: string): Promise<Map<string, string
       [userId]
     )
 
+    const rows = result.rows || []
     for (const row of rows) {
-      for (const pattern of row.patterns || []) {
-        if (pattern) {
-          map.set(pattern.toLowerCase(), row.entity_id)
+      if (row.patterns && Array.isArray(row.patterns)) {
+        for (const pattern of row.patterns) {
+          if (pattern) {
+            map.set(pattern.toLowerCase(), row.entity_id)
+          }
         }
       }
     }
@@ -691,7 +694,7 @@ async function persistAttributions(
  */
 async function fetchMovementsWithAvailableCash(userId: string): Promise<MovementWithAvailableCash[]> {
   await ensureMovementsSchema()
-  const { rows } = await query<
+  const result = await query<
     MovementWithAvailableCash & { amount: string; available_cash: string; metadata: unknown; tag_data: unknown }
   >(
     `SELECT m.id, m.user_id, m.direction, m.amount::float, m.date::text, m.movement_type,
@@ -712,6 +715,7 @@ async function fetchMovementsWithAvailableCash(userId: string): Promise<Movement
     [userId, EPS]
   )
 
+  const rows = result.rows || []
   return rows.map((r) => ({
     ...r,
     amount: safeParseFloat(r.amount),
@@ -726,7 +730,7 @@ async function fetchMovementsWithAvailableCash(userId: string): Promise<Movement
  */
 async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
   await ensureMovementsSchema()
-  const { rows } = await query<
+  const result = await query<
     CashEventRow & { amount: string; outstanding_amount: string | null; expected_date: string }
   >(
     `SELECT id, user_id, entity_id, event_type, amount::float, outstanding_amount::float, status,
@@ -737,6 +741,7 @@ async function loadOpenCashEvents(userId: string): Promise<MutableCashEvent[]> {
     [userId]
   )
 
+  const rows = result.rows || []
   return rows.map((r) => ({
     id: r.id,
     user_id: r.user_id,
