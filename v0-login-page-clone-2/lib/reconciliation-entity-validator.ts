@@ -626,7 +626,6 @@ export async function recordConfirmedBankPattern(
 
     const safeEntityId = entityId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80)
     const safeBankDesc = bankDescription.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80)
-    const customId = `recon_pattern_${safeEntityId}_${safeBankDesc}`
 
     const content = `Reconciliation bank pattern (confirmed match):
 Entity: "${entityName}"
@@ -635,24 +634,22 @@ Bank Description Pattern: "${bankDescription}"
 This bank transaction description reliably maps to entity "${entityName}". 
 Use this to normalize "${bankDescription}" → "${entityName}" in future reconciliation.`
 
-    await sm.memories.add({
+    await sm.add({
       content,
+      containerTag: tag,
+      customId: `recon_pattern_${safeEntityId}_${safeBankDesc}`.slice(0, 100),
       metadata: {
         type: "reconciliation_bank_pattern",
         entity_id: entityId,
         entity_name: entityName,
         bank_description: bankDescription,
       },
-      containerTags: [tag],
-      // @ts-ignore — customId is supported but not in all SDK type defs
-      customId,
     })
 
-    // Invalidate memory cache for this bank description so next run fetches fresh
+    // Invalidate memory cache so next run fetches fresh context
     const cacheKeyPrefix = `${userId}::${bankDescription.toLowerCase().slice(0, 120)}`
     memoryContextCache.delete(cacheKeyPrefix)
   } catch (err) {
-    // Non-fatal: write-back failure should never block reconciliation
     console.warn(
       `[EntityValidator] Failed to write bank pattern to Supermemory:`,
       err instanceof Error ? err.message : String(err)
