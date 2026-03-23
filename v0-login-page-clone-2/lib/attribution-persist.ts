@@ -40,6 +40,7 @@ export type CreateAttributionOpts = {
   source: AttributionSource
   metadata?: Record<string, unknown>
   confidenceEnvelope?: ConfidenceEnvelope | null
+  confidenceDetail?: Record<string, unknown> | null
   migrated_from_allocation_id?: string | null
   /** Phase 2: category-based matching fields */
   category?: string | null
@@ -219,7 +220,10 @@ export async function insertAttributionWithClient(
   }
 
   const metadata = { ...opts.metadata }
-  const confDetail = opts.confidenceEnvelope
+  // Use confidenceDetail if provided (e.g., from fusion engine), otherwise derive from envelope
+  const confDetail = opts.confidenceDetail
+    ? opts.confidenceDetail
+    : opts.confidenceEnvelope
     ? serializeConfidenceEnvelope(opts.confidenceEnvelope)
     : opts.confidence
       ? serializeConfidenceEnvelope(confidenceFromScore(opts.confidence))
