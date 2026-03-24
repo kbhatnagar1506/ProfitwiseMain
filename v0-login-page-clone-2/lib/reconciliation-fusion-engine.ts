@@ -71,6 +71,24 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
   try {
     console.log("[fusion-engine] Starting fusion reconciliation for user:", userId)
 
+    // Clear previous auto-generated attributions so available_cash is recalculated from scratch.
+    // User-source attributions (manual matches) are preserved.
+    await query(
+      `DELETE FROM movement_attributions
+       WHERE user_id = $1
+         AND source = 'rule'
+         AND metadata->>'waterfall_stage' IS NOT NULL`,
+      [userId],
+    )
+    await query(
+      `UPDATE cash_events
+       SET outstanding_amount = amount,
+           status = CASE WHEN status = 'paid' AND COALESCE((metadata->>'manual_paid')::boolean, false) THEN 'paid' ELSE 'open' END
+       WHERE user_id = $1
+         AND status != 'paid'`,
+      [userId],
+    )
+
     // Load all data upfront
     const movements = await fetchMovementsWithAvailableCash(userId)
     const cashEvents = await loadOpenCashEvents(userId)
@@ -163,7 +181,7 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         const memoryScore = memoryScores.get(candidate.id) ?? 0
 
         // Entity gate: AI or Memory must pass
-        const entityGatePassed = aiScore >= 0.40 || memoryScore >= 0.80
+        const entityGatePassed = aiScore >= 0.40 || memoryScore >= 0.80 || mathScore >= 0.80
         if (!entityGatePassed) continue
 
         // Fused score
@@ -175,7 +193,7 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         }
       }
 
-      if (!bestMatch || bestFusedScore < 0.62) {
+      if (!bestMatch || bestFusedScore < 0.55) {
         if (movement.available_cash > STAGE4_REVIEW_THRESHOLD) {
           stage4Queued++
         }
