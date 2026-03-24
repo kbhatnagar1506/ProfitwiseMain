@@ -1,8 +1,9 @@
 import { query } from "@/lib/db"
 import { classifyMovement, type ClassificationResult, type CaseType } from "@/lib/reconciliation-case-classifier"
 import type { CashEventRow } from "@/lib/cash-events-build"
-import { getAuth } from "@clerk/nextjs/server"
-import { NextRequest, NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
+import { NextResponse } from "next/server"
 
 type MovementWithAvailableCash = {
   id: string
@@ -96,18 +97,23 @@ interface ResponseData {
   summary: CaseSummary
 }
 
-export async function GET(request: NextRequest): Promise<NextResponse> {
+export async function GET(request: Request): Promise<NextResponse> {
   try {
-    const { userId } = await getAuth(request)
-    if (!userId) {
+    const cookieStore = await cookies()
+    const sessionToken = cookieStore.get(getSessionCookieName())?.value
+    const user = await getUserBySessionToken(sessionToken ?? "")
+
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+    const userId = user.id
+
     // Get query parameters
-    const searchParams = request.nextUrl.searchParams
-    const filter = searchParams.get("filter") || "all" // all, operational, non_op
-    const caseTypeFilter = searchParams.get("case_type") || null
-    const search = searchParams.get("search") || null
+    const url = new URL(request.url)
+    const filter = url.searchParams.get("filter") || "all" // all, operational, non_op
+    const caseTypeFilter = url.searchParams.get("case_type") || null
+    const search = url.searchParams.get("search") || null
 
     // Load data
     const movements = await fetchMovementsWithAvailableCash(userId)
