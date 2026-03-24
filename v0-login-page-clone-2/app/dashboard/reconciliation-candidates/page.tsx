@@ -124,96 +124,107 @@ export default function ReconciliationCandidatesPage() {
   }
 
   const downloadCSV = () => {
-    if (!data) return
-
-    // Build CSV header
-    const headers = [
-      "Date",
-      "Counterparty",
-      "Amount",
-      "Direction",
-      "Case Type",
-      "Is Operational",
-      "Suggested Action",
-      "Candidates Count",
-      "Candidate 1 Entity",
-      "Candidate 1 Amount",
-      "Candidate 1 Match Type",
-      "Candidate 1 Amount Diff",
-      "Candidate 2 Entity",
-      "Candidate 2 Amount",
-      "Candidate 2 Match Type",
-      "Candidate 2 Amount Diff",
-      "Candidate 3 Entity",
-      "Candidate 3 Amount",
-      "Candidate 3 Match Type",
-      "Candidate 3 Amount Diff",
-      "Flags",
-      "Economic Class",
-      "Movement ID",
-    ]
-
-    // Build CSV rows
-    const rows = data.movements.map((m) => {
-      const c = m.classification
-      const candidates = c.candidates || []
-      const flags = Object.entries(c.flags)
-        .filter(([, v]) => v)
-        .map(([k]) => k)
-        .join("; ")
-
-      return [
-        m.date,
-        m.counterparty || "",
-        m.amount.toFixed(2),
-        m.direction,
-        c.case_type,
-        c.is_operational ? "Yes" : "No",
-        c.suggested_action,
-        candidates.length,
-        candidates[0]?.entity_name || "",
-        candidates[0]?.amount?.toFixed(2) || "",
-        candidates[0]?.match_type || "",
-        candidates[0]?.amount_diff?.toFixed(2) || "",
-        candidates[1]?.entity_name || "",
-        candidates[1]?.amount?.toFixed(2) || "",
-        candidates[1]?.match_type || "",
-        candidates[1]?.amount_diff?.toFixed(2) || "",
-        candidates[2]?.entity_name || "",
-        candidates[2]?.amount?.toFixed(2) || "",
-        candidates[2]?.match_type || "",
-        candidates[2]?.amount_diff?.toFixed(2) || "",
-        flags,
-        m.economic_class || "",
-        m.id,
-      ]
-    })
-
-    // Escape CSV values
-    const escapeCSV = (val: string | number) => {
-      const str = String(val)
-      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-        return `"${str.replace(/"/g, '""')}"`
-      }
-      return str
+    if (!data || !data.movements || data.movements.length === 0) {
+      console.error("No data to download")
+      return
     }
 
-    // Build CSV content
-    const csvContent = [
-      headers.map(escapeCSV).join(","),
-      ...rows.map((row) => row.map(escapeCSV).join(",")),
-    ].join("\n")
+    try {
+      // Build CSV header
+      const headers = [
+        "Date",
+        "Counterparty",
+        "Amount",
+        "Direction",
+        "Case Type",
+        "Is Operational",
+        "Suggested Action",
+        "Candidates Count",
+        "Candidate 1 Entity",
+        "Candidate 1 Amount",
+        "Candidate 1 Match Type",
+        "Candidate 1 Amount Diff",
+        "Candidate 2 Entity",
+        "Candidate 2 Amount",
+        "Candidate 2 Match Type",
+        "Candidate 2 Amount Diff",
+        "Candidate 3 Entity",
+        "Candidate 3 Amount",
+        "Candidate 3 Match Type",
+        "Candidate 3 Amount Diff",
+        "Flags",
+        "Economic Class",
+        "Movement ID",
+      ]
 
-    // Download
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = `reconciliation-candidates-${new Date().toISOString().split("T")[0]}.csv`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+      // Build CSV rows
+      const rows = data.movements.map((m) => {
+        const c = m.classification
+        const candidates = c?.candidates || []
+        const flags = c?.flags
+          ? Object.entries(c.flags)
+              .filter(([, v]) => v)
+              .map(([k]) => k)
+              .join("; ")
+          : ""
+
+        return [
+          m.date || "",
+          m.counterparty || "",
+          typeof m.amount === "number" ? m.amount.toFixed(2) : "0.00",
+          m.direction || "",
+          c?.case_type || "",
+          c?.is_operational ? "Yes" : "No",
+          c?.suggested_action || "",
+          candidates.length,
+          candidates[0]?.entity_name || "",
+          typeof candidates[0]?.amount === "number" ? candidates[0].amount.toFixed(2) : "",
+          candidates[0]?.match_type || "",
+          typeof candidates[0]?.amount_diff === "number" ? candidates[0].amount_diff.toFixed(2) : "",
+          candidates[1]?.entity_name || "",
+          typeof candidates[1]?.amount === "number" ? candidates[1].amount.toFixed(2) : "",
+          candidates[1]?.match_type || "",
+          typeof candidates[1]?.amount_diff === "number" ? candidates[1].amount_diff.toFixed(2) : "",
+          candidates[2]?.entity_name || "",
+          typeof candidates[2]?.amount === "number" ? candidates[2].amount.toFixed(2) : "",
+          candidates[2]?.match_type || "",
+          typeof candidates[2]?.amount_diff === "number" ? candidates[2].amount_diff.toFixed(2) : "",
+          flags,
+          m.economic_class || "",
+          m.id || "",
+        ]
+      })
+
+      // Escape CSV values
+      const escapeCSV = (val: string | number) => {
+        const str = String(val ?? "")
+        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+          return `"${str.replace(/"/g, '""')}"`
+        }
+        return str
+      }
+
+      // Build CSV content
+      const csvContent = [
+        headers.map(escapeCSV).join(","),
+        ...rows.map((row) => row.map(escapeCSV).join(",")),
+      ].join("\n")
+
+      // Download using data URI approach (more compatible)
+      const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8;" })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.setAttribute("href", url)
+      link.setAttribute("download", `reconciliation-candidates-${new Date().toISOString().split("T")[0]}.csv`)
+      link.style.visibility = "hidden"
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error("CSV download error:", err)
+      alert("Failed to download CSV: " + (err instanceof Error ? err.message : "Unknown error"))
+    }
   }
 
   const runAIEnhancement = async () => {

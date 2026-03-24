@@ -62,6 +62,17 @@ async function loadCashEvents(userId: string): Promise<CashEventRow[]> {
   return result.rows as CashEventRow[]
 }
 
+// Store for job status (in production, use Redis or DB)
+const jobStore = new Map<string, {
+  status: "pending" | "running" | "completed" | "failed"
+  progress: number
+  result?: unknown
+  error?: string
+  startedAt: Date
+  completedAt?: Date
+}>()
+
+// POST - Start a new AI enhancement job
 export async function POST(request: Request): Promise<NextResponse> {
   try {
     const cookieStore = await cookies()
@@ -74,11 +85,102 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const userId = user.id
     const body = await request.json()
-    const maxMovements = body.maxMovements || 50
+    const maxMovements = body.maxMovements || 30
 
+    // Create job ID
+    const jobId = `ai-enhance-${userId}-${Date.now()}`
+    
+    // Initialize job status
+    jobStore.set(jobId, {
+      status: "pending",
+      progress: 0,
+      startedAt: new Date(),
+    })
+
+    // Start background processing (don't await)
+    processAIEnhancement(jobId, userId, maxMovements).catch((err) => {
+      console.error("[AI Enhance Job] Error:", err)
+      const job = jobStore.get(jobId)
+      if (job) {
+        job.status = "failed"
+        job.error = err instanceof Error ? err.message : "Unknown error"
+        job.completedAt = new Date()
+      }
+    })
+
+    return NextResponse.json({ 
+      jobId,
+      status: "pending",
+      message: "AI enhancement job started. Poll GET /api/dashboard/reconciliation-candidates/ai-enhance?jobId=... for status."
+    })
+  } catch (error) {
+    console.error("[reconciliation-ai-classify] Error:", error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Internal server error" },
+      { status: 500 }
+    )
+  }
+}
+
+// GET - Check job status
+export async function GET(request: Request): Promise<NextResponse> {
+  try {
+    const cookieStore = await cookies()
+    const sessionToken = cookieStore.get(getSessionCookieName())?.value
+    const user = await getUserBySessionToken(sessionToken ?? "")
+
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    const url = new URL(request.url)
+    const jobId = url.searchParams.get("jobId")
+
+    if (!jobId) {
+      return NextResponse.json({ error: "jobId required" }, { status: 400 })
+    }
+
+    const job = jobStore.get(jobId)
+    if (!job) {
+      return NextResponse.json({ error: "Job not found" }, { status: 404 })
+    }
+
+    // Clean up old completed jobs (older than 5 minutes)
+    if (job.completedAt && Date.now() - job.completedAt.getTime() > 5 * 60 * 1000) {
+      jobStore.delete(jobId)
+    }
+
+    return NextResponse.json({
+      jobId,
+      status: job.status,
+      progress: job.progress,
+      result: job.result,
+      error: job.error,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    })
+  } catch (error) {
+    console.error("[reconciliation-ai-classify] GET Error:", error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Internal server error" },
+      { status: 500 }
+    )
+  }
+}
+
+// Background processing function
+async function processAIEnhancement(jobId: string, userId: string, maxMovements: number) {
+  const job = jobStore.get(jobId)
+  if (!job) return
+
+  job.status = "running"
+  job.progress = 10
+
+  try {
     // Load data
     const movements = await fetchMovementsWithAvailableCash(userId)
     const cashEvents = await loadCashEvents(userId)
+    job.progress = 20
 
     // First, run deterministic classification
     const classifiedMovements: MovementForAI[] = movements.map((m) => {
@@ -93,6 +195,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         classification,
       }
     })
+    job.progress = 40
 
     // Build entity list for AI
     const cashEventsForAI = cashEvents.map((e) => ({
@@ -103,11 +206,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     }))
 
     // Run AI enhancement
+    job.progress = 50
     const aiEnhancements = await enhanceClassificationsWithAI(
       classifiedMovements,
       cashEventsForAI,
       { maxMovements }
     )
+    job.progress = 90
 
     // Merge results
     const enhancedResults = classifiedMovements.map((m) => {
@@ -122,7 +227,6 @@ export async function POST(request: Request): Promise<NextResponse> {
           case_type: m.classification.case_type,
           suggested_action: m.classification.suggested_action,
           candidates_count: m.classification.candidates.length,
-          flags: m.classification.flags,
         },
         ai_enhanced: aiEnhancement
           ? {
@@ -130,12 +234,8 @@ export async function POST(request: Request): Promise<NextResponse> {
               confidence: aiEnhancement.confidence,
               reasoning: aiEnhancement.reasoning,
               recommended_action: aiEnhancement.recommended_action,
-              entity_matches: aiEnhancement.entity_matches,
-              flags_detected: aiEnhancement.flags_detected,
             }
           : null,
-        final_case_type: aiEnhancement?.suggested_case_type || m.classification.case_type,
-        final_action: aiEnhancement?.recommended_action || m.classification.suggested_action,
       }
     })
 
@@ -149,15 +249,15 @@ export async function POST(request: Request): Promise<NextResponse> {
       high_confidence: enhancedResults.filter((r) => r.ai_enhanced && r.ai_enhanced.confidence >= 0.8).length,
     }
 
-    return NextResponse.json({
-      movements: enhancedResults,
-      summary,
-    })
+    job.status = "completed"
+    job.progress = 100
+    job.result = { movements: enhancedResults, summary }
+    job.completedAt = new Date()
+
   } catch (error) {
-    console.error("[reconciliation-ai-classify] Error:", error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Internal server error" },
-      { status: 500 }
-    )
+    job.status = "failed"
+    job.error = error instanceof Error ? error.message : "Unknown error"
+    job.completedAt = new Date()
+    throw error
   }
 }
