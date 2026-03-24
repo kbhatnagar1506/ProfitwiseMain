@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
-import { RefreshCw, Search, ChevronRight, Download } from "lucide-react"
+import { RefreshCw, Search, ChevronRight, Download, Sparkles } from "lucide-react"
 import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
 
 interface ClassifiedMovement {
@@ -87,11 +87,13 @@ function getMatchTypeColor(matchType: string): string {
 export default function ReconciliationCandidatesPage() {
   const [data, setData] = useState<ResponseData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [aiLoading, setAiLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<"all" | "operational" | "non_op">("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
   const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
+  const [aiEnhancements, setAiEnhancements] = useState<Map<string, { suggested_case_type: string; confidence: number; reasoning: string }>>(new Map())
 
   const fetchData = useCallback(async () => {
     try {
@@ -214,6 +216,41 @@ export default function ReconciliationCandidatesPage() {
     URL.revokeObjectURL(url)
   }
 
+  const runAIEnhancement = async () => {
+    try {
+      setAiLoading(true)
+      const res = await fetch("/api/dashboard/reconciliation-candidates/ai-enhance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxMovements: 50 }),
+      })
+      
+      if (!res.ok) throw new Error("AI enhancement failed")
+      
+      const json = await res.json()
+      
+      // Store AI enhancements
+      const enhancements = new Map<string, { suggested_case_type: string; confidence: number; reasoning: string }>()
+      for (const m of json.movements || []) {
+        if (m.ai_enhanced) {
+          enhancements.set(m.id, {
+            suggested_case_type: m.ai_enhanced.suggested_case_type,
+            confidence: m.ai_enhanced.confidence,
+            reasoning: m.ai_enhanced.reasoning,
+          })
+        }
+      }
+      setAiEnhancements(enhancements)
+      
+      // Show summary
+      alert(`AI Enhancement Complete!\n\n• ${json.summary.ai_enhanced} movements analyzed\n• ${json.summary.case_type_changes} classifications improved\n• ${json.summary.high_confidence} high-confidence matches`)
+    } catch (err) {
+      alert("AI enhancement failed: " + (err instanceof Error ? err.message : "Unknown error"))
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
@@ -251,6 +288,15 @@ export default function ReconciliationCandidatesPage() {
           <p className="text-[12px] text-zinc-500 mt-0.5">Deterministic case classification · Data-driven matching</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={runAIEnhancement}
+            disabled={loading || aiLoading || !data}
+            className="bg-purple-600 hover:bg-purple-700 text-white text-[11px] h-7 px-3"
+          >
+            <Sparkles className={`h-3 w-3 mr-1.5 ${aiLoading ? "animate-pulse" : ""}`} />
+            {aiLoading ? "Analyzing..." : "AI Enhance"}
+          </Button>
           <Button
             size="sm"
             onClick={downloadCSV}
