@@ -96,7 +96,6 @@ export interface Candidate {
   fee_implied: number | null
   is_direct_link: boolean
   reference_match: boolean
-  entity_name_match: boolean // ADDED: Whether counterparty name matches entity name
 }
 
 export interface ClassificationFlags {
@@ -279,65 +278,6 @@ function isRounding(movement: MovementWithAvailableCash, candidate: CashEventRow
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entity Name Matching Helper
-// ─────────────────────────────────────────────────────────────────────────────
-
-function normalizeEntityName(name: string | null | undefined): string {
-  if (!name) return ""
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "").trim()
-}
-
-function extractNameFromParentheses(name: string | null): string | null {
-  if (!name) return null
-  const match = name.match(/\(([^)]+)\)/)
-  return match ? match[1] : null
-}
-
-function entityNamesMatch(movementCounterparty: string | null, candidateEntityName: string | null): boolean {
-  if (!movementCounterparty || !candidateEntityName) return false
-  
-  const movNorm = normalizeEntityName(movementCounterparty)
-  const candNorm = normalizeEntityName(candidateEntityName)
-  
-  if (!movNorm || !candNorm) return false
-  
-  // Exact match after normalization
-  if (movNorm === candNorm) return true
-  
-  // One contains the other (for partial names)
-  if (movNorm.length >= 4 && candNorm.length >= 4) {
-    if (movNorm.includes(candNorm) || candNorm.includes(movNorm)) return true
-  }
-  
-  // Extract name from parentheses in movement counterparty
-  // e.g., "Hailey Lacy (Depaul)" -> check both "Hailey Lacy" and "Depaul"
-  const orgName = extractNameFromParentheses(movementCounterparty)
-  if (orgName) {
-    const orgNorm = normalizeEntityName(orgName)
-    if (orgNorm && orgNorm.length >= 4) {
-      if (orgNorm === candNorm || orgNorm.includes(candNorm) || candNorm.includes(orgNorm)) return true
-    }
-    // Also check the part before parentheses
-    const beforeParen = movementCounterparty.split("(")[0].trim()
-    const beforeNorm = normalizeEntityName(beforeParen)
-    if (beforeNorm && beforeNorm.length >= 4) {
-      if (beforeNorm === candNorm || beforeNorm.includes(candNorm) || candNorm.includes(beforeNorm)) return true
-    }
-  }
-  
-  // Extract name from parentheses in candidate entity name
-  const candOrgName = extractNameFromParentheses(candidateEntityName)
-  if (candOrgName) {
-    const candOrgNorm = normalizeEntityName(candOrgName)
-    if (candOrgNorm && candOrgNorm.length >= 4) {
-      if (candOrgNorm === movNorm || candOrgNorm.includes(movNorm) || movNorm.includes(candOrgNorm)) return true
-    }
-  }
-  
-  return false
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Candidate Building
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -375,10 +315,6 @@ function buildCandidates(
       const candRef = String(event.metadata?.invoice_number || event.metadata?.bill_number || "")
       return candRef === ref // Exact match
     })
-    
-    // ADDED: Check if entity name matches movement counterparty
-    const entityNameMatch = entityNamesMatch(movement.counterparty, entityName) ||
-                            entityNamesMatch(movement.raw_description, entityName)
 
     // Determine all applicable match types
     const matchTypes: MatchType[] = []
@@ -430,7 +366,6 @@ function buildCandidates(
         fee_implied: detectFeeAmount(movement, event),
         is_direct_link: isDirectLink,
         reference_match: !!refMatch,
-        entity_name_match: entityNameMatch,
       })
     } else {
       // Reversal candidate
@@ -447,16 +382,13 @@ function buildCandidates(
         fee_implied: null,
         is_direct_link: isDirectLink,
         reference_match: !!refMatch,
-        entity_name_match: entityNameMatch,
       })
     }
   }
 
-  // Sort by match quality: direct link first, then entity name match, then exact, then by amount diff
+  // Sort by match quality: direct link first, then exact, then by amount diff
   candidates.sort((a, b) => {
     if (a.is_direct_link !== b.is_direct_link) return a.is_direct_link ? -1 : 1
-    // ADDED: Prioritize entity name matches
-    if (a.entity_name_match !== b.entity_name_match) return a.entity_name_match ? -1 : 1
     if (a.match_type === "EXACT" && b.match_type !== "EXACT") return -1
     if (a.match_type !== "EXACT" && b.match_type === "EXACT") return 1
     return a.amount_diff - b.amount_diff
@@ -521,9 +453,8 @@ function detectFlags(
     is_aggregation: matchableCandidates.length > 1 && Math.abs(aggregationSum - Math.abs(movement.available_cash)) < EPS,
     is_reversal: reversalCandidates.length > 0 || isChargeback,
     same_amount_conflict: potentialConflicts.length > 1,
-    // FIXED Issue 4: cross_entity should only be true if EXACT matches (with diff < EPS) span multiple entities
-    // Not based on all candidates, just the ones that are actually exact matches
-    cross_entity: exactCandidates.length > 1 && new Set(exactCandidates.map((c) => c.entity_id)).size > 1,
+    // Only flag cross_entity if the EXACT matches span multiple entities (not all candidates)
+    cross_entity: exactCandidates.length > 0 && new Set(exactCandidates.map((c) => c.entity_id)).size > 1,
     is_zero_amount: Math.abs(movement.available_cash) < 0.1,
     is_duplicate: isDuplicate,
   }
@@ -559,30 +490,23 @@ function resolveCase(
     return uniqueEntities === 1 ? "DIRECT_LINK_MULTI_SAME_ENTITY" : "DIRECT_LINK_MULTI_DIFF_ENTITY"
   }
 
-  // Exact match cases - FIXED Issue 1: Check total candidates count, not just exact matches with diff < EPS
+  // Exact match cases
   const exactMatches = candidates.filter((c) => c.match_type === "EXACT" && Math.abs(c.amount_diff) < EPS)
-  const allExactCandidates = candidates.filter((c) => c.match_type === "EXACT")
-  
   if (exactMatches.length > 0) {
-    // FIXED: If there are multiple candidates total (even if only 1 has diff < EPS), it's not truly SINGLE
-    // A "SINGLE" means there's only ONE plausible match, not multiple candidates where one happens to be exact
-    const isTrulySingle = exactMatches.length === 1 && 
-                          allExactCandidates.length === 1 && 
-                          !flags.same_amount_conflict &&
-                          !flags.cross_entity
-    
-    if (isTrulySingle) {
+    if (exactMatches.length === 1) {
+      // If there's a same_amount_conflict, we can't safely call it SINGLE
+      if (flags.same_amount_conflict) {
+        const uniqueEntities = new Set(candidates.filter(c => c.match_type === "EXACT").map((c) => c.entity_id)).size
+        return uniqueEntities === 1 ? "EXACT_MULTI_SAME_ENTITY" : "EXACT_MULTI_DIFF_ENTITY"
+      }
       if (flags.has_reference) return "EXACT_WITH_REFERENCE"
       return "EXACT_SINGLE"
     }
-    
-    // Multiple exact matches or conflicts exist
-    const uniqueEntities = new Set(allExactCandidates.map((c) => c.entity_id)).size
+    const uniqueEntities = new Set(exactMatches.map((c) => c.entity_id)).size
     return uniqueEntities === 1 ? "EXACT_MULTI_SAME_ENTITY" : "EXACT_MULTI_DIFF_ENTITY"
   }
 
-  // FIXED Issue 2: Fee cases should only trigger if there's NO exact match available
-  // Fee detection should be a fallback, not override exact matches
+  // Fee cases
   if (flags.has_fee) {
     const feeCandidates = candidates.filter((c) => c.match_type === "FEE")
     
@@ -594,7 +518,6 @@ function resolveCase(
       return "FEE_FROM_TAG_DATA"
     }
     
-    // FIXED Issue 5: Count actual FEE candidates for SINGLE vs MULTI naming
     if (feeCandidates.length === 1) {
       const processor = detectProcessorType(movement.counterparty)
       if (processor === "stripe" || processor === "square") return "FEE_STRIPE_SQUARE"
