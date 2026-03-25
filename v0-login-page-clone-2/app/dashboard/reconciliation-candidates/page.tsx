@@ -360,7 +360,7 @@ export default function ReconciliationCandidatesPage() {
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-6 gap-3">
+      <div className="grid grid-cols-4 gap-3">
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Total Movements</p>
           <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-white">{data.summary.total}</p>
@@ -376,14 +376,6 @@ export default function ReconciliationCandidatesPage() {
         <div className="bg-[#141414] border border-red-500/30 rounded-lg p-4">
           <p className="text-[10px] text-red-400 uppercase tracking-wider">Zero Candidates</p>
           <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-red-400">{data.summary.zero_candidates || 0}</p>
-        </div>
-        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Auto-Matchable</p>
-          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-emerald-400">{data.summary.auto_matchable}</p>
-        </div>
-        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Needs Review</p>
-          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-amber-400">{data.summary.needs_review}</p>
         </div>
       </div>
 
