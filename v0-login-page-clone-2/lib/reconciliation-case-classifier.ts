@@ -221,7 +221,8 @@ function detectFeeAmount(movement: MovementWithAvailableCash, candidate: CashEve
   if (diff < EPS) return null
 
   const feeRatio = diff / candAmount
-  if (feeRatio < 0.005 || feeRatio > 0.1) return null
+  // Fee must be between 0.5% and 5% (typical processor fees)
+  if (feeRatio < 0.005 || feeRatio > 0.05) return null
 
   return diff
 }
@@ -793,50 +794,51 @@ export function classifyMovement(
   const caseType = resolveCase(movement, candidates, flags, allMovements)
 
   // Determine suggested action based on case type
+  // NOTE: All auto_match changed to review for evaluation phase - no auto-matching yet
   const caseActionMap: Record<CaseType, "auto_match" | "review" | "manual" | "exclude"> = {
-    // Direct links - auto match
-    DIRECT_LINK_SINGLE: "auto_match",
-    DIRECT_LINK_MULTI_SAME_ENTITY: "auto_match",
+    // Direct links - review (was auto_match)
+    DIRECT_LINK_SINGLE: "review",
+    DIRECT_LINK_MULTI_SAME_ENTITY: "review",
     DIRECT_LINK_MULTI_DIFF_ENTITY: "review",
-    DIRECT_LINK_WITH_FEE: "auto_match",
+    DIRECT_LINK_WITH_FEE: "review",
     DIRECT_LINK_PARTIAL: "review",
 
-    // Exact matches
-    EXACT_SINGLE: "auto_match",
-    EXACT_MULTI_SAME_ENTITY: "auto_match", // Same entity, exact amounts
-    EXACT_MULTI_DIFF_ENTITY: "review", // Conflict
-    EXACT_WITH_REFERENCE: "auto_match",
+    // Exact matches - review (was auto_match)
+    EXACT_SINGLE: "review",
+    EXACT_MULTI_SAME_ENTITY: "review",
+    EXACT_MULTI_DIFF_ENTITY: "review",
+    EXACT_WITH_REFERENCE: "review",
 
-    // Fee cases
-    FEE_IMPLIED_SINGLE: "auto_match",
+    // Fee cases - review (was auto_match)
+    FEE_IMPLIED_SINGLE: "review",
     FEE_IMPLIED_MULTI: "review",
-    FEE_FROM_TAG_DATA: "auto_match",
+    FEE_FROM_TAG_DATA: "review",
     FEE_SEPARATE_TRANSACTION: "review",
-    FEE_STRIPE_SQUARE: "auto_match",
-    FEE_ACH: "auto_match",
+    FEE_STRIPE_SQUARE: "review",
+    FEE_ACH: "review",
 
     // Partial payments
-    PARTIAL_SINGLE: "auto_match",
+    PARTIAL_SINGLE: "review",
     PARTIAL_MULTI_SAME_ENTITY: "review",
     PARTIAL_MULTI_DIFF_ENTITY: "review",
     PARTIAL_WITH_FEE: "review",
 
-    // Aggregation
-    AGGREGATION_SAME_ENTITY: "auto_match",
+    // Aggregation - review (was auto_match)
+    AGGREGATION_SAME_ENTITY: "review",
     AGGREGATION_DIFF_ENTITY: "review",
     AGGREGATION_WITH_FEE: "review",
     AGGREGATION_PARTIAL: "review",
 
-    // Rounding - auto match (small diff)
-    ROUNDING_UNDER: "auto_match",
-    ROUNDING_OVER: "auto_match",
+    // Rounding - review (was auto_match)
+    ROUNDING_UNDER: "review",
+    ROUNDING_OVER: "review",
 
-    // Discounts
-    EARLY_DISCOUNT: "auto_match",
+    // Discounts - review (was auto_match)
+    EARLY_DISCOUNT: "review",
     VOLUME_DISCOUNT: "review",
 
     // Reversals
-    REVERSAL_FULL: "review", // Verify it's intentional
+    REVERSAL_FULL: "review",
     REVERSAL_PARTIAL: "review",
     CHARGEBACK: "review",
 
