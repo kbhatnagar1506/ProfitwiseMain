@@ -494,7 +494,7 @@ ${candidateList}
 For each candidate, provide a confidence score from 0.0 (definitely not a match) to 1.0 (definitely a match).
 Consider:
 - Entity name similarity
-- Amount reasonableness (within 0.5-8% for processor fees)
+- Amount reasonableness (within 0.5-5% for processor fees)
 - Whether the bank description could plausibly refer to this entity
 
 Return ONLY a JSON object with numeric indices as keys and scores as values, like:
@@ -585,13 +585,13 @@ async function callLLMForScoring(prompt: string, attempt = 1): Promise<string | 
 }
 
 /**
- * Detect processor fee (0.5-8% band)
+ * Detect processor fee (0.5-5% band)
  */
 function detectProcessorFee(movement: MovementWithAvailableCash, candidate: MutableCashEvent): boolean {
   if (movement.available_cash >= candidate.outstanding_amount) return false
 
   const impliedFee = (candidate.outstanding_amount - movement.available_cash) / candidate.outstanding_amount
-  return impliedFee >= 0.005 && impliedFee <= 0.08
+  return impliedFee >= 0.005 && impliedFee <= 0.05
 }
 
 /**
@@ -629,14 +629,21 @@ function buildAttribution(
     explanation: `Math ${(mathScore * 100).toFixed(0)}% | AI ${(aiScore * 100).toFixed(0)}% | Memory ${(memoryScore * 100).toFixed(0)}%`,
   }
 
+  // gross_amount = invoice/bill amount (what was expected)
+  // net_amount = amount actually applied from bank (capped at invoice amount)
+  // When bank > invoice (overpayment/no fee), net = gross (full invoice paid)
+  // When bank < invoice (fee deducted), net = bank amount
+  const grossAmount = candidate.outstanding_amount
+  const netAmount = Math.min(movement.available_cash, candidate.outstanding_amount)
+
   return {
     userId,
     movementId: movement.id,
     component_type: targetType,
     entity_id: candidate.entity_id,
     reference_id: (candidate.metadata?.invoice_id ?? candidate.metadata?.bill_id) as string | null,
-    gross_amount: candidate.outstanding_amount,
-    net_amount: movement.available_cash,
+    gross_amount: grossAmount,
+    net_amount: netAmount,
     confidence: fusedScore,
     source: "rule",
     metadata: {
