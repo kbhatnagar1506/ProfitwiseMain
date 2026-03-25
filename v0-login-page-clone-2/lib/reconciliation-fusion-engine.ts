@@ -500,7 +500,9 @@ No explanation, no markdown, just JSON.`
     const response = await callLLMForScoring(prompt)
     if (response) {
       try {
-        const parsed = JSON.parse(response)
+        // Strip markdown code fences if model wraps response despite response_format instruction
+        const cleaned = response.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim()
+        const parsed = JSON.parse(cleaned)
         for (let i = 0; i < candidates.length; i++) {
           const score = parsed[String(i + 1)]
           if (typeof score === "number" && score >= 0 && score <= 1) {
@@ -543,6 +545,7 @@ async function callLLMForScoring(prompt: string): Promise<string | null> {
         messages: [{ role: "user", content: prompt }],
         max_tokens: 1000,
         temperature: 0,
+        response_format: { type: "json_object" },
       }),
       signal: controller.signal,
     })
