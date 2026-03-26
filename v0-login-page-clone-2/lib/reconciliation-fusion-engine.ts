@@ -156,9 +156,17 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         continue
       }
 
+      // Detect same-amount conflict (multiple candidates with identical amounts)
+      const movementAmount = movement.available_cash
+      const sameAmountCandidates = candidates.filter(c => 
+        Math.abs(c.outstanding_amount - movementAmount) < 0.01
+      )
+      const hasSameAmountConflict = sameAmountCandidates.length > 1
+
       // Score all candidates in parallel
       const mathScores = new Map<string, number>()
       const memoryScores = new Map<string, number>()
+      const levenshteinScores = new Map<string, number>()
 
       for (const candidate of candidates) {
         const mathScore = scoreMath(movement, candidate)
@@ -166,6 +174,12 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
 
         const memoryScore = scoreMemory(movement, candidate, bankPatternMap, resolvedBankForMove)
         memoryScores.set(candidate.id, memoryScore)
+
+        // NEW: Levenshtein entity name similarity (deterministic, no LLM cost)
+        const entityName = (candidate.metadata?.customer_name ?? candidate.metadata?.vendor_name ?? "") as string
+        const bankLabel = resolvedBankForMove ?? movement.counterparty ?? ""
+        const levScore = entityNameSimilarity(bankLabel, entityName)
+        levenshteinScores.set(candidate.id, levScore)
       }
 
       // Batch AI scoring
@@ -179,13 +193,31 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         const mathScore = mathScores.get(candidate.id) ?? 0
         const aiScore = aiScores.get(candidate.id) ?? 0
         const memoryScore = memoryScores.get(candidate.id) ?? 0
+        const levenshteinScore = levenshteinScores.get(candidate.id) ?? 0
+        const hasDirectEntityLink = movement.counterparty_entity_id === candidate.entity_id
 
-        // Entity gate: AI or Memory must pass
-        const entityGatePassed = aiScore >= 0.40 || memoryScore >= 0.80 || mathScore >= 0.80
+        // Entity signals - CRITICAL: Use > 0.50 for AI to exclude passive LLM default
+        // The LLM returns 0.50 on failure/timeout, which is NOT an active validation.
+        // Real LLM validations return 0.85+ for matches, 0.15- for non-matches.
+        const hasEntitySignal = 
+          aiScore > 0.50 ||            // AI ACTIVELY confirms (not default 0.50)
+          memoryScore >= 0.80 ||       // Known Supermemory pattern
+          levenshteinScore >= 0.70 ||  // Strong name similarity
+          hasDirectEntityLink          // Pre-linked entity from classification
+
+        // Gate logic: stricter when same-amount conflict exists
+        const entityGatePassed = hasSameAmountConflict
+          ? hasEntitySignal                           // STRICT: Must have ACTIVE entity signal
+          : (hasEntitySignal || mathScore >= 0.80)    // NORMAL: Math fallback allowed
+        
         if (!entityGatePassed) continue
 
-        // Fused score
-        const fusedScore = mathScore * 0.45 + aiScore * 0.35 + memoryScore * 0.20
+        // Fused score (4 signals, rebalanced weights)
+        const fusedScore = 
+          mathScore * 0.40 +        // Amount + date compatibility
+          aiScore * 0.30 +          // LLM entity semantic match
+          memoryScore * 0.15 +      // Historical pattern match
+          levenshteinScore * 0.15   // Deterministic name similarity
 
         if (fusedScore > bestFusedScore) {
           bestFusedScore = fusedScore
@@ -204,6 +236,7 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
       const mathScore = mathScores.get(bestMatch.id) ?? 0
       const aiScore = aiScores.get(bestMatch.id) ?? 0
       const memoryScore = memoryScores.get(bestMatch.id) ?? 0
+      const levenshteinScore = levenshteinScores.get(bestMatch.id) ?? 0
 
       const attr = buildAttribution(
         userId,
@@ -214,6 +247,7 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         mathScore,
         aiScore,
         memoryScore,
+        levenshteinScore,
         resolvedBankForMove
       )
 
@@ -606,6 +640,7 @@ function buildAttribution(
   mathScore: number,
   aiScore: number,
   memoryScore: number,
+  levenshteinScore: number,
   resolvedBankForMove: string | null
 ): CreateAttributionOpts | null {
   const entityName = (candidate.metadata?.customer_name ?? candidate.metadata?.vendor_name ?? "") as string
@@ -625,8 +660,9 @@ function buildAttribution(
     mathScore: Math.round(mathScore * 100) / 100,
     aiScore: Math.round(aiScore * 100) / 100,
     memoryScore: Math.round(memoryScore * 100) / 100,
+    levenshteinScore: Math.round(levenshteinScore * 100) / 100,
     fusedScore: Math.round(fusedScore * 100) / 100,
-    explanation: `Math ${(mathScore * 100).toFixed(0)}% | AI ${(aiScore * 100).toFixed(0)}% | Memory ${(memoryScore * 100).toFixed(0)}%`,
+    explanation: `Math ${(mathScore * 100).toFixed(0)}% | AI ${(aiScore * 100).toFixed(0)}% | Memory ${(memoryScore * 100).toFixed(0)}% | Lev ${(levenshteinScore * 100).toFixed(0)}%`,
   }
 
   // gross_amount = invoice/bill amount (what was expected)
