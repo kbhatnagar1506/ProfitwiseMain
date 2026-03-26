@@ -90,7 +90,7 @@ export default function ReconciliationCandidatesPage() {
   const [loading, setLoading] = useState(true)
   const [aiLoading, setAiLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<"all" | "operational" | "non_op" | "zero_candidates">("all")
+  const [filter, setFilter] = useState<"all" | "operational" | "non_op" | "zero_candidates" | "review">("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
   const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
@@ -382,7 +382,7 @@ export default function ReconciliationCandidatesPage() {
       {/* Filter Bar */}
       <div className="bg-[#141414] border border-white/10 rounded-lg p-4 space-y-3">
         <div className="flex items-center gap-3">
-          <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "operational" | "non_op" | "zero_candidates")} className="w-full">
+          <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "operational" | "non_op" | "zero_candidates" | "review")} className="w-full">
             <TabsList className="bg-[#0A0A0A] border border-white/10 h-8">
               <TabsTrigger value="all" className="text-[11px] h-6 px-3">
                 All ({data.summary.total})
@@ -395,6 +395,9 @@ export default function ReconciliationCandidatesPage() {
               </TabsTrigger>
               <TabsTrigger value="zero_candidates" className="text-[11px] h-6 px-3 text-red-400">
                 Zero Candidates ({data.summary.zero_candidates || 0})
+              </TabsTrigger>
+              <TabsTrigger value="review" className="text-[11px] h-6 px-3 text-amber-400">
+                Needs Review ({data.summary.needs_review || 0})
               </TabsTrigger>
             </TabsList>
           </Tabs>
