@@ -115,7 +115,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     // Get query parameters
     const url = new URL(request.url)
-    const filter = url.searchParams.get("filter") || "all" // all, operational, non_op, zero_candidates, review
+    const filter = url.searchParams.get("filter") || "all" // all, operational, non_op, review
     const caseTypeFilter = url.searchParams.get("case_type") || null
     const search = url.searchParams.get("search") || null
 
@@ -155,8 +155,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       // Apply filters
       if (filter === "operational" && !classification.is_operational) continue
       if (filter === "non_op" && classification.is_operational) continue
-      if (filter === "zero_candidates" && (classification.candidates.length > 0 || !classification.is_operational)) continue
-      if (filter === "review" && classification.suggested_action !== "review") continue
+      if (filter === "review" && (classification.candidates.length > 0 || !classification.is_operational)) continue
       if (caseTypeFilter && classification.case_type !== caseTypeFilter) continue
       if (search) {
         const searchLower = search.toLowerCase()
