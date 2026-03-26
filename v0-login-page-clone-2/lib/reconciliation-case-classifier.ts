@@ -844,18 +844,18 @@ export function classifyMovement(
 
     // Overpayments
     OVERPAYMENT_SINGLE: "review",
-    OVERPAYMENT_PREPAYMENT: "manual",
+    OVERPAYMENT_PREPAYMENT: "review",
     OVERPAYMENT_CREDIT_MEMO: "review",
 
     // Special cases
     DUPLICATE_PAYMENT: "review",
     CROSS_ENTITY_PAYMENT: "review",
     SETTLEMENT_BREAKDOWN: "review",
-    ZERO_AMOUNT: "manual",
+    ZERO_AMOUNT: "review",
 
-    // No match
-    NO_MATCH_HAS_CANDIDATES: "manual",
-    NO_MATCH_NO_CANDIDATES: "manual",
+    // No match - needs review to understand why
+    NO_MATCH_HAS_CANDIDATES: "review",
+    NO_MATCH_NO_CANDIDATES: "review",
 
     // Non-operational
     INTERCOMPANY_TRANSFER: "exclude",
