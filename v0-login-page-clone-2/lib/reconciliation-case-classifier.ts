@@ -64,7 +64,16 @@ export type CaseType =
   | "CROSS_ENTITY_PAYMENT"
   | "SETTLEMENT_BREAKDOWN"
   | "ZERO_AMOUNT"
-  // No Match Cases (2)
+  // Zero Candidate Sub-Cases (8) - when no AR/AP matches found
+  | "ZERO_MISSING_INVOICE"      // AR: Customer paid but no invoice exists
+  | "ZERO_MISSING_BILL"         // AP: Vendor paid but no bill exists
+  | "ZERO_PREPAYMENT_DEPOSIT"   // Payment before invoice issued (large amounts)
+  | "ZERO_SUBSCRIPTION"         // Recurring SaaS/service (Zapier, Google, etc.)
+  | "ZERO_SMALL_EXPENSE"        // Petty cash / small operational expense
+  | "ZERO_REFUND_CREDIT"        // Refund or credit (opposite direction)
+  | "ZERO_DELETED_COUNTERPARTY" // Counterparty marked as deleted
+  | "ZERO_UNCLASSIFIED"         // Needs manual review
+  // No Match Cases (2) - has candidates but none match well
   | "NO_MATCH_HAS_CANDIDATES"
   | "NO_MATCH_NO_CANDIDATES"
   // Non-Operational Cases (12)
@@ -462,6 +471,78 @@ function detectFlags(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Zero-Candidate Sub-Classification
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Known SaaS/subscription patterns
+const SUBSCRIPTION_PATTERNS = [
+  "zapier", "google workspace", "google cloud", "aws", "amazon web services",
+  "microsoft", "azure", "slack", "notion", "figma", "canva", "dropbox",
+  "zoom", "hubspot", "salesforce", "mailchimp", "sendgrid", "twilio",
+  "stripe", "square", "shopify", "quickbooks", "xero", "gusto", "rippling",
+  "github", "gitlab", "atlassian", "jira", "confluence", "asana", "monday",
+  "intercom", "zendesk", "freshdesk", "docusign", "adobe", "openai",
+  "anthropic", "vercel", "netlify", "heroku", "digitalocean", "cloudflare"
+]
+
+function classifyZeroCandidate(movement: MovementWithAvailableCash): CaseType {
+  const counterparty = (movement.counterparty || "").toLowerCase()
+  const description = (movement.raw_description || "").toLowerCase()
+  const amount = Math.abs(movement.available_cash)
+  const isInflow = movement.direction === "inflow"
+  const isOutflow = movement.direction === "outflow"
+
+  // 1. Deleted counterparty - highest priority
+  if (counterparty.includes("(deleted)") || description.includes("(deleted)")) {
+    return "ZERO_DELETED_COUNTERPARTY"
+  }
+
+  // 2. Subscription/SaaS expense detection
+  const combinedText = `${counterparty} ${description}`
+  const isSubscription = SUBSCRIPTION_PATTERNS.some(pattern => combinedText.includes(pattern))
+  if (isSubscription && isOutflow) {
+    return "ZERO_SUBSCRIPTION"
+  }
+
+  // 3. Small expense (petty cash) - outflows under $100
+  if (isOutflow && amount < 100) {
+    return "ZERO_SMALL_EXPENSE"
+  }
+
+  // 4. Large prepayment/deposit - inflows over $5000 with no invoice
+  if (isInflow && amount > 5000) {
+    return "ZERO_PREPAYMENT_DEPOSIT"
+  }
+
+  // 5. Refund/credit detection - unusual direction
+  // AR (inflow expected) but we have outflow = refund to customer
+  // AP (outflow expected) but we have inflow = refund from vendor
+  // This is tricky - we need to check if the counterparty looks like a customer vs vendor
+  // For now, small inflows from vendor-like names could be refunds
+  if (isInflow && amount < 500 && (
+    counterparty.includes("amazon") ||
+    counterparty.includes("refund") ||
+    description.includes("refund") ||
+    description.includes("credit")
+  )) {
+    return "ZERO_REFUND_CREDIT"
+  }
+
+  // 6. Missing invoice (AR) - customer payment with no matching invoice
+  if (isInflow) {
+    return "ZERO_MISSING_INVOICE"
+  }
+
+  // 7. Missing bill (AP) - vendor payment with no matching bill
+  if (isOutflow) {
+    return "ZERO_MISSING_BILL"
+  }
+
+  // 8. Fallback
+  return "ZERO_UNCLASSIFIED"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Case Resolution
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -640,13 +721,15 @@ function resolveCase(
       }
       return "OVERPAYMENT_SINGLE"
     }
-  } else if (Math.abs(movement.available_cash) > EPS) {
-    // Payment with no matching invoice
-    return "OVERPAYMENT_PREPAYMENT"
   }
 
-  // No match cases
-  return candidates.length > 0 ? "NO_MATCH_HAS_CANDIDATES" : "NO_MATCH_NO_CANDIDATES"
+  // Zero candidates - use sub-classifier for detailed categorization
+  if (candidates.length === 0) {
+    return classifyZeroCandidate(movement)
+  }
+
+  // No match cases - has candidates but none match well
+  return "NO_MATCH_HAS_CANDIDATES"
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -852,6 +935,16 @@ export function classifyMovement(
     CROSS_ENTITY_PAYMENT: "review",
     SETTLEMENT_BREAKDOWN: "review",
     ZERO_AMOUNT: "review",
+
+    // Zero-candidate sub-cases - all need review
+    ZERO_MISSING_INVOICE: "review",
+    ZERO_MISSING_BILL: "review",
+    ZERO_PREPAYMENT_DEPOSIT: "review",
+    ZERO_SUBSCRIPTION: "review",
+    ZERO_SMALL_EXPENSE: "review",
+    ZERO_REFUND_CREDIT: "review",
+    ZERO_DELETED_COUNTERPARTY: "review",
+    ZERO_UNCLASSIFIED: "review",
 
     // No match - needs review to understand why
     NO_MATCH_HAS_CANDIDATES: "review",
