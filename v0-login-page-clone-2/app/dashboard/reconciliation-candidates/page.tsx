@@ -514,12 +514,14 @@ export default function ReconciliationCandidatesPage() {
                   <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Direction</th>
                   <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Case Type</th>
                   <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Candidates</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Action</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">AI Match</th>
                   <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {data.movements.map((movement) => (
+                {data.movements.map((movement) => {
+                  const aiMatch = aiMatchResults.get(movement.id)
+                  return (
                   <tr key={movement.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
                     <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(movement.date)}</td>
                     <td className="px-3 py-2">
@@ -544,9 +546,21 @@ export default function ReconciliationCandidatesPage() {
                       <span className="text-[12px] font-mono text-zinc-300">{movement.classification.candidates.length}</span>
                     </td>
                     <td className="px-3 py-2">
-                      <Badge className={`text-[10px] px-2 py-0.5 border capitalize ${getActionColor(movement.classification.suggested_action)}`}>
-                        {movement.classification.suggested_action}
-                      </Badge>
+                      {aiMatch ? (
+                        <div className="flex items-center gap-1.5">
+                          <Badge className={`text-[10px] px-2 py-0.5 border ${
+                            aiMatch.decision === "match" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                            aiMatch.decision === "create_invoice" || aiMatch.decision === "create_bill" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                            aiMatch.decision === "needs_review" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                            "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
+                          }`}>
+                            {aiMatch.decision.replace(/_/g, " ")}
+                          </Badge>
+                          <span className="text-[10px] text-zinc-500">{Math.round(aiMatch.confidence * 100)}%</span>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-zinc-600">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-center">
                       <button
@@ -557,7 +571,7 @@ export default function ReconciliationCandidatesPage() {
                       </button>
                     </td>
                   </tr>
-                ))}
+                )})
               </tbody>
             </table>
           </div>
@@ -687,6 +701,44 @@ export default function ReconciliationCandidatesPage() {
               ) : (
                 <div className="bg-[#0A0A0A] border border-white/10 rounded-lg p-4 text-center">
                   <p className="text-[12px] text-zinc-500">No candidates found for this movement.</p>
+                </div>
+              )}
+              {/* AI Match Result */}
+              {aiMatchResults.get(selectedMovement.id) && (
+                <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg p-4">
+                  <p className="text-[10px] text-blue-400 uppercase tracking-wider mb-3">AI Match Result</p>
+                  {(() => {
+                    const aiMatch = aiMatchResults.get(selectedMovement.id)!
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-zinc-400">Decision:</span>
+                          <Badge className={`text-[10px] px-2 py-0.5 border ${
+                            aiMatch.decision === "match" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                            aiMatch.decision === "create_invoice" || aiMatch.decision === "create_bill" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                            aiMatch.decision === "needs_review" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                            "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
+                          }`}>
+                            {aiMatch.decision.replace(/_/g, " ")}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-zinc-400">Confidence:</span>
+                          <span className="text-[11px] text-white font-mono">{Math.round(aiMatch.confidence * 100)}%</span>
+                        </div>
+                        {aiMatch.matched_id && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-zinc-400">Matched To:</span>
+                            <span className="text-[11px] text-emerald-400 font-mono">{aiMatch.matched_id.slice(0, 12)}...</span>
+                          </div>
+                        )}
+                        <div className="pt-2 border-t border-white/5">
+                          <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Reasoning</p>
+                          <p className="text-[11px] text-zinc-300">{aiMatch.reasoning}</p>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
               )}
             </div>
