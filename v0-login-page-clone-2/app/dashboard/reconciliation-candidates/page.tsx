@@ -571,7 +571,7 @@ export default function ReconciliationCandidatesPage() {
                       </button>
                     </td>
                   </tr>
-                )})
+                )})}
               </tbody>
             </table>
           </div>
