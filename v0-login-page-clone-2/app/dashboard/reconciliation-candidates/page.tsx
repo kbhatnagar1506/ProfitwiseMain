@@ -98,6 +98,8 @@ export default function ReconciliationCandidatesPage() {
   const [data, setData] = useState<ResponseData | null>(null)
   const [loading, setLoading] = useState(true)
   const [aiLoading, setAiLoading] = useState(false)
+  const [aiMatchLoading, setAiMatchLoading] = useState(false)
+  const [aiMatchResults, setAiMatchResults] = useState<Map<string, { decision: string; confidence: number; reasoning: string; matched_id: string | null }>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<"all" | "operational" | "non_op" | "review">("all")
   const [searchQuery, setSearchQuery] = useState("")
@@ -301,6 +303,71 @@ export default function ReconciliationCandidatesPage() {
     }
   }
 
+  const runAIMatching = async () => {
+    try {
+      setAiMatchLoading(true)
+      
+      // Start the background job
+      const startRes = await fetch("/api/dashboard/reconciliation-candidates/ai-match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxMovements: 100, batchSize: 10 }),
+      })
+      
+      if (!startRes.ok) throw new Error("Failed to start AI matching")
+      
+      const startJson = await startRes.json()
+      const jobId = startJson.jobId
+      
+      if (!jobId) throw new Error("No job ID returned")
+      
+      // Poll for completion
+      let attempts = 0
+      const maxAttempts = 90 // 3 minutes max (2s intervals)
+      
+      while (attempts < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 2000)) // Wait 2 seconds
+        
+        const pollRes = await fetch(`/api/dashboard/reconciliation-candidates/ai-match?jobId=${jobId}`)
+        if (!pollRes.ok) throw new Error("Failed to check job status")
+        
+        const pollJson = await pollRes.json()
+        
+        if (pollJson.status === "completed") {
+          // Store AI match results
+          const results = new Map<string, { decision: string; confidence: number; reasoning: string; matched_id: string | null }>()
+          for (const match of pollJson.result?.matches || []) {
+            results.set(match.movement_id, {
+              decision: match.decision,
+              confidence: match.confidence,
+              reasoning: match.reasoning,
+              matched_id: match.matched_candidate_id,
+            })
+          }
+          setAiMatchResults(results)
+          
+          // Show summary
+          const result = pollJson.result || {}
+          const matchCount = result.matches?.filter((m: { decision: string }) => m.decision === "match").length || 0
+          const reviewCount = result.matches?.filter((m: { decision: string }) => m.decision === "needs_review").length || 0
+          alert(`AI Matching Complete!\n\n• ${result.total_processed || 0} movements analyzed\n• ${matchCount} matches found\n• ${reviewCount} need review\n• ${result.errors?.length || 0} errors\n• Time: ${(result.processing_time_ms / 1000).toFixed(1)}s`)
+          return
+        } else if (pollJson.status === "failed") {
+          throw new Error(pollJson.error || "AI matching job failed")
+        }
+        
+        // Still running, continue polling
+        attempts++
+      }
+      
+      throw new Error("AI matching timed out")
+    } catch (err) {
+      alert("AI matching failed: " + (err instanceof Error ? err.message : "Unknown error"))
+    } finally {
+      setAiMatchLoading(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
@@ -338,6 +405,15 @@ export default function ReconciliationCandidatesPage() {
           <p className="text-[12px] text-zinc-500 mt-0.5">Deterministic case classification · Data-driven matching</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={runAIMatching}
+            disabled={loading || aiMatchLoading || !data}
+            className="bg-blue-600 hover:bg-blue-700 text-white text-[11px] h-7 px-3"
+          >
+            <Sparkles className={`h-3 w-3 mr-1.5 ${aiMatchLoading ? "animate-pulse" : ""}`} />
+            {aiMatchLoading ? "Matching..." : "AI Match"}
+          </Button>
           <Button
             size="sm"
             onClick={runAIEnhancement}
