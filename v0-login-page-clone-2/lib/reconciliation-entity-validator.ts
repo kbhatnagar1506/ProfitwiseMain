@@ -122,7 +122,8 @@ async function getMemoryContext(
     const entry: MemoryContextEntry = { knownCanonicals, rawContext, cachedAt: Date.now() }
     memoryContextCache.set(cacheKey, entry)
     return { knownCanonicals, rawContext }
-  } catch {
+  } catch (err) {
+    console.warn("[EntityValidator] Supermemory context fetch failed:", err instanceof Error ? err.message : String(err))
     return { knownCanonicals: new Set(), rawContext: "" }
   }
 }
