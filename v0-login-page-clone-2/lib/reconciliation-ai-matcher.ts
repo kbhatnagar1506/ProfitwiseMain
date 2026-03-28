@@ -58,10 +58,8 @@ export async function runAIReconciliationMatcher(
   } = {}
 ): Promise<AIMatcherResult> {
   const startTime = Date.now()
-  const batchSize = options.batchSize || 10
-  const maxMovements = options.maxMovements || 100
+  const maxMovements = options.maxMovements || 500
   const includeSupermemory = options.includeSupermemory !== false
-  const parallelBatches = options.parallelBatches || 5 // Process 5 batches in parallel
 
   const results: MatchDecision[] = []
   const errors: string[] = []
@@ -71,7 +69,36 @@ export async function runAIReconciliationMatcher(
     .filter(m => shouldProcessWithAI(m))
     .slice(0, maxMovements)
 
-  console.log(`[AI Matcher] Processing ${movementsToProcess.length} movements in batches of ${batchSize}, ${parallelBatches} parallel`)
+  // Dynamic batch sizing based on data volume
+  // Smaller batches = more parallel requests but less context per request
+  // Larger batches = fewer requests but more context (better matching)
+  const totalCount = movementsToProcess.length
+  let batchSize: number
+  let parallelBatches: number
+
+  if (totalCount <= 10) {
+    // Very small: single batch, no parallelism needed
+    batchSize = totalCount
+    parallelBatches = 1
+  } else if (totalCount <= 50) {
+    // Small: 5-10 per batch, 3 parallel
+    batchSize = Math.ceil(totalCount / 5)
+    parallelBatches = 3
+  } else if (totalCount <= 200) {
+    // Medium: 10 per batch, 5 parallel
+    batchSize = 10
+    parallelBatches = 5
+  } else {
+    // Large: 15 per batch, 8 parallel (maximize throughput)
+    batchSize = 15
+    parallelBatches = 8
+  }
+
+  // Allow overrides from options
+  if (options.batchSize) batchSize = options.batchSize
+  if (options.parallelBatches) parallelBatches = options.parallelBatches
+
+  console.log(`[AI Matcher] Processing ${totalCount} movements: batchSize=${batchSize}, parallel=${parallelBatches}`)
 
   // Create all batches
   const batches: MovementToMatch[][] = []
