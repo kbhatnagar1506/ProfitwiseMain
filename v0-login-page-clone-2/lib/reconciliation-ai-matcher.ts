@@ -352,7 +352,7 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
       "Authorization": `Bearer ${API_KEY}`
     },
     body: JSON.stringify({
-      model: "gpt-4.1-mini",
+      model: "gpt-5.4-nano",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
