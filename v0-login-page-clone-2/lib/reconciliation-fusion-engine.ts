@@ -29,6 +29,12 @@ import { safeParseFloat } from "./utils"
 import { getAllUnreconciledMovements } from "./reconciliation-llm-match"
 import { searchEntityContextFromSupermemory } from "./supermemory"
 
+// #region agent log helper
+const debugLog = (location: string, message: string, data: Record<string, unknown>, hypothesisId: string) => {
+  fetch('http://127.0.0.1:7475/ingest/aa0cc895-06aa-4a08-8cd3-8fca2e4aa288',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2aa905'},body:JSON.stringify({sessionId:'2aa905',location,message,data,hypothesisId,timestamp:Date.now()})}).catch(()=>{});
+};
+// #endregion
+
 const EPS = 0.01
 const STAGE4_REVIEW_THRESHOLD = 1000
 
@@ -74,6 +80,9 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
 
   try {
     console.log("[fusion-engine] Starting fusion reconciliation for user:", userId)
+    // #region agent log
+    debugLog('fusion-engine.ts:76', 'Fusion reconciliation started', { userId }, 'H1');
+    // #endregion
 
     // Clear previous auto-generated attributions so available_cash is recalculated from scratch.
     // User-source attributions (manual matches) are preserved.
@@ -99,6 +108,15 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
     const bankPatternMap = await preloadBankPatternMap(userId)
 
     console.log(`[fusion-engine] Loaded ${movements.length} movements, ${cashEvents.length} cash events`)
+    // #region agent log
+    debugLog('fusion-engine.ts:110', 'Data loaded', { 
+      movementCount: movements.length, 
+      cashEventCount: cashEvents.length,
+      movementsWithCash: movements.filter(m => m.available_cash > EPS).length,
+      sampleMovement: movements[0] ? { id: movements[0].id, amount: movements[0].available_cash, direction: movements[0].direction, counterparty: movements[0].counterparty } : null,
+      sampleCashEvent: cashEvents[0] ? { id: cashEvents[0].id, amount: cashEvents[0].outstanding_amount, type: cashEvents[0].event_type, entity: cashEvents[0].entity_id } : null
+    }, 'H1');
+    // #endregion
 
     // Bulk-resolve bank display labels for all movements at once (single DB round-trip)
     const bankLabelInputs: DisplayNameInput[] = movements.map((m) => ({
@@ -158,6 +176,15 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
       // ─── Phase 2: Parallel Scoring ───
       const candidates = buildCandidateList(movement, eventsByEntity, targetType)
       if (candidates.length === 0) {
+        // #region agent log
+        debugLog('fusion-engine.ts:178', 'No candidates for movement', { 
+          movementId: movement.id, 
+          amount: movement.available_cash, 
+          direction: movement.direction,
+          counterparty: movement.counterparty,
+          targetType
+        }, 'H1');
+        // #endregion
         if (movement.available_cash > STAGE4_REVIEW_THRESHOLD) {
           stage4Queued++
         }
@@ -189,9 +216,33 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
       // Batch AI scoring (enriched with Supermemory context)
       const aiScores = await scoreAIBatch(movement, candidates, resolvedBankForMove, userId)
 
+      // #region agent log - log first 3 movements with full scoring details
+      if (pendingAttributions.length === 0 && stage4Queued < 3) {
+        const scoringDetails = candidates.slice(0, 3).map(c => ({
+          candidateId: c.id,
+          entityId: c.entity_id,
+          entityName: (c.metadata?.customer_name ?? c.metadata?.vendor_name ?? "") as string,
+          outstanding: c.outstanding_amount,
+          mathScore: mathScores.get(c.id),
+          aiScore: aiScores.get(c.id),
+          levScore: levenshteinScores.get(c.id)
+        }));
+        debugLog('fusion-engine.ts:208', 'Scoring details for movement', { 
+          movementId: movement.id, 
+          amount: movement.available_cash,
+          bankLabel: resolvedBankForMove,
+          candidateCount: candidates.length,
+          hasSameAmountConflict,
+          scoringDetails
+        }, 'H2,H3,H4,H5');
+      }
+      // #endregion
+
       // ─── Phase 3: Fuse Scores + Entity Gate ───
       let bestMatch: (typeof candidates)[0] | null = null
       let bestFusedScore = 0
+      let gateFailCount = 0
+      let scoreFailCount = 0
 
       for (const candidate of candidates) {
         const mathScore = mathScores.get(candidate.id) ?? 0
@@ -201,20 +252,27 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
 
         // Count independent entity signals
         // Each signal must be strong enough to count independently
-        const aiSignal = aiScore > 0.50           // AI ACTIVELY confirms (not default 0.50)
-        const levSignal = levenshteinScore >= 0.70 // Strong name similarity
+        // FIXED: AI signal threshold lowered to >= 0.50 to include default, but we track if it's active
+        const aiIsActive = aiScore > 0.50      // AI ACTIVELY confirms (not default 0.50)
+        const aiSignal = aiScore >= 0.50       // AI at least didn't reject
+        const levSignal = levenshteinScore >= 0.60 // Relaxed from 0.70 - moderate name similarity
         const linkSignal = hasDirectEntityLink     // Pre-linked entity from classification
         
-        const entitySignalCount = (aiSignal ? 1 : 0) + (levSignal ? 1 : 0) + (linkSignal ? 1 : 0)
-        const hasEntitySignal = entitySignalCount >= 1
+        // For conflict resolution, only count ACTIVE signals
+        const activeSignalCount = (aiIsActive ? 1 : 0) + (levSignal ? 1 : 0) + (linkSignal ? 1 : 0)
+        // For normal matching, passive AI (0.50) counts as weak signal
+        const hasAnyEntitySignal = aiSignal || levSignal || linkSignal
 
         // Gate logic: STRICTER when same-amount conflict exists
-        // Require 2 independent signals to disambiguate between same-amount candidates
+        // Require 2 ACTIVE signals to disambiguate between same-amount candidates
         const entityGatePassed = hasSameAmountConflict
-          ? entitySignalCount >= 2                 // STRICT: Must have 2+ independent signals
-          : (hasEntitySignal || mathScore >= 0.80) // NORMAL: 1 signal or strong math
+          ? activeSignalCount >= 2                      // STRICT: Must have 2+ ACTIVE signals
+          : (hasAnyEntitySignal || mathScore >= 0.75)   // NORMAL: Any signal or good math (relaxed from 0.80)
         
-        if (!entityGatePassed) continue
+        if (!entityGatePassed) {
+          gateFailCount++
+          continue
+        }
 
         // P2: Dynamic scoring weights based on signal confidence
         // When one signal is very strong, give it more weight
@@ -227,19 +285,46 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
         }
       }
 
-      // P0: Raise confidence threshold - 0.65 for auto-apply, 0.55-0.65 for review
-      const AUTO_APPLY_THRESHOLD = 0.65
-      const REVIEW_THRESHOLD = 0.55
+      // Confidence thresholds - relaxed slightly for better recall
+      const AUTO_APPLY_THRESHOLD = 0.60  // Relaxed from 0.65
+      const REVIEW_THRESHOLD = 0.50      // Relaxed from 0.55
       
       if (!bestMatch || bestFusedScore < REVIEW_THRESHOLD) {
         if (movement.available_cash > STAGE4_REVIEW_THRESHOLD) {
           stage4Queued++
+        }
+        // Log why we're skipping (first 5 only to avoid spam)
+        if (stage4Queued <= 5) {
+          console.log(`[fusion-engine] No match for movement $${movement.available_cash.toFixed(2)}: gateFailCount=${gateFailCount}, bestScore=${bestFusedScore.toFixed(2)}, candidates=${candidates.length}`)
+          // #region agent log
+          debugLog('fusion-engine.ts:298', 'Movement rejected - no match found', { 
+            movementId: movement.id, 
+            amount: movement.available_cash,
+            gateFailCount,
+            bestFusedScore,
+            candidateCount: candidates.length,
+            hasSameAmountConflict,
+            reason: !bestMatch ? 'all_candidates_failed_gate' : 'best_score_below_threshold'
+          }, 'H2,H3');
+          // #endregion
         }
         continue
       }
       
       // If score is between review and auto-apply threshold, flag for review but still apply
       const needsReview = bestFusedScore >= REVIEW_THRESHOLD && bestFusedScore < AUTO_APPLY_THRESHOLD
+
+      // #region agent log
+      debugLog('fusion-engine.ts:306', 'Match found - applying attribution', { 
+        movementId: movement.id, 
+        movementAmount: movement.available_cash,
+        matchedCandidateId: bestMatch.id,
+        matchedEntityId: bestMatch.entity_id,
+        matchedEntityName: (bestMatch.metadata?.customer_name ?? bestMatch.metadata?.vendor_name ?? "") as string,
+        bestFusedScore,
+        needsReview
+      }, 'H2,H3');
+      // #endregion
 
       // ─── Phase 4: Apply Match ───
       const mathScore = mathScores.get(bestMatch.id) ?? 0
@@ -293,6 +378,17 @@ export async function runFusionReconciliation(userId: string): Promise<FullRecon
       remainingUnmatched: finalUnreconciled.length,
       executionTimeMs,
     })
+
+    // #region agent log
+    debugLog('fusion-engine.ts:376', 'Fusion reconciliation complete', { 
+      attributionsCreated: pendingAttributions.length,
+      remainingUnmatched: finalUnreconciled.length,
+      stage4Queued,
+      movementsProcessed: movements.length,
+      cashEventsUpdated: touchedEventIds.size,
+      executionTimeMs
+    }, 'H1,H2,H3,H4,H5');
+    // #endregion
 
     return {
       waterfall: {
@@ -535,6 +631,15 @@ async function scoreAIBatch(
     // Continue without context
   }
 
+  // #region agent log
+  debugLog('fusion-engine.ts:625', 'AI scoring batch start', { 
+    bankDesc,
+    candidateCount: candidates.length,
+    hasSupermemoryContext: supermemoryContext.length > 0,
+    supermemoryContextLength: supermemoryContext.length
+  }, 'H4');
+  // #endregion
+
   // Chunk candidates to avoid oversized prompts causing ECONNRESET
   for (let chunkStart = 0; chunkStart < candidates.length; chunkStart += AI_BATCH_SIZE) {
     const chunk = candidates.slice(chunkStart, chunkStart + AI_BATCH_SIZE)
@@ -575,6 +680,14 @@ Return ONLY a JSON object with numeric indices as keys and scores as values, lik
           // Strip markdown code fences if model ignores response_format
           const cleaned = response.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim()
           const parsed = JSON.parse(cleaned)
+          // #region agent log
+          debugLog('fusion-engine.ts:670', 'AI scoring response parsed', { 
+            chunkStart,
+            chunkSize: chunk.length,
+            parsedScores: parsed,
+            rawResponse: response.slice(0, 200)
+          }, 'H4');
+          // #endregion
           for (let i = 0; i < chunk.length; i++) {
             const score = parsed[String(i + 1)]
             if (typeof score === "number" && score >= 0 && score <= 1) {
@@ -583,10 +696,29 @@ Return ONLY a JSON object with numeric indices as keys and scores as values, lik
           }
         } catch (parseErr) {
           console.error("[fusion-engine] Failed to parse AI scores:", parseErr)
+          // #region agent log
+          debugLog('fusion-engine.ts:680', 'AI scoring parse error', { 
+            error: String(parseErr),
+            rawResponse: response?.slice(0, 500)
+          }, 'H4');
+          // #endregion
         }
+      } else {
+        // #region agent log
+        debugLog('fusion-engine.ts:683', 'AI scoring returned null', { 
+          chunkStart,
+          chunkSize: chunk.length
+        }, 'H4');
+        // #endregion
       }
     } catch (err) {
       console.error("[fusion-engine] AI scoring error for chunk:", err)
+      // #region agent log
+      debugLog('fusion-engine.ts:685', 'AI scoring chunk error', { 
+        error: String(err),
+        chunkStart
+      }, 'H4');
+      // #endregion
       // Leave defaults (0.5) for this chunk and continue
     }
   }
@@ -669,9 +801,9 @@ function calculateDynamicFusedScore(mathScore: number, aiScore: number, levensht
   if (aiScore > 0.85) aiWeight += 0.10
   if (levenshteinScore > 0.85) levWeight += 0.05
   
-  // Penalize when signals strongly disagree
+  // Penalize when signals strongly disagree - REDUCED penalty
   const signalVariance = Math.abs(mathScore - aiScore) + Math.abs(aiScore - levenshteinScore) + Math.abs(mathScore - levenshteinScore)
-  const disagreementPenalty = signalVariance > 1.0 ? 0.10 : signalVariance > 0.5 ? 0.05 : 0
+  const disagreementPenalty = signalVariance > 1.5 ? 0.05 : signalVariance > 1.0 ? 0.03 : 0
   
   // Normalize weights
   const totalWeight = mathWeight + aiWeight + levWeight
