@@ -46,7 +46,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const userId = user.id
     const body = await request.json().catch(() => ({}))
     // Don't limit by default - let the matcher handle dynamic sizing
-    const maxMovements = body.maxMovements || 500
+    const maxMovements = body.maxMovements || 2000
 
     // Generate job ID
     const jobId = `ai-match-${userId}-${Date.now()}`

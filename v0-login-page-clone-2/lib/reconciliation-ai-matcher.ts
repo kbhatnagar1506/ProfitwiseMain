@@ -58,7 +58,7 @@ export async function runAIReconciliationMatcher(
   } = {}
 ): Promise<AIMatcherResult> {
   const startTime = Date.now()
-  const maxMovements = options.maxMovements || 500
+  const maxMovements = options.maxMovements || 2000
   const includeSupermemory = options.includeSupermemory !== false
 
   const results: MatchDecision[] = []
@@ -78,7 +78,7 @@ export async function runAIReconciliationMatcher(
 
   if (totalCount <= 10) {
     // Very small: single batch, no parallelism needed
-    batchSize = totalCount
+    batchSize = totalCount || 1
     parallelBatches = 1
   } else if (totalCount <= 50) {
     // Small: 5-10 per batch, 3 parallel
@@ -88,10 +88,18 @@ export async function runAIReconciliationMatcher(
     // Medium: 10 per batch, 5 parallel
     batchSize = 10
     parallelBatches = 5
-  } else {
-    // Large: 15 per batch, 8 parallel (maximize throughput)
+  } else if (totalCount <= 500) {
+    // Large: 15 per batch, 10 parallel
     batchSize = 15
-    parallelBatches = 8
+    parallelBatches = 10
+  } else if (totalCount <= 1000) {
+    // Very large: 20 per batch, 15 parallel
+    batchSize = 20
+    parallelBatches = 15
+  } else {
+    // Massive (1000+): 25 per batch, 20 parallel (max throughput)
+    batchSize = 25
+    parallelBatches = 20
   }
 
   // Allow overrides from options
