@@ -26,6 +26,7 @@ import {
   Settings,
   LayoutGrid,
   Zap,
+  Search,
   type LucideIcon,
 } from "lucide-react"
 
@@ -94,6 +95,7 @@ export const dashboardNavigation: NavGroup[] = [
     label: "Accounting",
     items: [
       { label: "Reconciliation", href: "/dashboard/reconciliation", icon: CheckCircle },
+      { label: "Recon Candidates", href: "/dashboard/reconciliation-candidates", icon: Search },
       { label: "Review queue", href: "/dashboard/review-queue", icon: Clock },
       { label: "Books", href: "/dashboard/books", icon: BookOpen },
       { label: "P&L", href: "/dashboard/p-and-l", icon: PieChart },
