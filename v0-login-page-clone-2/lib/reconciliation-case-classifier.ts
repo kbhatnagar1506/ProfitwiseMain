@@ -211,10 +211,16 @@ function extractReferenceFromDescription(description: string | null): string[] {
 }
 
 function detectFeeAmount(movement: MovementWithAvailableCash, candidate: CashEventRow): number | null {
-  const diff = Math.abs(candidate.amount - Math.abs(movement.available_cash))
+  const movAmount = Math.abs(movement.available_cash)
+  const candAmount = candidate.amount
+
+  // Fee only applies when payment is less than invoice (processor took a cut)
+  if (movAmount >= candAmount) return null
+
+  const diff = candAmount - movAmount
   if (diff < EPS) return null
 
-  const feeRatio = diff / candidate.amount
+  const feeRatio = diff / candAmount
   if (feeRatio < 0.005 || feeRatio > 0.1) return null
 
   return diff
@@ -250,9 +256,12 @@ function isReversal(movement: MovementWithAvailableCash, candidate: CashEventRow
   // Amounts must match
   if (Math.abs(movAmount - candAmount) >= EPS) return false
 
-  // Direction must be opposite
-  const expectedDirection = candidate.event_type === "ar" ? "outflow" : "inflow"
-  if (movement.direction !== expectedDirection) return false
+  // For AR (receivable), a reversal would be an outflow (refund to customer)
+  // For AP (payable), a reversal would be an inflow (refund from vendor)
+  const isOppositeDirection =
+    (candidate.event_type === "ar" && movement.direction === "outflow") ||
+    (candidate.event_type === "ap" && movement.direction === "inflow")
+  if (!isOppositeDirection) return false
 
   // Optional: Check if reversal is recent (within 30 days)
   const movDate = new Date(movement.date).getTime()
@@ -281,15 +290,23 @@ function buildCandidates(
   const candidates: Candidate[] = []
   const movAmount = Math.abs(movement.available_cash)
   const directLinkId = extractDirectLinkId(movement.tag_data)
-  const refsFromDesc = extractReferenceFromDescription(movement.counterparty)
+  const refsFromDesc = [
+    ...extractReferenceFromDescription(movement.counterparty),
+    ...extractReferenceFromDescription(movement.raw_description),
+  ]
+
+  // Also check for reversals (opposite direction)
+  const reverseType = targetType === "ar" ? "ap" : "ar"
 
   for (const event of cashEvents) {
-    if (event.event_type !== targetType) continue
+    // Check both target type and reverse type (for reversals)
+    const isTargetType = event.event_type === targetType
+    const isReverseType = event.event_type === reverseType
+    if (!isTargetType && !isReverseType) continue
     if (event.outstanding_amount <= EPS) continue
 
     const entityName = (event.metadata?.customer_name || event.metadata?.vendor_name || event.entity_id) as string
     const amountDiff = Math.abs(event.amount - movAmount)
-    const feeImplied = detectFeeAmount(movement, event)
     const isDirectLink = directLinkId === event.id || directLinkId === event.metadata?.invoice_id || directLinkId === event.metadata?.bill_id
     const refMatch = refsFromDesc.some((ref) => {
       const candRef = String(event.metadata?.invoice_number || event.metadata?.bill_number || "")
@@ -299,43 +316,71 @@ function buildCandidates(
     // Determine all applicable match types
     const matchTypes: MatchType[] = []
 
+    // Check for reversal first (only for opposite type)
+    if (isReverseType && isReversal(movement, event)) {
+      matchTypes.push("REVERSAL")
+    }
+
+    // Skip non-reversal candidates from reverse type
+    if (isReverseType && matchTypes.length === 0) continue
+
     if (isDirectLink) {
       matchTypes.push("DIRECT_LINK")
     }
-    if (feeImplied) {
-      matchTypes.push("FEE")
-    }
-    if (isReversal(movement, event)) {
-      matchTypes.push("REVERSAL")
-    }
-    if (isRounding(movement, event)) {
-      matchTypes.push("ROUNDING")
-    }
-    if (isEarlyDiscount(movement, event)) {
-      matchTypes.push("DISCOUNT")
-    }
-    if (movAmount < event.amount - EPS) {
-      matchTypes.push("PARTIAL")
-    }
 
-    // Primary is the first (highest priority), secondary are the rest
-    const primaryMatchType = matchTypes[0] || "EXACT"
-    const secondaryMatchTypes = matchTypes.slice(1)
+    // Only check fee/discount/partial for target type (not reversals)
+    if (isTargetType) {
+      const feeImplied = detectFeeAmount(movement, event)
+      if (feeImplied) {
+        matchTypes.push("FEE")
+      }
+      if (isRounding(movement, event)) {
+        matchTypes.push("ROUNDING")
+      }
+      if (isEarlyDiscount(movement, event)) {
+        matchTypes.push("DISCOUNT")
+      }
+      // PARTIAL: payment is less than invoice, but NOT explained by fee or discount
+      // Only mark as PARTIAL if no fee was detected
+      if (movAmount < event.amount - EPS && !feeImplied && !isEarlyDiscount(movement, event)) {
+        matchTypes.push("PARTIAL")
+      }
 
-    candidates.push({
-      id: event.id,
-      entity_id: event.entity_id,
-      entity_name: entityName,
-      amount: event.amount,
-      outstanding_amount: event.outstanding_amount,
-      due_date: event.expected_date,
-      match_type: primaryMatchType,
-      secondary_match_types: secondaryMatchTypes,
-      amount_diff: amountDiff,
-      fee_implied: feeImplied,
-      is_direct_link: isDirectLink,
-      reference_match: !!refMatch,
-    })
+      // Primary is the first (highest priority), secondary are the rest
+      const primaryMatchType = matchTypes[0] || "EXACT"
+      const secondaryMatchTypes = matchTypes.slice(1)
+
+      candidates.push({
+        id: event.id,
+        entity_id: event.entity_id,
+        entity_name: entityName,
+        amount: event.amount,
+        outstanding_amount: event.outstanding_amount,
+        due_date: event.expected_date,
+        match_type: primaryMatchType,
+        secondary_match_types: secondaryMatchTypes,
+        amount_diff: amountDiff,
+        fee_implied: detectFeeAmount(movement, event),
+        is_direct_link: isDirectLink,
+        reference_match: !!refMatch,
+      })
+    } else {
+      // Reversal candidate
+      candidates.push({
+        id: event.id,
+        entity_id: event.entity_id,
+        entity_name: entityName,
+        amount: event.amount,
+        outstanding_amount: event.outstanding_amount,
+        due_date: event.expected_date,
+        match_type: "REVERSAL",
+        secondary_match_types: [],
+        amount_diff: amountDiff,
+        fee_implied: null,
+        is_direct_link: isDirectLink,
+        reference_match: !!refMatch,
+      })
+    }
   }
 
   // Sort by match quality: direct link first, then exact, then by amount diff
@@ -349,7 +394,8 @@ function buildCandidates(
   // Filter out low-quality matches (amount diff > 20%)
   const qualityCandidates = candidates.filter((c) => {
     const diffRatio = c.amount_diff / c.amount
-    return diffRatio <= 0.2 || c.match_type === "DIRECT_LINK" || c.match_type === "EXACT"
+    // Keep if: within 20% diff, OR direct link, OR truly exact (amount_diff < EPS)
+    return diffRatio <= 0.2 || c.match_type === "DIRECT_LINK" || c.amount_diff < EPS
   })
 
   // Return top N candidates
@@ -384,13 +430,17 @@ function detectFlags(
     }),
   ]
 
+  // Detect chargeback from description
+  const desc = (movement.raw_description || "").toLowerCase()
+  const isChargeback = desc.includes("chargeback") || desc.includes("dispute") || desc.includes("reversal")
+
   return {
     has_direct_link: directLinkCandidates.length > 0,
     has_reference: candidates.some((c) => c.reference_match),
     has_fee: feeCandidates.length > 0,
     is_partial: partialCandidates.length > 0,
     is_aggregation: matchableCandidates.length > 1 && Math.abs(aggregationSum - Math.abs(movement.available_cash)) < EPS,
-    is_reversal: reversalCandidates.length > 0,
+    is_reversal: reversalCandidates.length > 0 || isChargeback,
     same_amount_conflict: potentialConflicts.length > 1,
     cross_entity: candidates.length > 0 && new Set(candidates.map((c) => c.entity_id)).size > 1,
     is_zero_amount: Math.abs(movement.available_cash) < 0.1,
@@ -436,6 +486,15 @@ function resolveCase(
   // Fee cases
   if (flags.has_fee) {
     const feeCandidates = candidates.filter((c) => c.match_type === "FEE")
+    
+    // Check if fee info is in tag_data
+    const tagData = movement.tag_data as Record<string, unknown> | null
+    const hasFeeInTagData = tagData && (tagData.fee || tagData.processing_fee || tagData.transaction_fee)
+    
+    if (hasFeeInTagData) {
+      return "FEE_FROM_TAG_DATA"
+    }
+    
     if (feeCandidates.length === 1) {
       const processor = detectProcessorType(movement.counterparty)
       if (processor === "stripe" || processor === "square") return "FEE_STRIPE_SQUARE"
@@ -449,7 +508,29 @@ function resolveCase(
   if (flags.is_aggregation) {
     const uniqueEntities = new Set(candidates.map((c) => c.entity_id)).size
     if (flags.has_fee) return "AGGREGATION_WITH_FEE"
-    return uniqueEntities === 1 ? "AGGREGATION_SAME_ENTITY" : "AGGREGATION_DIFF_ENTITY"
+    
+    // Settlement breakdown: aggregation across different entities (e.g., marketplace payout)
+    if (uniqueEntities > 1) {
+      const desc = (movement.raw_description || "").toLowerCase()
+      const isSettlement = desc.includes("settlement") || desc.includes("payout") || desc.includes("batch")
+      if (isSettlement) {
+        return "SETTLEMENT_BREAKDOWN"
+      }
+      return "AGGREGATION_DIFF_ENTITY"
+    }
+    return "AGGREGATION_SAME_ENTITY"
+  }
+
+  // Check for partial aggregation (sum is close but not exact)
+  const matchableCandidates = candidates.filter((c) => c.match_type === "EXACT" || c.match_type === "FEE")
+  if (matchableCandidates.length > 1) {
+    const aggregationSum = matchableCandidates.reduce((sum, c) => sum + c.amount, 0)
+    const movAmount = Math.abs(movement.available_cash)
+    const sumDiff = Math.abs(aggregationSum - movAmount)
+    // If sum is within 5% but not exact, it's a partial aggregation
+    if (sumDiff > EPS && sumDiff / movAmount <= 0.05) {
+      return "AGGREGATION_PARTIAL"
+    }
   }
 
   // Partial payment cases
@@ -469,8 +550,15 @@ function resolveCase(
     return candidates.length > 1 ? "VOLUME_DISCOUNT" : "EARLY_DISCOUNT"
   }
 
-  // Reversal cases
+  // Reversal cases (including chargebacks)
   if (flags.is_reversal) {
+    const desc = (movement.raw_description || "").toLowerCase()
+    const isChargeback = desc.includes("chargeback") || desc.includes("dispute")
+    
+    if (isChargeback) {
+      return "CHARGEBACK"
+    }
+    
     const reversalCandidates = candidates.filter((c) => c.match_type === "REVERSAL")
     if (reversalCandidates.length === 1) {
       const diff = Math.abs(reversalCandidates[0].amount - Math.abs(movement.available_cash))
@@ -479,11 +567,22 @@ function resolveCase(
     return "REVERSAL_PARTIAL"
   }
 
+  // Cross-entity payment (payment from one entity applied to another's invoice)
+  if (flags.cross_entity && candidates.length > 0) {
+    const uniqueEntities = new Set(candidates.map((c) => c.entity_id)).size
+    if (uniqueEntities > 1) {
+      return "CROSS_ENTITY_PAYMENT"
+    }
+  }
+
   // Rounding cases
   const roundingCandidates = candidates.filter((c) => c.match_type === "ROUNDING")
   if (roundingCandidates.length > 0) {
-    const diff = roundingCandidates[0].amount_diff
-    return diff > 0 ? "ROUNDING_OVER" : "ROUNDING_UNDER"
+    const movAmount = Math.abs(movement.available_cash)
+    const candAmount = roundingCandidates[0].amount
+    // If movement > candidate, we received more than expected (over)
+    // If movement < candidate, we received less than expected (under)
+    return movAmount > candAmount ? "ROUNDING_OVER" : "ROUNDING_UNDER"
   }
 
   // Overpayment cases
