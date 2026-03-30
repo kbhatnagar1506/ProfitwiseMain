@@ -408,7 +408,8 @@ function buildCandidates(
 
 function detectFlags(
   movement: MovementWithAvailableCash,
-  candidates: Candidate[]
+  candidates: Candidate[],
+  allMovements?: MovementWithAvailableCash[]
 ): ClassificationFlags {
   const directLinkCandidates = candidates.filter((c) => c.is_direct_link)
   const exactCandidates = candidates.filter((c) => c.match_type === "EXACT" && Math.abs(c.amount_diff) < EPS)
@@ -434,6 +435,13 @@ function detectFlags(
   const desc = (movement.raw_description || "").toLowerCase()
   const isChargeback = desc.includes("chargeback") || desc.includes("dispute") || desc.includes("reversal")
 
+  // Cross-movement analysis for duplicates
+  let isDuplicate = false
+  if (allMovements && allMovements.length > 0) {
+    const duplicateResult = detectDuplicatePayment(movement, allMovements, candidates)
+    isDuplicate = duplicateResult.isDuplicate
+  }
+
   return {
     has_direct_link: directLinkCandidates.length > 0,
     has_reference: candidates.some((c) => c.reference_match),
@@ -444,7 +452,7 @@ function detectFlags(
     same_amount_conflict: potentialConflicts.length > 1,
     cross_entity: candidates.length > 0 && new Set(candidates.map((c) => c.entity_id)).size > 1,
     is_zero_amount: Math.abs(movement.available_cash) < 0.1,
-    is_duplicate: false, // Would need historical data to detect
+    is_duplicate: isDuplicate,
   }
 }
 
@@ -455,10 +463,16 @@ function detectFlags(
 function resolveCase(
   movement: MovementWithAvailableCash,
   candidates: Candidate[],
-  flags: ClassificationFlags
+  flags: ClassificationFlags,
+  allMovements?: MovementWithAvailableCash[]
 ): CaseType {
   // Zero amount
   if (flags.is_zero_amount) return "ZERO_AMOUNT"
+
+  // Duplicate payment check (highest priority - should be flagged immediately)
+  if (flags.is_duplicate) {
+    return "DUPLICATE_PAYMENT"
+  }
 
   // Direct link cases
   if (flags.has_direct_link) {
@@ -502,6 +516,21 @@ function resolveCase(
       return "FEE_IMPLIED_SINGLE"
     }
     return "FEE_IMPLIED_MULTI"
+  }
+
+  // Check for separate fee transaction (when movement amount exactly matches candidate but there's a separate fee)
+  // This happens when: movement = $100, candidate = $103, and there's a separate $3 fee transaction
+  if (allMovements && candidates.length > 0) {
+    const bestCandidate = candidates[0]
+    const movAmount = Math.abs(movement.available_cash)
+    
+    // If movement is less than candidate, check for separate fee
+    if (movAmount < bestCandidate.amount - EPS) {
+      const separateFee = findSeparateFeeTransaction(movement, allMovements, bestCandidate)
+      if (separateFee.found) {
+        return "FEE_SEPARATE_TRANSACTION"
+      }
+    }
   }
 
   // Aggregation cases
@@ -611,12 +640,113 @@ function resolveCase(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Cross-Movement Analysis Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface SeparateFeeResult {
+  found: boolean
+  feeMovementId: string | null
+  feeAmount: number
+}
+
+function findSeparateFeeTransaction(
+  movement: MovementWithAvailableCash,
+  allMovements: MovementWithAvailableCash[],
+  candidate: Candidate
+): SeparateFeeResult {
+  // Look for a separate fee transaction that:
+  // 1. Is an outflow (fee deducted)
+  // 2. Occurred within 3 days of the main movement
+  // 3. Amount is within typical fee range (0.5% - 10% of candidate amount)
+  // 4. Description contains fee-related keywords
+  
+  const movDate = new Date(movement.date).getTime()
+  const expectedFee = candidate.amount - Math.abs(movement.available_cash)
+  
+  if (expectedFee <= 0) return { found: false, feeMovementId: null, feeAmount: 0 }
+  
+  for (const m of allMovements) {
+    if (m.id === movement.id) continue
+    if (m.direction !== "outflow") continue
+    
+    const mDate = new Date(m.date).getTime()
+    const daysDiff = Math.abs(movDate - mDate) / (1000 * 60 * 60 * 24)
+    if (daysDiff > 3) continue
+    
+    const mAmount = Math.abs(m.available_cash)
+    const feeRatio = mAmount / candidate.amount
+    if (feeRatio < 0.005 || feeRatio > 0.1) continue
+    
+    // Check if amounts match (movement + fee = candidate)
+    const totalPaid = Math.abs(movement.available_cash) + mAmount
+    if (Math.abs(totalPaid - candidate.amount) < EPS) {
+      // Check description for fee keywords
+      const desc = (m.raw_description || "").toLowerCase()
+      const isFeeDesc = desc.includes("fee") || desc.includes("charge") || 
+                        desc.includes("processing") || desc.includes("service")
+      
+      if (isFeeDesc || Math.abs(mAmount - expectedFee) < EPS) {
+        return { found: true, feeMovementId: m.id, feeAmount: mAmount }
+      }
+    }
+  }
+  
+  return { found: false, feeMovementId: null, feeAmount: 0 }
+}
+
+function detectDuplicatePayment(
+  movement: MovementWithAvailableCash,
+  allMovements: MovementWithAvailableCash[],
+  candidates: Candidate[]
+): { isDuplicate: boolean; originalMovementId: string | null } {
+  // Look for another movement that:
+  // 1. Has the same amount
+  // 2. Same direction
+  // 3. Same or similar counterparty
+  // 4. Occurred within 30 days
+  // 5. Could match the same candidate(s)
+  
+  const movAmount = Math.abs(movement.available_cash)
+  const movDate = new Date(movement.date).getTime()
+  
+  for (const m of allMovements) {
+    if (m.id === movement.id) continue
+    if (m.direction !== movement.direction) continue
+    
+    const mAmount = Math.abs(m.available_cash)
+    if (Math.abs(mAmount - movAmount) >= EPS) continue
+    
+    const mDate = new Date(m.date).getTime()
+    const daysDiff = Math.abs(movDate - mDate) / (1000 * 60 * 60 * 24)
+    if (daysDiff > 30) continue
+    
+    // Check if counterparties match
+    const sameCounterparty = movement.counterparty && m.counterparty &&
+      movement.counterparty.toLowerCase() === m.counterparty.toLowerCase()
+    
+    // Check if they could match the same candidate
+    const sameEntity = movement.counterparty_entity_id && m.counterparty_entity_id &&
+      movement.counterparty_entity_id === m.counterparty_entity_id
+    
+    if (sameCounterparty || sameEntity) {
+      // The earlier one is the "original", the later one is the "duplicate"
+      if (mDate < movDate) {
+        return { isDuplicate: true, originalMovementId: m.id }
+      }
+    }
+  }
+  
+  return { isDuplicate: false, originalMovementId: null }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main Classification Function
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function classifyMovement(
   movement: MovementWithAvailableCash,
-  cashEvents: CashEventRow[]
+  cashEvents: CashEventRow[],
+  allMovements?: MovementWithAvailableCash[] // Optional: for cross-movement analysis
 ): ClassificationResult {
   // Check if non-operational
   if (isNonOperational(movement.economic_class)) {
@@ -647,11 +777,11 @@ export function classifyMovement(
   // Build candidates
   const candidates = buildCandidates(movement, cashEvents, targetType)
 
-  // Detect flags
-  const flags = detectFlags(movement, candidates)
+  // Detect flags (with cross-movement analysis if available)
+  const flags = detectFlags(movement, candidates, allMovements)
 
-  // Resolve case type
-  const caseType = resolveCase(movement, candidates, flags)
+  // Resolve case type (with cross-movement analysis if available)
+  const caseType = resolveCase(movement, candidates, flags, allMovements)
 
   // Determine suggested action based on case type
   const caseActionMap: Record<CaseType, "auto_match" | "review" | "manual" | "exclude"> = {

@@ -113,7 +113,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const movements = await fetchMovementsWithAvailableCash(userId)
     const cashEvents = await loadOpenCashEvents(userId)
 
-    // Classify each movement
+    // Classify each movement (pass all movements for cross-movement analysis)
     const classifiedMovements: ClassifiedMovement[] = []
     const caseTypeCounts: Record<CaseType, number> = {} as Record<CaseType, number>
     let operationalCount = 0
@@ -122,7 +122,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     let needsReviewCount = 0
 
     for (const movement of movements) {
-      const classification = classifyMovement(movement, cashEvents)
+      // Pass all movements for cross-movement analysis (duplicate detection, separate fee detection)
+      const classification = classifyMovement(movement, cashEvents, movements)
 
       // Apply filters
       if (filter === "operational" && !classification.is_operational) continue
