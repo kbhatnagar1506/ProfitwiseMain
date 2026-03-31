@@ -36,14 +36,19 @@ async function fetchMovementsWithAvailableCash(userId: string): Promise<Movement
        m.counterparty_entity_id,
        m.raw_description,
        m.metadata,
-       m.economic_class,
-       m.tag_data,
-       COALESCE(m.amount - COALESCE(SUM(ma.net_amount), 0), m.amount) as available_cash
+       mt.economic_class,
+       mt.tag_data,
+       COALESCE(m.amount - COALESCE(attr_sum.total_attributed, 0), m.amount) as available_cash
      FROM movements m
-     LEFT JOIN movement_attributions ma ON m.id = ma.movement_id AND ma.source = 'rule'
+     LEFT JOIN movement_tags mt ON mt.movement_id = m.id
+     LEFT JOIN (
+       SELECT movement_id, SUM(net_amount) as total_attributed
+       FROM movement_attributions
+       WHERE source = 'rule'
+       GROUP BY movement_id
+     ) attr_sum ON attr_sum.movement_id = m.id
      WHERE m.user_id = $1
-       AND COALESCE(m.amount - COALESCE(SUM(ma.net_amount), 0), m.amount) > $2
-     GROUP BY m.id
+       AND COALESCE(m.amount - COALESCE(attr_sum.total_attributed, 0), m.amount) > $2
      ORDER BY m.date DESC`,
     [userId, EPS]
   )
