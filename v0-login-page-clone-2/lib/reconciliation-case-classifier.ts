@@ -303,7 +303,10 @@ function buildCandidates(
     const isTargetType = event.event_type === targetType
     const isReverseType = event.event_type === reverseType
     if (!isTargetType && !isReverseType) continue
-    if (event.outstanding_amount <= EPS) continue
+    
+    // Use outstanding_amount if available, otherwise use amount
+    const effectiveAmount = event.outstanding_amount > EPS ? event.outstanding_amount : event.amount
+    if (effectiveAmount <= EPS) continue
 
     const entityName = (event.metadata?.customer_name || event.metadata?.vendor_name || event.entity_id) as string
     const amountDiff = Math.abs(event.amount - movAmount)
@@ -355,7 +358,7 @@ function buildCandidates(
         entity_id: event.entity_id,
         entity_name: entityName,
         amount: event.amount,
-        outstanding_amount: event.outstanding_amount,
+        outstanding_amount: effectiveAmount,
         due_date: event.expected_date,
         match_type: primaryMatchType,
         secondary_match_types: secondaryMatchTypes,
@@ -371,7 +374,7 @@ function buildCandidates(
         entity_id: event.entity_id,
         entity_name: entityName,
         amount: event.amount,
-        outstanding_amount: event.outstanding_amount,
+        outstanding_amount: effectiveAmount,
         due_date: event.expected_date,
         match_type: "REVERSAL",
         secondary_match_types: [],
