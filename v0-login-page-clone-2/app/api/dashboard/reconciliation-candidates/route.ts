@@ -70,10 +70,8 @@ async function loadOpenCashEvents(userId: string): Promise<CashEventRow[]> {
      FROM cash_events
      WHERE user_id = $1
        AND event_type IN ('ar', 'ap')
-       AND status != 'paid'
-       AND COALESCE(outstanding_amount, amount) > $2
      ORDER BY expected_date ASC`,
-    [userId, EPS]
+    [userId]
   )
   return result.rows as CashEventRow[]
 }
