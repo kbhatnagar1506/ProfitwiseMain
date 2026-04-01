@@ -244,6 +244,10 @@ async function fetchMovementsWithAvailableCash(userId: string): Promise<Movement
 }
 
 async function loadCashEvents(userId: string): Promise<CashEventRow[]> {
+  // AR ONLY - Load invoices for matching against customer payments
+  // AP (bills) are NOT loaded because:
+  // 1. AP reconciliation doesn't make sense (bills created from payments)
+  // 2. AP goes through vendor classification → forecast instead
   const result = await query(
     `SELECT
        id,
@@ -257,7 +261,7 @@ async function loadCashEvents(userId: string): Promise<CashEventRow[]> {
        metadata
      FROM cash_events
      WHERE user_id = $1
-       AND event_type IN ('ar', 'ap')
+       AND event_type = 'ar'
      ORDER BY expected_date ASC`,
     [userId]
   )

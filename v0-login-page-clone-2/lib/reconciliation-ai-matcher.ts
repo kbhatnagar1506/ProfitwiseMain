@@ -1,8 +1,14 @@
 /**
- * AI Reconciliation Matcher
+ * AI AR Reconciliation Matcher
  * 
- * Uses GPT-5.4-mini + Supermemory to intelligently match bank movements to invoices/bills.
- * Optimized prompts for structured financial matching.
+ * Uses GPT-5.4-mini + Supermemory to intelligently match bank INFLOWS to INVOICES.
+ * 
+ * AR ONLY - This matcher handles Accounts Receivable reconciliation:
+ * - Bank inflows (customer payments) → Match to invoices
+ * 
+ * AP (outflows) are NOT reconciled here because:
+ * - Bills are often created FROM the payment (circular)
+ * - AP should go through: classify → vendor model → forecast
  */
 
 import { searchEntityContextFromSupermemory, searchEntityProfileContext } from "./supermemory"
@@ -28,7 +34,7 @@ export interface MovementToMatch {
 
 export interface MatchDecision {
   movement_id: string
-  decision: "match" | "no_match" | "needs_review" | "create_invoice" | "create_bill"
+  decision: "match" | "no_match" | "needs_review" | "create_invoice"
   matched_candidate_id: string | null
   matched_candidate_ids: string[]
   confidence: number
@@ -138,17 +144,26 @@ export async function runAIReconciliationMatcher(
 // ─────────────────────────────────────────────────────────────────────────────
 
 function shouldProcessWithAI(movement: MovementToMatch): boolean {
-  const ct = movement.classification.case_type
-  const hasCandidates = movement.classification.candidates.length > 0
+  // AR ONLY - Skip outflows (AP)
+  // AP goes through vendor classification, not invoice matching
+  if (movement.direction === "outflow") {
+    return false
+  }
   
+  // Skip non-operational
   if (!movement.classification.is_operational) {
     return false
   }
   
+  const ct = movement.classification.case_type
+  const hasCandidates = movement.classification.candidates.length > 0
+  
+  // Process AR movements with invoice candidates
   if (hasCandidates) {
     return true
   }
   
+  // Process zero-candidate AR movements (missing invoice scenarios)
   return ct.startsWith("ZERO_")
 }
 
@@ -227,51 +242,51 @@ async function matchMovementsWithCandidates(
     }
   })
 
-  const systemPrompt = `You are a financial reconciliation AI. Match bank transactions to invoices/bills.
+  const systemPrompt = `You are an AR (Accounts Receivable) reconciliation AI. Match customer payments to invoices.
 
 ## YOUR TASK
-For each bank movement, pick the BEST matching candidate (or none).
+For each bank INFLOW (customer payment), find the matching INVOICE(s).
 
 ## CANDIDATE FIELDS EXPLAINED
-- **entity**: Customer/vendor name from invoice/bill
-- **amount**: Original invoice/bill amount
-- **outstanding**: Remaining unpaid amount
-- **diff**: Bank amount minus candidate amount (negative = bank received less)
+- **entity**: Customer name from invoice
+- **amount**: Original invoice amount
+- **outstanding**: Remaining unpaid amount on invoice
+- **diff**: Bank amount minus invoice amount (negative = received less than invoice)
 - **match_type**: EXACT, FEE, PARTIAL, DIRECT_LINK, etc.
 - **is_direct_link**: true if invoice ID was found in bank description
 - **reference_match**: true if reference number matches
-- **fee_implied**: Calculated fee amount if this is a fee-adjusted match
-- **due_date**: Invoice/bill due date
+- **fee_implied**: Payment processor fee (Stripe, Square, PayPal deducted this)
+- **due_date**: Invoice due date
 
 ## MATCHING RULES (in priority order)
 
-1. **DIRECT LINK** (is_direct_link=true): Highest priority - invoice ID found in bank data
+1. **DIRECT LINK** (is_direct_link=true): Invoice ID found in bank data
    → Confidence 0.99+ if amounts also match
 
-2. **EXACT MATCH**: Bank amount = Candidate amount (diff ≈ 0)
-   → High confidence if entity names are similar
+2. **EXACT MATCH**: Payment = Invoice amount (diff ≈ 0)
+   → High confidence if customer names are similar
 
-3. **FEE-ADJUSTED MATCH**: match_type=FEE, fee_implied shows the fee
-   → Common for payment processors (Stripe, Square, PayPal)
+3. **FEE-ADJUSTED MATCH**: Payment = Invoice - processor fee (2-5%)
+   → Common: Stripe/Square/PayPal deduct fees before deposit
    → Example: Invoice $100, Bank $97, fee_implied=$3 = MATCH
 
-4. **ENTITY NAME MATCHING**:
+4. **CUSTOMER NAME MATCHING**:
    - "MichaelHouk" = "Michael Houk" = "M. Houk" (same person)
    - "Kelsee Gomes (NY Yankees)" matches invoice for "Kelsee Gomes"
-   - Ignore parenthetical info like "(Detroit Tigers)" - focus on the NAME
-   - Company variations: "Belle's Gourmet" = "Belles Gourmet Popcorn"
+   - Ignore parenthetical info like team names - focus on the PERSON NAME
+   - Company variations: "ABC Corp" = "ABC Corporation" = "ABC Inc"
 
-5. **PARTIAL PAYMENT**: match_type=PARTIAL, outstanding > 0
-   → Only match if entity names match AND it's clearly a partial
+5. **PARTIAL PAYMENT**: Payment < Invoice amount
+   → Only match if customer names match clearly
 
-6. **AGGREGATION**: Bank = Sum of multiple invoices
-   → Return multiple candidate IDs in matched_candidate_ids
+6. **AGGREGATION**: Single payment covers multiple invoices
+   → Return multiple invoice IDs in matched_candidate_ids
 
 ## CONFIDENCE SCORING
-- 0.95-1.00: Direct link OR exact amount + exact entity name
-- 0.85-0.94: Exact amount + similar entity name
-- 0.70-0.84: Fee-adjusted match with good entity match
-- 0.50-0.69: Partial match or uncertain entity
+- 0.95-1.00: Direct link OR exact amount + exact customer name
+- 0.85-0.94: Exact amount + similar customer name
+- 0.70-0.84: Fee-adjusted match with good name match
+- 0.50-0.69: Partial payment or uncertain customer
 - Below 0.50: Weak match, needs review
 
 ## OUTPUT FORMAT
@@ -279,13 +294,13 @@ Return JSON with decisions array. Each decision:
 {
   "movement_id": "exact ID from input",
   "decision": "match" | "no_match" | "needs_review",
-  "matched_candidate_id": "candidate ID or null",
+  "matched_candidate_id": "invoice ID or null",
   "matched_candidate_ids": ["id1", "id2"] // for aggregation only
   "confidence": 0.0-1.0,
-  "reasoning": "Brief: [entity match quality] + [amount match quality]"
+  "reasoning": "Brief: [customer match] + [amount match]"
 }
 
-${entityContext ? `\n## KNOWN ENTITIES (from memory)\n${entityContext}` : ""}`
+${entityContext ? `\n## KNOWN CUSTOMERS (from memory)\n${entityContext}` : ""}`
 
   const userPrompt = `Match these ${movements.length} bank movements:
 
@@ -318,78 +333,86 @@ async function classifyZeroCandidateMovements(
   movements: MovementToMatch[],
   includeSupermemory: boolean
 ): Promise<MatchDecision[]> {
+  // AR ONLY - these are inflows with no matching invoice
+  // Filter to only inflows (should already be filtered, but double-check)
+  const arMovements = movements.filter(m => m.direction === "inflow")
+  
+  if (arMovements.length === 0) {
+    return []
+  }
+  
   let entityContext = ""
   if (includeSupermemory) {
-    const counterparties = [...new Set(movements.map(m => m.counterparty).filter(Boolean))]
+    const counterparties = [...new Set(arMovements.map(m => m.counterparty).filter(Boolean))]
     if (counterparties.length > 0) {
       entityContext = await searchEntityContextFromSupermemory(userId, counterparties.slice(0, 10).join(", "))
     }
   }
 
-  const movementData = movements.map((m, idx) => ({
+  const movementData = arMovements.map((m, idx) => ({
     idx: idx + 1,
     id: m.id,
     counterparty: m.counterparty || "Unknown",
     description: m.raw_description || "",
     amount: Math.abs(m.amount),
-    type: m.direction === "inflow" ? "RECEIVED (AR)" : "PAID (AP)",
     date: m.date,
     current_case: m.classification.case_type
   }))
 
-  const systemPrompt = `You are a financial reconciliation AI. These bank movements have NO matching invoices/bills.
+  const systemPrompt = `You are an AR (Accounts Receivable) specialist. These customer PAYMENTS have NO matching INVOICE.
 
 ## YOUR TASK
-Determine WHY there's no match and what action to take.
+Determine WHY there's no invoice and what action to take.
 
 ## CLASSIFICATION RULES
 
-### FOR MONEY RECEIVED (AR):
-- **create_invoice**: Customer paid but invoice missing
-  → Confidence 0.7+ if clear customer name
-  → Example: "Sarah Katz (Marlins)" paid $1,060 - likely needs invoice created
+### LIKELY NEEDS INVOICE CREATED (decision: "create_invoice")
+- Clear customer name in bank description
+- Amount suggests a real sale (not a refund or adjustment)
+- Example: "Sarah Katz (Marlins)" paid $1,060 → Create invoice for Sarah Katz
 
-- **needs_review**: Unclear situation
-  → Prepayments, deposits, refunds, unclear counterparty
+### LIKELY A PREPAYMENT/DEPOSIT (decision: "needs_review")
+- Large round amounts ($5,000, $10,000)
+- Description mentions "deposit", "prepay", "advance"
+- New customer not seen before
 
-### FOR MONEY PAID (AP):
-- **create_bill**: Vendor paid but bill missing
-  → Confidence 0.7+ if clear vendor name
-  → Example: "Amazon" charge $23.48 - likely needs bill created
+### LIKELY A REFUND RECEIVED (decision: "no_match")
+- Small amounts under $50
+- Description mentions "refund", "credit", "return"
+- Negative context in description
 
-- **no_match**: Known non-billable expenses
-  → Subscriptions (Shopify, Zapier, Google Workspace)
-  → Bank fees, small operational expenses
-  → Confidence 0.8+ for clear subscriptions
+### DATA ISSUE (decision: "needs_review")
+- "(deleted)" in counterparty name
+- Very generic description
+- Can't identify the customer
 
-## PATTERNS TO RECOGNIZE
-- Subscriptions: Shopify, Zapier, DocuSign, Google Workspace, QuickBooks
-- Payment processors: Stripe, Square, PayPal (usually fees)
-- Small expenses under $50: Often operational, may not need bills
-- "(deleted)" in name: Data sync issue, needs review
+## CONFIDENCE SCORING
+- 0.8+: Clear customer name, reasonable amount, likely needs invoice
+- 0.6-0.8: Probable customer, some uncertainty
+- Below 0.6: Unclear, needs manual review
 
 ## OUTPUT FORMAT
 {
   "decisions": [
     {
       "movement_id": "exact ID",
-      "decision": "create_invoice" | "create_bill" | "no_match" | "needs_review",
+      "decision": "create_invoice" | "no_match" | "needs_review",
       "confidence": 0.0-1.0,
       "reasoning": "Brief explanation",
-      "suggested_action": "Create invoice for [Customer]" | "Create bill for [Vendor]" | "Mark as subscription" | "Review manually"
+      "suggested_action": "Create invoice for [Customer Name]" | "Review - possible prepayment" | "Review - unclear customer"
     }
   ]
 }
 
-${entityContext ? `\n## KNOWN ENTITIES\n${entityContext}` : ""}`
+${entityContext ? `\n## KNOWN CUSTOMERS (from memory)\n${entityContext}` : ""}`
 
-  const userPrompt = `Classify these ${movements.length} unmatched movements:
+  const userPrompt = `Classify these ${arMovements.length} customer payments with no matching invoice:
 
 ${JSON.stringify(movementData, null, 2)}`
 
   try {
     const response = await callLLM(systemPrompt, userPrompt)
-    return parseZeroResponse(response, movements)
+    return parseZeroResponse(response, arMovements)
   } catch (error) {
     console.error("[AI Matcher] LLM call failed:", error)
     return movements.map(m => ({

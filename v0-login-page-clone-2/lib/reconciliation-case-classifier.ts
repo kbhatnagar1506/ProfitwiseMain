@@ -864,8 +864,36 @@ export function classifyMovement(
     }
   }
 
-  // Determine target type (AR for inflows, AP for outflows)
-  const targetType = movement.direction === "inflow" ? "ar" : "ap"
+  // AR RECONCILIATION ONLY
+  // Outflows (AP) are NOT reconciled - they go through vendor classification instead
+  // AP reconciliation doesn't make sense because:
+  // 1. Bills are often created FROM the payment (circular)
+  // 2. Many businesses don't enter bills for every expense
+  // 3. AP should be: classify (operational/non-op) → vendor model → forecast
+  if (movement.direction === "outflow") {
+    return {
+      movement_id: movement.id,
+      case_type: "NO_MATCH_NO_CANDIDATES" as CaseType, // Will be handled by AP classification
+      is_operational: true,
+      candidates: [],
+      flags: {
+        has_direct_link: false,
+        has_reference: false,
+        has_fee: false,
+        is_partial: false,
+        is_aggregation: false,
+        is_reversal: false,
+        same_amount_conflict: false,
+        cross_entity: false,
+        is_zero_amount: Math.abs(movement.available_cash) < EPS,
+        is_duplicate: false,
+      },
+      suggested_action: "exclude", // Exclude from AR reconciliation - handled separately
+    }
+  }
+
+  // AR only - match inflows to invoices
+  const targetType = "ar" as const
 
   // Build candidates
   const candidates = buildCandidates(movement, cashEvents, targetType)
