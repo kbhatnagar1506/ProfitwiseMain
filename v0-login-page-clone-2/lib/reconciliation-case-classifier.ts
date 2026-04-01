@@ -453,7 +453,8 @@ function detectFlags(
     is_aggregation: matchableCandidates.length > 1 && Math.abs(aggregationSum - Math.abs(movement.available_cash)) < EPS,
     is_reversal: reversalCandidates.length > 0 || isChargeback,
     same_amount_conflict: potentialConflicts.length > 1,
-    cross_entity: candidates.length > 0 && new Set(candidates.map((c) => c.entity_id)).size > 1,
+    // Only flag cross_entity if the EXACT matches span multiple entities (not all candidates)
+    cross_entity: exactCandidates.length > 0 && new Set(exactCandidates.map((c) => c.entity_id)).size > 1,
     is_zero_amount: Math.abs(movement.available_cash) < 0.1,
     is_duplicate: isDuplicate,
   }
@@ -493,6 +494,11 @@ function resolveCase(
   const exactMatches = candidates.filter((c) => c.match_type === "EXACT" && Math.abs(c.amount_diff) < EPS)
   if (exactMatches.length > 0) {
     if (exactMatches.length === 1) {
+      // If there's a same_amount_conflict, we can't safely call it SINGLE
+      if (flags.same_amount_conflict) {
+        const uniqueEntities = new Set(candidates.filter(c => c.match_type === "EXACT").map((c) => c.entity_id)).size
+        return uniqueEntities === 1 ? "EXACT_MULTI_SAME_ENTITY" : "EXACT_MULTI_DIFF_ENTITY"
+      }
       if (flags.has_reference) return "EXACT_WITH_REFERENCE"
       return "EXACT_SINGLE"
     }
@@ -864,7 +870,12 @@ export function classifyMovement(
     UNCLASSIFIED_NON_OP: "exclude",
   }
 
-  const suggestedAction = caseActionMap[caseType] || "manual"
+  let suggestedAction = caseActionMap[caseType] || "manual"
+
+  // Override: Don't auto_match if there's a same_amount_conflict
+  if (flags.same_amount_conflict && suggestedAction === "auto_match") {
+    suggestedAction = "review"
+  }
 
   return {
     movement_id: movement.id,
