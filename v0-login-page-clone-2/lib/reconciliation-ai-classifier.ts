@@ -8,10 +8,10 @@
  * 4. Providing confidence scores and reasoning
  */
 
-import OpenAI from "openai"
-import type { ClassificationResult, CaseType, Candidate } from "./reconciliation-case-classifier"
+import type { ClassificationResult, CaseType } from "./reconciliation-case-classifier"
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
+const API_KEY = process.env.OPENAI_API_KEY
 
 export interface AIClassificationEnhancement {
   original_case_type: CaseType
@@ -104,32 +104,50 @@ async function classifyBatchWithAI(
 ): Promise<Map<string, AIClassificationEnhancement>> {
   const results = new Map<string, AIClassificationEnhancement>()
 
+  if (!API_KEY) {
+    console.error("[AI Classifier] No API key configured")
+    return results
+  }
+
   const prompt = buildClassificationPrompt(movements, entityNames, cashEvents)
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: `You are a financial reconciliation expert. Your job is to analyze bank transactions and determine:
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `You are a financial reconciliation expert. Your job is to analyze bank transactions and determine:
 1. What type of transaction this is (payment to vendor, receipt from customer, fee, transfer, etc.)
 2. Which entity (customer/vendor) this transaction likely belongs to
 3. Whether there's a matching invoice/bill in the system
 
 You must respond with valid JSON only. Be concise but accurate.`
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.1,
-      max_tokens: 2000,
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        max_tokens: 2000,
+      }),
     })
 
-    const content = response.choices[0]?.message?.content
+    if (!response.ok) {
+      console.error("[AI Classifier] API error:", response.status)
+      return results
+    }
+
+    const json = await response.json()
+    const content = json.choices?.[0]?.message?.content
     if (!content) return results
 
     const parsed = JSON.parse(content) as {
@@ -251,29 +269,39 @@ export async function matchEntityNamesWithAI(
   counterparty: string,
   candidateEntities: string[]
 ): Promise<{ matched_entity: string | null; confidence: number }> {
-  if (!counterparty || candidateEntities.length === 0) {
+  if (!counterparty || candidateEntities.length === 0 || !API_KEY) {
     return { matched_entity: null, confidence: 0 }
   }
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "You match business names. Return JSON with matched_entity (exact string from list or null) and confidence (0-1)."
-        },
-        {
-          role: "user",
-          content: `Does "${counterparty}" match any of these entities?\n${candidateEntities.slice(0, 20).join("\n")}\n\nRespond: {"matched_entity": "...", "confidence": 0.X}`
-        }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 100,
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "You match business names. Return JSON with matched_entity (exact string from list or null) and confidence (0-1)."
+          },
+          {
+            role: "user",
+            content: `Does "${counterparty}" match any of these entities?\n${candidateEntities.slice(0, 20).join("\n")}\n\nRespond: {"matched_entity": "...", "confidence": 0.X}`
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        max_tokens: 100,
+      }),
     })
 
-    const content = response.choices[0]?.message?.content
+    if (!response.ok) return { matched_entity: null, confidence: 0 }
+
+    const json = await response.json()
+    const content = json.choices?.[0]?.message?.content
     if (!content) return { matched_entity: null, confidence: 0 }
 
     const parsed = JSON.parse(content)
