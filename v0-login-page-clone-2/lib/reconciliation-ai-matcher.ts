@@ -51,6 +51,18 @@ export interface AIMatcherResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Invoice State Tracking
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface InvoiceState {
+  id: string
+  originalAmount: number
+  remainingAmount: number  // Tracks partial payments
+  isFullyMatched: boolean
+  matchedPayments: string[]  // Movement IDs that matched this invoice
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main Matcher Function
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -71,14 +83,34 @@ export async function runAIReconciliationMatcher(
   const results: MatchDecision[] = []
   const errors: string[] = []
   
-  // CRITICAL: Track matched invoice IDs to prevent double-matching
-  // Same customer can have multiple invoices of same amount
-  // Once an invoice is matched, remove it from all other candidates
-  const matchedInvoiceIds = new Set<string>()
+  // CRITICAL: Track invoice state to handle all edge cases:
+  // 1. Same customer, multiple invoices, same amount → track by unique ID
+  // 2. Partial payments → track remaining amount
+  // 3. Aggregation → remove all matched invoices
+  // 4. Overpayment → mark invoice as fully matched
+  // 5. FIFO → handled by sorting candidates by due date
+  const invoiceStates = new Map<string, InvoiceState>()
 
   const movementsToProcess = movements
     .filter(m => shouldProcessWithAI(m))
     .slice(0, maxMovements)
+  
+  // Initialize invoice states from all candidates
+  for (const m of movementsToProcess) {
+    for (const c of m.classification.candidates) {
+      if (!invoiceStates.has(c.id)) {
+        invoiceStates.set(c.id, {
+          id: c.id,
+          originalAmount: c.amount,
+          remainingAmount: c.outstanding_amount ?? c.amount,
+          isFullyMatched: false,
+          matchedPayments: []
+        })
+      }
+    }
+  }
+  
+  console.log(`[AI Matcher] Tracking ${invoiceStates.size} unique invoices`)
 
   const totalCount = movementsToProcess.length
   let batchSize: number
@@ -101,28 +133,42 @@ export async function runAIReconciliationMatcher(
 
   console.log(`[AI Matcher] Model: ${MODEL} | Processing ${totalCount} movements: batchSize=${batchSize}`)
 
-  // Process batches SEQUENTIALLY to maintain invoice deduplication
-  // Each batch's matches are removed from subsequent batches' candidates
-  // (No parallel processing - we need to track matched invoices across batches)
+  // Process batches SEQUENTIALLY to maintain invoice state
+  // Each batch's matches update invoice states for subsequent batches
   for (let i = 0; i < movementsToProcess.length; i += batchSize) {
     const batch = movementsToProcess.slice(i, i + batchSize)
     
-    // Filter out already-matched invoices from this batch's candidates
-    const filteredBatch = filterMatchedInvoices(batch, matchedInvoiceIds)
+    // Filter candidates based on current invoice states
+    const filteredBatch = filterByInvoiceState(batch, invoiceStates)
     
-    console.log(`[AI Matcher] Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(movementsToProcess.length / batchSize)} | ${filteredBatch.length} movements | ${matchedInvoiceIds.size} invoices already matched`)
+    const fullyMatchedCount = Array.from(invoiceStates.values()).filter(s => s.isFullyMatched).length
+    console.log(`[AI Matcher] Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(movementsToProcess.length / batchSize)} | ${filteredBatch.length} movements | ${fullyMatchedCount}/${invoiceStates.size} invoices fully matched`)
     
     try {
       const batchResults = await processBatch(userId, filteredBatch, includeSupermemory)
       
-      // Track newly matched invoice IDs
+      // Update invoice states based on match decisions
       for (const decision of batchResults) {
         if (decision.decision === "match") {
+          // Handle single invoice match
           if (decision.matched_candidate_id) {
-            matchedInvoiceIds.add(decision.matched_candidate_id)
+            updateInvoiceState(
+              invoiceStates, 
+              decision.matched_candidate_id, 
+              decision.movement_id,
+              getPaymentAmount(movementsToProcess, decision.movement_id),
+              decision
+            )
           }
+          // Handle aggregation (multiple invoices)
           for (const id of decision.matched_candidate_ids) {
-            matchedInvoiceIds.add(id)
+            updateInvoiceState(
+              invoiceStates, 
+              id, 
+              decision.movement_id,
+              null, // For aggregation, mark as fully matched
+              decision
+            )
           }
         }
       }
@@ -135,7 +181,9 @@ export async function runAIReconciliationMatcher(
     }
   }
 
-  console.log(`[AI Matcher] Completed. Total matched invoices: ${matchedInvoiceIds.size}`)
+  const fullyMatchedCount = Array.from(invoiceStates.values()).filter(s => s.isFullyMatched).length
+  const partiallyMatchedCount = Array.from(invoiceStates.values()).filter(s => s.matchedPayments.length > 0 && !s.isFullyMatched).length
+  console.log(`[AI Matcher] Completed. Invoices: ${fullyMatchedCount} fully matched, ${partiallyMatchedCount} partially matched`)
 
   return {
     total_processed: movementsToProcess.length,
@@ -145,22 +193,88 @@ export async function runAIReconciliationMatcher(
   }
 }
 
-// Filter out already-matched invoices from candidates
-function filterMatchedInvoices(
-  movements: MovementToMatch[],
-  matchedInvoiceIds: Set<string>
-): MovementToMatch[] {
-  if (matchedInvoiceIds.size === 0) return movements
+// Get payment amount from movement
+function getPaymentAmount(movements: MovementToMatch[], movementId: string): number {
+  const m = movements.find(m => m.id === movementId)
+  return m ? Math.abs(m.amount) : 0
+}
+
+// Update invoice state after a match
+function updateInvoiceState(
+  invoiceStates: Map<string, InvoiceState>,
+  invoiceId: string,
+  movementId: string,
+  paymentAmount: number | null,
+  decision: MatchDecision
+): void {
+  const state = invoiceStates.get(invoiceId)
+  if (!state) return
   
+  state.matchedPayments.push(movementId)
+  
+  // Determine if this is a partial or full match
+  const isPartialMatch = decision.reasoning?.toLowerCase().includes('partial') ||
+                         decision.matched_candidate_ids.length === 0 && paymentAmount !== null && 
+                         paymentAmount < state.remainingAmount * 0.95 // Allow 5% tolerance
+  
+  if (isPartialMatch && paymentAmount !== null) {
+    // Partial payment - reduce remaining amount but don't mark as fully matched
+    state.remainingAmount = Math.max(0, state.remainingAmount - paymentAmount)
+    if (state.remainingAmount < 0.01) {
+      state.isFullyMatched = true
+    }
+    console.log(`[AI Matcher] Invoice ${invoiceId}: Partial payment $${paymentAmount}, remaining $${state.remainingAmount.toFixed(2)}`)
+  } else {
+    // Full match or aggregation - mark as fully matched
+    state.isFullyMatched = true
+    state.remainingAmount = 0
+    console.log(`[AI Matcher] Invoice ${invoiceId}: Fully matched`)
+  }
+}
+
+// Filter candidates based on invoice state
+// - Remove fully matched invoices
+// - Update outstanding amounts for partially matched invoices
+function filterByInvoiceState(
+  movements: MovementToMatch[],
+  invoiceStates: Map<string, InvoiceState>
+): MovementToMatch[] {
   return movements.map(m => {
     const originalCount = m.classification.candidates.length
-    const filteredCandidates = m.classification.candidates.filter(
-      c => !matchedInvoiceIds.has(c.id)
-    )
     
-    // If candidates changed, create a new movement object with filtered candidates
+    // Filter and update candidates based on invoice state
+    const filteredCandidates = m.classification.candidates
+      .filter(c => {
+        const state = invoiceStates.get(c.id)
+        // Keep if: no state (new invoice) OR not fully matched
+        return !state || !state.isFullyMatched
+      })
+      .map(c => {
+        const state = invoiceStates.get(c.id)
+        if (state && state.remainingAmount < state.originalAmount) {
+          // Update outstanding amount for partially paid invoices
+          return {
+            ...c,
+            outstanding_amount: state.remainingAmount,
+            amount_diff: Math.abs(m.amount) - state.remainingAmount
+          }
+        }
+        return c
+      })
+      // Sort by due date (FIFO - older invoices first)
+      .sort((a, b) => {
+        if (!a.due_date && !b.due_date) return 0
+        if (!a.due_date) return 1
+        if (!b.due_date) return -1
+        return new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
+      })
+    
+    // If candidates changed, create a new movement object
     if (filteredCandidates.length !== originalCount) {
-      console.log(`[AI Matcher] Movement ${m.id}: Removed ${originalCount - filteredCandidates.length} already-matched invoices`)
+      const removedCount = originalCount - filteredCandidates.length
+      if (removedCount > 0) {
+        console.log(`[AI Matcher] Movement ${m.id}: Removed ${removedCount} fully-matched invoices, ${filteredCandidates.length} remaining`)
+      }
       return {
         ...m,
         classification: {
