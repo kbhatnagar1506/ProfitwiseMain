@@ -96,6 +96,7 @@ interface CaseSummary {
   auto_matchable: number
   needs_review: number
   zero_candidates: number
+  ar_count: number
 }
 
 interface ResponseData {
@@ -117,7 +118,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     // Get query parameters
     const url = new URL(request.url)
-    const filter = url.searchParams.get("filter") || "all" // all, operational, non_op, review
+    const filter = url.searchParams.get("filter") || "all" // all, ar, operational, non_op, review
     const caseTypeFilter = url.searchParams.get("case_type") || null
     const search = url.searchParams.get("search") || null
 
@@ -149,12 +150,19 @@ export async function GET(request: Request): Promise<NextResponse> {
     let autoMatchableCount = 0
     let needsReviewCount = 0
     let zeroCandidatesCount = 0
+    let arCount = 0
 
     for (const movement of movements) {
       // Pass all movements for cross-movement analysis (duplicate detection, separate fee detection)
       const classification = classifyMovement(movement, cashEvents, movements)
 
+      // Track AR count for summary (before filters)
+      if (movement.direction === "inflow" && classification.is_operational) {
+        arCount++
+      }
+
       // Apply filters
+      if (filter === "ar" && movement.direction !== "inflow") continue
       if (filter === "operational" && !classification.is_operational) continue
       if (filter === "non_op" && classification.is_operational) continue
       if (filter === "review" && (classification.candidates.length > 0 || !classification.is_operational)) continue
@@ -207,6 +215,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       auto_matchable: autoMatchableCount,
       needs_review: needsReviewCount,
       zero_candidates: zeroCandidatesCount,
+      ar_count: arCount,
     }
 
     const response: ResponseData = {

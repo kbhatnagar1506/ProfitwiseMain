@@ -1,11 +1,10 @@
 /**
- * Reconciliation Case Classifier
+ * AR Reconciliation Case Classifier
  *
- * Deterministic classification of bank movements into ~49 distinct case types.
- * No AI/ML - purely data-driven matching based on amounts, counts, entity relationships, and flags.
- *
- * Purpose: Identify what kind of reconciliation scenario each bank movement represents,
- * then surface all candidate invoices/bills with their match types.
+ * Deterministic classification of bank INFLOWS into distinct case types.
+ * AR-ONLY: Matches customer payments to invoices.
+ * 
+ * AP (outflows) are excluded - they go through vendor classification instead.
  */
 
 import type { CashEventRow } from "./cash-events-build"
@@ -13,70 +12,60 @@ import type { CashEventRow } from "./cash-events-build"
 const EPS = 0.01
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Type Definitions
+// Type Definitions - AR FOCUSED
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type CaseType =
-  // Direct Link Cases (5)
-  | "DIRECT_LINK_SINGLE"
-  | "DIRECT_LINK_MULTI_SAME_ENTITY"
-  | "DIRECT_LINK_MULTI_DIFF_ENTITY"
-  | "DIRECT_LINK_WITH_FEE"
-  | "DIRECT_LINK_PARTIAL"
-  // Exact Match Cases (4)
-  | "EXACT_SINGLE"
-  | "EXACT_MULTI_SAME_ENTITY"
-  | "EXACT_MULTI_DIFF_ENTITY"
-  | "EXACT_WITH_REFERENCE"
-  // Fee Cases (6)
-  | "FEE_IMPLIED_SINGLE"
-  | "FEE_IMPLIED_MULTI"
-  | "FEE_FROM_TAG_DATA"
-  | "FEE_SEPARATE_TRANSACTION"
-  | "FEE_STRIPE_SQUARE"
-  | "FEE_ACH"
-  // Partial Payment Cases (4)
-  | "PARTIAL_SINGLE"
-  | "PARTIAL_MULTI_SAME_ENTITY"
-  | "PARTIAL_MULTI_DIFF_ENTITY"
-  | "PARTIAL_WITH_FEE"
-  // Aggregation Cases (4)
-  | "AGGREGATION_SAME_ENTITY"
-  | "AGGREGATION_DIFF_ENTITY"
-  | "AGGREGATION_WITH_FEE"
-  | "AGGREGATION_PARTIAL"
-  // Overpayment Cases (3)
-  | "OVERPAYMENT_SINGLE"
-  | "OVERPAYMENT_PREPAYMENT"
-  | "OVERPAYMENT_CREDIT_MEMO"
-  // Rounding Cases (2)
-  | "ROUNDING_UNDER"
-  | "ROUNDING_OVER"
+  // Direct Link Cases (5) - Invoice ID found in bank data
+  | "DIRECT_LINK_SINGLE"           // One invoice linked directly
+  | "DIRECT_LINK_MULTI_SAME_CUSTOMER" // Multiple invoices, same customer
+  | "DIRECT_LINK_MULTI_DIFF_CUSTOMER" // Multiple invoices, different customers
+  | "DIRECT_LINK_WITH_FEE"         // Direct link but with processor fee
+  | "DIRECT_LINK_PARTIAL"          // Direct link but partial payment
+  // Exact Match Cases (4) - Payment = Invoice amount
+  | "EXACT_SINGLE"                 // One invoice, exact amount match
+  | "EXACT_MULTI_SAME_CUSTOMER"    // Multiple invoices same amount, same customer
+  | "EXACT_MULTI_DIFF_CUSTOMER"    // Multiple invoices same amount, different customers
+  | "EXACT_WITH_REFERENCE"         // Exact match with reference number in description
+  // Fee-Adjusted Cases (4) - Payment = Invoice - processor fee
+  | "FEE_ADJUSTED_SINGLE"          // One invoice, fee deducted (2-5%)
+  | "FEE_ADJUSTED_MULTI"           // Multiple invoices, fee deducted
+  | "FEE_STRIPE_SQUARE"            // Stripe/Square processor fee pattern
+  | "FEE_ACH"                      // ACH processing fee pattern
+  // Partial Payment Cases (3) - Payment < Invoice amount
+  | "PARTIAL_SINGLE"               // Partial payment on one invoice
+  | "PARTIAL_MULTI_SAME_CUSTOMER"  // Partial across multiple, same customer
+  | "PARTIAL_MULTI_DIFF_CUSTOMER"  // Partial across multiple, different customers
+  // Aggregation Cases (3) - One payment covers multiple invoices
+  | "AGGREGATION_SAME_CUSTOMER"    // Multiple invoices, same customer
+  | "AGGREGATION_DIFF_CUSTOMER"    // Multiple invoices, different customers (rare)
+  | "AGGREGATION_WITH_FEE"         // Aggregation with fee deducted
+  // Overpayment Cases (2) - Payment > Invoice amount
+  | "OVERPAYMENT_SINGLE"           // Paid more than invoice amount
+  | "OVERPAYMENT_PREPAYMENT"       // Payment before invoice exists (deposit)
+  // Rounding Cases (2) - Small difference < $0.05
+  | "ROUNDING_UNDER"               // Paid slightly less
+  | "ROUNDING_OVER"                // Paid slightly more
   // Discount Cases (2)
-  | "EARLY_DISCOUNT"
-  | "VOLUME_DISCOUNT"
-  // Reversal/Refund Cases (3)
-  | "REVERSAL_FULL"
-  | "REVERSAL_PARTIAL"
-  | "CHARGEBACK"
-  // Special Cases (4)
-  | "DUPLICATE_PAYMENT"
-  | "CROSS_ENTITY_PAYMENT"
-  | "SETTLEMENT_BREAKDOWN"
-  | "ZERO_AMOUNT"
-  // Zero Candidate Sub-Cases (8) - when no AR/AP matches found
-  | "ZERO_MISSING_INVOICE"      // AR: Customer paid but no invoice exists
-  | "ZERO_MISSING_BILL"         // AP: Vendor paid but no bill exists
-  | "ZERO_PREPAYMENT_DEPOSIT"   // Payment before invoice issued (large amounts)
-  | "ZERO_SUBSCRIPTION"         // Recurring SaaS/service (Zapier, Google, etc.)
-  | "ZERO_SMALL_EXPENSE"        // Petty cash / small operational expense
-  | "ZERO_REFUND_CREDIT"        // Refund or credit (opposite direction)
-  | "ZERO_DELETED_COUNTERPARTY" // Counterparty marked as deleted
-  | "ZERO_UNCLASSIFIED"         // Needs manual review
-  // No Match Cases (2) - has candidates but none match well
-  | "NO_MATCH_HAS_CANDIDATES"
-  | "NO_MATCH_NO_CANDIDATES"
-  // Non-Operational Cases (12)
+  | "EARLY_DISCOUNT"               // Early payment discount (1-3%)
+  | "VOLUME_DISCOUNT"              // Volume-based discount
+  // Refund Cases (2) - Money going back to customer
+  | "REFUND_FULL"                  // Full refund (outflow matching AR)
+  | "REFUND_PARTIAL"               // Partial refund
+  // Special Cases (3)
+  | "DUPLICATE_PAYMENT"            // Same payment made twice
+  | "CROSS_CUSTOMER_PAYMENT"       // Payment from wrong customer
+  | "ZERO_AMOUNT"                  // $0 transaction
+  // Zero Candidate Cases (5) - No matching invoice found (AR-specific)
+  | "ZERO_MISSING_INVOICE"         // Customer paid but no invoice exists
+  | "ZERO_PREPAYMENT"              // Large deposit/prepayment before invoice
+  | "ZERO_REFUND_RECEIVED"         // Refund from vendor (unusual inflow)
+  | "ZERO_DELETED_CUSTOMER"        // Customer was deleted from system
+  | "ZERO_UNCLASSIFIED"            // Needs manual review
+  // No Match Cases (2)
+  | "NO_MATCH_HAS_CANDIDATES"      // Has invoice candidates but none match well
+  | "NO_MATCH_NO_CANDIDATES"       // No invoice candidates at all
+  // Non-Operational Cases (12) - Excluded from AR reconciliation
   | "INTERCOMPANY_TRANSFER"
   | "LOAN_PAYMENT"
   | "LOAN_PROCEEDS"
@@ -89,6 +78,8 @@ export type CaseType =
   | "CREDIT_CARD_PAYMENT"
   | "MERCHANT_DEPOSIT"
   | "UNCLASSIFIED_NON_OP"
+  // AP Placeholder (outflows excluded from reconciliation)
+  | "AP_EXCLUDED"
 
 export type MatchType = "EXACT" | "FEE" | "PARTIAL" | "AGGREGATION" | "ROUNDING" | "DISCOUNT" | "REVERSAL" | "DIRECT_LINK"
 
@@ -471,74 +462,47 @@ function detectFlags(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Zero-Candidate Sub-Classification
+// Zero-Candidate Sub-Classification (AR-Specific)
 // ─────────────────────────────────────────────────────────────────────────────
-
-// Known SaaS/subscription patterns
-const SUBSCRIPTION_PATTERNS = [
-  "zapier", "google workspace", "google cloud", "aws", "amazon web services",
-  "microsoft", "azure", "slack", "notion", "figma", "canva", "dropbox",
-  "zoom", "hubspot", "salesforce", "mailchimp", "sendgrid", "twilio",
-  "stripe", "square", "shopify", "quickbooks", "xero", "gusto", "rippling",
-  "github", "gitlab", "atlassian", "jira", "confluence", "asana", "monday",
-  "intercom", "zendesk", "freshdesk", "docusign", "adobe", "openai",
-  "anthropic", "vercel", "netlify", "heroku", "digitalocean", "cloudflare"
-]
 
 function classifyZeroCandidate(movement: MovementWithAvailableCash): CaseType {
   const counterparty = (movement.counterparty || "").toLowerCase()
   const description = (movement.raw_description || "").toLowerCase()
   const amount = Math.abs(movement.available_cash)
-  const isInflow = movement.direction === "inflow"
-  const isOutflow = movement.direction === "outflow"
 
-  // 1. Deleted counterparty - highest priority
+  // AR only processes inflows - this should always be true here
+  if (movement.direction !== "inflow") {
+    return "AP_EXCLUDED"
+  }
+
+  // 1. Deleted customer - highest priority
   if (counterparty.includes("(deleted)") || description.includes("(deleted)")) {
-    return "ZERO_DELETED_COUNTERPARTY"
+    return "ZERO_DELETED_CUSTOMER"
   }
 
-  // 2. Subscription/SaaS expense detection
-  const combinedText = `${counterparty} ${description}`
-  const isSubscription = SUBSCRIPTION_PATTERNS.some(pattern => combinedText.includes(pattern))
-  if (isSubscription && isOutflow) {
-    return "ZERO_SUBSCRIPTION"
-  }
-
-  // 3. Small expense (petty cash) - outflows under $100
-  if (isOutflow && amount < 100) {
-    return "ZERO_SMALL_EXPENSE"
-  }
-
-  // 4. Large prepayment/deposit - inflows over $5000 with no invoice
-  if (isInflow && amount > 5000) {
-    return "ZERO_PREPAYMENT_DEPOSIT"
-  }
-
-  // 5. Refund/credit detection - unusual direction
-  // AR (inflow expected) but we have outflow = refund to customer
-  // AP (outflow expected) but we have inflow = refund from vendor
-  // This is tricky - we need to check if the counterparty looks like a customer vs vendor
-  // For now, small inflows from vendor-like names could be refunds
-  if (isInflow && amount < 500 && (
-    counterparty.includes("amazon") ||
-    counterparty.includes("refund") ||
+  // 2. Refund patterns - unusual inflow that looks like a vendor refund
+  const isRefundPattern = 
     description.includes("refund") ||
-    description.includes("credit")
-  )) {
-    return "ZERO_REFUND_CREDIT"
+    description.includes("credit") ||
+    description.includes("return") ||
+    counterparty.includes("refund")
+  
+  if (isRefundPattern && amount < 1000) {
+    return "ZERO_REFUND_RECEIVED"
   }
 
-  // 6. Missing invoice (AR) - customer payment with no matching invoice
-  if (isInflow) {
+  // 3. Large prepayment/deposit - over $5000 with no invoice
+  if (amount > 5000) {
+    return "ZERO_PREPAYMENT"
+  }
+
+  // 4. Missing invoice - customer payment with no matching invoice
+  // This is the most common case for AR
+  if (counterparty && counterparty.length > 2) {
     return "ZERO_MISSING_INVOICE"
   }
 
-  // 7. Missing bill (AP) - vendor payment with no matching bill
-  if (isOutflow) {
-    return "ZERO_MISSING_BILL"
-  }
-
-  // 8. Fallback
+  // 5. Fallback - needs manual review
   return "ZERO_UNCLASSIFIED"
 }
 
@@ -555,12 +519,12 @@ function resolveCase(
   // Zero amount
   if (flags.is_zero_amount) return "ZERO_AMOUNT"
 
-  // Duplicate payment check (highest priority - should be flagged immediately)
+  // Duplicate payment check (highest priority)
   if (flags.is_duplicate) {
     return "DUPLICATE_PAYMENT"
   }
 
-  // Direct link cases
+  // Direct link cases - invoice ID found in bank data
   if (flags.has_direct_link) {
     const directLinks = candidates.filter((c) => c.is_direct_link)
     if (directLinks.length === 1) {
@@ -568,100 +532,53 @@ function resolveCase(
       if (flags.is_partial) return "DIRECT_LINK_PARTIAL"
       return "DIRECT_LINK_SINGLE"
     }
-    const uniqueEntities = new Set(directLinks.map((c) => c.entity_id)).size
-    return uniqueEntities === 1 ? "DIRECT_LINK_MULTI_SAME_ENTITY" : "DIRECT_LINK_MULTI_DIFF_ENTITY"
+    const uniqueCustomers = new Set(directLinks.map((c) => c.entity_id)).size
+    return uniqueCustomers === 1 ? "DIRECT_LINK_MULTI_SAME_CUSTOMER" : "DIRECT_LINK_MULTI_DIFF_CUSTOMER"
   }
 
-  // Exact match cases
+  // Exact match cases - payment = invoice amount
   const exactMatches = candidates.filter((c) => c.match_type === "EXACT" && Math.abs(c.amount_diff) < EPS)
   if (exactMatches.length > 0) {
     if (exactMatches.length === 1) {
-      // If there's a same_amount_conflict, we can't safely call it SINGLE
       if (flags.same_amount_conflict) {
-        const uniqueEntities = new Set(candidates.filter(c => c.match_type === "EXACT").map((c) => c.entity_id)).size
-        return uniqueEntities === 1 ? "EXACT_MULTI_SAME_ENTITY" : "EXACT_MULTI_DIFF_ENTITY"
+        const uniqueCustomers = new Set(candidates.filter(c => c.match_type === "EXACT").map((c) => c.entity_id)).size
+        return uniqueCustomers === 1 ? "EXACT_MULTI_SAME_CUSTOMER" : "EXACT_MULTI_DIFF_CUSTOMER"
       }
       if (flags.has_reference) return "EXACT_WITH_REFERENCE"
       return "EXACT_SINGLE"
     }
-    const uniqueEntities = new Set(exactMatches.map((c) => c.entity_id)).size
-    return uniqueEntities === 1 ? "EXACT_MULTI_SAME_ENTITY" : "EXACT_MULTI_DIFF_ENTITY"
+    const uniqueCustomers = new Set(exactMatches.map((c) => c.entity_id)).size
+    return uniqueCustomers === 1 ? "EXACT_MULTI_SAME_CUSTOMER" : "EXACT_MULTI_DIFF_CUSTOMER"
   }
 
-  // Fee cases
+  // Fee-adjusted cases - payment = invoice - processor fee
   if (flags.has_fee) {
     const feeCandidates = candidates.filter((c) => c.match_type === "FEE")
-    
-    // Check if fee info is in tag_data
-    const tagData = movement.tag_data as Record<string, unknown> | null
-    const hasFeeInTagData = tagData && (tagData.fee || tagData.processing_fee || tagData.transaction_fee)
-    
-    if (hasFeeInTagData) {
-      return "FEE_FROM_TAG_DATA"
-    }
     
     if (feeCandidates.length === 1) {
       const processor = detectProcessorType(movement.counterparty)
       if (processor === "stripe" || processor === "square") return "FEE_STRIPE_SQUARE"
       if (processor === "ach") return "FEE_ACH"
-      return "FEE_IMPLIED_SINGLE"
+      return "FEE_ADJUSTED_SINGLE"
     }
-    return "FEE_IMPLIED_MULTI"
+    return "FEE_ADJUSTED_MULTI"
   }
 
-  // Check for separate fee transaction (when movement amount exactly matches candidate but there's a separate fee)
-  // This happens when: movement = $100, candidate = $103, and there's a separate $3 fee transaction
-  if (allMovements && candidates.length > 0) {
-    const bestCandidate = candidates[0]
-    const movAmount = Math.abs(movement.available_cash)
-    
-    // If movement is less than candidate, check for separate fee
-    if (movAmount < bestCandidate.amount - EPS) {
-      const separateFee = findSeparateFeeTransaction(movement, allMovements, bestCandidate)
-      if (separateFee.found) {
-        return "FEE_SEPARATE_TRANSACTION"
-      }
-    }
-  }
-
-  // Aggregation cases
+  // Aggregation cases - one payment covers multiple invoices
   if (flags.is_aggregation) {
-    const uniqueEntities = new Set(candidates.map((c) => c.entity_id)).size
+    const uniqueCustomers = new Set(candidates.map((c) => c.entity_id)).size
     if (flags.has_fee) return "AGGREGATION_WITH_FEE"
-    
-    // Settlement breakdown: aggregation across different entities (e.g., marketplace payout)
-    if (uniqueEntities > 1) {
-      const desc = (movement.raw_description || "").toLowerCase()
-      const isSettlement = desc.includes("settlement") || desc.includes("payout") || desc.includes("batch")
-      if (isSettlement) {
-        return "SETTLEMENT_BREAKDOWN"
-      }
-      return "AGGREGATION_DIFF_ENTITY"
-    }
-    return "AGGREGATION_SAME_ENTITY"
+    return uniqueCustomers === 1 ? "AGGREGATION_SAME_CUSTOMER" : "AGGREGATION_DIFF_CUSTOMER"
   }
 
-  // Check for partial aggregation (sum is close but not exact)
-  const matchableCandidates = candidates.filter((c) => c.match_type === "EXACT" || c.match_type === "FEE")
-  if (matchableCandidates.length > 1) {
-    const aggregationSum = matchableCandidates.reduce((sum, c) => sum + c.amount, 0)
-    const movAmount = Math.abs(movement.available_cash)
-    const sumDiff = Math.abs(aggregationSum - movAmount)
-    // If sum is within 5% but not exact, it's a partial aggregation
-    if (sumDiff > EPS && sumDiff / movAmount <= 0.05) {
-      return "AGGREGATION_PARTIAL"
-    }
-  }
-
-  // Partial payment cases
+  // Partial payment cases - payment < invoice amount
   if (flags.is_partial) {
     const partialCandidates = candidates.filter((c) => c.match_type === "PARTIAL")
     if (partialCandidates.length === 1) {
-      if (flags.has_fee) return "PARTIAL_WITH_FEE"
       return "PARTIAL_SINGLE"
     }
-    const uniqueEntities = new Set(partialCandidates.map((c) => c.entity_id)).size
-    return uniqueEntities === 1 ? "PARTIAL_MULTI_SAME_ENTITY" : "PARTIAL_MULTI_DIFF_ENTITY"
+    const uniqueCustomers = new Set(partialCandidates.map((c) => c.entity_id)).size
+    return uniqueCustomers === 1 ? "PARTIAL_MULTI_SAME_CUSTOMER" : "PARTIAL_MULTI_DIFF_CUSTOMER"
   }
 
   // Discount cases
@@ -670,29 +587,19 @@ function resolveCase(
     return candidates.length > 1 ? "VOLUME_DISCOUNT" : "EARLY_DISCOUNT"
   }
 
-  // Reversal cases (including chargebacks)
+  // Refund cases (outflow matching AR invoice)
   if (flags.is_reversal) {
-    const desc = (movement.raw_description || "").toLowerCase()
-    const isChargeback = desc.includes("chargeback") || desc.includes("dispute")
-    
-    if (isChargeback) {
-      return "CHARGEBACK"
-    }
-    
     const reversalCandidates = candidates.filter((c) => c.match_type === "REVERSAL")
     if (reversalCandidates.length === 1) {
       const diff = Math.abs(reversalCandidates[0].amount - Math.abs(movement.available_cash))
-      return diff < EPS ? "REVERSAL_FULL" : "REVERSAL_PARTIAL"
+      return diff < EPS ? "REFUND_FULL" : "REFUND_PARTIAL"
     }
-    return "REVERSAL_PARTIAL"
+    return "REFUND_PARTIAL"
   }
 
-  // Cross-entity payment (payment from one entity applied to another's invoice)
+  // Cross-customer payment
   if (flags.cross_entity && candidates.length > 0) {
-    const uniqueEntities = new Set(candidates.map((c) => c.entity_id)).size
-    if (uniqueEntities > 1) {
-      return "CROSS_ENTITY_PAYMENT"
-    }
+    return "CROSS_CUSTOMER_PAYMENT"
   }
 
   // Rounding cases
@@ -700,35 +607,25 @@ function resolveCase(
   if (roundingCandidates.length > 0) {
     const movAmount = Math.abs(movement.available_cash)
     const candAmount = roundingCandidates[0].amount
-    // If movement > candidate, we received more than expected (over)
-    // If movement < candidate, we received less than expected (under)
     return movAmount > candAmount ? "ROUNDING_OVER" : "ROUNDING_UNDER"
   }
 
   // Overpayment cases
   if (candidates.length > 0) {
-    // Find the best matching candidate (first one after sorting)
     const bestCandidate = candidates[0]
     const overpaymentAmount = Math.abs(movement.available_cash) - bestCandidate.amount
 
     if (overpaymentAmount > EPS) {
-      // Check if overpayment could be offset by credit memo
-      const creditMemos = candidates.filter((c) => c.amount < 0) // Negative amounts = credits
-      const creditSum = creditMemos.reduce((sum, c) => sum + Math.abs(c.amount), 0)
-
-      if (creditSum >= overpaymentAmount - EPS) {
-        return "OVERPAYMENT_CREDIT_MEMO"
-      }
       return "OVERPAYMENT_SINGLE"
     }
   }
 
-  // Zero candidates - use sub-classifier for detailed categorization
+  // Zero candidates - use AR-specific sub-classifier
   if (candidates.length === 0) {
     return classifyZeroCandidate(movement)
   }
 
-  // No match cases - has candidates but none match well
+  // Has candidates but none match well
   return "NO_MATCH_HAS_CANDIDATES"
 }
 
@@ -866,14 +763,10 @@ export function classifyMovement(
 
   // AR RECONCILIATION ONLY
   // Outflows (AP) are NOT reconciled - they go through vendor classification instead
-  // AP reconciliation doesn't make sense because:
-  // 1. Bills are often created FROM the payment (circular)
-  // 2. Many businesses don't enter bills for every expense
-  // 3. AP should be: classify (operational/non-op) → vendor model → forecast
   if (movement.direction === "outflow") {
     return {
       movement_id: movement.id,
-      case_type: "NO_MATCH_NO_CANDIDATES" as CaseType, // Will be handled by AP classification
+      case_type: "AP_EXCLUDED" as CaseType,
       is_operational: true,
       candidates: [],
       flags: {
@@ -888,7 +781,7 @@ export function classifyMovement(
         is_zero_amount: Math.abs(movement.available_cash) < EPS,
         is_duplicate: false,
       },
-      suggested_action: "exclude", // Exclude from AR reconciliation - handled separately
+      suggested_action: "exclude",
     }
   }
 
@@ -909,36 +802,32 @@ export function classifyMovement(
   const caseActionMap: Record<CaseType, "auto_match" | "review" | "manual" | "exclude"> = {
     // Direct links - review (was auto_match)
     DIRECT_LINK_SINGLE: "review",
-    DIRECT_LINK_MULTI_SAME_ENTITY: "review",
-    DIRECT_LINK_MULTI_DIFF_ENTITY: "review",
+    DIRECT_LINK_MULTI_SAME_CUSTOMER: "review",
+    DIRECT_LINK_MULTI_DIFF_CUSTOMER: "review",
     DIRECT_LINK_WITH_FEE: "review",
     DIRECT_LINK_PARTIAL: "review",
 
     // Exact matches - review (was auto_match)
     EXACT_SINGLE: "review",
-    EXACT_MULTI_SAME_ENTITY: "review",
-    EXACT_MULTI_DIFF_ENTITY: "review",
+    EXACT_MULTI_SAME_CUSTOMER: "review",
+    EXACT_MULTI_DIFF_CUSTOMER: "review",
     EXACT_WITH_REFERENCE: "review",
 
     // Fee cases - review (was auto_match)
-    FEE_IMPLIED_SINGLE: "review",
-    FEE_IMPLIED_MULTI: "review",
-    FEE_FROM_TAG_DATA: "review",
-    FEE_SEPARATE_TRANSACTION: "review",
+    FEE_ADJUSTED_SINGLE: "review",
+    FEE_ADJUSTED_MULTI: "review",
     FEE_STRIPE_SQUARE: "review",
     FEE_ACH: "review",
 
     // Partial payments
     PARTIAL_SINGLE: "review",
-    PARTIAL_MULTI_SAME_ENTITY: "review",
-    PARTIAL_MULTI_DIFF_ENTITY: "review",
-    PARTIAL_WITH_FEE: "review",
+    PARTIAL_MULTI_SAME_CUSTOMER: "review",
+    PARTIAL_MULTI_DIFF_CUSTOMER: "review",
 
     // Aggregation - review (was auto_match)
-    AGGREGATION_SAME_ENTITY: "review",
-    AGGREGATION_DIFF_ENTITY: "review",
+    AGGREGATION_SAME_CUSTOMER: "review",
+    AGGREGATION_DIFF_CUSTOMER: "review",
     AGGREGATION_WITH_FEE: "review",
-    AGGREGATION_PARTIAL: "review",
 
     // Rounding - review (was auto_match)
     ROUNDING_UNDER: "review",
@@ -948,30 +837,24 @@ export function classifyMovement(
     EARLY_DISCOUNT: "review",
     VOLUME_DISCOUNT: "review",
 
-    // Reversals
-    REVERSAL_FULL: "review",
-    REVERSAL_PARTIAL: "review",
-    CHARGEBACK: "review",
+    // Refunds
+    REFUND_FULL: "review",
+    REFUND_PARTIAL: "review",
 
     // Overpayments
     OVERPAYMENT_SINGLE: "review",
     OVERPAYMENT_PREPAYMENT: "review",
-    OVERPAYMENT_CREDIT_MEMO: "review",
 
     // Special cases
     DUPLICATE_PAYMENT: "review",
-    CROSS_ENTITY_PAYMENT: "review",
-    SETTLEMENT_BREAKDOWN: "review",
+    CROSS_CUSTOMER_PAYMENT: "review",
     ZERO_AMOUNT: "review",
 
     // Zero-candidate sub-cases - all need review
     ZERO_MISSING_INVOICE: "review",
-    ZERO_MISSING_BILL: "review",
-    ZERO_PREPAYMENT_DEPOSIT: "review",
-    ZERO_SUBSCRIPTION: "review",
-    ZERO_SMALL_EXPENSE: "review",
-    ZERO_REFUND_CREDIT: "review",
-    ZERO_DELETED_COUNTERPARTY: "review",
+    ZERO_PREPAYMENT: "review",
+    ZERO_REFUND_RECEIVED: "review",
+    ZERO_DELETED_CUSTOMER: "review",
     ZERO_UNCLASSIFIED: "review",
 
     // No match - needs review to understand why
@@ -991,6 +874,9 @@ export function classifyMovement(
     CREDIT_CARD_PAYMENT: "exclude",
     MERCHANT_DEPOSIT: "exclude",
     UNCLASSIFIED_NON_OP: "exclude",
+    
+    // AP excluded from AR reconciliation
+    AP_EXCLUDED: "exclude",
   }
 
   let suggestedAction = caseActionMap[caseType] || "manual"
