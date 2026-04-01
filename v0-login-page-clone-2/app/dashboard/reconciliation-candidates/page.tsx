@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
-import { RefreshCw, Search, ChevronRight } from "lucide-react"
+import { RefreshCw, Search, ChevronRight, Download } from "lucide-react"
 import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
 
 interface ClassifiedMovement {
@@ -121,6 +121,99 @@ export default function ReconciliationCandidatesPage() {
     setIsDetailsPanelOpen(true)
   }
 
+  const downloadCSV = () => {
+    if (!data) return
+
+    // Build CSV header
+    const headers = [
+      "Date",
+      "Counterparty",
+      "Amount",
+      "Direction",
+      "Case Type",
+      "Is Operational",
+      "Suggested Action",
+      "Candidates Count",
+      "Candidate 1 Entity",
+      "Candidate 1 Amount",
+      "Candidate 1 Match Type",
+      "Candidate 1 Amount Diff",
+      "Candidate 2 Entity",
+      "Candidate 2 Amount",
+      "Candidate 2 Match Type",
+      "Candidate 2 Amount Diff",
+      "Candidate 3 Entity",
+      "Candidate 3 Amount",
+      "Candidate 3 Match Type",
+      "Candidate 3 Amount Diff",
+      "Flags",
+      "Economic Class",
+      "Movement ID",
+    ]
+
+    // Build CSV rows
+    const rows = data.movements.map((m) => {
+      const c = m.classification
+      const candidates = c.candidates || []
+      const flags = Object.entries(c.flags)
+        .filter(([, v]) => v)
+        .map(([k]) => k)
+        .join("; ")
+
+      return [
+        m.date,
+        m.counterparty || "",
+        m.amount.toFixed(2),
+        m.direction,
+        c.case_type,
+        c.is_operational ? "Yes" : "No",
+        c.suggested_action,
+        candidates.length,
+        candidates[0]?.entity_name || "",
+        candidates[0]?.amount?.toFixed(2) || "",
+        candidates[0]?.match_type || "",
+        candidates[0]?.amount_diff?.toFixed(2) || "",
+        candidates[1]?.entity_name || "",
+        candidates[1]?.amount?.toFixed(2) || "",
+        candidates[1]?.match_type || "",
+        candidates[1]?.amount_diff?.toFixed(2) || "",
+        candidates[2]?.entity_name || "",
+        candidates[2]?.amount?.toFixed(2) || "",
+        candidates[2]?.match_type || "",
+        candidates[2]?.amount_diff?.toFixed(2) || "",
+        flags,
+        m.economic_class || "",
+        m.id,
+      ]
+    })
+
+    // Escape CSV values
+    const escapeCSV = (val: string | number) => {
+      const str = String(val)
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+        return `"${str.replace(/"/g, '""')}"`
+      }
+      return str
+    }
+
+    // Build CSV content
+    const csvContent = [
+      headers.map(escapeCSV).join(","),
+      ...rows.map((row) => row.map(escapeCSV).join(",")),
+    ].join("\n")
+
+    // Download
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `reconciliation-candidates-${new Date().toISOString().split("T")[0]}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
   if (loading) {
     return (
       <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
@@ -157,15 +250,26 @@ export default function ReconciliationCandidatesPage() {
           <h1 className="text-xl font-semibold text-white tracking-tight">Reconciliation Candidates</h1>
           <p className="text-[12px] text-zinc-500 mt-0.5">Deterministic case classification · Data-driven matching</p>
         </div>
-        <Button
-          size="sm"
-          onClick={() => fetchData()}
-          disabled={loading}
-          className="bg-white/10 hover:bg-white/15 text-white text-[11px] h-7 px-3"
-        >
-          <RefreshCw className={`h-3 w-3 mr-1.5 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={downloadCSV}
+            disabled={loading || !data}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] h-7 px-3"
+          >
+            <Download className="h-3 w-3 mr-1.5" />
+            Download CSV
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => fetchData()}
+            disabled={loading}
+            className="bg-white/10 hover:bg-white/15 text-white text-[11px] h-7 px-3"
+          >
+            <RefreshCw className={`h-3 w-3 mr-1.5 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Summary Stats */}
