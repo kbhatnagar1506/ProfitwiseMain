@@ -230,31 +230,60 @@ export default function ReconciliationCandidatesPage() {
   const runAIEnhancement = async () => {
     try {
       setAiLoading(true)
-      const res = await fetch("/api/dashboard/reconciliation-candidates/ai-enhance", {
+      
+      // Start the background job
+      const startRes = await fetch("/api/dashboard/reconciliation-candidates/ai-enhance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ maxMovements: 50 }),
       })
       
-      if (!res.ok) throw new Error("AI enhancement failed")
+      if (!startRes.ok) throw new Error("Failed to start AI enhancement")
       
-      const json = await res.json()
+      const startJson = await startRes.json()
+      const jobId = startJson.jobId
       
-      // Store AI enhancements
-      const enhancements = new Map<string, { suggested_case_type: string; confidence: number; reasoning: string }>()
-      for (const m of json.movements || []) {
-        if (m.ai_enhanced) {
-          enhancements.set(m.id, {
-            suggested_case_type: m.ai_enhanced.suggested_case_type,
-            confidence: m.ai_enhanced.confidence,
-            reasoning: m.ai_enhanced.reasoning,
-          })
+      if (!jobId) throw new Error("No job ID returned")
+      
+      // Poll for completion
+      let attempts = 0
+      const maxAttempts = 60 // 2 minutes max (2s intervals)
+      
+      while (attempts < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 2000)) // Wait 2 seconds
+        
+        const pollRes = await fetch(`/api/dashboard/reconciliation-candidates/ai-enhance?jobId=${jobId}`)
+        if (!pollRes.ok) throw new Error("Failed to check job status")
+        
+        const pollJson = await pollRes.json()
+        
+        if (pollJson.status === "completed") {
+          // Store AI enhancements
+          const enhancements = new Map<string, { suggested_case_type: string; confidence: number; reasoning: string }>()
+          for (const m of pollJson.result?.movements || []) {
+            if (m.ai_enhanced) {
+              enhancements.set(m.id, {
+                suggested_case_type: m.ai_enhanced.suggested_case_type,
+                confidence: m.ai_enhanced.confidence,
+                reasoning: m.ai_enhanced.reasoning,
+              })
+            }
+          }
+          setAiEnhancements(enhancements)
+          
+          // Show summary
+          const summary = pollJson.result?.summary || {}
+          alert(`AI Enhancement Complete!\n\n• ${summary.ai_enhanced || 0} movements analyzed\n• ${summary.case_type_changes || 0} classifications improved\n• ${summary.high_confidence || 0} high-confidence matches`)
+          return
+        } else if (pollJson.status === "failed") {
+          throw new Error(pollJson.error || "AI enhancement job failed")
         }
+        
+        // Still running, continue polling
+        attempts++
       }
-      setAiEnhancements(enhancements)
       
-      // Show summary
-      alert(`AI Enhancement Complete!\n\n• ${json.summary.ai_enhanced} movements analyzed\n• ${json.summary.case_type_changes} classifications improved\n• ${json.summary.high_confidence} high-confidence matches`)
+      throw new Error("AI enhancement timed out")
     } catch (err) {
       alert("AI enhancement failed: " + (err instanceof Error ? err.message : "Unknown error"))
     } finally {
