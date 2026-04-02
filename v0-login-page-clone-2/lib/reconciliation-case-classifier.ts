@@ -305,9 +305,9 @@ function buildCandidates(
     const isReverseType = event.event_type === reverseType
     if (!isTargetType && !isReverseType) continue
     
-    // Use outstanding_amount if available, otherwise use amount
-    const effectiveAmount = event.outstanding_amount > EPS ? event.outstanding_amount : event.amount
-    if (effectiveAmount <= EPS) continue
+    // Use original amount for matching - we're correcting books, not filtering by outstanding
+    // Skip only if the original amount is zero/invalid
+    if (event.amount <= EPS) continue
 
     const entityName = (event.metadata?.customer_name || event.metadata?.vendor_name || event.entity_id) as string
     const amountDiff = Math.abs(event.amount - movAmount)
@@ -359,7 +359,7 @@ function buildCandidates(
         entity_id: event.entity_id,
         entity_name: entityName,
         amount: event.amount,
-        outstanding_amount: effectiveAmount,
+        outstanding_amount: event.outstanding_amount,
         due_date: event.expected_date,
         match_type: primaryMatchType,
         secondary_match_types: secondaryMatchTypes,
@@ -375,7 +375,7 @@ function buildCandidates(
         entity_id: event.entity_id,
         entity_name: entityName,
         amount: event.amount,
-        outstanding_amount: effectiveAmount,
+        outstanding_amount: event.outstanding_amount,
         due_date: event.expected_date,
         match_type: "REVERSAL",
         secondary_match_types: [],
