@@ -27,6 +27,7 @@ interface CaseSummary {
   non_operational: number
   auto_matchable: number
   needs_review: number
+  zero_candidates: number
 }
 
 interface ResponseData {
@@ -89,7 +90,7 @@ export default function ReconciliationCandidatesPage() {
   const [loading, setLoading] = useState(true)
   const [aiLoading, setAiLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<"all" | "operational" | "non_op">("all")
+  const [filter, setFilter] = useState<"all" | "operational" | "non_op" | "zero_candidates">("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
   const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
@@ -359,7 +360,7 @@ export default function ReconciliationCandidatesPage() {
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-6 gap-3">
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Total Movements</p>
           <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-white">{data.summary.total}</p>
@@ -371,6 +372,10 @@ export default function ReconciliationCandidatesPage() {
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Non-Operational</p>
           <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-zinc-400">{data.summary.non_operational}</p>
+        </div>
+        <div className="bg-[#141414] border border-red-500/30 rounded-lg p-4">
+          <p className="text-[10px] text-red-400 uppercase tracking-wider">Zero Candidates</p>
+          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-red-400">{data.summary.zero_candidates || 0}</p>
         </div>
         <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Auto-Matchable</p>
@@ -385,7 +390,7 @@ export default function ReconciliationCandidatesPage() {
       {/* Filter Bar */}
       <div className="bg-[#141414] border border-white/10 rounded-lg p-4 space-y-3">
         <div className="flex items-center gap-3">
-          <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "operational" | "non_op")} className="w-full">
+          <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "operational" | "non_op" | "zero_candidates")} className="w-full">
             <TabsList className="bg-[#0A0A0A] border border-white/10 h-8">
               <TabsTrigger value="all" className="text-[11px] h-6 px-3">
                 All ({data.summary.total})
@@ -395,6 +400,9 @@ export default function ReconciliationCandidatesPage() {
               </TabsTrigger>
               <TabsTrigger value="non_op" className="text-[11px] h-6 px-3">
                 Non-Op ({data.summary.non_operational})
+              </TabsTrigger>
+              <TabsTrigger value="zero_candidates" className="text-[11px] h-6 px-3 text-red-400">
+                Zero Candidates ({data.summary.zero_candidates || 0})
               </TabsTrigger>
             </TabsList>
           </Tabs>

@@ -93,6 +93,7 @@ interface CaseSummary {
   non_operational: number
   auto_matchable: number
   needs_review: number
+  zero_candidates: number
 }
 
 interface ResponseData {
@@ -114,7 +115,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     // Get query parameters
     const url = new URL(request.url)
-    const filter = url.searchParams.get("filter") || "all" // all, operational, non_op
+    const filter = url.searchParams.get("filter") || "all" // all, operational, non_op, zero_candidates
     const caseTypeFilter = url.searchParams.get("case_type") || null
     const search = url.searchParams.get("search") || null
 
@@ -129,6 +130,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     let nonOperationalCount = 0
     let autoMatchableCount = 0
     let needsReviewCount = 0
+    let zeroCandidatesCount = 0
 
     for (const movement of movements) {
       // Pass all movements for cross-movement analysis (duplicate detection, separate fee detection)
@@ -137,6 +139,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       // Apply filters
       if (filter === "operational" && !classification.is_operational) continue
       if (filter === "non_op" && classification.is_operational) continue
+      if (filter === "zero_candidates" && (classification.candidates.length > 0 || !classification.is_operational)) continue
       if (caseTypeFilter && classification.case_type !== caseTypeFilter) continue
       if (search) {
         const searchLower = search.toLowerCase()
@@ -171,6 +174,11 @@ export async function GET(request: Request): Promise<NextResponse> {
       } else if (classification.suggested_action === "review") {
         needsReviewCount++
       }
+
+      // Count zero candidates (operational only - non-op are expected to have 0)
+      if (classification.is_operational && classification.candidates.length === 0) {
+        zeroCandidatesCount++
+      }
     }
 
     const summary: CaseSummary = {
@@ -180,6 +188,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       non_operational: nonOperationalCount,
       auto_matchable: autoMatchableCount,
       needs_review: needsReviewCount,
+      zero_candidates: zeroCandidatesCount,
     }
 
     const response: ResponseData = {
