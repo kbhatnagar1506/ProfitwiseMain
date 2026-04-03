@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
-import { RefreshCw, Search, ChevronRight, Download, Sparkles } from "lucide-react"
+import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users } from "lucide-react"
 import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
 
 interface ClassifiedMovement {
@@ -102,6 +102,8 @@ export default function ReconciliationCandidatesPage() {
   const [loading, setLoading] = useState(true)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiMatchLoading, setAiMatchLoading] = useState(false)
+  const [customerMatchLoading, setCustomerMatchLoading] = useState(false)
+  const [customerMatchStatus, setCustomerMatchStatus] = useState<{ status: string; matchCount: number } | null>(null)
   const [aiMatchResults, setAiMatchResults] = useState<Map<string, { decision: string; confidence: number; reasoning: string; matched_id: string | null }>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<"all" | "ar" | "operational" | "non_op" | "review">("ar")
@@ -239,6 +241,57 @@ export default function ReconciliationCandidatesPage() {
     } catch (err) {
       console.error("CSV download error:", err)
       alert("Failed to download CSV: " + (err instanceof Error ? err.message : "Unknown error"))
+    }
+  }
+
+  const runCustomerMatching = async () => {
+    try {
+      setCustomerMatchLoading(true)
+      setCustomerMatchStatus(null)
+      
+      // Start the background job
+      const startRes = await fetch("/api/reconciliation/match-customers", {
+        method: "POST",
+      })
+      
+      if (!startRes.ok) throw new Error("Failed to start customer matching")
+      
+      const startJson = await startRes.json()
+      const jobId = startJson.jobId
+      
+      if (!jobId) throw new Error("No job ID returned")
+      
+      // Poll for completion
+      let attempts = 0
+      const maxAttempts = 90 // 3 minutes max (2s intervals)
+      
+      while (attempts < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 2000)) // Wait 2 seconds
+        
+        const pollRes = await fetch("/api/reconciliation/match-customers")
+        if (!pollRes.ok) throw new Error("Failed to check job status")
+        
+        const pollJson = await pollRes.json()
+        
+        if (pollJson.status === "complete" || pollJson.status === "processing" && pollJson.progress === 100) {
+          setCustomerMatchStatus({ status: "complete", matchCount: pollJson.matchCount || 0 })
+          alert(`Customer Matching Complete!\n\n• ${pollJson.matchCount || 0} customers matched to invoices\n\nRefresh to see updated candidates.`)
+          fetchData() // Refresh data
+          return
+        } else if (pollJson.status === "failed") {
+          throw new Error(pollJson.error || "Customer matching job failed")
+        }
+        
+        // Still running, continue polling
+        attempts++
+      }
+      
+      throw new Error("Customer matching timed out")
+    } catch (err) {
+      console.error("Customer matching error:", err)
+      alert("Customer matching failed: " + (err instanceof Error ? err.message : "Unknown error"))
+    } finally {
+      setCustomerMatchLoading(false)
     }
   }
 
@@ -408,6 +461,15 @@ export default function ReconciliationCandidatesPage() {
           <p className="text-[12px] text-zinc-500 mt-0.5">Match customer payments to invoices · AR-focused classification</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={runCustomerMatching}
+            disabled={loading || customerMatchLoading || !data}
+            className="bg-cyan-600 hover:bg-cyan-700 text-white text-[11px] h-7 px-3"
+          >
+            <Users className={`h-3 w-3 mr-1.5 ${customerMatchLoading ? "animate-pulse" : ""}`} />
+            {customerMatchLoading ? "Matching..." : "Match Customers"}
+          </Button>
           <Button
             size="sm"
             onClick={runAIMatching}
