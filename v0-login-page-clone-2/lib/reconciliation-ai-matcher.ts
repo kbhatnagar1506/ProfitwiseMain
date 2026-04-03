@@ -424,9 +424,11 @@ Example: Customer "John Smith" has two $500 invoices (INV-001, INV-002)
 2. **EXACT MATCH**: Payment = Invoice amount (diff ≈ 0)
    → High confidence if customer names are similar
 
-3. **FEE-ADJUSTED MATCH**: Payment = Invoice - processor fee (2-5%)
+3. **FEE-ADJUSTED MATCH**: Payment = Invoice - processor fee (0-5%)
    → Common: Stripe/Square/PayPal deduct fees before deposit
    → Example: Invoice $100, Bank $97, fee_implied=$3 = MATCH
+   → Even small fees (0.5-1%) are valid - ACH fees are often lower
+   → IMPORTANT: If payment is 0-5% LESS than invoice, treat as fee-adjusted match with HIGH confidence
 
 4. **CUSTOMER NAME MATCHING**:
    - "MichaelHouk" = "Michael Houk" = "M. Houk" (same person)
@@ -442,9 +444,10 @@ Example: Customer "John Smith" has two $500 invoices (INV-001, INV-002)
 
 ## CONFIDENCE SCORING
 - 0.95-1.00: Direct link OR exact amount + exact customer name
+- 0.90-0.99: Fee-adjusted (0-5% less) + exact customer name match
 - 0.85-0.94: Exact amount + similar customer name
-- 0.70-0.84: Fee-adjusted match with good name match
-- 0.50-0.69: Partial payment or uncertain customer
+- 0.75-0.89: Fee-adjusted match with good name match
+- 0.50-0.74: Partial payment or uncertain customer
 - Below 0.50: Weak match, needs review
 
 ## OUTPUT FORMAT
