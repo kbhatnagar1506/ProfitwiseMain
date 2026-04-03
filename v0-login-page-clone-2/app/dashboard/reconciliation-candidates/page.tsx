@@ -377,8 +377,8 @@ export default function ReconciliationCandidatesPage() {
     try {
       setCustomerMatchLoading(true)
       
-      // Show instructions for manual triggering
-      alert(`Customer Matching Job\n\nTo queue the customer matching job, run:\n\nnode -e "const {queues} = require('./lib/queue/bull-client'); queues.matchCustomers.add({userId: 'YOUR_USER_ID'})"\n\nOr use the admin panel to trigger the job.\n\nThe background job will process customer matching and store results in the database.`)
+      // Show instructions for manual triggering via CLI
+      alert(`✅ Customer Matching Job\n\nTo queue the job, run:\n\nnode -e "const {queues} = require('./lib/queue/bull-client'); queues.matchCustomers.add({userId: 'YOUR_USER_ID'})"\n\nOr on Heroku:\n\nheroku run "node -e \\"const {queues} = require('./lib/queue/bull-client'); queues.matchCustomers.add({userId: 'YOUR_USER_ID'})\\""  \n\nThe background job will process and store results in the database.`)
     } catch (err) {
       alert("Error: " + (err instanceof Error ? err.message : "Unknown error"))
     } finally {
