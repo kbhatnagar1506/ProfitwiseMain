@@ -1850,7 +1850,7 @@ export async function ensureUserDecisionsSchema() {
     )
   `)
 
-  // Phase C2: Reconciliation metrics table for comprehensive monitoring
+  // Reconciliation metrics table for comprehensive monitoring
   await p.query(`
     CREATE TABLE IF NOT EXISTS reconciliation_metrics (
       id           SERIAL PRIMARY KEY,
@@ -1865,5 +1865,22 @@ export async function ensureUserDecisionsSchema() {
     CREATE INDEX IF NOT EXISTS idx_reconciliation_metrics_user_metric
       ON reconciliation_metrics (user_id, metric_name, created_at DESC)
   `)
+
+  // Customer matching results from Nano LLM stage
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS movement_customer_matches (
+      movement_id VARCHAR(255) PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      matched_customer VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `)
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_customer_matches_user_id ON movement_customer_matches(user_id)
+  `)
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_customer_matches_created_at ON movement_customer_matches(created_at DESC)
+  `)
+
   movementsSchemaEnsured = true
 }
