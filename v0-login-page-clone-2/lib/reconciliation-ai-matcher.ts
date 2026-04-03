@@ -386,7 +386,9 @@ async function matchMovementsWithCandidates(
         due_date: c.due_date,
         is_direct_link: c.is_direct_link,
         reference_match: c.reference_match,
-        fee_implied: c.fee_implied
+        fee_implied: c.fee_implied,
+        is_customer_match: c.is_customer_match ?? false,  // NEW: matched via customer name
+        is_amount_match: c.is_amount_match ?? false,      // NEW: matched via amount tolerance
       }))
     }
   })
@@ -404,6 +406,13 @@ Example: Customer "John Smith" has two $500 invoices (INV-001, INV-002)
 - Payment 2: $500 from "John Smith" → Match to INV-002 (NOT INV-001 again!)
 - Payment 3: $500 from "John Smith" → No match (both invoices already used)
 
+## CANDIDATE SOURCES (NEW)
+Candidates are categorized by how they were matched:
+- **is_amount_match=true**: Payment amount is within 20% of invoice (amount-based matching)
+- **is_customer_match=true**: Invoice customer name matches bank counterparty (customer-based matching)
+- **Both true**: HIGHEST CONFIDENCE - amount AND customer both match
+- **is_direct_link=true**: Invoice ID found directly in bank description (overrides other sources)
+
 ## CANDIDATE FIELDS EXPLAINED
 - **id**: Unique invoice ID (use this for matching)
 - **entity**: Customer name from invoice
@@ -415,35 +424,40 @@ Example: Customer "John Smith" has two $500 invoices (INV-001, INV-002)
 - **reference_match**: true if reference number matches
 - **fee_implied**: Payment processor fee (Stripe, Square, PayPal deducted this)
 - **due_date**: Invoice due date
+- **is_customer_match**: true if invoice customer matches bank counterparty
+- **is_amount_match**: true if payment amount is within 20% of invoice
 
 ## MATCHING RULES (in priority order)
 
 1. **DIRECT LINK** (is_direct_link=true): Invoice ID found in bank data
    → Confidence 0.99+ if amounts also match
 
-2. **EXACT MATCH**: Payment = Invoice amount (diff ≈ 0)
+2. **BOTH MATCH** (is_customer_match=true AND is_amount_match=true): Customer + amount both match
+   → Highest confidence (0.95+) - this is the gold standard
+
+3. **EXACT MATCH**: Payment = Invoice amount (diff ≈ 0)
    → High confidence if customer names are similar
 
-3. **FEE-ADJUSTED MATCH**: Payment = Invoice - processor fee (0-5%)
+4. **FEE-ADJUSTED MATCH**: Payment = Invoice - processor fee (0-5%)
    → Common: Stripe/Square/PayPal deduct fees before deposit
    → Example: Invoice $100, Bank $97, fee_implied=$3 = MATCH
    → Even small fees (0.5-1%) are valid - ACH fees are often lower
    → IMPORTANT: If payment is 0-5% LESS than invoice, treat as fee-adjusted match with HIGH confidence
 
-4. **CUSTOMER NAME MATCHING**:
+5. **CUSTOMER NAME MATCHING**:
    - "MichaelHouk" = "Michael Houk" = "M. Houk" (same person)
    - "Kelsee Gomes (NY Yankees)" matches invoice for "Kelsee Gomes"
    - Ignore parenthetical info like team names - focus on the PERSON NAME
    - Company variations: "ABC Corp" = "ABC Corporation" = "ABC Inc"
 
-5. **PARTIAL PAYMENT**: Payment < Invoice amount
+6. **PARTIAL PAYMENT**: Payment < Invoice amount
    → Only match if customer names match clearly
 
-6. **AGGREGATION**: Single payment covers multiple invoices
+7. **AGGREGATION**: Single payment covers multiple invoices
    → Return multiple invoice IDs in matched_candidate_ids
 
 ## CONFIDENCE SCORING
-- 0.95-1.00: Direct link OR exact amount + exact customer name
+- 0.95-1.00: Direct link OR (exact amount + exact customer name) OR (both match flags true)
 - 0.90-0.99: Fee-adjusted (0-5% less) + exact customer name match
 - 0.85-0.94: Exact amount + similar customer name
 - 0.75-0.89: Fee-adjusted match with good name match

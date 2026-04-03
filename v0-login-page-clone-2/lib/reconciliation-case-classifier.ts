@@ -8,6 +8,7 @@
  */
 
 import type { CashEventRow } from "./cash-events-build"
+import { heuristicAliasMatch, normalizeForMatch } from "./alias-normalize"
 
 const EPS = 0.01
 
@@ -96,6 +97,8 @@ export interface Candidate {
   fee_implied: number | null
   is_direct_link: boolean
   reference_match: boolean
+  is_customer_match?: boolean  // NEW: matched via customer name
+  is_amount_match?: boolean    // NEW: matched via amount tolerance
 }
 
 export interface ClassificationFlags {
@@ -287,6 +290,7 @@ function buildCandidates(
   movement: MovementWithAvailableCash,
   cashEvents: CashEventRow[],
   targetType: "ar" | "ap",
+  matchedCustomer: string | null = null,  // NEW: matched customer from LLM
   maxCandidates: number = 20
 ): Candidate[] {
   const candidates: Candidate[] = []
@@ -299,6 +303,10 @@ function buildCandidates(
 
   // Also check for reversals (opposite direction)
   const reverseType = targetType === "ar" ? "ap" : "ar"
+
+  // Track which candidates are amount-based vs customer-based
+  const amountBasedIds = new Set<string>()
+  const customerBasedIds = new Set<string>()
 
   for (const event of cashEvents) {
     // Check both target type and reverse type (for reversals)
@@ -355,6 +363,13 @@ function buildCandidates(
       const primaryMatchType = matchTypes[0] || "EXACT"
       const secondaryMatchTypes = matchTypes.slice(1)
 
+      // Check if this is an amount-based match (within 20%)
+      const diffRatio = amountDiff / event.amount
+      const isAmountMatch = diffRatio <= 0.2 || primaryMatchType === "DIRECT_LINK" || amountDiff < EPS
+      if (isAmountMatch) {
+        amountBasedIds.add(event.id)
+      }
+
       candidates.push({
         id: event.id,
         entity_id: event.entity_id,
@@ -368,6 +383,8 @@ function buildCandidates(
         fee_implied: detectFeeAmount(movement, event),
         is_direct_link: isDirectLink,
         reference_match: !!refMatch,
+        is_amount_match: isAmountMatch,
+        is_customer_match: false,  // Will be set below
       })
     } else {
       // Reversal candidate
@@ -384,23 +401,80 @@ function buildCandidates(
         fee_implied: null,
         is_direct_link: isDirectLink,
         reference_match: !!refMatch,
+        is_amount_match: false,
+        is_customer_match: false,
       })
     }
   }
 
-  // Sort by match quality: direct link first, then exact, then by amount diff
+  // NEW: Add customer-based candidates if customer was matched
+  if (matchedCustomer) {
+    for (const event of cashEvents) {
+      // Skip if already added as amount-based
+      if (candidates.some(c => c.id === event.id)) continue
+      
+      if (event.event_type !== targetType) continue
+      if (event.amount <= EPS) continue
+
+      const eventCustomerName = (event.metadata?.customer_name || event.metadata?.vendor_name) as string
+      
+      // Check if customer names match using heuristic
+      if (eventCustomerName && heuristicAliasMatch(matchedCustomer, eventCustomerName)) {
+        const entityName = eventCustomerName || event.entity_id
+        const amountDiff = Math.abs(event.amount - movAmount)
+        
+        customerBasedIds.add(event.id)
+        
+        candidates.push({
+          id: event.id,
+          entity_id: event.entity_id,
+          entity_name: entityName,
+          amount: event.amount,
+          outstanding_amount: event.outstanding_amount,
+          due_date: event.expected_date,
+          match_type: "EXACT",  // Default to EXACT for customer matches
+          secondary_match_types: [],
+          amount_diff: amountDiff,
+          fee_implied: null,
+          is_direct_link: false,
+          reference_match: false,
+          is_amount_match: false,
+          is_customer_match: true,  // NEW: marked as customer match
+        })
+      }
+    }
+  }
+
+  // Sort by match quality: 
+  // 1. Both amount and customer match (highest priority)
+  // 2. Direct link
+  // 3. EXACT match type
+  // 4. Amount diff
   candidates.sort((a, b) => {
+    // Both matches (intersection) - highest priority
+    const aIsBoth = a.is_amount_match && a.is_customer_match
+    const bIsBoth = b.is_amount_match && b.is_customer_match
+    if (aIsBoth !== bIsBoth) return aIsBoth ? -1 : 1
+
+    // Direct link
     if (a.is_direct_link !== b.is_direct_link) return a.is_direct_link ? -1 : 1
+    
+    // Customer match
+    if (a.is_customer_match !== b.is_customer_match) return a.is_customer_match ? -1 : 1
+    
+    // EXACT match type
     if (a.match_type === "EXACT" && b.match_type !== "EXACT") return -1
     if (a.match_type !== "EXACT" && b.match_type === "EXACT") return 1
+    
+    // Amount diff
     return a.amount_diff - b.amount_diff
   })
 
-  // Filter out low-quality matches (amount diff > 20%)
+  // Filter out low-quality matches (amount diff > 20%), but keep customer matches
   const qualityCandidates = candidates.filter((c) => {
     const diffRatio = c.amount_diff / c.amount
-    // Keep if: within 20% diff, OR direct link, OR truly exact (amount_diff < EPS)
-    return diffRatio <= 0.2 || c.match_type === "DIRECT_LINK" || c.amount_diff < EPS
+    // Keep if: within 20% diff, OR direct link, OR truly exact, OR customer match
+    return diffRatio <= 0.2 || c.match_type === "DIRECT_LINK" || c.amount_diff < EPS || c.is_customer_match
   })
 
   // Return top N candidates
@@ -737,7 +811,8 @@ function detectDuplicatePayment(
 export function classifyMovement(
   movement: MovementWithAvailableCash,
   cashEvents: CashEventRow[],
-  allMovements?: MovementWithAvailableCash[] // Optional: for cross-movement analysis
+  allMovements?: MovementWithAvailableCash[],  // Optional: for cross-movement analysis
+  matchedCustomer?: string | null  // NEW: matched customer from LLM
 ): ClassificationResult {
   // Check if non-operational
   if (isNonOperational(movement.economic_class)) {
@@ -789,8 +864,8 @@ export function classifyMovement(
   // AR only - match inflows to invoices
   const targetType = "ar" as const
 
-  // Build candidates
-  const candidates = buildCandidates(movement, cashEvents, targetType)
+  // Build candidates (with customer matching if available)
+  const candidates = buildCandidates(movement, cashEvents, targetType, matchedCustomer ?? null)
 
   // Detect flags (with cross-movement analysis if available)
   const flags = detectFlags(movement, candidates, allMovements)

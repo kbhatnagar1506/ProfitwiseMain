@@ -21,6 +21,10 @@ export interface GenerateForecastJob {
   userId: string
 }
 
+export interface MatchCustomersJob {
+  userId: string
+}
+
 export interface ProcessWebhookJob {
   userId: string
   source: 'plaid' | 'qbo' | 'xero' | 'stripe' | 'shopify'
@@ -32,7 +36,7 @@ export interface JobStatus {
   jobId: string
   userId: string
   status: 'queued' | 'processing' | 'complete' | 'failed'
-  step: 'fetching' | 'classifying' | 'tagging' | 'computing-state' | 'generating-forecast' | 'complete'
+  step: 'fetching' | 'classifying' | 'tagging' | 'computing-state' | 'generating-forecast' | 'matching-customers' | 'complete'
   progress: number // 0-100
   error?: string
   createdAt: Date

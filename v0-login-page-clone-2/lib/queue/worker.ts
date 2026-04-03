@@ -13,6 +13,7 @@ import { processClassifyMovements } from './processors/classify-movements'
 import { processTagMovements } from './processors/tag-movements'
 import { processComputeState } from './processors/compute-state'
 import { processGenerateForecast } from './processors/generate-forecast'
+import { processMatchCustomers } from './processors/match-customers'
 import { processProcessWebhook } from './processors/process-webhook'
 import { QUEUE_NAMES } from './bull-config'
 import { queues } from './bull-client'
@@ -60,6 +61,13 @@ async function startWorker() {
   queues.generateForecast.on('error', (err) => {
     console.error(`Queue error in ${QUEUE_NAMES.GENERATE_FORECAST}:`, err)
     log('queue.error', { queue: QUEUE_NAMES.GENERATE_FORECAST, error: err.message }, 'queue')
+  })
+
+  // match-customers processor
+  queues.matchCustomers.process(2, processMatchCustomers)
+  queues.matchCustomers.on('error', (err) => {
+    console.error(`Queue error in ${QUEUE_NAMES.MATCH_CUSTOMERS}:`, err)
+    log('queue.error', { queue: QUEUE_NAMES.MATCH_CUSTOMERS, error: err.message }, 'queue')
   })
 
   // process-webhook processor
