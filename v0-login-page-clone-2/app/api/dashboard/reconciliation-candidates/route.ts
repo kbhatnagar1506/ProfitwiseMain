@@ -29,7 +29,7 @@ async function fetchMovementsWithAvailableCash(userId: string): Promise<Movement
        m.id,
        m.user_id,
        m.direction,
-       m.amount,
+       m.amount::float as amount,
        m.date,
        m.movement_type,
        m.counterparty,
@@ -38,7 +38,7 @@ async function fetchMovementsWithAvailableCash(userId: string): Promise<Movement
        m.metadata,
        mt.economic_class,
        mt.tag_data,
-       COALESCE(m.amount - COALESCE(attr_sum.total_attributed, 0), m.amount) as available_cash
+       COALESCE(m.amount - COALESCE(attr_sum.total_attributed, 0), m.amount)::float as available_cash
      FROM movements m
      LEFT JOIN movement_tags mt ON mt.movement_id = m.id
      LEFT JOIN (
@@ -62,8 +62,8 @@ async function loadOpenCashEvents(userId: string): Promise<CashEventRow[]> {
        user_id,
        entity_id,
        event_type,
-       amount,
-       outstanding_amount,
+       amount::float as amount,
+       outstanding_amount::float as outstanding_amount,
        status,
        expected_date,
        metadata
@@ -122,6 +122,22 @@ export async function GET(request: Request): Promise<NextResponse> {
     // Load data
     const movements = await fetchMovementsWithAvailableCash(userId)
     const cashEvents = await loadOpenCashEvents(userId)
+
+    // Debug: Log cash events count
+    console.log(`[reconciliation-candidates] Loaded ${movements.length} movements, ${cashEvents.length} cash events`)
+    if (cashEvents.length > 0) {
+      const arEvents = cashEvents.filter(e => e.event_type === 'ar')
+      const apEvents = cashEvents.filter(e => e.event_type === 'ap')
+      console.log(`[reconciliation-candidates] AR events: ${arEvents.length}, AP events: ${apEvents.length}`)
+      if (arEvents.length > 0) {
+        console.log(`[reconciliation-candidates] Sample AR event:`, JSON.stringify(arEvents[0]))
+      }
+      if (apEvents.length > 0) {
+        console.log(`[reconciliation-candidates] Sample AP event:`, JSON.stringify(apEvents[0]))
+      }
+    } else {
+      console.log(`[reconciliation-candidates] WARNING: No cash events found for user ${userId}`)
+    }
 
     // Classify each movement (pass all movements for cross-movement analysis)
     const classifiedMovements: ClassifiedMovement[] = []
