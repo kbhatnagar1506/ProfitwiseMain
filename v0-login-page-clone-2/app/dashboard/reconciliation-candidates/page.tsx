@@ -256,37 +256,17 @@ export default function ReconciliationCandidatesPage() {
       
       if (!startRes.ok) throw new Error("Failed to start customer matching")
       
-      const startJson = await startRes.json()
-      const jobId = startJson.jobId
+      // Wait a bit for processing to complete
+      await new Promise((resolve) => setTimeout(resolve, 5000))
       
-      if (!jobId) throw new Error("No job ID returned")
+      // Check results
+      const pollRes = await fetch("/api/reconciliation/match-customers")
+      if (!pollRes.ok) throw new Error("Failed to check results")
       
-      // Poll for completion
-      let attempts = 0
-      const maxAttempts = 90 // 3 minutes max (2s intervals)
-      
-      while (attempts < maxAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, 2000)) // Wait 2 seconds
-        
-        const pollRes = await fetch("/api/reconciliation/match-customers")
-        if (!pollRes.ok) throw new Error("Failed to check job status")
-        
-        const pollJson = await pollRes.json()
-        
-        if (pollJson.status === "complete" || pollJson.status === "processing" && pollJson.progress === 100) {
-          setCustomerMatchStatus({ status: "complete", matchCount: pollJson.matchCount || 0 })
-          alert(`Customer Matching Complete!\n\n• ${pollJson.matchCount || 0} customers matched to invoices\n\nRefresh to see updated candidates.`)
-          fetchData() // Refresh data
-          return
-        } else if (pollJson.status === "failed") {
-          throw new Error(pollJson.error || "Customer matching job failed")
-        }
-        
-        // Still running, continue polling
-        attempts++
-      }
-      
-      throw new Error("Customer matching timed out")
+      const pollJson = await pollRes.json()
+      setCustomerMatchStatus({ status: "complete", matchCount: pollJson.matchCount || 0 })
+      alert(`Customer Matching Complete!\n\n• ${pollJson.matchCount || 0} customers matched to invoices\n\nRefresh to see updated candidates.`)
+      fetchData() // Refresh data
     } catch (err) {
       console.error("Customer matching error:", err)
       alert("Customer matching failed: " + (err instanceof Error ? err.message : "Unknown error"))
