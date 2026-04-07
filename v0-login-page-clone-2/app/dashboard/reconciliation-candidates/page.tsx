@@ -52,6 +52,15 @@ function getCaseTypeColor(caseType: CaseType): string {
   if (caseType.startsWith("AGGREGATION")) return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
   if (caseType.startsWith("NO_MATCH")) return "bg-red-500/10 text-red-400 border-red-500/20"
   if (caseType.startsWith("REVERSAL")) return "bg-orange-500/10 text-orange-400 border-orange-500/20"
+  // Zero-candidate sub-cases - different colors for each type
+  if (caseType === "ZERO_MISSING_INVOICE") return "bg-rose-500/10 text-rose-400 border-rose-500/20"
+  if (caseType === "ZERO_MISSING_BILL") return "bg-rose-500/10 text-rose-400 border-rose-500/20"
+  if (caseType === "ZERO_PREPAYMENT_DEPOSIT") return "bg-violet-500/10 text-violet-400 border-violet-500/20"
+  if (caseType === "ZERO_SUBSCRIPTION") return "bg-sky-500/10 text-sky-400 border-sky-500/20"
+  if (caseType === "ZERO_SMALL_EXPENSE") return "bg-slate-500/10 text-slate-400 border-slate-500/20"
+  if (caseType === "ZERO_REFUND_CREDIT") return "bg-teal-500/10 text-teal-400 border-teal-500/20"
+  if (caseType === "ZERO_DELETED_COUNTERPARTY") return "bg-gray-500/10 text-gray-400 border-gray-500/20"
+  if (caseType === "ZERO_UNCLASSIFIED") return "bg-red-500/10 text-red-400 border-red-500/20"
   return "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
 }
 
