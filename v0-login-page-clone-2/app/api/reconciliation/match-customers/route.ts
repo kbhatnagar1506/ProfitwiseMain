@@ -42,7 +42,7 @@ async function runCustomerMatching(userId: string) {
   try {
     // Fetch AR movements with entity info for display name resolution
     const movementsResult = await query(
-      `SELECT m.id, m.counterparty, m.counterparty_entity_id
+      `SELECT m.id, m.counterparty, m.counterparty_entity_id, m.raw_description
        FROM movements m
        LEFT JOIN movement_tags mt ON mt.movement_id = m.id
        WHERE m.user_id = $1
@@ -53,7 +53,8 @@ async function runCustomerMatching(userId: string) {
     const movements = movementsResult.rows as Array<{ 
       id: string; 
       counterparty: string | null; 
-      counterparty_entity_id: string | null 
+      counterparty_entity_id: string | null;
+      raw_description: string | null;
     }>
 
     // Resolve display names (entity canonical > merchant normalized > raw counterparty)
@@ -65,10 +66,12 @@ async function runCustomerMatching(userId: string) {
     }))
     const displayNames = await resolveDisplayNames(displayNameInputs)
 
-    // Use resolved display names for matching (falls back to raw counterparty if no resolution)
+    // Use resolved display names for matching, but also pass raw data for LLM context
     const movementsWithResolvedNames = movements.map(m => ({
       id: m.id,
-      counterparty: displayNames.get(m.id)?.display_name ?? m.counterparty
+      counterparty: displayNames.get(m.id)?.display_name ?? m.counterparty,
+      raw_counterparty: m.counterparty,  // Original bank counterparty
+      description: m.raw_description      // Bank description for extra context
     }))
 
     // Fetch known customers from invoices

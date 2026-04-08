@@ -4,6 +4,7 @@ import type { CashEventRow } from "@/lib/cash-events-build"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { NextResponse } from "next/server"
+import { resolveDisplayNames, type DisplayNameInput } from "@/lib/display-name-resolve"
 
 type MovementWithAvailableCash = {
   id: string
@@ -98,6 +99,7 @@ interface ClassifiedMovement {
   amount: number
   direction: "inflow" | "outflow"
   counterparty: string | null
+  display_name: string | null  // Resolved/normalized name
   economic_class: string | null
   classification: ClassificationResult
 }
@@ -160,6 +162,15 @@ export async function GET(request: Request): Promise<NextResponse> {
     const customerMatches = await loadCustomerMatches(userId)
     console.log(`[reconciliation-candidates] Loaded ${customerMatches.size} pre-computed customer matches`)
 
+    // Resolve display names for all movements (entity canonical > merchant normalized > raw counterparty)
+    const displayNameInputs: DisplayNameInput[] = movements.map(m => ({
+      movement_id: m.id,
+      user_id: userId,
+      counterparty: m.counterparty,
+      counterparty_entity_id: m.counterparty_entity_id
+    }))
+    const displayNames = await resolveDisplayNames(displayNameInputs)
+
     // Classify each movement (pass all movements for cross-movement analysis)
     const classifiedMovements: ClassifiedMovement[] = []
     const caseTypeCounts: Record<CaseType, number> = {} as Record<CaseType, number>
@@ -189,8 +200,10 @@ export async function GET(request: Request): Promise<NextResponse> {
       if (caseTypeFilter && classification.case_type !== caseTypeFilter) continue
       if (search) {
         const searchLower = search.toLowerCase()
+        const resolvedName = displayNames.get(movement.id)?.display_name
         const matchesSearch =
           movement.counterparty?.toLowerCase().includes(searchLower) ||
+          resolvedName?.toLowerCase().includes(searchLower) ||
           movement.raw_description?.toLowerCase().includes(searchLower) ||
           classification.case_type.toLowerCase().includes(searchLower)
         if (!matchesSearch) continue
@@ -202,6 +215,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         amount: movement.amount,
         direction: movement.direction,
         counterparty: movement.counterparty,
+        display_name: displayNames.get(movement.id)?.display_name ?? movement.counterparty,
         economic_class: movement.economic_class,
         classification,
       })
