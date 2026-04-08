@@ -45,8 +45,8 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const userId = user.id
     const body = await request.json().catch(() => ({}))
-    const maxMovements = body.maxMovements || 100
-    const batchSize = body.batchSize || 10
+    // Don't limit by default - let the matcher handle dynamic sizing
+    const maxMovements = body.maxMovements || 500
 
     // Generate job ID
     const jobId = `ai-match-${userId}-${Date.now()}`
@@ -168,9 +168,8 @@ async function processAIMatching(
     job.total = Math.min(movementsToMatch.length, maxMovements)
     console.log(`[AI Matcher Job ${jobId}] Processing ${job.total} movements`)
 
-    // Run AI matcher
+    // Run AI matcher - let it determine batch size dynamically
     const result = await runAIReconciliationMatcher(userId, movementsToMatch, {
-      batchSize,
       maxMovements,
       includeSupermemory: true
     })

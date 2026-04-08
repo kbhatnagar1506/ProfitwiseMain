@@ -311,7 +311,7 @@ export default function ReconciliationCandidatesPage() {
       const startRes = await fetch("/api/dashboard/reconciliation-candidates/ai-match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxMovements: 100, batchSize: 10 }),
+        body: JSON.stringify({}), // Let backend determine optimal batch sizing
       })
       
       if (!startRes.ok) throw new Error("Failed to start AI matching")
