@@ -3,6 +3,9 @@ import { requireSession } from '@/lib/require-session'
 import { query } from '@/lib/db'
 import { matchCustomersWithLLM } from '@/lib/reconciliation-customer-matcher'
 
+// Simple in-memory job tracking (per-user)
+const jobStatus = new Map<string, { status: 'processing' | 'complete' | 'failed'; matchCount: number; error?: string }>()
+
 export async function POST(request: NextRequest) {
   try {
     const session = await requireSession()
@@ -11,15 +14,17 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = session.id
-    const jobId = `match-${Date.now()}`
+    
+    // Mark as processing
+    jobStatus.set(userId, { status: 'processing', matchCount: 0 })
 
     // Run customer matching directly (non-blocking response)
-    runCustomerMatching(userId, jobId).catch(err => {
+    runCustomerMatching(userId).catch(err => {
       console.error('[match-customers] Background job failed:', err)
+      jobStatus.set(userId, { status: 'failed', matchCount: 0, error: err.message })
     })
 
     return NextResponse.json({
-      jobId,
       status: 'processing',
       message: 'Customer matching started',
     })
@@ -32,7 +37,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function runCustomerMatching(userId: string, jobId: string) {
+async function runCustomerMatching(userId: string) {
   try {
     // Fetch AR movements
     const movementsResult = await query(
@@ -62,6 +67,7 @@ async function runCustomerMatching(userId: string, jobId: string) {
 
     if (movements.length === 0 || knownCustomers.length === 0) {
       console.log(`[match-customers] Skipping: no movements or customers`)
+      jobStatus.set(userId, { status: 'complete', matchCount: 0 })
       return
     }
 
@@ -88,8 +94,10 @@ async function runCustomerMatching(userId: string, jobId: string) {
     }
 
     console.log(`[match-customers] Complete: stored ${storedCount} customer matches`)
+    jobStatus.set(userId, { status: 'complete', matchCount: storedCount })
   } catch (error) {
     console.error('[match-customers] Job failed:', error)
+    jobStatus.set(userId, { status: 'failed', matchCount: 0, error: error instanceof Error ? error.message : String(error) })
   }
 }
 
@@ -101,17 +109,34 @@ export async function GET(request: NextRequest) {
     }
 
     const userId = session.id
+    
+    // Check in-memory status first
+    const status = jobStatus.get(userId)
+    
+    if (status) {
+      // Get total match count from DB
+      const { rows: matchRows } = await query(
+        `SELECT COUNT(*) as count FROM movement_customer_matches WHERE user_id = $1`,
+        [userId]
+      )
+      const totalMatchCount = parseInt(matchRows[0]?.count || '0')
+      
+      return NextResponse.json({
+        status: status.status,
+        matchCount: totalMatchCount,
+        error: status.error,
+      })
+    }
 
-    // Get match count directly from the table
+    // No job running, return current match count
     const { rows: matchRows } = await query(
       `SELECT COUNT(*) as count FROM movement_customer_matches WHERE user_id = $1`,
       [userId]
     )
-
     const matchCount = parseInt(matchRows[0]?.count || '0')
 
     return NextResponse.json({
-      status: 'complete',
+      status: 'idle',
       matchCount,
     })
   } catch (error) {

@@ -256,17 +256,32 @@ export default function ReconciliationCandidatesPage() {
       
       if (!startRes.ok) throw new Error("Failed to start customer matching")
       
-      // Wait a bit for processing to complete
-      await new Promise((resolve) => setTimeout(resolve, 5000))
+      // Poll for completion
+      let attempts = 0
+      const maxAttempts = 120 // 4 minutes max (2s intervals)
       
-      // Check results
-      const pollRes = await fetch("/api/reconciliation/match-customers")
-      if (!pollRes.ok) throw new Error("Failed to check results")
+      while (attempts < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 2000)) // Wait 2 seconds
+        
+        const pollRes = await fetch("/api/reconciliation/match-customers")
+        if (!pollRes.ok) throw new Error("Failed to check status")
+        
+        const pollJson = await pollRes.json()
+        
+        if (pollJson.status === "complete") {
+          setCustomerMatchStatus({ status: "complete", matchCount: pollJson.matchCount || 0 })
+          alert(`Customer Matching Complete!\n\n• ${pollJson.matchCount || 0} customers matched to invoices\n\nRefresh to see updated candidates.`)
+          fetchData() // Refresh data
+          return
+        } else if (pollJson.status === "failed") {
+          throw new Error(pollJson.error || "Customer matching failed")
+        }
+        
+        // Still processing, continue polling
+        attempts++
+      }
       
-      const pollJson = await pollRes.json()
-      setCustomerMatchStatus({ status: "complete", matchCount: pollJson.matchCount || 0 })
-      alert(`Customer Matching Complete!\n\n• ${pollJson.matchCount || 0} customers matched to invoices\n\nRefresh to see updated candidates.`)
-      fetchData() // Refresh data
+      throw new Error("Customer matching timed out")
     } catch (err) {
       console.error("Customer matching error:", err)
       alert("Customer matching failed: " + (err instanceof Error ? err.message : "Unknown error"))
