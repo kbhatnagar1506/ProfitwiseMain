@@ -54,12 +54,14 @@ export async function runAIReconciliationMatcher(
     batchSize?: number
     maxMovements?: number
     includeSupermemory?: boolean
+    parallelBatches?: number
   } = {}
 ): Promise<AIMatcherResult> {
   const startTime = Date.now()
   const batchSize = options.batchSize || 10
   const maxMovements = options.maxMovements || 100
   const includeSupermemory = options.includeSupermemory !== false
+  const parallelBatches = options.parallelBatches || 5 // Process 5 batches in parallel
 
   const results: MatchDecision[] = []
   const errors: string[] = []
@@ -69,19 +71,34 @@ export async function runAIReconciliationMatcher(
     .filter(m => shouldProcessWithAI(m))
     .slice(0, maxMovements)
 
-  console.log(`[AI Matcher] Processing ${movementsToProcess.length} movements in batches of ${batchSize}`)
+  console.log(`[AI Matcher] Processing ${movementsToProcess.length} movements in batches of ${batchSize}, ${parallelBatches} parallel`)
 
-  // Process in batches
+  // Create all batches
+  const batches: MovementToMatch[][] = []
   for (let i = 0; i < movementsToProcess.length; i += batchSize) {
-    const batch = movementsToProcess.slice(i, i + batchSize)
+    batches.push(movementsToProcess.slice(i, i + batchSize))
+  }
+
+  // Process batches in parallel chunks
+  for (let i = 0; i < batches.length; i += parallelBatches) {
+    const parallelChunk = batches.slice(i, i + parallelBatches)
     
-    try {
-      const batchResults = await processBatch(userId, batch, includeSupermemory)
-      results.push(...batchResults)
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error)
-      errors.push(`Batch ${i / batchSize + 1} failed: ${errorMsg}`)
-      console.error(`[AI Matcher] Batch error:`, error)
+    console.log(`[AI Matcher] Processing parallel chunk ${Math.floor(i / parallelBatches) + 1}/${Math.ceil(batches.length / parallelBatches)} (${parallelChunk.length} batches)`)
+    
+    const batchPromises = parallelChunk.map(async (batch, idx) => {
+      try {
+        return await processBatch(userId, batch, includeSupermemory)
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        errors.push(`Batch ${i + idx + 1} failed: ${errorMsg}`)
+        console.error(`[AI Matcher] Batch ${i + idx + 1} error:`, error)
+        return []
+      }
+    })
+
+    const batchResults = await Promise.all(batchPromises)
+    for (const batchResult of batchResults) {
+      results.push(...batchResult)
     }
   }
 
@@ -335,7 +352,7 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
       "Authorization": `Bearer ${API_KEY}`
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: "gpt-4.1-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }

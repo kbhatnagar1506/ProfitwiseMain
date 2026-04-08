@@ -323,7 +323,7 @@ export default function ReconciliationCandidatesPage() {
       
       // Poll for completion
       let attempts = 0
-      const maxAttempts = 90 // 3 minutes max (2s intervals)
+      const maxAttempts = 300 // 10 minutes max (2s intervals)
       
       while (attempts < maxAttempts) {
         await new Promise((resolve) => setTimeout(resolve, 2000)) // Wait 2 seconds
