@@ -46,8 +46,8 @@ export async function matchCustomersWithLLM(
 
   const resultMap = new Map<string, string | null>()
 
-  // Batch movements (20 per call to avoid response truncation)
-  const batchSize = 20
+  // Batch movements (10 per call to avoid response truncation)
+  const batchSize = 10
   for (let i = 0; i < movements.length; i += batchSize) {
     const batch = movements.slice(i, i + batchSize)
     console.log(`[Customer Matcher] Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(movements.length / batchSize)} (${batch.length} movements)`)
@@ -118,7 +118,7 @@ Return JSON in the format specified above.`
         { role: "user", content: userPrompt }
       ],
       temperature: 0.1,
-      max_completion_tokens: 2000,
+      max_completion_tokens: 4000,
       response_format: { type: "json_object" }
     })
   })
