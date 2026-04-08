@@ -409,6 +409,8 @@ function buildCandidates(
 
   // NEW: Add customer-based candidates if customer was matched
   if (matchedCustomer) {
+    const normalizedMatchedCustomer = normalizeForMatch(matchedCustomer)
+    
     for (const event of cashEvents) {
       // Skip if already added as amount-based
       if (candidates.some(c => c.id === event.id)) continue
@@ -418,8 +420,9 @@ function buildCandidates(
 
       const eventCustomerName = (event.metadata?.customer_name || event.metadata?.vendor_name) as string
       
-      // Check if customer names match using heuristic
-      if (eventCustomerName && heuristicAliasMatch(matchedCustomer, eventCustomerName)) {
+      // Check if customer names match using normalized comparison
+      // This ensures ALL invoices for the matched customer are included, regardless of minor name variations
+      if (eventCustomerName && normalizeForMatch(eventCustomerName) === normalizedMatchedCustomer) {
         const entityName = eventCustomerName || event.entity_id
         const amountDiff = Math.abs(event.amount - movAmount)
         
@@ -865,7 +868,8 @@ export function classifyMovement(
   const targetType = "ar" as const
 
   // Build candidates (with customer matching if available)
-  const candidates = buildCandidates(movement, cashEvents, targetType, matchedCustomer ?? null)
+  // Increased limit to 50 to show all customer-based candidates
+  const candidates = buildCandidates(movement, cashEvents, targetType, matchedCustomer ?? null, 50)
 
   // Detect flags (with cross-movement analysis if available)
   const flags = detectFlags(movement, candidates, allMovements)
