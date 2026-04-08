@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireSession } from '@/lib/require-session'
 import { query } from '@/lib/db'
 import { matchCustomersWithLLM } from '@/lib/reconciliation-customer-matcher'
+import { resolveDisplayNames, type DisplayNameInput } from '@/lib/display-name-resolve'
 
 // Simple in-memory job tracking (per-user)
 const jobStatus = new Map<string, { status: 'processing' | 'complete' | 'failed'; matchCount: number; error?: string }>()
@@ -39,9 +40,9 @@ export async function POST(request: NextRequest) {
 
 async function runCustomerMatching(userId: string) {
   try {
-    // Fetch AR movements
+    // Fetch AR movements with entity info for display name resolution
     const movementsResult = await query(
-      `SELECT m.id, m.counterparty
+      `SELECT m.id, m.counterparty, m.counterparty_entity_id
        FROM movements m
        LEFT JOIN movement_tags mt ON mt.movement_id = m.id
        WHERE m.user_id = $1
@@ -49,7 +50,26 @@ async function runCustomerMatching(userId: string) {
        ORDER BY m.date DESC`,
       [userId]
     )
-    const movements = movementsResult.rows
+    const movements = movementsResult.rows as Array<{ 
+      id: string; 
+      counterparty: string | null; 
+      counterparty_entity_id: string | null 
+    }>
+
+    // Resolve display names (entity canonical > merchant normalized > raw counterparty)
+    const displayNameInputs: DisplayNameInput[] = movements.map(m => ({
+      movement_id: m.id,
+      user_id: userId,
+      counterparty: m.counterparty,
+      counterparty_entity_id: m.counterparty_entity_id
+    }))
+    const displayNames = await resolveDisplayNames(displayNameInputs)
+
+    // Use resolved display names for matching (falls back to raw counterparty if no resolution)
+    const movementsWithResolvedNames = movements.map(m => ({
+      id: m.id,
+      counterparty: displayNames.get(m.id)?.display_name ?? m.counterparty
+    }))
 
     // Fetch known customers from invoices
     const customersResult = await query(
@@ -63,7 +83,7 @@ async function runCustomerMatching(userId: string) {
     )
     const knownCustomers = customersResult.rows.map((r: { customer_name: string }) => r.customer_name).filter(Boolean)
 
-    console.log(`[match-customers] Processing ${movements.length} movements with ${knownCustomers.length} known customers`)
+    console.log(`[match-customers] Processing ${movements.length} movements with ${knownCustomers.length} known customers (using resolved display names)`)
 
     if (movements.length === 0 || knownCustomers.length === 0) {
       console.log(`[match-customers] Skipping: no movements or customers`)
@@ -71,9 +91,9 @@ async function runCustomerMatching(userId: string) {
       return
     }
 
-    // Run customer matching
+    // Run customer matching with resolved names
     const customerMatches = await matchCustomersWithLLM(
-      movements.map((m: { id: string; counterparty: string | null }) => ({ id: m.id, counterparty: m.counterparty })),
+      movementsWithResolvedNames,
       knownCustomers
     )
 
