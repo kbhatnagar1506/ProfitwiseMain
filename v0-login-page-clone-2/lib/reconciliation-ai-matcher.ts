@@ -193,7 +193,8 @@ async function matchMovementsWithCandidates(
   }
 
   const movementData = movements.map((m, idx) => {
-    const candidates = m.classification.candidates.slice(0, 8)
+    // Send ALL candidates - don't truncate, let AI see everything
+    const candidates = m.classification.candidates
     
     return {
       idx: idx + 1,
@@ -214,10 +215,14 @@ async function matchMovementsWithCandidates(
         id: c.id,
         entity: c.entity_name,
         amount: c.amount,
+        outstanding: c.outstanding_amount,
         diff: c.amount_diff,
         diff_pct: c.amount !== 0 ? ((c.amount_diff / c.amount) * 100).toFixed(1) + "%" : "N/A",
         match_type: c.match_type,
-        score: c.score
+        due_date: c.due_date,
+        is_direct_link: c.is_direct_link,
+        reference_match: c.reference_match,
+        fee_implied: c.fee_implied
       }))
     }
   })
@@ -227,30 +232,44 @@ async function matchMovementsWithCandidates(
 ## YOUR TASK
 For each bank movement, pick the BEST matching candidate (or none).
 
+## CANDIDATE FIELDS EXPLAINED
+- **entity**: Customer/vendor name from invoice/bill
+- **amount**: Original invoice/bill amount
+- **outstanding**: Remaining unpaid amount
+- **diff**: Bank amount minus candidate amount (negative = bank received less)
+- **match_type**: EXACT, FEE, PARTIAL, DIRECT_LINK, etc.
+- **is_direct_link**: true if invoice ID was found in bank description
+- **reference_match**: true if reference number matches
+- **fee_implied**: Calculated fee amount if this is a fee-adjusted match
+- **due_date**: Invoice/bill due date
+
 ## MATCHING RULES (in priority order)
 
-1. **EXACT MATCH**: Bank amount = Candidate amount (within $0.01)
-   → High confidence match if entity names are similar
+1. **DIRECT LINK** (is_direct_link=true): Highest priority - invoice ID found in bank data
+   → Confidence 0.99+ if amounts also match
 
-2. **FEE-ADJUSTED MATCH**: Bank amount = Candidate amount - fee (2-5%)
+2. **EXACT MATCH**: Bank amount = Candidate amount (diff ≈ 0)
+   → High confidence if entity names are similar
+
+3. **FEE-ADJUSTED MATCH**: match_type=FEE, fee_implied shows the fee
    → Common for payment processors (Stripe, Square, PayPal)
-   → Example: Invoice $100, Bank $97 (3% fee) = MATCH
+   → Example: Invoice $100, Bank $97, fee_implied=$3 = MATCH
 
-3. **ENTITY NAME MATCHING**:
+4. **ENTITY NAME MATCHING**:
    - "MichaelHouk" = "Michael Houk" = "M. Houk" (same person)
    - "Kelsee Gomes (NY Yankees)" matches invoice for "Kelsee Gomes"
    - Ignore parenthetical info like "(Detroit Tigers)" - focus on the NAME
    - Company variations: "Belle's Gourmet" = "Belles Gourmet Popcorn"
 
-4. **PARTIAL PAYMENT**: Bank < Invoice amount
+5. **PARTIAL PAYMENT**: match_type=PARTIAL, outstanding > 0
    → Only match if entity names match AND it's clearly a partial
 
-5. **AGGREGATION**: Bank = Sum of multiple invoices
-   → Return multiple candidate IDs
+6. **AGGREGATION**: Bank = Sum of multiple invoices
+   → Return multiple candidate IDs in matched_candidate_ids
 
 ## CONFIDENCE SCORING
-- 0.95-1.00: Exact amount + exact/very similar entity name
-- 0.85-0.94: Exact amount + somewhat similar entity name
+- 0.95-1.00: Direct link OR exact amount + exact entity name
+- 0.85-0.94: Exact amount + similar entity name
 - 0.70-0.84: Fee-adjusted match with good entity match
 - 0.50-0.69: Partial match or uncertain entity
 - Below 0.50: Weak match, needs review
