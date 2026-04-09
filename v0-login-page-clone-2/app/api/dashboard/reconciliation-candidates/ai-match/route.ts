@@ -63,7 +63,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     })
 
     // Start background processing
-    processAIMatching(jobId, userId, maxMovements, batchSize).catch(error => {
+    processAIMatching(jobId, userId, maxMovements).catch(error => {
       console.error(`[AI Matcher Job ${jobId}] Fatal error:`, error)
       const job = jobStore.get(jobId)
       if (job) {
@@ -132,8 +132,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 async function processAIMatching(
   jobId: string,
   userId: string,
-  maxMovements: number,
-  batchSize: number
+  maxMovements: number
 ): Promise<void> {
   const job = jobStore.get(jobId)
   if (!job) return
