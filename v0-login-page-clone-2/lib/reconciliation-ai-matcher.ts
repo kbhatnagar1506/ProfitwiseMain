@@ -1,8 +1,8 @@
 /**
  * AI Reconciliation Matcher
  * 
- * Uses LLM + Supermemory to intelligently match bank movements to invoices/bills.
- * Processes in background batches for efficiency.
+ * Uses GPT-5.4-mini + Supermemory to intelligently match bank movements to invoices/bills.
+ * Optimized prompts for structured financial matching.
  */
 
 import { searchEntityContextFromSupermemory, searchEntityProfileContext } from "./supermemory"
@@ -10,6 +10,7 @@ import type { ClassificationResult, CaseType, Candidate } from "./reconciliation
 
 const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
 const API_KEY = process.env.OPENAI_API_KEY
+const MODEL = "gpt-5.4-mini"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -29,11 +30,11 @@ export interface MatchDecision {
   movement_id: string
   decision: "match" | "no_match" | "needs_review" | "create_invoice" | "create_bill"
   matched_candidate_id: string | null
-  matched_candidate_ids: string[] // For aggregation matches
-  confidence: number // 0-1
+  matched_candidate_ids: string[]
+  confidence: number
   reasoning: string
   suggested_action: string
-  entity_context: string | null // From Supermemory
+  entity_context: string | null
 }
 
 export interface AIMatcherResult {
@@ -64,61 +65,48 @@ export async function runAIReconciliationMatcher(
   const results: MatchDecision[] = []
   const errors: string[] = []
 
-  // Filter to movements that need AI matching
   const movementsToProcess = movements
     .filter(m => shouldProcessWithAI(m))
     .slice(0, maxMovements)
 
-  // Dynamic batch sizing based on data volume
-  // Smaller batches = more parallel requests but less context per request
-  // Larger batches = fewer requests but more context (better matching)
   const totalCount = movementsToProcess.length
   let batchSize: number
   let parallelBatches: number
 
   if (totalCount <= 10) {
-    // Very small: single batch, no parallelism needed
     batchSize = totalCount || 1
     parallelBatches = 1
   } else if (totalCount <= 50) {
-    // Small: 5-10 per batch, 3 parallel
     batchSize = Math.ceil(totalCount / 5)
     parallelBatches = 3
   } else if (totalCount <= 200) {
-    // Medium: 10 per batch, 5 parallel
     batchSize = 10
     parallelBatches = 5
   } else if (totalCount <= 500) {
-    // Large: 15 per batch, 10 parallel
     batchSize = 15
     parallelBatches = 10
   } else if (totalCount <= 1000) {
-    // Very large: 20 per batch, 15 parallel
     batchSize = 20
     parallelBatches = 15
   } else {
-    // Massive (1000+): 25 per batch, 20 parallel (max throughput)
     batchSize = 25
     parallelBatches = 20
   }
 
-  // Allow overrides from options
   if (options.batchSize) batchSize = options.batchSize
   if (options.parallelBatches) parallelBatches = options.parallelBatches
 
-  console.log(`[AI Matcher] Processing ${totalCount} movements: batchSize=${batchSize}, parallel=${parallelBatches}`)
+  console.log(`[AI Matcher] Model: ${MODEL} | Processing ${totalCount} movements: batchSize=${batchSize}, parallel=${parallelBatches}`)
 
-  // Create all batches
   const batches: MovementToMatch[][] = []
   for (let i = 0; i < movementsToProcess.length; i += batchSize) {
     batches.push(movementsToProcess.slice(i, i + batchSize))
   }
 
-  // Process batches in parallel chunks
   for (let i = 0; i < batches.length; i += parallelBatches) {
     const parallelChunk = batches.slice(i, i + parallelBatches)
     
-    console.log(`[AI Matcher] Processing parallel chunk ${Math.floor(i / parallelBatches) + 1}/${Math.ceil(batches.length / parallelBatches)} (${parallelChunk.length} batches)`)
+    console.log(`[AI Matcher] Processing chunk ${Math.floor(i / parallelBatches) + 1}/${Math.ceil(batches.length / parallelBatches)}`)
     
     const batchPromises = parallelChunk.map(async (batch, idx) => {
       try {
@@ -153,17 +141,14 @@ function shouldProcessWithAI(movement: MovementToMatch): boolean {
   const ct = movement.classification.case_type
   const hasCandidates = movement.classification.candidates.length > 0
   
-  // Skip non-operational movements (they don't need AR/AP matching)
   if (!movement.classification.is_operational) {
     return false
   }
   
-  // Process ALL operational movements with candidates
   if (hasCandidates) {
     return true
   }
   
-  // Process zero-candidate movements (need to understand why)
   return ct.startsWith("ZERO_")
 }
 
@@ -174,17 +159,14 @@ async function processBatch(
 ): Promise<MatchDecision[]> {
   const results: MatchDecision[] = []
 
-  // Group by case type for more efficient prompting
   const withCandidates = movements.filter(m => m.classification.candidates.length > 0)
   const zeroCandidates = movements.filter(m => m.classification.candidates.length === 0)
 
-  // Process movements with candidates
   if (withCandidates.length > 0) {
     const matchResults = await matchMovementsWithCandidates(userId, withCandidates, includeSupermemory)
     results.push(...matchResults)
   }
 
-  // Process zero-candidate movements
   if (zeroCandidates.length > 0) {
     const zeroResults = await classifyZeroCandidateMovements(userId, zeroCandidates, includeSupermemory)
     results.push(...zeroResults)
@@ -194,7 +176,7 @@ async function processBatch(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Match Movements WITH Candidates
+// Match Movements WITH Candidates - IMPROVED PROMPTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function matchMovementsWithCandidates(
@@ -202,85 +184,106 @@ async function matchMovementsWithCandidates(
   movements: MovementToMatch[],
   includeSupermemory: boolean
 ): Promise<MatchDecision[]> {
-  // Build context from Supermemory
   let entityContext = ""
   if (includeSupermemory) {
-    const counterparties = movements
-      .map(m => m.counterparty)
-      .filter(Boolean)
-      .join(", ")
-    
-    if (counterparties) {
-      entityContext = await searchEntityContextFromSupermemory(userId, counterparties)
+    const counterparties = [...new Set(movements.map(m => m.counterparty).filter(Boolean))]
+    if (counterparties.length > 0) {
+      entityContext = await searchEntityContextFromSupermemory(userId, counterparties.slice(0, 10).join(", "))
     }
   }
 
-  // Build prompt
-  const movementDescriptions = movements.map((m, idx) => {
-    const candidates = m.classification.candidates.slice(0, 5) // Top 5 candidates
-    const candidateList = candidates.map((c, cidx) => 
-      `    ${cidx + 1}. ID: ${c.id} | Entity: ${c.entity_name} | Amount: $${c.amount.toFixed(2)} | Match Type: ${c.match_type} | Diff: $${c.amount_diff.toFixed(2)}`
-    ).join("\n")
-
-    return `
-Movement ${idx + 1}:
-  ID: ${m.id}
-  Counterparty: ${m.counterparty || "Unknown"}
-  Description: ${m.raw_description || "N/A"}
-  Amount: $${Math.abs(m.amount).toFixed(2)}
-  Direction: ${m.direction === "inflow" ? "AR (received)" : "AP (paid)"}
-  Date: ${m.date}
-  Case Type: ${m.classification.case_type}
-  Candidates:
-${candidateList}
-`
-  }).join("\n---\n")
-
-  const systemPrompt = `You are a financial reconciliation expert. Your job is to match bank movements to invoices/bills.
-
-For each movement, analyze the candidates and decide:
-1. Which candidate(s) to match (if any)
-2. Confidence level (0-1)
-3. Brief reasoning
-
-Consider:
-- Amount matching (exact, with fee deduction, partial payment)
-- Entity name similarity (variations, abbreviations, typos)
-- Date proximity to due date
-- Reference numbers in descriptions
-- Multiple invoices for aggregated payments
-
-${entityContext ? `\nEntity Knowledge:\n${entityContext}` : ""}
-
-Respond in JSON format:
-{
-  "decisions": [
-    {
-      "movement_id": "...",
-      "decision": "match" | "no_match" | "needs_review",
-      "matched_candidate_id": "..." or null,
-      "matched_candidate_ids": ["..."] for aggregation,
-      "confidence": 0.0-1.0,
-      "reasoning": "brief explanation"
+  const movementData = movements.map((m, idx) => {
+    const candidates = m.classification.candidates.slice(0, 8)
+    
+    return {
+      idx: idx + 1,
+      id: m.id,
+      bank: {
+        counterparty: m.counterparty || "Unknown",
+        description: m.raw_description || "",
+        amount: Math.abs(m.amount),
+        type: m.direction === "inflow" ? "RECEIVED (AR)" : "PAID (AP)",
+        date: m.date
+      },
+      case_type: m.classification.case_type,
+      flags: Object.entries(m.classification.flags)
+        .filter(([_, v]) => v)
+        .map(([k]) => k),
+      candidates: candidates.map((c, cidx) => ({
+        num: cidx + 1,
+        id: c.id,
+        entity: c.entity_name,
+        amount: c.amount,
+        diff: c.amount_diff,
+        diff_pct: c.amount !== 0 ? ((c.amount_diff / c.amount) * 100).toFixed(1) + "%" : "N/A",
+        match_type: c.match_type,
+        score: c.score
+      }))
     }
-  ]
-}`
+  })
 
-  const userPrompt = `Match these bank movements to their candidates:\n${movementDescriptions}`
+  const systemPrompt = `You are a financial reconciliation AI. Match bank transactions to invoices/bills.
+
+## YOUR TASK
+For each bank movement, pick the BEST matching candidate (or none).
+
+## MATCHING RULES (in priority order)
+
+1. **EXACT MATCH**: Bank amount = Candidate amount (within $0.01)
+   → High confidence match if entity names are similar
+
+2. **FEE-ADJUSTED MATCH**: Bank amount = Candidate amount - fee (2-5%)
+   → Common for payment processors (Stripe, Square, PayPal)
+   → Example: Invoice $100, Bank $97 (3% fee) = MATCH
+
+3. **ENTITY NAME MATCHING**:
+   - "MichaelHouk" = "Michael Houk" = "M. Houk" (same person)
+   - "Kelsee Gomes (NY Yankees)" matches invoice for "Kelsee Gomes"
+   - Ignore parenthetical info like "(Detroit Tigers)" - focus on the NAME
+   - Company variations: "Belle's Gourmet" = "Belles Gourmet Popcorn"
+
+4. **PARTIAL PAYMENT**: Bank < Invoice amount
+   → Only match if entity names match AND it's clearly a partial
+
+5. **AGGREGATION**: Bank = Sum of multiple invoices
+   → Return multiple candidate IDs
+
+## CONFIDENCE SCORING
+- 0.95-1.00: Exact amount + exact/very similar entity name
+- 0.85-0.94: Exact amount + somewhat similar entity name
+- 0.70-0.84: Fee-adjusted match with good entity match
+- 0.50-0.69: Partial match or uncertain entity
+- Below 0.50: Weak match, needs review
+
+## OUTPUT FORMAT
+Return JSON with decisions array. Each decision:
+{
+  "movement_id": "exact ID from input",
+  "decision": "match" | "no_match" | "needs_review",
+  "matched_candidate_id": "candidate ID or null",
+  "matched_candidate_ids": ["id1", "id2"] // for aggregation only
+  "confidence": 0.0-1.0,
+  "reasoning": "Brief: [entity match quality] + [amount match quality]"
+}
+
+${entityContext ? `\n## KNOWN ENTITIES (from memory)\n${entityContext}` : ""}`
+
+  const userPrompt = `Match these ${movements.length} bank movements:
+
+${JSON.stringify(movementData, null, 2)}`
 
   try {
     const response = await callLLM(systemPrompt, userPrompt)
     return parseMatchResponse(response, movements)
   } catch (error) {
     console.error("[AI Matcher] LLM call failed:", error)
-    // Return default decisions on error
     return movements.map(m => ({
       movement_id: m.id,
       decision: "needs_review" as const,
       matched_candidate_id: null,
       matched_candidate_ids: [],
       confidence: 0,
-      reasoning: "AI processing failed - manual review required",
+      reasoning: "AI processing failed",
       suggested_action: "review",
       entity_context: null
     }))
@@ -288,7 +291,7 @@ Respond in JSON format:
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Classify Zero-Candidate Movements
+// Classify Zero-Candidate Movements - IMPROVED PROMPTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function classifyZeroCandidateMovements(
@@ -296,59 +299,74 @@ async function classifyZeroCandidateMovements(
   movements: MovementToMatch[],
   includeSupermemory: boolean
 ): Promise<MatchDecision[]> {
-  // Get entity context for better classification
   let entityContext = ""
   if (includeSupermemory) {
-    const counterparties = movements
-      .map(m => m.counterparty)
-      .filter(Boolean)
-      .join(", ")
-    
-    if (counterparties) {
-      entityContext = await searchEntityContextFromSupermemory(userId, counterparties)
+    const counterparties = [...new Set(movements.map(m => m.counterparty).filter(Boolean))]
+    if (counterparties.length > 0) {
+      entityContext = await searchEntityContextFromSupermemory(userId, counterparties.slice(0, 10).join(", "))
     }
   }
 
-  const movementDescriptions = movements.map((m, idx) => `
-Movement ${idx + 1}:
-  ID: ${m.id}
-  Counterparty: ${m.counterparty || "Unknown"}
-  Description: ${m.raw_description || "N/A"}
-  Amount: $${Math.abs(m.amount).toFixed(2)}
-  Direction: ${m.direction === "inflow" ? "AR (received)" : "AP (paid)"}
-  Date: ${m.date}
-  Current Classification: ${m.classification.case_type}
-`).join("\n---\n")
+  const movementData = movements.map((m, idx) => ({
+    idx: idx + 1,
+    id: m.id,
+    counterparty: m.counterparty || "Unknown",
+    description: m.raw_description || "",
+    amount: Math.abs(m.amount),
+    type: m.direction === "inflow" ? "RECEIVED (AR)" : "PAID (AP)",
+    date: m.date,
+    current_case: m.classification.case_type
+  }))
 
-  const systemPrompt = `You are a financial reconciliation expert. These bank movements have NO matching invoices/bills in the system.
+  const systemPrompt = `You are a financial reconciliation AI. These bank movements have NO matching invoices/bills.
 
-For each movement, determine the most likely reason and recommended action:
+## YOUR TASK
+Determine WHY there's no match and what action to take.
 
-Possible reasons:
-- MISSING_INVOICE: Customer paid but invoice wasn't created yet
-- MISSING_BILL: Vendor paid but bill wasn't entered
-- PREPAYMENT: Deposit/advance payment before invoice
-- SUBSCRIPTION: Recurring SaaS/service payment (often no bills)
-- SMALL_EXPENSE: Petty cash / minor operational expense
-- REFUND: Refund or credit from vendor/to customer
-- DATA_ISSUE: Invoice/bill likely exists but wasn't synced
+## CLASSIFICATION RULES
 
-${entityContext ? `\nEntity Knowledge:\n${entityContext}` : ""}
+### FOR MONEY RECEIVED (AR):
+- **create_invoice**: Customer paid but invoice missing
+  → Confidence 0.7+ if clear customer name
+  → Example: "Sarah Katz (Marlins)" paid $1,060 - likely needs invoice created
 
-Respond in JSON format:
+- **needs_review**: Unclear situation
+  → Prepayments, deposits, refunds, unclear counterparty
+
+### FOR MONEY PAID (AP):
+- **create_bill**: Vendor paid but bill missing
+  → Confidence 0.7+ if clear vendor name
+  → Example: "Amazon" charge $23.48 - likely needs bill created
+
+- **no_match**: Known non-billable expenses
+  → Subscriptions (Shopify, Zapier, Google Workspace)
+  → Bank fees, small operational expenses
+  → Confidence 0.8+ for clear subscriptions
+
+## PATTERNS TO RECOGNIZE
+- Subscriptions: Shopify, Zapier, DocuSign, Google Workspace, QuickBooks
+- Payment processors: Stripe, Square, PayPal (usually fees)
+- Small expenses under $50: Often operational, may not need bills
+- "(deleted)" in name: Data sync issue, needs review
+
+## OUTPUT FORMAT
 {
   "decisions": [
     {
-      "movement_id": "...",
+      "movement_id": "exact ID",
       "decision": "create_invoice" | "create_bill" | "no_match" | "needs_review",
       "confidence": 0.0-1.0,
-      "reasoning": "brief explanation",
-      "suggested_action": "Create invoice for [entity]" | "Mark as subscription expense" | etc.
+      "reasoning": "Brief explanation",
+      "suggested_action": "Create invoice for [Customer]" | "Create bill for [Vendor]" | "Mark as subscription" | "Review manually"
     }
   ]
-}`
+}
 
-  const userPrompt = `Classify these unmatched movements:\n${movementDescriptions}`
+${entityContext ? `\n## KNOWN ENTITIES\n${entityContext}` : ""}`
+
+  const userPrompt = `Classify these ${movements.length} unmatched movements:
+
+${JSON.stringify(movementData, null, 2)}`
 
   try {
     const response = await callLLM(systemPrompt, userPrompt)
@@ -361,7 +379,7 @@ Respond in JSON format:
       matched_candidate_id: null,
       matched_candidate_ids: [],
       confidence: 0,
-      reasoning: "AI processing failed - manual review required",
+      reasoning: "AI processing failed",
       suggested_action: "review",
       entity_context: null
     }))
@@ -384,13 +402,13 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
       "Authorization": `Bearer ${API_KEY}`
     },
     body: JSON.stringify({
-      model: "gpt-5.4-nano",
+      model: MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
       ],
       temperature: 0.1,
-      max_completion_tokens: 2000,
+      max_completion_tokens: 4000,
       response_format: { type: "json_object" }
     })
   })
