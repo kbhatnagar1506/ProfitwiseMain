@@ -153,17 +153,14 @@ function shouldProcessWithAI(movement: MovementToMatch): boolean {
   const ct = movement.classification.case_type
   const hasCandidates = movement.classification.candidates.length > 0
   
-  // Process movements WITH candidates (need to pick the right one)
+  // Skip non-operational movements (they don't need AR/AP matching)
+  if (!movement.classification.is_operational) {
+    return false
+  }
+  
+  // Process ALL operational movements with candidates
   if (hasCandidates) {
-    return (
-      ct.startsWith("EXACT_MULTI") ||
-      ct === "DUPLICATE_PAYMENT" ||
-      ct === "NO_MATCH_HAS_CANDIDATES" ||
-      ct.startsWith("FEE_IMPLIED") ||
-      ct.startsWith("PARTIAL") ||
-      ct.startsWith("AGGREGATION") ||
-      movement.classification.flags.same_amount_conflict
-    )
+    return true
   }
   
   // Process zero-candidate movements (need to understand why)
