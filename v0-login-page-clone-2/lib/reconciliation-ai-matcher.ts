@@ -70,6 +70,11 @@ export async function runAIReconciliationMatcher(
 
   const results: MatchDecision[] = []
   const errors: string[] = []
+  
+  // CRITICAL: Track matched invoice IDs to prevent double-matching
+  // Same customer can have multiple invoices of same amount
+  // Once an invoice is matched, remove it from all other candidates
+  const matchedInvoiceIds = new Set<string>()
 
   const movementsToProcess = movements
     .filter(m => shouldProcessWithAI(m))
@@ -77,59 +82,60 @@ export async function runAIReconciliationMatcher(
 
   const totalCount = movementsToProcess.length
   let batchSize: number
-  let parallelBatches: number
 
   if (totalCount <= 10) {
     batchSize = totalCount || 1
-    parallelBatches = 1
   } else if (totalCount <= 50) {
     batchSize = Math.ceil(totalCount / 5)
-    parallelBatches = 3
   } else if (totalCount <= 200) {
     batchSize = 10
-    parallelBatches = 5
   } else if (totalCount <= 500) {
     batchSize = 15
-    parallelBatches = 10
   } else if (totalCount <= 1000) {
     batchSize = 20
-    parallelBatches = 15
   } else {
     batchSize = 25
-    parallelBatches = 20
   }
 
   if (options.batchSize) batchSize = options.batchSize
-  if (options.parallelBatches) parallelBatches = options.parallelBatches
 
-  console.log(`[AI Matcher] Model: ${MODEL} | Processing ${totalCount} movements: batchSize=${batchSize}, parallel=${parallelBatches}`)
+  console.log(`[AI Matcher] Model: ${MODEL} | Processing ${totalCount} movements: batchSize=${batchSize}`)
 
-  const batches: MovementToMatch[][] = []
+  // Process batches SEQUENTIALLY to maintain invoice deduplication
+  // Each batch's matches are removed from subsequent batches' candidates
+  // (No parallel processing - we need to track matched invoices across batches)
   for (let i = 0; i < movementsToProcess.length; i += batchSize) {
-    batches.push(movementsToProcess.slice(i, i + batchSize))
-  }
-
-  for (let i = 0; i < batches.length; i += parallelBatches) {
-    const parallelChunk = batches.slice(i, i + parallelBatches)
+    const batch = movementsToProcess.slice(i, i + batchSize)
     
-    console.log(`[AI Matcher] Processing chunk ${Math.floor(i / parallelBatches) + 1}/${Math.ceil(batches.length / parallelBatches)}`)
+    // Filter out already-matched invoices from this batch's candidates
+    const filteredBatch = filterMatchedInvoices(batch, matchedInvoiceIds)
     
-    const batchPromises = parallelChunk.map(async (batch, idx) => {
-      try {
-        return await processBatch(userId, batch, includeSupermemory)
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error)
-        errors.push(`Batch ${i + idx + 1} failed: ${errorMsg}`)
-        console.error(`[AI Matcher] Batch ${i + idx + 1} error:`, error)
-        return []
+    console.log(`[AI Matcher] Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(movementsToProcess.length / batchSize)} | ${filteredBatch.length} movements | ${matchedInvoiceIds.size} invoices already matched`)
+    
+    try {
+      const batchResults = await processBatch(userId, filteredBatch, includeSupermemory)
+      
+      // Track newly matched invoice IDs
+      for (const decision of batchResults) {
+        if (decision.decision === "match") {
+          if (decision.matched_candidate_id) {
+            matchedInvoiceIds.add(decision.matched_candidate_id)
+          }
+          for (const id of decision.matched_candidate_ids) {
+            matchedInvoiceIds.add(id)
+          }
+        }
       }
-    })
-
-    const batchResults = await Promise.all(batchPromises)
-    for (const batchResult of batchResults) {
-      results.push(...batchResult)
+      
+      results.push(...batchResults)
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      errors.push(`Batch ${Math.floor(i / batchSize) + 1} failed: ${errorMsg}`)
+      console.error(`[AI Matcher] Batch error:`, error)
     }
   }
+
+  console.log(`[AI Matcher] Completed. Total matched invoices: ${matchedInvoiceIds.size}`)
 
   return {
     total_processed: movementsToProcess.length,
@@ -137,6 +143,35 @@ export async function runAIReconciliationMatcher(
     errors,
     processing_time_ms: Date.now() - startTime
   }
+}
+
+// Filter out already-matched invoices from candidates
+function filterMatchedInvoices(
+  movements: MovementToMatch[],
+  matchedInvoiceIds: Set<string>
+): MovementToMatch[] {
+  if (matchedInvoiceIds.size === 0) return movements
+  
+  return movements.map(m => {
+    const originalCount = m.classification.candidates.length
+    const filteredCandidates = m.classification.candidates.filter(
+      c => !matchedInvoiceIds.has(c.id)
+    )
+    
+    // If candidates changed, create a new movement object with filtered candidates
+    if (filteredCandidates.length !== originalCount) {
+      console.log(`[AI Matcher] Movement ${m.id}: Removed ${originalCount - filteredCandidates.length} already-matched invoices`)
+      return {
+        ...m,
+        classification: {
+          ...m.classification,
+          candidates: filteredCandidates
+        }
+      }
+    }
+    
+    return m
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -247,7 +282,16 @@ async function matchMovementsWithCandidates(
 ## YOUR TASK
 For each bank INFLOW (customer payment), find the matching INVOICE(s).
 
+## CRITICAL RULE: ONE INVOICE = ONE PAYMENT
+Each invoice ID can only be matched to ONE payment. If the same invoice appears as a candidate for multiple payments, you must choose the BEST match and leave others unmatched.
+
+Example: Customer "John Smith" has two $500 invoices (INV-001, INV-002)
+- Payment 1: $500 from "John Smith" → Match to INV-001
+- Payment 2: $500 from "John Smith" → Match to INV-002 (NOT INV-001 again!)
+- Payment 3: $500 from "John Smith" → No match (both invoices already used)
+
 ## CANDIDATE FIELDS EXPLAINED
+- **id**: Unique invoice ID (use this for matching)
 - **entity**: Customer name from invoice
 - **amount**: Original invoice amount
 - **outstanding**: Remaining unpaid amount on invoice
