@@ -34,20 +34,6 @@ interface CaseSummary {
 interface ResponseData {
   movements: ClassifiedMovement[]
   summary: CaseSummary
-  invoices: InvoiceWithStatus[]
-}
-
-interface InvoiceWithStatus {
-  id: string
-  customer_name: string | null
-  amount: number
-  outstanding_amount: number
-  due_date: string | null
-  status: string
-  is_matched: boolean
-  matched_movement_id: string | null
-  matched_payment_amount: number | null
-  matched_payment_date: string | null
 }
 
 function formatCurrency(n: number) {
@@ -121,7 +107,6 @@ export default function ReconciliationCandidatesPage() {
   const [aiMatchResults, setAiMatchResults] = useState<Map<string, { decision: string; confidence: number; reasoning: string; matched_id: string | null }>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<"all" | "ar" | "operational" | "non_op" | "review">("ar")
-  const [invoiceFilter, setInvoiceFilter] = useState<"all" | "matched" | "unmatched">("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
   const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
@@ -577,9 +562,6 @@ export default function ReconciliationCandidatesPage() {
 
       {/* Movements Table */}
       <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-white/10">
-          <p className="text-[11px] text-zinc-400 font-medium">Bank Movements ({data.movements.length})</p>
-        </div>
         {data.movements.length === 0 ? (
           <div className="p-12 text-center">
             <p className="text-zinc-500 text-sm">No movements found matching your filters.</p>
@@ -658,118 +640,6 @@ export default function ReconciliationCandidatesPage() {
           </div>
         )}
       </div>
-
-      {/* AR Invoices Panel */}
-      {data.invoices && data.invoices.length > 0 && (
-        <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <p className="text-[11px] text-zinc-400 font-medium">AR Invoices ({data.invoices.length})</p>
-              <div className="flex items-center gap-1 bg-[#0A0A0A] rounded-md p-0.5">
-                <button
-                  onClick={() => setInvoiceFilter("all")}
-                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
-                    invoiceFilter === "all" 
-                      ? "bg-white/10 text-white" 
-                      : "text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  All ({data.invoices.length})
-                </button>
-                <button
-                  onClick={() => setInvoiceFilter("matched")}
-                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
-                    invoiceFilter === "matched" 
-                      ? "bg-emerald-500/20 text-emerald-400" 
-                      : "text-zinc-500 hover:text-emerald-400"
-                  }`}
-                >
-                  Matched ({data.invoices.filter(i => i.is_matched).length})
-                </button>
-                <button
-                  onClick={() => setInvoiceFilter("unmatched")}
-                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
-                    invoiceFilter === "unmatched" 
-                      ? "bg-red-500/20 text-red-400" 
-                      : "text-zinc-500 hover:text-red-400"
-                  }`}
-                >
-                  Unmatched ({data.invoices.filter(i => !i.is_matched).length})
-                </button>
-              </div>
-            </div>
-            <p className="text-[10px] text-zinc-500">
-              Total: {formatCurrency(data.invoices.reduce((sum, i) => sum + i.amount, 0))}
-            </p>
-          </div>
-          <div className="max-h-[400px] overflow-y-auto">
-            <table className="w-full">
-              <thead className="sticky top-0 bg-[#141414]">
-                <tr className="border-b border-white/10">
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Customer</th>
-                  <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Amount</th>
-                  <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Outstanding</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Due Date</th>
-                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Status</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Matched Payment</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.invoices
-                  .filter(invoice => {
-                    if (invoiceFilter === "matched") return invoice.is_matched
-                    if (invoiceFilter === "unmatched") return !invoice.is_matched
-                    return true
-                  })
-                  .map((invoice) => (
-                  <tr key={invoice.id} className={`border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100 ${invoice.is_matched ? 'opacity-60' : ''}`}>
-                    <td className="px-3 py-2">
-                      <p className="text-[12px] text-white truncate max-w-[200px]">{invoice.customer_name || "Unknown"}</p>
-                      <p className="text-[10px] text-zinc-600">{invoice.id.slice(0, 12)}</p>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <span className="text-[12px] font-mono tabular-nums text-zinc-300">
-                        {formatCurrency(invoice.amount)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <span className={`text-[12px] font-mono tabular-nums ${invoice.outstanding_amount < invoice.amount ? 'text-amber-400' : 'text-zinc-400'}`}>
-                        {formatCurrency(invoice.outstanding_amount)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">
-                      {formatDate(invoice.due_date)}
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      {invoice.is_matched ? (
-                        <Badge className="text-[10px] px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          Matched
-                        </Badge>
-                      ) : (
-                        <Badge className="text-[10px] px-2 py-0.5 bg-red-500/10 text-red-400 border border-red-500/20">
-                          Unmatched
-                        </Badge>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      {invoice.is_matched && invoice.matched_payment_amount ? (
-                        <div>
-                          <p className="text-[11px] text-emerald-400 font-mono tabular-nums">
-                            {formatCurrency(invoice.matched_payment_amount)}
-                          </p>
-                          <p className="text-[10px] text-zinc-600">{formatDate(invoice.matched_payment_date)}</p>
-                        </div>
-                      ) : (
-                        <span className="text-[10px] text-zinc-600">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* Details Panel */}
       <Sheet open={isDetailsPanelOpen} onOpenChange={setIsDetailsPanelOpen}>

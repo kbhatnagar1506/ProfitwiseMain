@@ -92,70 +92,6 @@ async function loadCustomerMatches(userId: string): Promise<Map<string, string |
   return matches
 }
 
-async function loadReconciliationDecisions(userId: string): Promise<Map<string, { movement_id: string; decision: string; confidence: number; payment_amount: number; payment_date: string }>> {
-  // Load AR attributions - these link movements (payments) to cash_events (invoices)
-  // reference_id contains the cash_event (invoice) ID
-  const result = await query(
-    `SELECT 
-       ma.reference_id as invoice_id,
-       ma.movement_id,
-       ma.confidence,
-       ma.net_amount as payment_amount,
-       m.date as payment_date
-     FROM movement_attributions ma
-     JOIN movements m ON m.id = ma.movement_id
-     WHERE ma.user_id = $1
-       AND ma.component_type = 'ar'
-       AND ma.reference_id IS NOT NULL`,
-    [userId]
-  )
-  const decisions = new Map<string, { movement_id: string; decision: string; confidence: number; payment_amount: number; payment_date: string }>()
-  for (const row of result.rows) {
-    // Only keep the first match for each invoice (in case of duplicates)
-    if (!decisions.has(row.invoice_id)) {
-      decisions.set(row.invoice_id, {
-        movement_id: row.movement_id,
-        decision: 'match',
-        confidence: row.confidence || 0.8,
-        payment_amount: Math.abs(parseFloat(row.payment_amount) || 0),
-        payment_date: row.payment_date
-      })
-    }
-  }
-  return decisions
-}
-
-function buildInvoicesWithStatus(
-  cashEvents: CashEventRow[],
-  decisions: Map<string, { movement_id: string; decision: string; confidence: number; payment_amount: number; payment_date: string }>
-): InvoiceWithStatus[] {
-  return cashEvents
-    .filter(e => e.event_type === 'ar')
-    .map(invoice => {
-      const match = decisions.get(invoice.id)
-      return {
-        id: invoice.id,
-        customer_name: (invoice.metadata?.customer_name as string) || null,
-        amount: invoice.amount,
-        outstanding_amount: invoice.outstanding_amount ?? invoice.amount,
-        due_date: invoice.expected_date,
-        status: invoice.status || 'open',
-        is_matched: !!match,
-        matched_movement_id: match?.movement_id || null,
-        matched_payment_amount: match?.payment_amount || null,
-        matched_payment_date: match?.payment_date || null
-      }
-    })
-    .sort((a, b) => {
-      // Sort: unmatched first, then by due date
-      if (a.is_matched !== b.is_matched) return a.is_matched ? 1 : -1
-      if (!a.due_date && !b.due_date) return 0
-      if (!a.due_date) return 1
-      if (!b.due_date) return -1
-      return new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
-    })
-}
-
 interface ClassifiedMovement {
   id: string
   date: string
@@ -180,20 +116,6 @@ interface CaseSummary {
 interface ResponseData {
   movements: ClassifiedMovement[]
   summary: CaseSummary
-  invoices: InvoiceWithStatus[]
-}
-
-interface InvoiceWithStatus {
-  id: string
-  customer_name: string | null
-  amount: number
-  outstanding_amount: number
-  due_date: string | null
-  status: string
-  is_matched: boolean
-  matched_movement_id: string | null
-  matched_payment_amount: number | null
-  matched_payment_date: string | null
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
@@ -237,16 +159,6 @@ export async function GET(request: Request): Promise<NextResponse> {
     // Load pre-computed customer matches from database (populated by background job)
     const customerMatches = await loadCustomerMatches(userId)
     console.log(`[reconciliation-candidates] Loaded ${customerMatches.size} pre-computed customer matches`)
-
-    // Load reconciliation decisions to determine invoice match status
-    const reconciliationDecisions = await loadReconciliationDecisions(userId)
-    console.log(`[reconciliation-candidates] Loaded ${reconciliationDecisions.size} reconciliation decisions`)
-
-    // Build invoices with match status
-    const invoicesWithStatus = buildInvoicesWithStatus(cashEvents, reconciliationDecisions)
-    const matchedInvoices = invoicesWithStatus.filter(i => i.is_matched).length
-    const unmatchedInvoices = invoicesWithStatus.filter(i => !i.is_matched).length
-    console.log(`[reconciliation-candidates] Invoices: ${matchedInvoices} matched, ${unmatchedInvoices} unmatched`)
 
     // Classify each movement (pass all movements for cross-movement analysis)
     const classifiedMovements: ClassifiedMovement[] = []
@@ -329,7 +241,6 @@ export async function GET(request: Request): Promise<NextResponse> {
     const response: ResponseData = {
       movements: classifiedMovements,
       summary,
-      invoices: invoicesWithStatus,
     }
 
     return NextResponse.json(response)

@@ -76,12 +76,12 @@ function matchDeterministically(
  * Match bank transaction counterparties to known invoice customers.
  * Uses deterministic matching first, then LLM only for ambiguous cases.
  * 
- * @param movements Array of movements with id, counterparty (resolved), and optional raw data
+ * @param movements Array of movements with id and counterparty
  * @param knownCustomers List of known customer names from invoices
  * @returns Map of movement_id -> matched_customer (or null if no match)
  */
 export async function matchCustomersWithLLM(
-  movements: Array<{ id: string; counterparty: string | null; raw_counterparty?: string | null; description?: string | null }>,
+  movements: Array<{ id: string; counterparty: string | null }>,
   knownCustomers: string[]
 ): Promise<Map<string, string | null>> {
   if (movements.length === 0 || knownCustomers.length === 0) {
@@ -138,7 +138,7 @@ export async function matchCustomersWithLLM(
 }
 
 async function matchBatchWithLLM(
-  movements: Array<{ id: string; counterparty: string | null; raw_counterparty?: string | null; description?: string | null }>,
+  movements: Array<{ id: string; counterparty: string | null }>,
   knownCustomers: string[]
 ): Promise<CustomerMatchResult[]> {
   const systemPrompt = `You are an AR (Accounts Receivable) specialist. Match bank transaction counterparties to known customers.
@@ -147,21 +147,14 @@ async function matchBatchWithLLM(
 ${knownCustomers.join(", ")}
 
 ## Your Task
-For each bank transaction, find the matching known customer or return null if no match.
-
-## Input Fields
-- **counterparty**: Resolved/normalized name (best quality)
-- **raw_counterparty**: Original bank data (may have extra info like payment processor codes)
-- **description**: Bank transaction description (may contain customer name or invoice references)
+For each bank transaction counterparty, find the matching known customer or return null if no match.
 
 ## Matching Rules
 1. Exact match (case-insensitive): "David Vaughn" = "david vaughn"
 2. Partial match: "David Vaughn (Troubadour)" matches "David Vaughn"
 3. Name variations: "MichaelHouk" matches "Michael Houk"
 4. Fuzzy match: "Kelsee Gomes (NY Yankees)" matches "Kelsee Gomes"
-5. Look for names in description: "Payment from John Smith" → "John Smith"
-6. Ignore payment processor prefixes: "VENMO*", "SQ *", "ZELLE*", etc.
-7. If no clear match, return null
+5. If no clear match, return null
 
 ## Output Format
 Return JSON with matches array:
@@ -176,16 +169,7 @@ Respond with JSON only.`
 
   const userPrompt = `Match these ${movements.length} bank transactions to known customers:
 
-${movements.map(m => {
-    let line = `- id:${m.id} counterparty:"${m.counterparty || "unknown"}"`
-    if (m.raw_counterparty && m.raw_counterparty !== m.counterparty) {
-      line += ` raw:"${m.raw_counterparty}"`
-    }
-    if (m.description) {
-      line += ` desc:"${m.description.substring(0, 100)}"`
-    }
-    return line
-  }).join("\n")}
+${movements.map(m => `- id:${m.id} counterparty:"${m.counterparty || "unknown"}"`).join("\n")}
 
 Return JSON in the format specified above.`
 
