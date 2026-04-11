@@ -28,6 +28,7 @@ interface CaseSummary {
   auto_matchable: number
   needs_review: number
   zero_candidates: number
+  ar_count: number
 }
 
 interface ResponseData {
@@ -51,16 +52,18 @@ function getCaseTypeColor(caseType: CaseType): string {
   if (caseType.startsWith("PARTIAL")) return "bg-purple-500/10 text-purple-400 border-purple-500/20"
   if (caseType.startsWith("AGGREGATION")) return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
   if (caseType.startsWith("NO_MATCH")) return "bg-red-500/10 text-red-400 border-red-500/20"
-  if (caseType.startsWith("REVERSAL")) return "bg-orange-500/10 text-orange-400 border-orange-500/20"
-  // Zero-candidate sub-cases - different colors for each type
+  if (caseType.startsWith("REFUND")) return "bg-orange-500/10 text-orange-400 border-orange-500/20"
+  if (caseType.startsWith("OVERPAYMENT")) return "bg-pink-500/10 text-pink-400 border-pink-500/20"
+  if (caseType.startsWith("ROUNDING")) return "bg-slate-500/10 text-slate-400 border-slate-500/20"
+  if (caseType.startsWith("DISCOUNT") || caseType.startsWith("EARLY") || caseType.startsWith("VOLUME")) return "bg-teal-500/10 text-teal-400 border-teal-500/20"
+  // Zero-candidate sub-cases - AR focused
   if (caseType === "ZERO_MISSING_INVOICE") return "bg-rose-500/10 text-rose-400 border-rose-500/20"
-  if (caseType === "ZERO_MISSING_BILL") return "bg-rose-500/10 text-rose-400 border-rose-500/20"
-  if (caseType === "ZERO_PREPAYMENT_DEPOSIT") return "bg-violet-500/10 text-violet-400 border-violet-500/20"
-  if (caseType === "ZERO_SUBSCRIPTION") return "bg-sky-500/10 text-sky-400 border-sky-500/20"
-  if (caseType === "ZERO_SMALL_EXPENSE") return "bg-slate-500/10 text-slate-400 border-slate-500/20"
-  if (caseType === "ZERO_REFUND_CREDIT") return "bg-teal-500/10 text-teal-400 border-teal-500/20"
-  if (caseType === "ZERO_DELETED_COUNTERPARTY") return "bg-gray-500/10 text-gray-400 border-gray-500/20"
+  if (caseType === "ZERO_PREPAYMENT") return "bg-violet-500/10 text-violet-400 border-violet-500/20"
+  if (caseType === "ZERO_REFUND_RECEIVED") return "bg-teal-500/10 text-teal-400 border-teal-500/20"
+  if (caseType === "ZERO_DELETED_CUSTOMER") return "bg-gray-500/10 text-gray-400 border-gray-500/20"
   if (caseType === "ZERO_UNCLASSIFIED") return "bg-red-500/10 text-red-400 border-red-500/20"
+  // AP excluded
+  if (caseType === "AP_EXCLUDED") return "bg-zinc-500/10 text-zinc-500 border-zinc-500/20"
   return "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
 }
 
@@ -101,7 +104,7 @@ export default function ReconciliationCandidatesPage() {
   const [aiMatchLoading, setAiMatchLoading] = useState(false)
   const [aiMatchResults, setAiMatchResults] = useState<Map<string, { decision: string; confidence: number; reasoning: string; matched_id: string | null }>>(new Map())
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<"all" | "operational" | "non_op" | "review">("all")
+  const [filter, setFilter] = useState<"all" | "ar" | "operational" | "non_op" | "review">("ar")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
   const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
@@ -401,8 +404,8 @@ export default function ReconciliationCandidatesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-white tracking-tight">Reconciliation Candidates</h1>
-          <p className="text-[12px] text-zinc-500 mt-0.5">Deterministic case classification · Data-driven matching</p>
+          <h1 className="text-xl font-semibold text-white tracking-tight">AR Reconciliation</h1>
+          <p className="text-[12px] text-zinc-500 mt-0.5">Match customer payments to invoices · AR-focused classification</p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -467,8 +470,11 @@ export default function ReconciliationCandidatesPage() {
       {/* Filter Bar */}
       <div className="bg-[#141414] border border-white/10 rounded-lg p-4 space-y-3">
         <div className="flex items-center gap-3">
-          <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "operational" | "non_op" | "review")} className="w-full">
+          <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "ar" | "operational" | "non_op" | "review")} className="w-full">
             <TabsList className="bg-[#0A0A0A] border border-white/10 h-8">
+              <TabsTrigger value="ar" className="text-[11px] h-6 px-3 text-emerald-400">
+                AR Only ({data.summary.ar_count || 0})
+              </TabsTrigger>
               <TabsTrigger value="all" className="text-[11px] h-6 px-3">
                 All ({data.summary.total})
               </TabsTrigger>
