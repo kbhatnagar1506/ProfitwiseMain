@@ -460,7 +460,8 @@ Return JSON with decisions array. Each decision:
 
 ${entityContext ? `\n## KNOWN CUSTOMERS (from memory)\n${entityContext}` : ""}`
 
-  const userPrompt = `Match these ${movements.length} bank movements:
+  const userPrompt = `Match these ${movements.length} bank movements to invoices.
+Respond with JSON in the format specified above.
 
 ${JSON.stringify(movementData, null, 2)}`
 
@@ -564,7 +565,8 @@ Determine WHY there's no invoice and what action to take.
 
 ${entityContext ? `\n## KNOWN CUSTOMERS (from memory)\n${entityContext}` : ""}`
 
-  const userPrompt = `Classify these ${arMovements.length} customer payments with no matching invoice:
+  const userPrompt = `Classify these ${arMovements.length} customer payments with no matching invoice.
+Respond with JSON in the format specified above.
 
 ${JSON.stringify(movementData, null, 2)}`
 
