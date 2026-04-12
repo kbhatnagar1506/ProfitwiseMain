@@ -1,6 +1,8 @@
 import { query } from "@/lib/db"
 import { classifyMovement, type ClassificationResult, type CaseType } from "@/lib/reconciliation-case-classifier"
 import type { CashEventRow } from "@/lib/cash-events-build"
+import { syncCashEventsForUser } from "@/lib/cash-events-build"
+import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { NextResponse } from "next/server"
@@ -135,6 +137,16 @@ export async function GET(request: Request): Promise<NextResponse> {
     const filter = url.searchParams.get("filter") || "all" // all, ar, operational, non_op, review
     const caseTypeFilter = url.searchParams.get("case_type") || null
     const search = url.searchParams.get("search") || null
+
+    // CRITICAL: Sync cash_events from latest QBO/Xero invoices before loading
+    // This ensures newly created invoices appear as candidates
+    try {
+      const invoices = await fetchInvoicesForReconciliation(userId)
+      await syncCashEventsForUser(userId, invoices, [])  // Empty AP obligations - AR only
+      console.log(`[reconciliation-candidates] Synced ${invoices.length} invoices to cash_events`)
+    } catch (syncErr) {
+      console.warn(`[reconciliation-candidates] Cash events sync failed:`, syncErr)
+    }
 
     // Load data
     const movements = await fetchMovementsWithAvailableCash(userId)
