@@ -221,8 +221,9 @@ function detectFeeAmount(movement: MovementWithAvailableCash, candidate: CashEve
   if (diff < EPS) return null
 
   const feeRatio = diff / candAmount
-  // Fee must be between 0.5% and 5% (typical processor fees)
-  if (feeRatio < 0.005 || feeRatio > 0.05) return null
+  // Fee can be 0-5% (typical processor fees: Stripe 2.9%+$0.30, PayPal 2.9%, Square 2.6%, ACH 0.5-1%)
+  // No lower bound - even small fees are valid
+  if (feeRatio > 0.05) return null
 
   return diff
 }
