@@ -186,6 +186,13 @@ export async function GET(request: Request): Promise<NextResponse> {
       // Pass all movements for cross-movement analysis (duplicate detection, separate fee detection)
       // Also pass the matched customer from LLM
       const matchedCustomer = customerMatches.get(movement.id)
+      
+      // Debug: Check Hailey Lacy movement
+      if (movement.counterparty?.toLowerCase().includes('hailey') || 
+          (Math.abs(movement.amount - 279.90) < 0.01 && movement.direction === 'inflow')) {
+        console.log(`[reconciliation-candidates] Hailey movement: id=${movement.id}, amount=${movement.amount}, counterparty=${movement.counterparty}, matchedCustomer=${matchedCustomer}`)
+      }
+      
       const classification = classifyMovement(movement, cashEvents, movements, matchedCustomer)
 
       // Track AR count for summary (before filters)
