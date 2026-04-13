@@ -1867,3 +1867,74 @@ export async function ensureUserDecisionsSchema() {
   `)
   movementsSchemaEnsured = true
 }
+
+let arMatchesSchemaEnsured = false
+
+export async function ensureARMatchesSchema(): Promise<void> {
+  if (arMatchesSchemaEnsured) return
+  const p = await getPool()
+  if (!p) return
+
+  console.log("[DB] Creating ar_reconciliation_matches table...")
+  try {
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS ar_reconciliation_matches (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        
+        -- Bank side (movement)
+        movement_id UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
+        bank_amount NUMERIC(12,2) NOT NULL,
+        bank_date DATE NOT NULL,
+        bank_description TEXT,
+        bank_counterparty TEXT,
+        
+        -- Invoice side (cash_event / AR)
+        cash_event_id UUID NOT NULL REFERENCES cash_events(id) ON DELETE CASCADE,
+        invoice_id TEXT NOT NULL,
+        invoice_amount NUMERIC(12,2) NOT NULL,
+        customer_name TEXT NOT NULL,
+        
+        -- Match details
+        match_type TEXT NOT NULL,
+        confidence NUMERIC(3,2),
+        fee_amount NUMERIC(12,2) DEFAULT 0,
+        matched_amount NUMERIC(12,2) NOT NULL,
+        
+        -- Source
+        matched_by TEXT NOT NULL DEFAULT 'manual',
+        ai_reasoning TEXT,
+        
+        -- Status
+        status TEXT NOT NULL DEFAULT 'pending',
+        confirmed_at TIMESTAMPTZ,
+        confirmed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        
+        -- Timestamps
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        
+        -- Constraints
+        UNIQUE(movement_id, cash_event_id)
+      )
+    `)
+    console.log("[DB] ar_reconciliation_matches table created/verified")
+  } catch (err) {
+    console.error("[DB] ar_reconciliation_matches creation failed:", err instanceof Error ? err.message : String(err))
+    throw err
+  }
+
+  console.log("[DB] Creating ar_reconciliation_matches indexes...")
+  try {
+    await p.query("CREATE INDEX IF NOT EXISTS idx_ar_matches_user ON ar_reconciliation_matches(user_id)")
+    await p.query("CREATE INDEX IF NOT EXISTS idx_ar_matches_status ON ar_reconciliation_matches(user_id, status)")
+    await p.query("CREATE INDEX IF NOT EXISTS idx_ar_matches_movement ON ar_reconciliation_matches(movement_id)")
+    await p.query("CREATE INDEX IF NOT EXISTS idx_ar_matches_invoice ON ar_reconciliation_matches(cash_event_id)")
+    await p.query("CREATE INDEX IF NOT EXISTS idx_ar_matches_date ON ar_reconciliation_matches(user_id, bank_date DESC)")
+    console.log("[DB] ar_reconciliation_matches indexes created")
+  } catch (err) {
+    console.error("[DB] ar_reconciliation_matches index creation failed:", err instanceof Error ? err.message : String(err))
+  }
+
+  arMatchesSchemaEnsured = true
+}
