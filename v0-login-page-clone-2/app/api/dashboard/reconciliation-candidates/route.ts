@@ -190,13 +190,11 @@ export async function GET(request: Request): Promise<NextResponse> {
       // Debug: Check Hailey Lacy movement
       if (movement.counterparty?.toLowerCase().includes('hailey lacy') || 
           (Math.abs(movement.amount - 279.90) < 0.01 && movement.direction === 'inflow')) {
-        console.log(`[reconciliation-candidates] Hailey movement: id=${movement.id}, amount=${movement.amount}, counterparty=${movement.counterparty}, matchedCustomer=${matchedCustomer}`)
+        console.log(`[reconciliation-candidates] Hailey movement: id=${movement.id}, amount=${movement.amount}, available_cash=${movement.available_cash}, counterparty=${movement.counterparty}, matchedCustomer=${matchedCustomer}`)
         // Check if invoice 462 is in cash events
         const inv462 = cashEvents.find(e => e.entity_id?.includes('462') || e.metadata?.invoice_id === '462')
         if (inv462) {
-          console.log(`[reconciliation-candidates] Invoice 462 found in cashEvents:`, JSON.stringify(inv462))
-        } else {
-          console.log(`[reconciliation-candidates] Invoice 462 NOT in cashEvents. Sample:`, JSON.stringify(cashEvents.slice(0, 3).map(e => ({ id: e.id, entity_id: e.entity_id, customer: e.metadata?.customer_name }))))
+          console.log(`[reconciliation-candidates] Invoice 462 in cashEvents: amount=${inv462.amount}, outstanding=${inv462.outstanding_amount}, status=${inv462.status}, customer=${inv462.metadata?.customer_name}`)
         }
       }
       
