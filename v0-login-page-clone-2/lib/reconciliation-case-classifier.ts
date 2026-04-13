@@ -214,7 +214,7 @@ function extractReferenceFromDescription(description: string | null): string[] {
 }
 
 function detectFeeAmount(movement: MovementWithAvailableCash, candidate: CashEventRow): number | null {
-  const movAmount = Math.abs(movement.available_cash)
+  const movAmount = Math.abs(movement.amount)
   const candAmount = candidate.amount
 
   // Fee only applies when payment is less than invoice (processor took a cut)
@@ -250,12 +250,12 @@ function isEarlyDiscount(movement: MovementWithAvailableCash, candidate: CashEve
   // Payment must be BEFORE due date (negative daysDiff) and within 10 days
   if (daysDiff > 0 || daysDiff < -10) return false
 
-  const discountRatio = (candidate.amount - Math.abs(movement.available_cash)) / candidate.amount
+  const discountRatio = (candidate.amount - Math.abs(movement.amount)) / candidate.amount
   return discountRatio >= 0.01 && discountRatio <= 0.03
 }
 
 function isReversal(movement: MovementWithAvailableCash, candidate: CashEventRow): boolean {
-  const movAmount = Math.abs(movement.available_cash)
+  const movAmount = Math.abs(movement.amount)
   const candAmount = Math.abs(candidate.amount)
 
   // Amounts must match
@@ -278,7 +278,7 @@ function isReversal(movement: MovementWithAvailableCash, candidate: CashEventRow
 }
 
 function isRounding(movement: MovementWithAvailableCash, candidate: CashEventRow): boolean {
-  const diff = Math.abs(candidate.amount - Math.abs(movement.available_cash))
+  const diff = Math.abs(candidate.amount - Math.abs(movement.amount))
   return diff > EPS && diff <= 0.05
 }
 
@@ -294,7 +294,7 @@ function buildCandidates(
   maxCandidates: number = 20
 ): Candidate[] {
   const candidates: Candidate[] = []
-  const movAmount = Math.abs(movement.available_cash)
+  const movAmount = Math.abs(movement.amount)
   const directLinkId = extractDirectLinkId(movement.tag_data)
   const refsFromDesc = [
     ...extractReferenceFromDescription(movement.counterparty),
@@ -509,7 +509,7 @@ function detectFlags(
     ...feeCandidates.filter((fc) => {
       // A fee candidate conflicts if its amount (minus fee) matches movement
       const amountAfterFee = fc.amount - (fc.fee_implied || 0)
-      return Math.abs(amountAfterFee - Math.abs(movement.available_cash)) < EPS
+      return Math.abs(amountAfterFee - Math.abs(movement.amount)) < EPS
     }),
   ]
 
@@ -529,12 +529,12 @@ function detectFlags(
     has_reference: candidates.some((c) => c.reference_match),
     has_fee: feeCandidates.length > 0,
     is_partial: partialCandidates.length > 0,
-    is_aggregation: matchableCandidates.length > 1 && Math.abs(aggregationSum - Math.abs(movement.available_cash)) < EPS,
+    is_aggregation: matchableCandidates.length > 1 && Math.abs(aggregationSum - Math.abs(movement.amount)) < EPS,
     is_reversal: reversalCandidates.length > 0 || isChargeback,
     same_amount_conflict: potentialConflicts.length > 1,
     // Only flag cross_entity if the EXACT matches span multiple entities (not all candidates)
     cross_entity: exactCandidates.length > 0 && new Set(exactCandidates.map((c) => c.entity_id)).size > 1,
-    is_zero_amount: Math.abs(movement.available_cash) < 0.1,
+    is_zero_amount: Math.abs(movement.amount) < 0.1,
     is_duplicate: isDuplicate,
   }
 }
@@ -546,7 +546,7 @@ function detectFlags(
 function classifyZeroCandidate(movement: MovementWithAvailableCash): CaseType {
   const counterparty = (movement.counterparty || "").toLowerCase()
   const description = (movement.raw_description || "").toLowerCase()
-  const amount = Math.abs(movement.available_cash)
+  const amount = Math.abs(movement.amount)
 
   // AR only processes inflows - this should always be true here
   if (movement.direction !== "inflow") {
@@ -669,7 +669,7 @@ function resolveCase(
   if (flags.is_reversal) {
     const reversalCandidates = candidates.filter((c) => c.match_type === "REVERSAL")
     if (reversalCandidates.length === 1) {
-      const diff = Math.abs(reversalCandidates[0].amount - Math.abs(movement.available_cash))
+      const diff = Math.abs(reversalCandidates[0].amount - Math.abs(movement.amount))
       return diff < EPS ? "REFUND_FULL" : "REFUND_PARTIAL"
     }
     return "REFUND_PARTIAL"
@@ -683,7 +683,7 @@ function resolveCase(
   // Rounding cases
   const roundingCandidates = candidates.filter((c) => c.match_type === "ROUNDING")
   if (roundingCandidates.length > 0) {
-    const movAmount = Math.abs(movement.available_cash)
+    const movAmount = Math.abs(movement.amount)
     const candAmount = roundingCandidates[0].amount
     return movAmount > candAmount ? "ROUNDING_OVER" : "ROUNDING_UNDER"
   }
@@ -691,7 +691,7 @@ function resolveCase(
   // Overpayment cases
   if (candidates.length > 0) {
     const bestCandidate = candidates[0]
-    const overpaymentAmount = Math.abs(movement.available_cash) - bestCandidate.amount
+    const overpaymentAmount = Math.abs(movement.amount) - bestCandidate.amount
 
     if (overpaymentAmount > EPS) {
       return "OVERPAYMENT_SINGLE"
@@ -729,7 +729,7 @@ function findSeparateFeeTransaction(
   // 4. Description contains fee-related keywords
   
   const movDate = new Date(movement.date).getTime()
-  const expectedFee = candidate.amount - Math.abs(movement.available_cash)
+  const expectedFee = candidate.amount - Math.abs(movement.amount)
   
   if (expectedFee <= 0) return { found: false, feeMovementId: null, feeAmount: 0 }
   
@@ -741,12 +741,12 @@ function findSeparateFeeTransaction(
     const daysDiff = Math.abs(movDate - mDate) / (1000 * 60 * 60 * 24)
     if (daysDiff > 3) continue
     
-    const mAmount = Math.abs(m.available_cash)
+    const mAmount = Math.abs(m.amount)
     const feeRatio = mAmount / candidate.amount
     if (feeRatio < 0.005 || feeRatio > 0.1) continue
     
     // Check if amounts match (movement + fee = candidate)
-    const totalPaid = Math.abs(movement.available_cash) + mAmount
+    const totalPaid = Math.abs(movement.amount) + mAmount
     if (Math.abs(totalPaid - candidate.amount) < EPS) {
       // Check description for fee keywords
       const desc = (m.raw_description || "").toLowerCase()
@@ -774,14 +774,14 @@ function detectDuplicatePayment(
   // 4. Occurred within 30 days
   // 5. Could match the same candidate(s)
   
-  const movAmount = Math.abs(movement.available_cash)
+  const movAmount = Math.abs(movement.amount)
   const movDate = new Date(movement.date).getTime()
   
   for (const m of allMovements) {
     if (m.id === movement.id) continue
     if (m.direction !== movement.direction) continue
     
-    const mAmount = Math.abs(m.available_cash)
+    const mAmount = Math.abs(m.amount)
     if (Math.abs(mAmount - movAmount) >= EPS) continue
     
     const mDate = new Date(m.date).getTime()
@@ -857,7 +857,7 @@ export function classifyMovement(
         is_reversal: false,
         same_amount_conflict: false,
         cross_entity: false,
-        is_zero_amount: Math.abs(movement.available_cash) < EPS,
+        is_zero_amount: Math.abs(movement.amount) < EPS,
         is_duplicate: false,
       },
       suggested_action: "exclude",
