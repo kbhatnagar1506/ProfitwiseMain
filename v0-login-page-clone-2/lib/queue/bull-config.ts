@@ -7,6 +7,7 @@ export const QUEUE_NAMES = {
   TAG_MOVEMENTS: 'tag-movements',
   COMPUTE_STATE: 'compute-state',
   GENERATE_FORECAST: 'generate-forecast',
+  MATCH_CUSTOMERS: 'match-customers',
   PROCESS_WEBHOOK: 'process-webhook',
 } as const
 

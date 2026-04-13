@@ -28,6 +28,7 @@ export const queues = {
   tagMovements: new Queue(QUEUE_NAMES.TAG_MOVEMENTS, redisConfig),
   computeState: new Queue(QUEUE_NAMES.COMPUTE_STATE, redisConfig),
   generateForecast: new Queue(QUEUE_NAMES.GENERATE_FORECAST, redisConfig),
+  matchCustomers: new Queue(QUEUE_NAMES.MATCH_CUSTOMERS, redisConfig),
   processWebhook: new Queue(QUEUE_NAMES.PROCESS_WEBHOOK, redisConfig),
 }
 

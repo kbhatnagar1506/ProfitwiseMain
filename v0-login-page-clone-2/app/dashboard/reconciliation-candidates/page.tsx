@@ -102,6 +102,8 @@ export default function ReconciliationCandidatesPage() {
   const [loading, setLoading] = useState(true)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiMatchLoading, setAiMatchLoading] = useState(false)
+  const [customerMatchLoading, setCustomerMatchLoading] = useState(false)
+  const [customerMatchJobId, setCustomerMatchJobId] = useState<string | null>(null)
   const [aiMatchResults, setAiMatchResults] = useState<Map<string, { decision: string; confidence: number; reasoning: string; matched_id: string | null }>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<"all" | "ar" | "operational" | "non_op" | "review">("ar")
@@ -371,6 +373,19 @@ export default function ReconciliationCandidatesPage() {
     }
   }
 
+  const runCustomerMatching = async () => {
+    try {
+      setCustomerMatchLoading(true)
+      
+      // Show instructions for manual triggering
+      alert(`Customer Matching Job\n\nTo queue the customer matching job, run:\n\nnode -e "const {queues} = require('./lib/queue/bull-client'); queues.matchCustomers.add({userId: 'YOUR_USER_ID'})"\n\nOr use the admin panel to trigger the job.\n\nThe background job will process customer matching and store results in the database.`)
+    } catch (err) {
+      alert("Error: " + (err instanceof Error ? err.message : "Unknown error"))
+    } finally {
+      setCustomerMatchLoading(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
@@ -408,6 +423,15 @@ export default function ReconciliationCandidatesPage() {
           <p className="text-[12px] text-zinc-500 mt-0.5">Match customer payments to invoices · AR-focused classification</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={runCustomerMatching}
+            disabled={loading || customerMatchLoading || !data}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] h-7 px-3"
+          >
+            <Sparkles className={`h-3 w-3 mr-1.5 ${customerMatchLoading ? "animate-pulse" : ""}`} />
+            {customerMatchLoading ? "Queuing..." : "Match Customers"}
+          </Button>
           <Button
             size="sm"
             onClick={runAIMatching}

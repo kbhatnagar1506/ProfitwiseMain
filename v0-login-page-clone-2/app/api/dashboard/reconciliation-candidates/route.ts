@@ -78,6 +78,20 @@ async function loadOpenCashEvents(userId: string): Promise<CashEventRow[]> {
   return result.rows as CashEventRow[]
 }
 
+async function loadCustomerMatches(userId: string): Promise<Map<string, string | null>> {
+  const result = await query(
+    `SELECT movement_id, matched_customer
+     FROM movement_customer_matches
+     WHERE user_id = $1`,
+    [userId]
+  )
+  const matches = new Map<string, string | null>()
+  for (const row of result.rows) {
+    matches.set(row.movement_id, row.matched_customer)
+  }
+  return matches
+}
+
 interface ClassifiedMovement {
   id: string
   date: string
@@ -142,6 +156,10 @@ export async function GET(request: Request): Promise<NextResponse> {
       console.log(`[reconciliation-candidates] WARNING: No cash events found for user ${userId}`)
     }
 
+    // Load pre-computed customer matches from database (populated by background job)
+    const customerMatches = await loadCustomerMatches(userId)
+    console.log(`[reconciliation-candidates] Loaded ${customerMatches.size} pre-computed customer matches`)
+
     // Classify each movement (pass all movements for cross-movement analysis)
     const classifiedMovements: ClassifiedMovement[] = []
     const caseTypeCounts: Record<CaseType, number> = {} as Record<CaseType, number>
@@ -154,7 +172,9 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     for (const movement of movements) {
       // Pass all movements for cross-movement analysis (duplicate detection, separate fee detection)
-      const classification = classifyMovement(movement, cashEvents, movements)
+      // Also pass the matched customer from LLM
+      const matchedCustomer = customerMatches.get(movement.id)
+      const classification = classifyMovement(movement, cashEvents, movements, matchedCustomer)
 
       // Track AR count for summary (before filters)
       if (movement.direction === "inflow" && classification.is_operational) {
