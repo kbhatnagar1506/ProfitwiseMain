@@ -136,6 +136,16 @@ export default function ReconciliationCandidatesPage() {
   // AR Matches state
   const [arMatches, setArMatches] = useState<ARMatch[]>([])
   const [arMatchesTotal, setArMatchesTotal] = useState(0)
+  const [arMatchesSummary, setArMatchesSummary] = useState<{
+    total: number
+    pending: number
+    confirmed: number
+    total_amount: number
+    confirmed_amount: number
+    pending_amount: number
+    unmatched_count: number
+    unmatched_amount: number
+  }>({ total: 0, pending: 0, confirmed: 0, total_amount: 0, confirmed_amount: 0, pending_amount: 0, unmatched_count: 0, unmatched_amount: 0 })
   const [arMatchesLoading, setArMatchesLoading] = useState(false)
   const [arMatchFilter, setArMatchFilter] = useState<"all" | "pending" | "confirmed">("all")
 
@@ -175,6 +185,9 @@ export default function ReconciliationCandidatesPage() {
       const json = await res.json()
       setArMatches(json.matches || [])
       setArMatchesTotal(json.total || 0)
+      if (json.summary) {
+        setArMatchesSummary(json.summary)
+      }
     } catch (err) {
       console.error("Failed to fetch AR matches:", err)
     } finally {
@@ -694,38 +707,63 @@ export default function ReconciliationCandidatesPage() {
 
       {/* AR Matches Section - Persisted matches from database */}
       <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h2 className="text-[13px] font-semibold text-white">AR Matches</h2>
-            <span className="text-[11px] text-zinc-500">({arMatchesTotal} total)</span>
+        <div className="px-4 py-3 border-b border-white/10">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <h2 className="text-[13px] font-semibold text-white">AR Matches</h2>
+              <span className="text-[11px] text-zinc-500">({arMatchesSummary.total} total)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setArMatchFilter("all")}
+                className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "all" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+              >
+                All ({arMatchesSummary.total})
+              </button>
+              <button
+                onClick={() => setArMatchFilter("pending")}
+                className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "pending" ? "bg-amber-500/20 text-amber-400" : "text-zinc-500 hover:text-zinc-300"}`}
+              >
+                Pending ({arMatchesSummary.pending})
+              </button>
+              <button
+                onClick={() => setArMatchFilter("confirmed")}
+                className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "confirmed" ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-500 hover:text-zinc-300"}`}
+              >
+                Confirmed ({arMatchesSummary.confirmed})
+              </button>
+              <Button
+                size="sm"
+                onClick={fetchArMatches}
+                disabled={arMatchesLoading}
+                className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2 ml-2"
+              >
+                <RefreshCw className={`h-3 w-3 ${arMatchesLoading ? "animate-spin" : ""}`} />
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setArMatchFilter("all")}
-              className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "all" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setArMatchFilter("pending")}
-              className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "pending" ? "bg-amber-500/20 text-amber-400" : "text-zinc-500 hover:text-zinc-300"}`}
-            >
-              Pending
-            </button>
-            <button
-              onClick={() => setArMatchFilter("confirmed")}
-              className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "confirmed" ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-500 hover:text-zinc-300"}`}
-            >
-              Confirmed
-            </button>
-            <Button
-              size="sm"
-              onClick={fetchArMatches}
-              disabled={arMatchesLoading}
-              className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2 ml-2"
-            >
-              <RefreshCw className={`h-3 w-3 ${arMatchesLoading ? "animate-spin" : ""}`} />
-            </Button>
+          {/* Summary Stats */}
+          <div className="grid grid-cols-4 gap-3">
+            <div className="bg-[#0A0A0A] border border-white/5 rounded px-3 py-2">
+              <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total Matched</p>
+              <p className="text-lg font-bold font-mono tabular-nums text-white">{formatCurrency(arMatchesSummary.total_amount)}</p>
+              <p className="text-[10px] text-zinc-500">{arMatchesSummary.total} transactions</p>
+            </div>
+            <div className="bg-[#0A0A0A] border border-emerald-500/20 rounded px-3 py-2">
+              <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Confirmed</p>
+              <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(arMatchesSummary.confirmed_amount)}</p>
+              <p className="text-[10px] text-zinc-500">{arMatchesSummary.confirmed} transactions</p>
+            </div>
+            <div className="bg-[#0A0A0A] border border-amber-500/20 rounded px-3 py-2">
+              <p className="text-[9px] text-amber-400 uppercase tracking-wider">Pending Review</p>
+              <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(arMatchesSummary.pending_amount)}</p>
+              <p className="text-[10px] text-zinc-500">{arMatchesSummary.pending} transactions</p>
+            </div>
+            <div className="bg-[#0A0A0A] border border-red-500/20 rounded px-3 py-2">
+              <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched</p>
+              <p className="text-lg font-bold font-mono tabular-nums text-red-400">{formatCurrency(arMatchesSummary.unmatched_amount)}</p>
+              <p className="text-[10px] text-zinc-500">{arMatchesSummary.unmatched_count} transactions</p>
+            </div>
           </div>
         </div>
         
