@@ -31,6 +31,37 @@ interface ARMatch {
   created_at: string
 }
 
+interface InvoiceWithMatch {
+  invoice_id: string
+  cash_event_id: string
+  customer_name: string
+  invoice_number: string | null
+  invoice_amount: number
+  outstanding_amount: number
+  invoice_date: string | null
+  due_date: string | null
+  invoice_status: string
+  is_matched: boolean
+  match_id: string | null
+  bank_amount: number | null
+  bank_date: string | null
+  bank_counterparty: string | null
+  bank_description: string | null
+  match_type: string | null
+  confidence: number | null
+  match_status: string | null
+}
+
+interface InvoiceSummary {
+  total_invoices: number
+  matched_count: number
+  unmatched_count: number
+  total_invoice_amount: number
+  matched_amount: number
+  unmatched_amount: number
+  outstanding_amount: number
+}
+
 interface ClassifiedMovement {
   id: string
   date: string
@@ -148,6 +179,16 @@ export default function ReconciliationCandidatesPage() {
   }>({ total: 0, pending: 0, confirmed: 0, total_amount: 0, confirmed_amount: 0, pending_amount: 0, unmatched_count: 0, unmatched_amount: 0 })
   const [arMatchesLoading, setArMatchesLoading] = useState(false)
   const [arMatchFilter, setArMatchFilter] = useState<"all" | "pending" | "confirmed">("all")
+  
+  // Invoice View state
+  const [invoices, setInvoices] = useState<InvoiceWithMatch[]>([])
+  const [invoiceSummary, setInvoiceSummary] = useState<InvoiceSummary>({
+    total_invoices: 0, matched_count: 0, unmatched_count: 0,
+    total_invoice_amount: 0, matched_amount: 0, unmatched_amount: 0, outstanding_amount: 0
+  })
+  const [invoicesLoading, setInvoicesLoading] = useState(false)
+  const [invoiceFilter, setInvoiceFilter] = useState<"all" | "matched" | "unmatched">("all")
+  const [activeView, setActiveView] = useState<"bank" | "invoice">("bank")
 
   const fetchData = useCallback(async () => {
     try {
@@ -198,6 +239,32 @@ export default function ReconciliationCandidatesPage() {
   useEffect(() => {
     fetchArMatches()
   }, [fetchArMatches])
+
+  // Fetch invoices with match status
+  const fetchInvoices = useCallback(async () => {
+    try {
+      setInvoicesLoading(true)
+      const params = new URLSearchParams()
+      if (invoiceFilter !== "all") params.append("filter", invoiceFilter)
+      params.append("limit", "1000")
+      
+      const res = await fetch(`/api/ar-reconciliation/invoices?${params.toString()}`)
+      if (!res.ok) throw new Error("Failed to fetch invoices")
+      const json = await res.json()
+      setInvoices(json.invoices || [])
+      if (json.summary) {
+        setInvoiceSummary(json.summary)
+      }
+    } catch (err) {
+      console.error("Failed to fetch invoices:", err)
+    } finally {
+      setInvoicesLoading(false)
+    }
+  }, [invoiceFilter])
+
+  useEffect(() => {
+    fetchInvoices()
+  }, [fetchInvoices])
 
   const handleSelectMovement = (movement: ClassifiedMovement) => {
     setSelectedMovement(movement)
@@ -708,132 +775,313 @@ export default function ReconciliationCandidatesPage() {
       {/* AR Matches Section - Persisted matches from database */}
       <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-white/10">
+          {/* View Toggle */}
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
-              <h2 className="text-[13px] font-semibold text-white">AR Matches</h2>
-              <span className="text-[11px] text-zinc-500">({arMatchesSummary.total} total)</span>
+              <h2 className="text-[13px] font-semibold text-white">AR Reconciliation</h2>
+              <div className="flex items-center bg-[#0A0A0A] rounded-lg p-0.5">
+                <button
+                  onClick={() => setActiveView("bank")}
+                  className={`px-3 py-1 text-[10px] rounded-md transition-colors ${activeView === "bank" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                >
+                  Bank → Invoice
+                </button>
+                <button
+                  onClick={() => setActiveView("invoice")}
+                  className={`px-3 py-1 text-[10px] rounded-md transition-colors ${activeView === "invoice" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                >
+                  Invoice → Bank
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setArMatchFilter("all")}
-                className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "all" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
-              >
-                All ({arMatchesSummary.total})
-              </button>
-              <button
-                onClick={() => setArMatchFilter("pending")}
-                className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "pending" ? "bg-amber-500/20 text-amber-400" : "text-zinc-500 hover:text-zinc-300"}`}
-              >
-                Pending ({arMatchesSummary.pending})
-              </button>
-              <button
-                onClick={() => setArMatchFilter("confirmed")}
-                className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "confirmed" ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-500 hover:text-zinc-300"}`}
-              >
-                Confirmed ({arMatchesSummary.confirmed})
-              </button>
-              <Button
-                size="sm"
-                onClick={fetchArMatches}
-                disabled={arMatchesLoading}
-                className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2 ml-2"
-              >
-                <RefreshCw className={`h-3 w-3 ${arMatchesLoading ? "animate-spin" : ""}`} />
-              </Button>
+              {activeView === "bank" ? (
+                <>
+                  <button
+                    onClick={() => setArMatchFilter("all")}
+                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "all" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                  >
+                    All ({arMatchesSummary.total})
+                  </button>
+                  <button
+                    onClick={() => setArMatchFilter("pending")}
+                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "pending" ? "bg-amber-500/20 text-amber-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                  >
+                    Pending ({arMatchesSummary.pending})
+                  </button>
+                  <button
+                    onClick={() => setArMatchFilter("confirmed")}
+                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "confirmed" ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                  >
+                    Confirmed ({arMatchesSummary.confirmed})
+                  </button>
+                  <Button
+                    size="sm"
+                    onClick={fetchArMatches}
+                    disabled={arMatchesLoading}
+                    className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2 ml-2"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${arMatchesLoading ? "animate-spin" : ""}`} />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setInvoiceFilter("all")}
+                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "all" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                  >
+                    All ({invoiceSummary.total_invoices})
+                  </button>
+                  <button
+                    onClick={() => setInvoiceFilter("matched")}
+                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "matched" ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                  >
+                    Matched ({invoiceSummary.matched_count})
+                  </button>
+                  <button
+                    onClick={() => setInvoiceFilter("unmatched")}
+                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "unmatched" ? "bg-red-500/20 text-red-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                  >
+                    Unmatched ({invoiceSummary.unmatched_count})
+                  </button>
+                  <Button
+                    size="sm"
+                    onClick={fetchInvoices}
+                    disabled={invoicesLoading}
+                    className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2 ml-2"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${invoicesLoading ? "animate-spin" : ""}`} />
+                  </Button>
+                </>
+              )}
             </div>
           </div>
-          {/* Summary Stats */}
-          <div className="grid grid-cols-4 gap-3">
-            <div className="bg-[#0A0A0A] border border-white/5 rounded px-3 py-2">
-              <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total Matched</p>
-              <p className="text-lg font-bold font-mono tabular-nums text-white">{formatCurrency(arMatchesSummary.total_amount)}</p>
-              <p className="text-[10px] text-zinc-500">{arMatchesSummary.total} transactions</p>
+          
+          {/* Summary Stats - Bank View */}
+          {activeView === "bank" && (
+            <div className="grid grid-cols-4 gap-3">
+              <div className="bg-[#0A0A0A] border border-white/5 rounded px-3 py-2">
+                <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total Matched</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-white">{formatCurrency(arMatchesSummary.total_amount)}</p>
+                <p className="text-[10px] text-zinc-500">{arMatchesSummary.total} transactions</p>
+              </div>
+              <div className="bg-[#0A0A0A] border border-emerald-500/20 rounded px-3 py-2">
+                <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Confirmed</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(arMatchesSummary.confirmed_amount)}</p>
+                <p className="text-[10px] text-zinc-500">{arMatchesSummary.confirmed} transactions</p>
+              </div>
+              <div className="bg-[#0A0A0A] border border-amber-500/20 rounded px-3 py-2">
+                <p className="text-[9px] text-amber-400 uppercase tracking-wider">Pending Review</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(arMatchesSummary.pending_amount)}</p>
+                <p className="text-[10px] text-zinc-500">{arMatchesSummary.pending} transactions</p>
+              </div>
+              <div className="bg-[#0A0A0A] border border-red-500/20 rounded px-3 py-2">
+                <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched Bank</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-red-400">{formatCurrency(arMatchesSummary.unmatched_amount)}</p>
+                <p className="text-[10px] text-zinc-500">{arMatchesSummary.unmatched_count} transactions</p>
+              </div>
             </div>
-            <div className="bg-[#0A0A0A] border border-emerald-500/20 rounded px-3 py-2">
-              <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Confirmed</p>
-              <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(arMatchesSummary.confirmed_amount)}</p>
-              <p className="text-[10px] text-zinc-500">{arMatchesSummary.confirmed} transactions</p>
+          )}
+          
+          {/* Summary Stats - Invoice View */}
+          {activeView === "invoice" && (
+            <div className="grid grid-cols-4 gap-3">
+              <div className="bg-[#0A0A0A] border border-white/5 rounded px-3 py-2">
+                <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total Invoices</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-white">{formatCurrency(invoiceSummary.total_invoice_amount)}</p>
+                <p className="text-[10px] text-zinc-500">{invoiceSummary.total_invoices} invoices</p>
+              </div>
+              <div className="bg-[#0A0A0A] border border-emerald-500/20 rounded px-3 py-2">
+                <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Matched</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(invoiceSummary.matched_amount)}</p>
+                <p className="text-[10px] text-zinc-500">{invoiceSummary.matched_count} invoices</p>
+              </div>
+              <div className="bg-[#0A0A0A] border border-red-500/20 rounded px-3 py-2">
+                <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-red-400">{formatCurrency(invoiceSummary.unmatched_amount)}</p>
+                <p className="text-[10px] text-zinc-500">{invoiceSummary.unmatched_count} invoices</p>
+              </div>
+              <div className="bg-[#0A0A0A] border border-amber-500/20 rounded px-3 py-2">
+                <p className="text-[9px] text-amber-400 uppercase tracking-wider">Outstanding</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(invoiceSummary.outstanding_amount)}</p>
+                <p className="text-[10px] text-zinc-500">remaining balance</p>
+              </div>
             </div>
-            <div className="bg-[#0A0A0A] border border-amber-500/20 rounded px-3 py-2">
-              <p className="text-[9px] text-amber-400 uppercase tracking-wider">Pending Review</p>
-              <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(arMatchesSummary.pending_amount)}</p>
-              <p className="text-[10px] text-zinc-500">{arMatchesSummary.pending} transactions</p>
-            </div>
-            <div className="bg-[#0A0A0A] border border-red-500/20 rounded px-3 py-2">
-              <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched</p>
-              <p className="text-lg font-bold font-mono tabular-nums text-red-400">{formatCurrency(arMatchesSummary.unmatched_amount)}</p>
-              <p className="text-[10px] text-zinc-500">{arMatchesSummary.unmatched_count} transactions</p>
-            </div>
-          </div>
+          )}
         </div>
         
-        {arMatchesLoading ? (
-          <div className="p-8 text-center">
-            <p className="text-zinc-500 text-sm">Loading matches...</p>
-          </div>
-        ) : arMatches.length === 0 ? (
-          <div className="p-8 text-center">
-            <p className="text-zinc-500 text-sm">No AR matches found. Run AI Match to create matches.</p>
-          </div>
-        ) : (
-          <div className="max-h-[400px] overflow-y-auto">
-            <table className="w-full">
-              <thead className="sticky top-0 bg-[#141414]">
-                <tr className="border-b border-white/10">
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Transaction</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Date</th>
-                  <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Amount</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice</th>
-                  <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice Amount</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Match Type</th>
-                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Confidence</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {arMatches.map((match) => (
-                  <tr key={match.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
-                    <td className="px-3 py-2">
-                      <p className="text-[12px] text-white truncate max-w-[200px]">{match.bank_counterparty || "Unknown"}</p>
-                      <p className="text-[10px] text-zinc-600 truncate max-w-[200px]">{match.bank_description || ""}</p>
-                    </td>
-                    <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(match.bank_date)}</td>
-                    <td className="px-3 py-2 text-right">
-                      <span className="text-[12px] font-mono tabular-nums font-semibold text-emerald-400">
-                        +{formatCurrency(match.bank_amount)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <p className="text-[12px] text-white">#{match.invoice_id}</p>
-                      <p className="text-[10px] text-zinc-500">{match.customer_name}</p>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <span className="text-[12px] font-mono tabular-nums text-zinc-300">
-                        {formatCurrency(match.invoice_amount)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <Badge className={`text-[9px] px-1.5 py-0 ${getMatchTypeColor(match.match_type)}`}>
-                        {match.match_type}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <span className="text-[11px] font-mono text-zinc-400">{Math.round(match.confidence * 100)}%</span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <Badge className={`text-[9px] px-1.5 py-0 ${
-                        match.status === "confirmed" ? "bg-emerald-500/10 text-emerald-400" :
-                        match.status === "pending" ? "bg-amber-500/10 text-amber-400" :
-                        "bg-zinc-500/10 text-zinc-400"
-                      }`}>
-                        {match.status}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {/* Bank View Table */}
+        {activeView === "bank" && (
+          <>
+            {arMatchesLoading ? (
+              <div className="p-8 text-center">
+                <p className="text-zinc-500 text-sm">Loading matches...</p>
+              </div>
+            ) : arMatches.length === 0 ? (
+              <div className="p-8 text-center">
+                <p className="text-zinc-500 text-sm">No AR matches found. Run AI Match to create matches.</p>
+              </div>
+            ) : (
+              <div className="max-h-[400px] overflow-y-auto">
+                <table className="w-full">
+                  <thead className="sticky top-0 bg-[#141414]">
+                    <tr className="border-b border-white/10">
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Transaction</th>
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Date</th>
+                      <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Amount</th>
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice</th>
+                      <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice Amount</th>
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Match Type</th>
+                      <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Confidence</th>
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {arMatches.map((match) => (
+                      <tr key={match.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
+                        <td className="px-3 py-2">
+                          <p className="text-[12px] text-white truncate max-w-[200px]">{match.bank_counterparty || "Unknown"}</p>
+                          <p className="text-[10px] text-zinc-600 truncate max-w-[200px]">{match.bank_description || ""}</p>
+                        </td>
+                        <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(match.bank_date)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <span className="text-[12px] font-mono tabular-nums font-semibold text-emerald-400">
+                            +{formatCurrency(match.bank_amount)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <p className="text-[12px] text-white">#{match.invoice_id}</p>
+                          <p className="text-[10px] text-zinc-500">{match.customer_name}</p>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <span className="text-[12px] font-mono tabular-nums text-zinc-300">
+                            {formatCurrency(match.invoice_amount)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <Badge className={`text-[9px] px-1.5 py-0 ${getMatchTypeColor(match.match_type)}`}>
+                            {match.match_type}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <span className="text-[11px] font-mono text-zinc-400">{Math.round(match.confidence * 100)}%</span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <Badge className={`text-[9px] px-1.5 py-0 ${
+                            match.status === "confirmed" ? "bg-emerald-500/10 text-emerald-400" :
+                            match.status === "pending" ? "bg-amber-500/10 text-amber-400" :
+                            "bg-zinc-500/10 text-zinc-400"
+                          }`}>
+                            {match.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Invoice View Table */}
+        {activeView === "invoice" && (
+          <>
+            {invoicesLoading ? (
+              <div className="p-8 text-center">
+                <p className="text-zinc-500 text-sm">Loading invoices...</p>
+              </div>
+            ) : invoices.length === 0 ? (
+              <div className="p-8 text-center">
+                <p className="text-zinc-500 text-sm">No invoices found.</p>
+              </div>
+            ) : (
+              <div className="max-h-[400px] overflow-y-auto">
+                <table className="w-full">
+                  <thead className="sticky top-0 bg-[#141414]">
+                    <tr className="border-b border-white/10">
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice</th>
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Customer</th>
+                      <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice Amount</th>
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Payment</th>
+                      <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Amount</th>
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Match Type</th>
+                      <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Confidence</th>
+                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoices.map((invoice) => (
+                      <tr key={invoice.cash_event_id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
+                        <td className="px-3 py-2">
+                          <p className="text-[12px] text-white">#{invoice.invoice_number || invoice.cash_event_id.slice(0, 8)}</p>
+                          <p className="text-[10px] text-zinc-600">{invoice.due_date ? formatDate(invoice.due_date) : "No due date"}</p>
+                        </td>
+                        <td className="px-3 py-2">
+                          <p className="text-[12px] text-white truncate max-w-[180px]">{invoice.customer_name}</p>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <span className="text-[12px] font-mono tabular-nums text-zinc-300">
+                            {formatCurrency(invoice.invoice_amount)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          {invoice.is_matched ? (
+                            <>
+                              <p className="text-[12px] text-white truncate max-w-[180px]">{invoice.bank_counterparty || "Bank deposit"}</p>
+                              <p className="text-[10px] text-zinc-600">{invoice.bank_date ? formatDate(invoice.bank_date) : ""}</p>
+                            </>
+                          ) : (
+                            <span className="text-[11px] text-zinc-600 italic">No payment matched</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {invoice.is_matched && invoice.bank_amount ? (
+                            <span className="text-[12px] font-mono tabular-nums font-semibold text-emerald-400">
+                              +{formatCurrency(invoice.bank_amount)}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-zinc-600">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {invoice.is_matched && invoice.match_type ? (
+                            <Badge className={`text-[9px] px-1.5 py-0 ${getMatchTypeColor(invoice.match_type)}`}>
+                              {invoice.match_type}
+                            </Badge>
+                          ) : (
+                            <span className="text-[11px] text-zinc-600">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          {invoice.is_matched && invoice.confidence ? (
+                            <span className="text-[11px] font-mono text-zinc-400">{Math.round(invoice.confidence * 100)}%</span>
+                          ) : (
+                            <span className="text-[11px] text-zinc-600">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {invoice.is_matched ? (
+                            <Badge className={`text-[9px] px-1.5 py-0 ${
+                              invoice.match_status === "confirmed" ? "bg-emerald-500/10 text-emerald-400" :
+                              invoice.match_status === "pending" ? "bg-amber-500/10 text-amber-400" :
+                              "bg-zinc-500/10 text-zinc-400"
+                            }`}>
+                              {invoice.match_status || "matched"}
+                            </Badge>
+                          ) : (
+                            <Badge className="text-[9px] px-1.5 py-0 bg-red-500/10 text-red-400">
+                              unmatched
+                            </Badge>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </div>
 
