@@ -7,7 +7,7 @@
 
 const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
 const API_KEY = process.env.OPENAI_API_KEY
-const MODEL = "gpt-5.4-nano"
+const MODEL = "gpt-4o-mini"
 
 interface CustomerMatchResult {
   movement_id: string
@@ -124,10 +124,12 @@ Return JSON in the format specified above.`
 
   if (!response.ok) {
     const error = await response.text()
+    console.error("[Customer Matcher] LLM API error:", response.status, error)
     throw new Error(`LLM API error: ${response.status} - ${error}`)
   }
 
   const data = await response.json()
+  console.log("[Customer Matcher] Full API response:", JSON.stringify(data).substring(0, 1000))
   const content = data.choices?.[0]?.message?.content || "{}"
   
   console.log("[Customer Matcher] LLM response:", content.substring(0, 500))
