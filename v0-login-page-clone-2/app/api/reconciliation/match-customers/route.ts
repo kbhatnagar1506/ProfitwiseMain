@@ -12,14 +12,14 @@ export async function POST(request: NextRequest) {
 
     const userId = session.id
 
-    // Create job status record
+    // Create job status record (use 'tagging' step which is valid in the constraint)
     const jobId = `manual-${Date.now()}`
     await query(
       `INSERT INTO job_status (job_id, user_id, status, step, progress, created_at, updated_at)
-       VALUES ($1, $2, 'processing', 'matching-customers', 0, NOW(), NOW())
+       VALUES ($1, $2, 'processing', 'tagging', 0, NOW(), NOW())
        ON CONFLICT (job_id) DO UPDATE SET
          status = 'processing',
-         step = 'matching-customers',
+         step = 'tagging',
          progress = 0,
          updated_at = NOW()`,
       [jobId, userId]
@@ -129,11 +129,11 @@ export async function GET(request: NextRequest) {
 
     const userId = session.id
 
-    // Get latest job status
+    // Get latest job status (match by job_id pattern for manual customer matching jobs)
     const { rows } = await query(
       `SELECT job_id, status, step, progress, error, created_at, updated_at
        FROM job_status
-       WHERE user_id = $1 AND step = 'matching-customers'
+       WHERE user_id = $1 AND job_id LIKE 'manual-%'
        ORDER BY created_at DESC
        LIMIT 1`,
       [userId]
