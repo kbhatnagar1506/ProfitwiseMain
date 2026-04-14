@@ -4,6 +4,7 @@ import { QueueLogger } from '../queue-logger'
 import { query } from '../../db'
 import { log } from '../../logger'
 import { tagMovements } from '../../movement-tag-enrich'
+import { queues } from '../bull-client'
 
 const QUEUE_NAME = 'tag-movements'
 const SLOW_JOB_THRESHOLD = 30000 // 30 seconds
@@ -30,21 +31,38 @@ export async function processTagMovements(job: Job<TagMovementsJob>) {
     QueueLogger.logJobProgress(job, QUEUE_NAME, 'tagging', 100)
     await updateJobStatus(job.id, userId, 'processing', 'tagging', 100)
 
-    // Queue next job: compute-state
-    const computeJob = await job.queue.add(
-      'compute-state',
-      { userId },
-      {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 2000 },
-        removeOnComplete: true,
-      }
-    )
+    // Queue next jobs in parallel:
+    // 1. compute-state (existing)
+    // 2. match-customers (NEW - for AR reconciliation)
+    const [computeJob, matchCustomersJob] = await Promise.all([
+      job.queue.add(
+        'compute-state',
+        { userId },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: true,
+        }
+      ),
+      queues.matchCustomers.add(
+        { userId },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: true,
+        }
+      )
+    ])
 
     QueueLogger.logJobComplete(job, QUEUE_NAME, Date.now() - startTime)
     QueueLogger.logSlowJob(job, QUEUE_NAME, Date.now() - startTime, SLOW_JOB_THRESHOLD)
 
-    return { jobId: job.id, nextJobId: computeJob.id, status: 'queued' }
+    return { 
+      jobId: job.id, 
+      nextJobId: computeJob.id, 
+      matchCustomersJobId: matchCustomersJob.id,
+      status: 'queued' 
+    }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     log('tag.error', { userId, jobId: job.id, error: errorMessage }, 'queue')

@@ -79,47 +79,17 @@ async function loadOpenCashEvents(userId: string): Promise<CashEventRow[]> {
 }
 
 async function loadCustomerMatches(userId: string): Promise<Map<string, string | null>> {
-  try {
-    const result = await query(
-      `SELECT movement_id, matched_customer
-       FROM movement_customer_matches
-       WHERE user_id = $1`,
-      [userId]
-    )
-    const matches = new Map<string, string | null>()
-    for (const row of result.rows) {
-      matches.set(row.movement_id, row.matched_customer)
-    }
-    return matches
-  } catch (error) {
-    // Table might not exist yet, create it and return empty map
-    const errorMsg = error instanceof Error ? error.message : String(error)
-    if (errorMsg.includes("does not exist") || errorMsg.includes("42P01")) {
-      console.log("[reconciliation-candidates] Table doesn't exist, creating it...")
-      try {
-        await query(`
-          CREATE TABLE IF NOT EXISTS movement_customer_matches (
-            movement_id VARCHAR(255) PRIMARY KEY,
-            user_id VARCHAR(255) NOT NULL,
-            matched_customer VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP NOT NULL DEFAULT NOW()
-          )
-        `)
-        await query(`
-          CREATE INDEX IF NOT EXISTS idx_customer_matches_user_id ON movement_customer_matches(user_id)
-        `)
-        await query(`
-          CREATE INDEX IF NOT EXISTS idx_customer_matches_created_at ON movement_customer_matches(created_at DESC)
-        `)
-        console.log("[reconciliation-candidates] Table created successfully")
-        return new Map()
-      } catch (createError) {
-        console.error("[reconciliation-candidates] Failed to create table:", createError)
-        return new Map()
-      }
-    }
-    throw error
+  const result = await query(
+    `SELECT movement_id, matched_customer
+     FROM movement_customer_matches
+     WHERE user_id = $1`,
+    [userId]
+  )
+  const matches = new Map<string, string | null>()
+  for (const row of result.rows) {
+    matches.set(row.movement_id, row.matched_customer)
   }
+  return matches
 }
 
 interface ClassifiedMovement {
