@@ -26,3 +26,19 @@ export async function addSyncInitialDataJob(userId: string) {
   )
   return job
 }
+
+export async function addMatchCustomersJob(userId: string) {
+  const queues = await getQueues()
+  const job = await queues.matchCustomers.add(
+    { userId },
+    {
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+      removeOnComplete: true,
+    }
+  )
+  return job
+}
