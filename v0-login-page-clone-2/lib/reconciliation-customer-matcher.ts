@@ -130,16 +130,39 @@ Return JSON in the format specified above.`
   const data = await response.json()
   const content = data.choices?.[0]?.message?.content || "{}"
   
+  console.log("[Customer Matcher] LLM response:", content.substring(0, 500))
+  
   try {
-    const parsed = JSON.parse(content) as LLMResponse
-    return parsed.matches.map(m => ({
-      movement_id: m.movement_id,
-      counterparty: movements.find(mov => mov.id === m.movement_id)?.counterparty ?? null,
-      matched_customer: m.customer,
-      confidence: m.confidence
+    const parsed = JSON.parse(content)
+    
+    // Handle various response formats
+    const matches = parsed.matches || parsed.results || parsed.data || []
+    
+    if (!Array.isArray(matches)) {
+      console.error("[Customer Matcher] Invalid response format - matches is not an array:", typeof matches)
+      // Return null matches for all movements
+      return movements.map(m => ({
+        movement_id: m.id,
+        counterparty: m.counterparty,
+        matched_customer: null,
+        confidence: 0
+      }))
+    }
+    
+    return matches.map((m: { movement_id?: string; id?: string; customer?: string | null; matched_customer?: string | null; confidence?: number }) => ({
+      movement_id: m.movement_id || m.id || "",
+      counterparty: movements.find(mov => mov.id === (m.movement_id || m.id))?.counterparty ?? null,
+      matched_customer: m.customer ?? m.matched_customer ?? null,
+      confidence: m.confidence ?? 0
     }))
   } catch (error) {
-    console.error("[Customer Matcher] Failed to parse LLM response:", error)
-    throw new Error("Failed to parse customer matcher response")
+    console.error("[Customer Matcher] Failed to parse LLM response:", error, "Content:", content.substring(0, 200))
+    // Return null matches for all movements instead of throwing
+    return movements.map(m => ({
+      movement_id: m.id,
+      counterparty: m.counterparty,
+      matched_customer: null,
+      confidence: 0
+    }))
   }
 }
