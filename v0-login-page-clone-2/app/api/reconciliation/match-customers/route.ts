@@ -11,22 +11,9 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = session.id
-
-    // Create job status record (use 'tagging' step which is valid in the constraint)
-    const jobId = `manual-${Date.now()}`
-    await query(
-      `INSERT INTO job_status (job_id, user_id, status, step, progress, created_at, updated_at)
-       VALUES ($1, $2, 'processing', 'tagging', 0, NOW(), NOW())
-       ON CONFLICT (job_id) DO UPDATE SET
-         status = 'processing',
-         step = 'tagging',
-         progress = 0,
-         updated_at = NOW()`,
-      [jobId, userId]
-    )
+    const jobId = `match-${Date.now()}`
 
     // Run customer matching directly (non-blocking response)
-    // Start the matching in background
     runCustomerMatching(userId, jobId).catch(err => {
       console.error('[match-customers] Background job failed:', err)
     })
@@ -74,10 +61,7 @@ async function runCustomerMatching(userId: string, jobId: string) {
     console.log(`[match-customers] Processing ${movements.length} movements with ${knownCustomers.length} known customers`)
 
     if (movements.length === 0 || knownCustomers.length === 0) {
-      await query(
-        `UPDATE job_status SET status = 'complete', progress = 100, updated_at = NOW() WHERE job_id = $1`,
-        [jobId]
-      )
+      console.log(`[match-customers] Skipping: no movements or customers`)
       return
     }
 
@@ -103,20 +87,9 @@ async function runCustomerMatching(userId: string, jobId: string) {
       }
     }
 
-    console.log(`[match-customers] Stored ${storedCount} customer matches`)
-
-    // Update job status
-    await query(
-      `UPDATE job_status SET status = 'complete', progress = 100, updated_at = NOW() WHERE job_id = $1`,
-      [jobId]
-    )
+    console.log(`[match-customers] Complete: stored ${storedCount} customer matches`)
   } catch (error) {
     console.error('[match-customers] Job failed:', error)
-    const errorMsg = error instanceof Error ? error.message : String(error)
-    await query(
-      `UPDATE job_status SET status = 'failed', error = $2, updated_at = NOW() WHERE job_id = $1`,
-      [jobId, errorMsg]
-    )
   }
 }
 
@@ -129,45 +102,22 @@ export async function GET(request: NextRequest) {
 
     const userId = session.id
 
-    // Get latest job status (match by job_id pattern for manual customer matching jobs)
-    const { rows } = await query(
-      `SELECT job_id, status, step, progress, error, created_at, updated_at
-       FROM job_status
-       WHERE user_id = $1 AND job_id LIKE 'manual-%'
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [userId]
-    )
-
-    if (rows.length === 0) {
-      return NextResponse.json({
-        status: 'none',
-        message: 'No customer matching job found',
-      })
-    }
-
-    const job = rows[0]
-
-    // Get match count
+    // Get match count directly from the table
     const { rows: matchRows } = await query(
       `SELECT COUNT(*) as count FROM movement_customer_matches WHERE user_id = $1`,
       [userId]
     )
 
+    const matchCount = parseInt(matchRows[0]?.count || '0')
+
     return NextResponse.json({
-      jobId: job.job_id,
-      status: job.status,
-      step: job.step,
-      progress: job.progress,
-      error: job.error,
-      matchCount: parseInt(matchRows[0]?.count || '0'),
-      createdAt: job.created_at,
-      updatedAt: job.updated_at,
+      status: 'complete',
+      matchCount,
     })
   } catch (error) {
     console.error('[match-customers] Error:', error)
     return NextResponse.json(
-      { error: 'Failed to get job status' },
+      { error: 'Failed to get match status' },
       { status: 500 }
     )
   }
