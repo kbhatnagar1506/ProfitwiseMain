@@ -46,10 +46,11 @@ export async function matchCustomersWithLLM(
 
   const resultMap = new Map<string, string | null>()
 
-  // Batch movements (50 per call to keep tokens reasonable)
-  const batchSize = 50
+  // Batch movements (20 per call to avoid response truncation)
+  const batchSize = 20
   for (let i = 0; i < movements.length; i += batchSize) {
     const batch = movements.slice(i, i + batchSize)
+    console.log(`[Customer Matcher] Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(movements.length / batchSize)} (${batch.length} movements)`)
     
     try {
       const batchResults = await matchBatchWithLLM(batch, knownCustomers)
