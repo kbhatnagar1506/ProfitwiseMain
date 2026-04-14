@@ -168,6 +168,7 @@ export default function ReconciliationCandidatesPage() {
       setArMatchesLoading(true)
       const params = new URLSearchParams()
       if (arMatchFilter !== "all") params.append("status", arMatchFilter)
+      params.append("limit", "1000") // Load all matches
       
       const res = await fetch(`/api/ar-reconciliation/matches?${params.toString()}`)
       if (!res.ok) throw new Error("Failed to fetch AR matches")
