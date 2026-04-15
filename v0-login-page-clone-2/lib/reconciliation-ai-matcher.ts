@@ -367,7 +367,7 @@ async function matchMovementsWithCandidates(
         description: m.raw_description || "",
         amount: Math.abs(m.amount),
         type: m.direction === "inflow" ? "RECEIVED (AR)" : "PAID (AP)",
-        date: m.date
+        payment_date: m.date  // RENAMED: clearly labeled as payment date
       },
       case_type: m.classification.case_type,
       flags: Object.entries(m.classification.flags)
@@ -382,12 +382,12 @@ async function matchMovementsWithCandidates(
         diff: c.amount_diff,
         diff_pct: c.amount !== 0 ? ((c.amount_diff / c.amount) * 100).toFixed(1) + "%" : "N/A",
         match_type: c.match_type,
-        due_date: c.due_date,
+        invoice_date: c.due_date,  // RENAMED: clearly labeled as invoice date
         is_direct_link: c.is_direct_link,
         reference_match: c.reference_match,
         fee_implied: c.fee_implied,
-        is_customer_match: c.is_customer_match ?? false,  // NEW: matched via customer name
-        is_amount_match: c.is_amount_match ?? false,      // NEW: matched via amount tolerance
+        is_customer_match: c.is_customer_match ?? false,
+        is_amount_match: c.is_amount_match ?? false,
       }))
     }
   })
@@ -405,7 +405,27 @@ Example: Customer "John Smith" has two $500 invoices (INV-001, INV-002)
 - Payment 2: $500 from "John Smith" → Match to INV-002 (NOT INV-001 again!)
 - Payment 3: $500 from "John Smith" → No match (both invoices already used)
 
-## CANDIDATE SOURCES (NEW)
+## DATE FIELDS EXPLAINED
+- **payment_date**: When the bank received the payment (from bank statement)
+- **invoice_date**: When the invoice was due/issued (from accounting system)
+
+## FIFO (First-In-First-Out) MATCHING RULE
+When a customer has MULTIPLE invoices of the SAME amount, ALWAYS match to the OLDEST invoice first:
+- Sort candidate invoices by invoice_date (oldest first)
+- Match payment to the oldest unpaid invoice
+- Example: Customer has invoices from Jan 1 ($500), Feb 1 ($500), Mar 1 ($500)
+  - First $500 payment → Match to Jan 1 invoice
+  - Second $500 payment → Match to Feb 1 invoice
+  - Third $500 payment → Match to Mar 1 invoice
+
+## AGGREGATION RULE (Multiple Invoices → One Payment)
+When a single payment covers MULTIPLE invoices:
+- Sum of invoice amounts should approximately equal payment amount (within 5% for fees)
+- All invoices should be from the SAME customer
+- Return ALL invoice IDs in matched_candidate_ids array
+- Example: Payment $1,500 from "John Smith" matches invoices $500 + $500 + $500 = $1,500
+
+## CANDIDATE SOURCES
 Candidates are categorized by how they were matched:
 - **is_amount_match=true**: Payment amount is within 20% of invoice (amount-based matching)
 - **is_customer_match=true**: Invoice customer name matches bank counterparty (customer-based matching)
@@ -422,7 +442,7 @@ Candidates are categorized by how they were matched:
 - **is_direct_link**: true if invoice ID was found in bank description
 - **reference_match**: true if reference number matches
 - **fee_implied**: Payment processor fee (Stripe, Square, PayPal deducted this)
-- **due_date**: Invoice due date
+- **invoice_date**: Invoice due/issue date (use for FIFO ordering)
 - **is_customer_match**: true if invoice customer matches bank counterparty
 - **is_amount_match**: true if payment amount is within 20% of invoice
 
@@ -433,9 +453,11 @@ Candidates are categorized by how they were matched:
 
 2. **BOTH MATCH** (is_customer_match=true AND is_amount_match=true): Customer + amount both match
    → Highest confidence (0.95+) - this is the gold standard
+   → If multiple invoices match, use FIFO (oldest invoice_date first)
 
 3. **EXACT MATCH**: Payment = Invoice amount (diff ≈ 0)
    → High confidence if customer names are similar
+   → Use FIFO for same-amount invoices
 
 4. **FEE-ADJUSTED MATCH**: Payment = Invoice - processor fee (0-5%)
    → Common: Stripe/Square/PayPal deduct fees before deposit
@@ -451,9 +473,13 @@ Candidates are categorized by how they were matched:
 
 6. **PARTIAL PAYMENT**: Payment < Invoice amount
    → Only match if customer names match clearly
+   → Set match_type to "PARTIAL" in response
 
 7. **AGGREGATION**: Single payment covers multiple invoices
+   → Sum of invoices ≈ payment amount (within 5% for fees)
+   → All invoices must be from same customer
    → Return multiple invoice IDs in matched_candidate_ids
+   → Use FIFO: include oldest invoices first until sum matches payment
 
 ## CONFIDENCE SCORING
 - 0.95-1.00: Direct link OR (exact amount + exact customer name) OR (both match flags true)
@@ -469,9 +495,10 @@ Return JSON with decisions array. Each decision:
   "movement_id": "exact ID from input",
   "decision": "match" | "no_match" | "needs_review",
   "matched_candidate_id": "invoice ID or null",
-  "matched_candidate_ids": ["id1", "id2"] // for aggregation only
+  "matched_candidate_ids": ["id1", "id2"], // for aggregation only, FIFO order
+  "match_type": "EXACT" | "FEE" | "PARTIAL" | "AGGREGATION",
   "confidence": 0.0-1.0,
-  "reasoning": "Brief: [customer match] + [amount match]"
+  "reasoning": "Brief: [customer match] + [amount match] + [FIFO if applicable]"
 }
 
 ${entityContext ? `\n## KNOWN CUSTOMERS (from memory)\n${entityContext}` : ""}`
