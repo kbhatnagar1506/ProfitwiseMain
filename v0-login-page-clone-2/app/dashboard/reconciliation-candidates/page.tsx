@@ -54,25 +54,24 @@ interface InvoiceWithMatch {
 }
 
 interface InvoiceSummary {
-  // Totals
+  // Totals (from original QBO/Xero data)
   total_invoices: number
   total_invoice_amount: number
+  total_outstanding: number
   // Matched breakdown
   matched_count: number
   matched_invoice_amount: number
+  matched_outstanding: number
   matched_bank_amount: number
-  total_matched_amount: number
   total_fee_amount: number
   avg_confidence: number
   // Status breakdown
   pending_count: number
   confirmed_count: number
-  pending_amount: number
-  confirmed_amount: number
   // Unmatched
   unmatched_count: number
   unmatched_invoice_amount: number
-  unmatched_outstanding_amount: number
+  unmatched_outstanding: number
 }
 
 interface ClassifiedMovement {
@@ -196,11 +195,11 @@ export default function ReconciliationCandidatesPage() {
   // Invoice View state
   const [invoices, setInvoices] = useState<InvoiceWithMatch[]>([])
   const [invoiceSummary, setInvoiceSummary] = useState<InvoiceSummary>({
-    total_invoices: 0, total_invoice_amount: 0,
-    matched_count: 0, matched_invoice_amount: 0, matched_bank_amount: 0,
-    total_matched_amount: 0, total_fee_amount: 0, avg_confidence: 0,
-    pending_count: 0, confirmed_count: 0, pending_amount: 0, confirmed_amount: 0,
-    unmatched_count: 0, unmatched_invoice_amount: 0, unmatched_outstanding_amount: 0
+    total_invoices: 0, total_invoice_amount: 0, total_outstanding: 0,
+    matched_count: 0, matched_invoice_amount: 0, matched_outstanding: 0,
+    matched_bank_amount: 0, total_fee_amount: 0, avg_confidence: 0,
+    pending_count: 0, confirmed_count: 0,
+    unmatched_count: 0, unmatched_invoice_amount: 0, unmatched_outstanding: 0
   })
   const [invoicesLoading, setInvoicesLoading] = useState(false)
   const [invoiceFilter, setInvoiceFilter] = useState<"all" | "matched" | "unmatched">("all")
@@ -924,7 +923,7 @@ export default function ReconciliationCandidatesPage() {
               </div>
               <div className="bg-[#0A0A0A] border border-amber-500/20 rounded px-3 py-2">
                 <p className="text-[9px] text-amber-400 uppercase tracking-wider">Outstanding</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(invoiceSummary.unmatched_outstanding_amount)}</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(invoiceSummary.total_outstanding)}</p>
                 <p className="text-[10px] text-zinc-500">remaining balance</p>
               </div>
             </div>
