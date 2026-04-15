@@ -11,6 +11,8 @@ import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
 import { query, ensureARMatchesSchema } from "@/lib/db"
 import { classifyMovement, type CashEventRow } from "@/lib/reconciliation-case-classifier"
 import { runAIReconciliationMatcher, type MovementToMatch, type AIMatcherResult } from "@/lib/reconciliation-ai-matcher"
+import { syncCashEventsForUser } from "@/lib/cash-events-build"
+import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 
 // In-memory job store (in production, use Redis or database)
 const jobStore = new Map<string, {
@@ -141,6 +143,16 @@ async function processAIMatching(
   console.log(`[AI Matcher Job ${jobId}] Starting...`)
 
   try {
+    // Sync cash events from QBO/Xero before processing
+    console.log(`[AI Matcher Job ${jobId}] Syncing invoices from accounting system...`)
+    try {
+      const invoices = await fetchInvoicesForReconciliation(userId)
+      await syncCashEventsForUser(userId, invoices, [])
+      console.log(`[AI Matcher Job ${jobId}] Synced ${invoices.length} invoices`)
+    } catch (syncErr) {
+      console.warn(`[AI Matcher Job ${jobId}] Invoice sync failed (continuing with existing data):`, syncErr)
+    }
+
     // Load movements
     const movements = await fetchMovementsWithAvailableCash(userId)
     const cashEvents = await loadCashEvents(userId)
