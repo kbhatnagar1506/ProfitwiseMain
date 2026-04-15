@@ -1,14 +1,14 @@
 /**
  * AR Reconciliation - Invoice View API
  * 
- * GET: Fetch all invoices with their match status (matched to bank payments or unmatched)
- * Uses ar_reconciliation_matches as the source of truth for invoice amounts
+ * GET: Fetch all invoices with their match status from ar_reconciliation_matches table
+ * Summary stats are calculated directly in PostgreSQL for accuracy
  */
 
 import { NextRequest, NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { query } from "@/lib/db"
+import { query, ensureARMatchesSchema } from "@/lib/db"
 
 export interface InvoiceWithMatch {
   // Invoice details
@@ -25,7 +25,7 @@ export interface InvoiceWithMatch {
   // Match details (null if unmatched)
   is_matched: boolean
   match_id: string | null
-  match_count: number  // Total number of matches for this invoice
+  match_count: number
   bank_amount: number | null
   bank_date: string | null
   bank_counterparty: string | null
@@ -45,20 +45,96 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+    await ensureARMatchesSchema()
+
     const url = new URL(request.url)
     const filter = url.searchParams.get("filter") || "all" // all, matched, unmatched
     const limit = parseInt(url.searchParams.get("limit") || "1000")
 
-    // Query all invoices from ar_reconciliation_matches table
-    // This table has the correct invoice_amount values
-    // Use DISTINCT ON to get one row per cash_event_id (invoice), picking the best match
+    // Calculate summary stats directly from ar_reconciliation_matches table (PostgreSQL for precision)
+    // This gives us accurate totals from the source of truth
+    const summaryResult = await query(
+      `WITH matched_invoices AS (
+        -- Get unique invoices that have been matched (by cash_event_id)
+        SELECT DISTINCT ON (cash_event_id)
+          cash_event_id,
+          invoice_amount,
+          bank_amount,
+          matched_amount,
+          fee_amount,
+          status,
+          confidence
+        FROM ar_reconciliation_matches
+        WHERE user_id = $1
+        ORDER BY cash_event_id, confidence DESC NULLS LAST, created_at DESC
+      ),
+      unmatched_invoices AS (
+        -- Get AR invoices that have NO match in ar_reconciliation_matches
+        SELECT 
+          ce.id as cash_event_id,
+          ce.amount as invoice_amount,
+          ce.outstanding_amount
+        FROM cash_events ce
+        WHERE ce.user_id = $1
+          AND ce.event_type = 'ar'
+          AND ce.id NOT IN (SELECT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1)
+      )
+      SELECT
+        -- Matched stats
+        (SELECT COUNT(*) FROM matched_invoices)::int as matched_count,
+        (SELECT COALESCE(SUM(invoice_amount), 0) FROM matched_invoices)::float as matched_invoice_amount,
+        (SELECT COALESCE(SUM(bank_amount), 0) FROM matched_invoices)::float as matched_bank_amount,
+        (SELECT COALESCE(SUM(matched_amount), 0) FROM matched_invoices)::float as total_matched_amount,
+        (SELECT COALESCE(SUM(fee_amount), 0) FROM matched_invoices)::float as total_fee_amount,
+        (SELECT COUNT(*) FILTER (WHERE status = 'pending') FROM matched_invoices)::int as pending_count,
+        (SELECT COUNT(*) FILTER (WHERE status = 'confirmed') FROM matched_invoices)::int as confirmed_count,
+        (SELECT COALESCE(SUM(invoice_amount) FILTER (WHERE status = 'pending'), 0) FROM matched_invoices)::float as pending_amount,
+        (SELECT COALESCE(SUM(invoice_amount) FILTER (WHERE status = 'confirmed'), 0) FROM matched_invoices)::float as confirmed_amount,
+        (SELECT COALESCE(AVG(confidence), 0) FROM matched_invoices)::float as avg_confidence,
+        -- Unmatched stats
+        (SELECT COUNT(*) FROM unmatched_invoices)::int as unmatched_count,
+        (SELECT COALESCE(SUM(invoice_amount), 0) FROM unmatched_invoices)::float as unmatched_invoice_amount,
+        (SELECT COALESCE(SUM(outstanding_amount), 0) FROM unmatched_invoices)::float as unmatched_outstanding_amount,
+        -- Total stats
+        ((SELECT COUNT(*) FROM matched_invoices) + (SELECT COUNT(*) FROM unmatched_invoices))::int as total_invoices,
+        ((SELECT COALESCE(SUM(invoice_amount), 0) FROM matched_invoices) + 
+         (SELECT COALESCE(SUM(invoice_amount), 0) FROM unmatched_invoices))::float as total_invoice_amount`,
+      [user.id]
+    )
+
+    const summaryRow = summaryResult.rows[0] || {}
+    const summary = {
+      // Totals
+      total_invoices: summaryRow.total_invoices || 0,
+      total_invoice_amount: summaryRow.total_invoice_amount || 0,
+      // Matched breakdown
+      matched_count: summaryRow.matched_count || 0,
+      matched_invoice_amount: summaryRow.matched_invoice_amount || 0,
+      matched_bank_amount: summaryRow.matched_bank_amount || 0,
+      total_matched_amount: summaryRow.total_matched_amount || 0,
+      total_fee_amount: summaryRow.total_fee_amount || 0,
+      avg_confidence: summaryRow.avg_confidence || 0,
+      // Status breakdown
+      pending_count: summaryRow.pending_count || 0,
+      confirmed_count: summaryRow.confirmed_count || 0,
+      pending_amount: summaryRow.pending_amount || 0,
+      confirmed_amount: summaryRow.confirmed_amount || 0,
+      // Unmatched
+      unmatched_count: summaryRow.unmatched_count || 0,
+      unmatched_invoice_amount: summaryRow.unmatched_invoice_amount || 0,
+      unmatched_outstanding_amount: summaryRow.unmatched_outstanding_amount || 0,
+    }
+
+    // Query invoices for display (with LIMIT for performance)
+    // Uses DISTINCT ON to get best match per invoice
     const invoicesResult = await query(
       `SELECT * FROM (
-        SELECT DISTINCT ON (arm.cash_event_id)
+        SELECT DISTINCT ON (cash_event_id)
+          arm.id as match_id,
           arm.cash_event_id,
           arm.invoice_id,
-          arm.customer_name,
           arm.invoice_amount::float as invoice_amount,
+          arm.customer_name,
           arm.bank_amount::float as bank_amount,
           arm.bank_date,
           arm.bank_counterparty,
@@ -66,25 +142,58 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           arm.match_type,
           arm.confidence::float as confidence,
           arm.status as match_status,
-          arm.id as match_id,
+          arm.fee_amount::float as fee_amount,
+          arm.matched_amount::float as matched_amount,
           arm.created_at,
+          -- Count of all matches for this invoice
+          (SELECT COUNT(*) FROM ar_reconciliation_matches WHERE cash_event_id = arm.cash_event_id AND user_id = $1)::int as match_count,
+          -- Get due_date from cash_events
           ce.expected_date as due_date,
-          ce.status as invoice_status,
           ce.outstanding_amount::float as outstanding_amount,
-          ce.metadata,
-          (SELECT COUNT(*) FROM ar_reconciliation_matches WHERE cash_event_id = arm.cash_event_id AND user_id = $1)::int as match_count
+          ce.status as invoice_status,
+          ce.metadata
         FROM ar_reconciliation_matches arm
-        LEFT JOIN cash_events ce ON ce.id = arm.cash_event_id AND ce.user_id = $1
+        JOIN cash_events ce ON ce.id = arm.cash_event_id
         WHERE arm.user_id = $1
-        ORDER BY arm.cash_event_id, arm.confidence DESC NULLS LAST, arm.created_at DESC
-      ) sub
+        ORDER BY cash_event_id, arm.confidence DESC NULLS LAST, arm.created_at DESC
+      ) matched
+      
+      UNION ALL
+      
+      -- Unmatched invoices from cash_events
+      SELECT
+        NULL as match_id,
+        ce.id as cash_event_id,
+        COALESCE(ce.metadata->>'doc_number', ce.metadata->>'invoice_number', ce.id::text) as invoice_id,
+        ce.amount::float as invoice_amount,
+        COALESCE(ce.metadata->>'customer_name', ce.metadata->>'entity_name', 'Unknown') as customer_name,
+        NULL::float as bank_amount,
+        NULL::date as bank_date,
+        NULL as bank_counterparty,
+        NULL as bank_description,
+        NULL as match_type,
+        NULL::float as confidence,
+        NULL as match_status,
+        NULL::float as fee_amount,
+        NULL::float as matched_amount,
+        ce.created_at,
+        0 as match_count,
+        ce.expected_date as due_date,
+        ce.outstanding_amount::float as outstanding_amount,
+        ce.status as invoice_status,
+        ce.metadata
+      FROM cash_events ce
+      WHERE ce.user_id = $1
+        AND ce.event_type = 'ar'
+        AND ce.id NOT IN (SELECT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1)
+      
       ORDER BY due_date DESC NULLS LAST, created_at DESC
       LIMIT $2`,
       [user.id, limit]
     )
 
-    // Process matched invoices
-    const matchedInvoices: InvoiceWithMatch[] = invoicesResult.rows.map(row => {
+    // Process results
+    const invoices: InvoiceWithMatch[] = invoicesResult.rows.map(row => {
       const metadata = row.metadata as Record<string, unknown> || {}
       const invoiceDate = (metadata.txn_date as string) || (metadata.date as string) || null
 
@@ -99,9 +208,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         due_date: row.due_date,
         invoice_status: row.invoice_status || "open",
         
-        is_matched: true,
+        is_matched: row.match_id !== null,
         match_id: row.match_id,
-        match_count: row.match_count || 1,
+        match_count: row.match_count || 0,
         bank_amount: row.bank_amount,
         bank_date: row.bank_date,
         bank_counterparty: row.bank_counterparty,
@@ -112,87 +221,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       }
     })
 
-    // Get unmatched invoices (cash_events that don't have a match in ar_reconciliation_matches)
-    const unmatchedResult = await query(
-      `SELECT 
-        ce.id as cash_event_id,
-        ce.amount::float as invoice_amount,
-        ce.outstanding_amount::float as outstanding_amount,
-        ce.expected_date as due_date,
-        ce.status as invoice_status,
-        ce.metadata,
-        ce.created_at
-      FROM cash_events ce
-      WHERE ce.user_id = $1
-        AND ce.event_type = 'ar'
-        AND ce.id NOT IN (
-          SELECT DISTINCT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1
-        )
-      ORDER BY ce.expected_date DESC NULLS LAST, ce.created_at DESC
-      LIMIT $2`,
-      [user.id, limit]
-    )
-
-    const unmatchedInvoices: InvoiceWithMatch[] = unmatchedResult.rows.map(row => {
-      const metadata = row.metadata as Record<string, unknown> || {}
-      const customerName = (metadata.customer_name as string) || 
-                          (metadata.entity_name as string) || 
-                          "Unknown"
-      const invoiceNumber = (metadata.doc_number as string) || 
-                           (metadata.invoice_number as string) || 
-                           null
-      const invoiceDate = (metadata.txn_date as string) || (metadata.date as string) || null
-
-      return {
-        invoice_id: row.cash_event_id,
-        cash_event_id: row.cash_event_id,
-        customer_name: customerName,
-        invoice_number: invoiceNumber,
-        invoice_amount: row.invoice_amount || 0,
-        outstanding_amount: row.outstanding_amount || 0,
-        invoice_date: invoiceDate,
-        due_date: row.due_date,
-        invoice_status: row.invoice_status,
-        
-        is_matched: false,
-        match_id: null,
-        match_count: 0,
-        bank_amount: null,
-        bank_date: null,
-        bank_counterparty: null,
-        bank_description: null,
-        match_type: null,
-        confidence: null,
-        match_status: null,
-      }
-    })
-
-    // Combine and sort all invoices
-    const allInvoices = [...matchedInvoices, ...unmatchedInvoices].sort((a, b) => {
-      const dateA = a.due_date ? new Date(a.due_date).getTime() : 0
-      const dateB = b.due_date ? new Date(b.due_date).getTime() : 0
-      return dateB - dateA
-    })
-
     // Apply filter
-    let filteredInvoices = allInvoices
+    let filteredInvoices = invoices
     if (filter === "matched") {
-      filteredInvoices = matchedInvoices
+      filteredInvoices = invoices.filter(inv => inv.is_matched)
     } else if (filter === "unmatched") {
-      filteredInvoices = unmatchedInvoices
-    }
-
-    // Calculate summary with proper precision
-    const roundTo2 = (n: number) => Math.round(n * 100) / 100
-    
-    const summary = {
-      total_invoices: allInvoices.length,
-      matched_count: matchedInvoices.length,
-      unmatched_count: unmatchedInvoices.length,
-      total_invoice_amount: roundTo2(allInvoices.reduce((sum, inv) => sum + (inv.invoice_amount || 0), 0)),
-      matched_amount: roundTo2(matchedInvoices.reduce((sum, inv) => sum + (inv.invoice_amount || 0), 0)),
-      unmatched_amount: roundTo2(unmatchedInvoices.reduce((sum, inv) => sum + (inv.invoice_amount || 0), 0)),
-      outstanding_amount: roundTo2(allInvoices.reduce((sum, inv) => sum + (inv.outstanding_amount || 0), 0)),
+      filteredInvoices = invoices.filter(inv => !inv.is_matched)
     }
 
     return NextResponse.json({
