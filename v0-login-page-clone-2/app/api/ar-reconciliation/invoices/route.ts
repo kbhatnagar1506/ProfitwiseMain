@@ -1,15 +1,13 @@
 /**
  * AR Reconciliation - Invoice View API
  * 
- * GET: Fetch all invoices with their match status
- * Summary stats are calculated from ORIGINAL invoice amounts (QBO TotalAmt / Xero Total)
- * NOT from cash_events.amount which stores amount_due (remaining balance)
+ * GET: Fetch all invoices with their match status (matched to bank payments or unmatched)
  */
 
 import { NextRequest, NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { query, ensureARMatchesSchema } from "@/lib/db"
+import { query } from "@/lib/db"
 
 export interface InvoiceWithMatch {
   // Invoice details
@@ -17,8 +15,8 @@ export interface InvoiceWithMatch {
   cash_event_id: string
   customer_name: string
   invoice_number: string | null
-  invoice_amount: number  // Original invoice total (TotalAmt)
-  outstanding_amount: number  // Remaining balance (Balance/AmountDue)
+  invoice_amount: number
+  outstanding_amount: number
   invoice_date: string | null
   due_date: string | null
   invoice_status: string
@@ -26,7 +24,7 @@ export interface InvoiceWithMatch {
   // Match details (null if unmatched)
   is_matched: boolean
   match_id: string | null
-  match_count: number
+  match_count: number  // Total number of matches for this invoice
   bank_amount: number | null
   bank_date: string | null
   bank_counterparty: string | null
@@ -46,229 +44,73 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    await ensureARMatchesSchema()
-
     const url = new URL(request.url)
     const filter = url.searchParams.get("filter") || "all" // all, matched, unmatched
     const limit = parseInt(url.searchParams.get("limit") || "1000")
 
-    // Step 1: Get ALL original invoice amounts from QBO/Xero (source of truth)
-    // This gives us the TRUE TotalAmt, not the amount_due stored in cash_events
-    const allInvoicesResult = await query(
-      `WITH qbo_invoices AS (
-        -- QBO: Get TotalAmt (original invoice total) and Balance (remaining)
-        SELECT 
-          e.entity_id as invoice_id,
-          'qbo' as source,
-          COALESCE((e.data->>'TotalAmt')::numeric, (e.data->>'Balance')::numeric, 0) as total_amount,
-          COALESCE((e.data->>'Balance')::numeric, 0) as balance,
-          e.data->>'DueDate' as due_date,
-          e.data->'CustomerRef'->>'name' as customer_name,
-          e.data->>'DocNumber' as doc_number
-        FROM qbo_entities e
-        JOIN qbo_connections c ON c.realm_id = e.realm_id
-        WHERE c.user_id = $1 
-          AND e.entity_type = 'Invoice'
-      ),
-      xero_invoices AS (
-        -- Xero: Get Total (original invoice total) and AmountDue (remaining)
-        SELECT 
-          e.entity_id as invoice_id,
-          'xero' as source,
-          COALESCE((e.data->>'Total')::numeric, (e.data->>'AmountDue')::numeric, 0) as total_amount,
-          COALESCE((e.data->>'AmountDue')::numeric, 0) as balance,
-          COALESCE(e.data->>'DueDateString', e.data->>'DateString') as due_date,
-          e.data->'Contact'->>'Name' as customer_name,
-          e.data->>'InvoiceNumber' as doc_number
-        FROM xero_entities e
-        JOIN xero_connections xc ON xc.tenant_id = e.tenant_id
-        WHERE xc.user_id = $1 
-          AND e.entity_type = 'Invoice'
-      ),
-      all_invoices AS (
-        SELECT * FROM qbo_invoices
-        UNION ALL
-        SELECT * FROM xero_invoices
-      ),
-      matched_invoice_ids AS (
-        -- Get invoice_ids that have been matched in ar_reconciliation_matches
-        -- The invoice_id in ar_reconciliation_matches corresponds to entity_id in qbo/xero_entities
-        SELECT DISTINCT invoice_id FROM ar_reconciliation_matches WHERE user_id = $1
-      )
-      SELECT
-        -- Total: ALL invoices from QBO/Xero
-        (SELECT COUNT(*) FROM all_invoices)::int as total_invoices,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM all_invoices)::float as total_invoice_amount,
-        (SELECT COALESCE(SUM(balance), 0) FROM all_invoices)::float as total_outstanding,
-        
-        -- Matched: Invoices that exist in ar_reconciliation_matches
-        (SELECT COUNT(*) FROM all_invoices WHERE invoice_id IN (SELECT invoice_id FROM matched_invoice_ids))::int as matched_count,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM all_invoices WHERE invoice_id IN (SELECT invoice_id FROM matched_invoice_ids))::float as matched_invoice_amount,
-        (SELECT COALESCE(SUM(balance), 0) FROM all_invoices WHERE invoice_id IN (SELECT invoice_id FROM matched_invoice_ids))::float as matched_outstanding,
-        
-        -- Unmatched: Invoices NOT in ar_reconciliation_matches
-        (SELECT COUNT(*) FROM all_invoices WHERE invoice_id NOT IN (SELECT invoice_id FROM matched_invoice_ids))::int as unmatched_count,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM all_invoices WHERE invoice_id NOT IN (SELECT invoice_id FROM matched_invoice_ids))::float as unmatched_invoice_amount,
-        (SELECT COALESCE(SUM(balance), 0) FROM all_invoices WHERE invoice_id NOT IN (SELECT invoice_id FROM matched_invoice_ids))::float as unmatched_outstanding`,
-      [user.id]
-    )
-
-    // Step 2: Get bank-side stats from ar_reconciliation_matches
-    const bankStatsResult = await query(
-      `WITH unique_matches AS (
-        SELECT DISTINCT ON (cash_event_id)
-          bank_amount,
-          fee_amount,
-          confidence,
-          status
-        FROM ar_reconciliation_matches
-        WHERE user_id = $1
-        ORDER BY cash_event_id, confidence DESC NULLS LAST, created_at DESC
-      )
-      SELECT
-        COALESCE(SUM(bank_amount), 0)::float as total_bank_received,
-        COALESCE(SUM(fee_amount), 0)::float as total_fees,
-        COALESCE(AVG(confidence), 0)::float as avg_confidence,
-        COUNT(*) FILTER (WHERE status = 'pending')::int as pending_count,
-        COUNT(*) FILTER (WHERE status = 'confirmed')::int as confirmed_count
-      FROM unique_matches`,
-      [user.id]
-    )
-
-    const invoiceStats = allInvoicesResult.rows[0] || {}
-    const bankStats = bankStatsResult.rows[0] || {}
-
-    const summary = {
-      // Totals (from original QBO/Xero data)
-      total_invoices: invoiceStats.total_invoices || 0,
-      total_invoice_amount: invoiceStats.total_invoice_amount || 0,
-      total_outstanding: invoiceStats.total_outstanding || 0,
-      
-      // Matched breakdown (invoice amounts from QBO/Xero, bank amounts from matches)
-      matched_count: invoiceStats.matched_count || 0,
-      matched_invoice_amount: invoiceStats.matched_invoice_amount || 0,
-      matched_outstanding: invoiceStats.matched_outstanding || 0,
-      
-      // Bank side stats
-      matched_bank_amount: bankStats.total_bank_received || 0,
-      total_fee_amount: bankStats.total_fees || 0,
-      avg_confidence: bankStats.avg_confidence || 0,
-      
-      // Status breakdown
-      pending_count: bankStats.pending_count || 0,
-      confirmed_count: bankStats.confirmed_count || 0,
-      
-      // Unmatched (from QBO/Xero)
-      unmatched_count: invoiceStats.unmatched_count || 0,
-      unmatched_invoice_amount: invoiceStats.unmatched_invoice_amount || 0,
-      unmatched_outstanding: invoiceStats.unmatched_outstanding || 0,
-    }
-
-    // Step 3: Query invoices for display with original amounts
+    // Query all AR invoices with their BEST match (highest confidence)
+    // Uses DISTINCT ON to get one row per invoice, picking the match with highest confidence
+    // Then re-orders by due_date for display
     const invoicesResult = await query(
-      `WITH qbo_invoices AS (
-        SELECT 
-          e.entity_id as invoice_id,
-          'qbo' as source,
-          COALESCE((e.data->>'TotalAmt')::numeric, (e.data->>'Balance')::numeric, 0)::float as total_amount,
-          COALESCE((e.data->>'Balance')::numeric, 0)::float as balance,
-          (e.data->>'DueDate')::date as due_date,
-          e.data->>'TxnDate' as txn_date,
-          COALESCE(e.data->'CustomerRef'->>'name', 'Unknown') as customer_name,
-          e.data->>'DocNumber' as doc_number
-        FROM qbo_entities e
-        JOIN qbo_connections c ON c.realm_id = e.realm_id
-        WHERE c.user_id = $1 
-          AND e.entity_type = 'Invoice'
-      ),
-      xero_invoices AS (
-        SELECT 
-          e.entity_id as invoice_id,
-          'xero' as source,
-          COALESCE((e.data->>'Total')::numeric, (e.data->>'AmountDue')::numeric, 0)::float as total_amount,
-          COALESCE((e.data->>'AmountDue')::numeric, 0)::float as balance,
-          COALESCE(e.data->>'DueDateString', e.data->>'DateString')::date as due_date,
-          e.data->>'DateString' as txn_date,
-          COALESCE(e.data->'Contact'->>'Name', 'Unknown') as customer_name,
-          e.data->>'InvoiceNumber' as doc_number
-        FROM xero_entities e
-        JOIN xero_connections xc ON xc.tenant_id = e.tenant_id
-        WHERE xc.user_id = $1 
-          AND e.entity_type = 'Invoice'
-      ),
-      all_invoices AS (
-        SELECT * FROM qbo_invoices
-        UNION ALL
-        SELECT * FROM xero_invoices
-      ),
-      matches AS (
-        SELECT DISTINCT ON (invoice_id)
-          id as match_id,
-          invoice_id,
-          cash_event_id,
-          bank_amount,
-          bank_date,
-          bank_counterparty,
-          bank_description,
-          match_type,
-          confidence,
-          status as match_status,
-          fee_amount,
-          matched_amount
-        FROM ar_reconciliation_matches
-        WHERE user_id = $1
-        ORDER BY invoice_id, confidence DESC NULLS LAST, created_at DESC
-      )
-      SELECT
-        inv.invoice_id,
-        inv.source,
-        inv.total_amount as invoice_amount,
-        inv.balance as outstanding_amount,
-        inv.due_date,
-        inv.txn_date as invoice_date,
-        inv.customer_name,
-        inv.doc_number as invoice_number,
-        
-        -- Match details
-        m.match_id,
-        m.cash_event_id,
-        m.bank_amount,
-        m.bank_date,
-        m.bank_counterparty,
-        m.bank_description,
-        m.match_type,
-        m.confidence,
-        m.match_status,
-        m.fee_amount,
-        m.matched_amount,
-        
-        -- Match count for this invoice
-        (SELECT COUNT(*) FROM ar_reconciliation_matches WHERE invoice_id = inv.invoice_id AND user_id = $1)::int as match_count,
-        
-        -- Status
-        CASE WHEN inv.balance <= 0.01 THEN 'paid'
-             WHEN inv.balance < inv.total_amount THEN 'partially_paid'
-             ELSE 'open' END as invoice_status
-             
-      FROM all_invoices inv
-      LEFT JOIN matches m ON m.invoice_id = inv.invoice_id
-      ORDER BY inv.due_date DESC NULLS LAST, inv.invoice_id
+      `SELECT * FROM (
+        SELECT DISTINCT ON (ce.id)
+          ce.id as cash_event_id,
+          ce.amount::float as invoice_amount,
+          ce.outstanding_amount::float as outstanding_amount,
+          ce.expected_date as due_date,
+          ce.status as invoice_status,
+          ce.metadata,
+          ce.created_at as invoice_created_at,
+          
+          -- Match details (will be null if no match)
+          arm.id as match_id,
+          arm.bank_amount::float as bank_amount,
+          arm.bank_date,
+          arm.bank_counterparty,
+          arm.bank_description,
+          arm.match_type,
+          arm.confidence::float as confidence,
+          arm.status as match_status,
+          arm.invoice_id as matched_invoice_id,
+          arm.customer_name as matched_customer_name,
+          
+          -- Count of all matches for this invoice
+          (SELECT COUNT(*) FROM ar_reconciliation_matches WHERE cash_event_id = ce.id AND user_id = $1)::int as match_count
+          
+        FROM cash_events ce
+        LEFT JOIN ar_reconciliation_matches arm ON arm.cash_event_id = ce.id AND arm.user_id = $1
+        WHERE ce.user_id = $1
+          AND ce.event_type = 'ar'
+        ORDER BY ce.id, arm.confidence DESC NULLS LAST, arm.created_at DESC
+      ) sub
+      ORDER BY due_date DESC NULLS LAST, invoice_created_at DESC
       LIMIT $2`,
       [user.id, limit]
     )
 
     // Process results
     const invoices: InvoiceWithMatch[] = invoicesResult.rows.map(row => {
+      const metadata = row.metadata as Record<string, unknown> || {}
+      const customerName = row.matched_customer_name || 
+                          (metadata.customer_name as string) || 
+                          (metadata.entity_name as string) || 
+                          "Unknown"
+      const invoiceNumber = row.matched_invoice_id ||
+                           (metadata.doc_number as string) || 
+                           (metadata.invoice_number as string) || 
+                           null
+      const invoiceDate = (metadata.txn_date as string) || (metadata.date as string) || null
+
       return {
-        invoice_id: row.invoice_id,
-        cash_event_id: row.cash_event_id || row.invoice_id,
-        customer_name: row.customer_name || "Unknown",
-        invoice_number: row.invoice_number || row.doc_number,
-        invoice_amount: row.invoice_amount || 0,
+        invoice_id: row.cash_event_id,
+        cash_event_id: row.cash_event_id,
+        customer_name: customerName,
+        invoice_number: invoiceNumber,
+        invoice_amount: row.invoice_amount,
         outstanding_amount: row.outstanding_amount || 0,
-        invoice_date: row.invoice_date,
+        invoice_date: invoiceDate,
         due_date: row.due_date,
-        invoice_status: row.invoice_status || "open",
+        invoice_status: row.invoice_status,
         
         is_matched: row.match_id !== null,
         match_id: row.match_id,
@@ -289,6 +131,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       filteredInvoices = invoices.filter(inv => inv.is_matched)
     } else if (filter === "unmatched") {
       filteredInvoices = invoices.filter(inv => !inv.is_matched)
+    }
+
+    // Calculate summary
+    const summary = {
+      total_invoices: invoices.length,
+      matched_count: invoices.filter(inv => inv.is_matched).length,
+      unmatched_count: invoices.filter(inv => !inv.is_matched).length,
+      total_invoice_amount: invoices.reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      matched_amount: invoices.filter(inv => inv.is_matched).reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      unmatched_amount: invoices.filter(inv => !inv.is_matched).reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      outstanding_amount: invoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
     }
 
     return NextResponse.json({
