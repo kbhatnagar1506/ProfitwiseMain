@@ -1,9 +1,15 @@
 /**
  * AR Reconciliation Customer Matcher
  * 
- * Uses LLM to match bank transaction counterparties to known invoice customers.
+ * Two-phase approach:
+ * 1. Deterministic matching (instant) - handles 80%+ of cases
+ * 2. LLM fallback (only for ambiguous cases)
+ * 
  * Enables enriched candidate building with customer-specific invoices.
  */
+
+import { normalizeForMatch, heuristicAliasMatch } from "./alias-normalize"
+import { entityNameSimilarity } from "./levenshtein"
 
 const API_URL = process.env.FORECAST_LLM_API_URL ?? "https://api.openai.com/v1/chat/completions"
 const API_KEY = process.env.OPENAI_API_KEY
@@ -25,7 +31,50 @@ interface LLMResponse {
 }
 
 /**
- * Match bank transaction counterparties to known invoice customers using LLM.
+ * Deterministic customer matching using normalized names and similarity algorithms.
+ * Returns matched customer name or null if no deterministic match found.
+ * 
+ * Matching levels (in order):
+ * 1. Exact normalized match: "JACK" → "Jack"
+ * 2. Heuristic alias match: "MichaelHouk" → "Michael Houk"
+ * 3. Entity similarity >= 0.85: "Davd Vaughn" → "David Vaughn"
+ */
+function matchDeterministically(
+  counterparty: string | null,
+  knownCustomers: string[]
+): string | null {
+  if (!counterparty) return null
+  
+  const normalized = normalizeForMatch(counterparty)
+  if (!normalized || normalized.length < 2) return null
+
+  // Level 1: Exact normalized match
+  for (const customer of knownCustomers) {
+    if (normalizeForMatch(customer) === normalized) {
+      return customer
+    }
+  }
+
+  // Level 2: Heuristic alias match (contains, prefix 85%+)
+  for (const customer of knownCustomers) {
+    if (heuristicAliasMatch(counterparty, customer)) {
+      return customer
+    }
+  }
+
+  // Level 3: Entity similarity >= 0.85
+  for (const customer of knownCustomers) {
+    if (entityNameSimilarity(counterparty, customer) >= 0.85) {
+      return customer
+    }
+  }
+
+  return null // No deterministic match, needs LLM
+}
+
+/**
+ * Match bank transaction counterparties to known invoice customers.
+ * Uses deterministic matching first, then LLM only for ambiguous cases.
  * 
  * @param movements Array of movements with id and counterparty
  * @param knownCustomers List of known customer names from invoices
@@ -35,33 +84,52 @@ export async function matchCustomersWithLLM(
   movements: Array<{ id: string; counterparty: string | null }>,
   knownCustomers: string[]
 ): Promise<Map<string, string | null>> {
-  if (!API_KEY) {
-    console.warn("[Customer Matcher] OPENAI_API_KEY not configured, returning empty matches")
-    return new Map(movements.map(m => [m.id, null]))
-  }
-
   if (movements.length === 0 || knownCustomers.length === 0) {
     return new Map(movements.map(m => [m.id, null]))
   }
 
   const resultMap = new Map<string, string | null>()
+  const needsLLM: Array<{ id: string; counterparty: string | null }> = []
 
-  // Batch movements (10 per call to avoid response truncation)
-  const batchSize = 10
-  for (let i = 0; i < movements.length; i += batchSize) {
-    const batch = movements.slice(i, i + batchSize)
-    console.log(`[Customer Matcher] Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(movements.length / batchSize)} (${batch.length} movements)`)
-    
-    try {
-      const batchResults = await matchBatchWithLLM(batch, knownCustomers)
-      for (const result of batchResults) {
-        resultMap.set(result.movement_id, result.matched_customer)
-      }
-    } catch (error) {
-      console.error("[Customer Matcher] Batch matching failed:", error)
-      // On error, return null matches for this batch
-      for (const m of batch) {
+  // Phase 1: Deterministic matching (instant)
+  for (const m of movements) {
+    const match = matchDeterministically(m.counterparty, knownCustomers)
+    if (match) {
+      resultMap.set(m.id, match)
+    } else {
+      needsLLM.push(m)
+    }
+  }
+
+  console.log(`[Customer Matcher] Deterministic: ${resultMap.size} matched, ${needsLLM.length} need LLM`)
+
+  // Phase 2: LLM for ambiguous cases only
+  if (needsLLM.length > 0) {
+    if (!API_KEY) {
+      console.warn("[Customer Matcher] OPENAI_API_KEY not configured, returning null for ambiguous matches")
+      for (const m of needsLLM) {
         resultMap.set(m.id, null)
+      }
+      return resultMap
+    }
+
+    // Batch ambiguous movements (10 per call)
+    const batchSize = 10
+    for (let i = 0; i < needsLLM.length; i += batchSize) {
+      const batch = needsLLM.slice(i, i + batchSize)
+      console.log(`[Customer Matcher] LLM batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(needsLLM.length / batchSize)} (${batch.length} movements)`)
+      
+      try {
+        const batchResults = await matchBatchWithLLM(batch, knownCustomers)
+        for (const result of batchResults) {
+          resultMap.set(result.movement_id, result.matched_customer)
+        }
+      } catch (error) {
+        console.error("[Customer Matcher] LLM batch matching failed:", error)
+        // On error, return null matches for this batch
+        for (const m of batch) {
+          resultMap.set(m.id, null)
+        }
       }
     }
   }
