@@ -24,6 +24,7 @@ export interface InvoiceWithMatch {
   // Match details (null if unmatched)
   is_matched: boolean
   match_id: string | null
+  match_count: number  // Total number of matches for this invoice
   bank_amount: number | null
   bank_date: string | null
   bank_counterparty: string | null
@@ -47,33 +48,42 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const filter = url.searchParams.get("filter") || "all" // all, matched, unmatched
     const limit = parseInt(url.searchParams.get("limit") || "1000")
 
-    // Query all AR invoices with their match status
+    // Query all AR invoices with their BEST match (highest confidence)
+    // Uses DISTINCT ON to get one row per invoice, picking the match with highest confidence
+    // Then re-orders by due_date for display
     const invoicesResult = await query(
-      `SELECT
-        ce.id as cash_event_id,
-        ce.amount::float as invoice_amount,
-        ce.outstanding_amount::float as outstanding_amount,
-        ce.expected_date as due_date,
-        ce.status as invoice_status,
-        ce.metadata,
-        
-        -- Match details (will be null if no match)
-        arm.id as match_id,
-        arm.bank_amount::float as bank_amount,
-        arm.bank_date,
-        arm.bank_counterparty,
-        arm.bank_description,
-        arm.match_type,
-        arm.confidence::float as confidence,
-        arm.status as match_status,
-        arm.invoice_id as matched_invoice_id,
-        arm.customer_name as matched_customer_name
-        
-      FROM cash_events ce
-      LEFT JOIN ar_reconciliation_matches arm ON arm.cash_event_id = ce.id AND arm.user_id = $1
-      WHERE ce.user_id = $1
-        AND ce.event_type = 'ar'
-      ORDER BY ce.expected_date DESC NULLS LAST, ce.created_at DESC
+      `SELECT * FROM (
+        SELECT DISTINCT ON (ce.id)
+          ce.id as cash_event_id,
+          ce.amount::float as invoice_amount,
+          ce.outstanding_amount::float as outstanding_amount,
+          ce.expected_date as due_date,
+          ce.status as invoice_status,
+          ce.metadata,
+          ce.created_at as invoice_created_at,
+          
+          -- Match details (will be null if no match)
+          arm.id as match_id,
+          arm.bank_amount::float as bank_amount,
+          arm.bank_date,
+          arm.bank_counterparty,
+          arm.bank_description,
+          arm.match_type,
+          arm.confidence::float as confidence,
+          arm.status as match_status,
+          arm.invoice_id as matched_invoice_id,
+          arm.customer_name as matched_customer_name,
+          
+          -- Count of all matches for this invoice
+          (SELECT COUNT(*) FROM ar_reconciliation_matches WHERE cash_event_id = ce.id AND user_id = $1)::int as match_count
+          
+        FROM cash_events ce
+        LEFT JOIN ar_reconciliation_matches arm ON arm.cash_event_id = ce.id AND arm.user_id = $1
+        WHERE ce.user_id = $1
+          AND ce.event_type = 'ar'
+        ORDER BY ce.id, arm.confidence DESC NULLS LAST, arm.created_at DESC
+      ) sub
+      ORDER BY due_date DESC NULLS LAST, invoice_created_at DESC
       LIMIT $2`,
       [user.id, limit]
     )
@@ -104,6 +114,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         
         is_matched: row.match_id !== null,
         match_id: row.match_id,
+        match_count: row.match_count || 0,
         bank_amount: row.bank_amount,
         bank_date: row.bank_date,
         bank_counterparty: row.bank_counterparty,
