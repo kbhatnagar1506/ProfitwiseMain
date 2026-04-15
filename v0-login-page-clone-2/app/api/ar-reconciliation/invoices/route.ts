@@ -16,10 +16,12 @@ export interface InvoiceWithMatch {
   customer_name: string
   invoice_number: string | null
   invoice_amount: number
-  outstanding_amount: number
+  outstanding_amount: number  // Calculated from our matches, not QBO
+  total_matched: number       // Sum of all matched amounts
   invoice_date: string | null
   due_date: string | null
   invoice_status: string
+  payment_status: "paid" | "partial" | "unpaid"  // Based on our matches
   
   // Match details (null if unmatched)
   is_matched: boolean
@@ -45,18 +47,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
 
     const url = new URL(request.url)
-    const filter = url.searchParams.get("filter") || "all" // all, matched, unmatched
+    const filter = url.searchParams.get("filter") || "all" // all, matched, unmatched, partial
     const limit = parseInt(url.searchParams.get("limit") || "1000")
 
     // Query all AR invoices with their BEST match (highest confidence)
-    // Uses DISTINCT ON to get one row per invoice, picking the match with highest confidence
-    // Then re-orders by due_date for display
+    // Also calculates total_matched from ALL matches (for FIFO/partial payment tracking)
     const invoicesResult = await query(
       `SELECT * FROM (
         SELECT DISTINCT ON (ce.id)
           ce.id as cash_event_id,
           ce.amount::float as invoice_amount,
-          ce.outstanding_amount::float as outstanding_amount,
           ce.expected_date as due_date,
           ce.status as invoice_status,
           ce.metadata,
@@ -74,11 +74,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           arm.invoice_id as matched_invoice_id,
           arm.customer_name as matched_customer_name,
           
-          -- Count of all matches for this invoice
-          (SELECT COUNT(*) FROM ar_reconciliation_matches WHERE cash_event_id = ce.id AND user_id = $1)::int as match_count
+          -- Aggregated match info for this invoice
+          match_agg.match_count,
+          match_agg.total_matched,
+          match_agg.best_match_type
           
         FROM cash_events ce
         LEFT JOIN ar_reconciliation_matches arm ON arm.cash_event_id = ce.id AND arm.user_id = $1
+        LEFT JOIN (
+          SELECT 
+            cash_event_id,
+            COUNT(*)::int as match_count,
+            COALESCE(SUM(matched_amount), 0)::float as total_matched,
+            MAX(match_type) as best_match_type
+          FROM ar_reconciliation_matches
+          WHERE user_id = $1
+          GROUP BY cash_event_id
+        ) match_agg ON match_agg.cash_event_id = ce.id
         WHERE ce.user_id = $1
           AND ce.event_type = 'ar'
         ORDER BY ce.id, arm.confidence DESC NULLS LAST, arm.created_at DESC
@@ -101,20 +113,45 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                            null
       const invoiceDate = (metadata.txn_date as string) || (metadata.date as string) || null
 
+      const invoiceAmount = row.invoice_amount || 0
+      const totalMatched = row.total_matched || 0
+      const matchCount = row.match_count || 0
+      const bestMatchType = row.best_match_type
+      
+      // Calculate outstanding from our matches (not QBO)
+      const calculatedOutstanding = Math.max(invoiceAmount - totalMatched, 0)
+      
+      // Determine payment status based on our matches
+      let paymentStatus: "paid" | "partial" | "unpaid" = "unpaid"
+      if (matchCount > 0) {
+        // EXACT, FEE, AGGREGATION = fully paid
+        if (bestMatchType === "EXACT" || bestMatchType === "FEE" || bestMatchType === "AGGREGATION") {
+          paymentStatus = "paid"
+        } else if (calculatedOutstanding <= 0.01) {
+          // Fully paid via partials
+          paymentStatus = "paid"
+        } else {
+          // Has matches but still has balance
+          paymentStatus = "partial"
+        }
+      }
+
       return {
         invoice_id: row.cash_event_id,
         cash_event_id: row.cash_event_id,
         customer_name: customerName,
         invoice_number: invoiceNumber,
-        invoice_amount: row.invoice_amount,
-        outstanding_amount: row.outstanding_amount || 0,
+        invoice_amount: invoiceAmount,
+        outstanding_amount: calculatedOutstanding,
+        total_matched: totalMatched,
         invoice_date: invoiceDate,
         due_date: row.due_date,
         invoice_status: row.invoice_status,
+        payment_status: paymentStatus,
         
-        is_matched: row.match_id !== null,
+        is_matched: matchCount > 0,
         match_id: row.match_id,
-        match_count: row.match_count || 0,
+        match_count: matchCount,
         bank_amount: row.bank_amount,
         bank_date: row.bank_date,
         bank_counterparty: row.bank_counterparty,
@@ -128,20 +165,37 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Apply filter
     let filteredInvoices = invoices
     if (filter === "matched") {
-      filteredInvoices = invoices.filter(inv => inv.is_matched)
+      filteredInvoices = invoices.filter(inv => inv.payment_status === "paid")
     } else if (filter === "unmatched") {
-      filteredInvoices = invoices.filter(inv => !inv.is_matched)
+      filteredInvoices = invoices.filter(inv => inv.payment_status === "unpaid")
+    } else if (filter === "partial") {
+      filteredInvoices = invoices.filter(inv => inv.payment_status === "partial")
     }
 
-    // Calculate summary
+    // Calculate summary based on payment status
+    const paidInvoices = invoices.filter(inv => inv.payment_status === "paid")
+    const partialInvoices = invoices.filter(inv => inv.payment_status === "partial")
+    const unpaidInvoices = invoices.filter(inv => inv.payment_status === "unpaid")
+    
     const summary = {
       total_invoices: invoices.length,
-      matched_count: invoices.filter(inv => inv.is_matched).length,
-      unmatched_count: invoices.filter(inv => !inv.is_matched).length,
+      paid_count: paidInvoices.length,
+      partial_count: partialInvoices.length,
+      unpaid_count: unpaidInvoices.length,
+      // Legacy fields for backward compatibility
+      matched_count: paidInvoices.length,
+      unmatched_count: unpaidInvoices.length,
+      // Amounts
       total_invoice_amount: invoices.reduce((sum, inv) => sum + inv.invoice_amount, 0),
-      matched_amount: invoices.filter(inv => inv.is_matched).reduce((sum, inv) => sum + inv.invoice_amount, 0),
-      unmatched_amount: invoices.filter(inv => !inv.is_matched).reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      paid_amount: paidInvoices.reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      partial_amount: partialInvoices.reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      // Legacy fields
+      matched_amount: paidInvoices.reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      unmatched_amount: unpaidInvoices.reduce((sum, inv) => sum + inv.invoice_amount, 0),
+      // Calculated outstanding (sum of remaining balances)
       outstanding_amount: invoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
+      total_matched: invoices.reduce((sum, inv) => sum + inv.total_matched, 0),
     }
 
     return NextResponse.json({
