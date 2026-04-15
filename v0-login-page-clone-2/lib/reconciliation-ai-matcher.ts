@@ -37,6 +37,7 @@ export interface MatchDecision {
   decision: "match" | "no_match" | "needs_review" | "create_invoice"
   matched_candidate_id: string | null
   matched_candidate_ids: string[]
+  match_type?: string  // EXACT, FEE, PARTIAL, DIRECT_LINK, etc.
   confidence: number
   reasoning: string
   suggested_action: string
@@ -212,10 +213,8 @@ function updateInvoiceState(
   
   state.matchedPayments.push(movementId)
   
-  // Determine if this is a partial or full match
-  const isPartialMatch = decision.reasoning?.toLowerCase().includes('partial') ||
-                         decision.matched_candidate_ids.length === 0 && paymentAmount !== null && 
-                         paymentAmount < state.remainingAmount * 0.95 // Allow 5% tolerance
+  // Determine if this is a partial or full match based on match_type from AI
+  const isPartialMatch = decision.match_type?.toUpperCase() === 'PARTIAL'
   
   if (isPartialMatch && paymentAmount !== null) {
     // Partial payment - reduce remaining amount but don't mark as fully matched
@@ -655,6 +654,7 @@ function parseMatchResponse(response: string, movements: MovementToMatch[]): Mat
           decision: "needs_review" as const,
           matched_candidate_id: null,
           matched_candidate_ids: [],
+          match_type: "EXACT",
           confidence: 0,
           reasoning: "No AI decision returned",
           suggested_action: "review",
@@ -667,6 +667,7 @@ function parseMatchResponse(response: string, movements: MovementToMatch[]): Mat
         decision: decision.decision || "needs_review",
         matched_candidate_id: decision.matched_candidate_id || null,
         matched_candidate_ids: decision.matched_candidate_ids || [],
+        match_type: decision.match_type || "EXACT",
         confidence: decision.confidence || 0,
         reasoning: decision.reasoning || "",
         suggested_action: decision.decision === "match" ? "apply_match" : "review",
@@ -680,6 +681,7 @@ function parseMatchResponse(response: string, movements: MovementToMatch[]): Mat
       decision: "needs_review" as const,
       matched_candidate_id: null,
       matched_candidate_ids: [],
+      match_type: "EXACT",
       confidence: 0,
       reasoning: "Failed to parse AI response",
       suggested_action: "review",
@@ -702,6 +704,7 @@ function parseZeroResponse(response: string, movements: MovementToMatch[]): Matc
           decision: "needs_review" as const,
           matched_candidate_id: null,
           matched_candidate_ids: [],
+          match_type: "EXACT",
           confidence: 0,
           reasoning: "No AI decision returned",
           suggested_action: "review",
@@ -714,6 +717,7 @@ function parseZeroResponse(response: string, movements: MovementToMatch[]): Matc
         decision: decision.decision || "needs_review",
         matched_candidate_id: null,
         matched_candidate_ids: [],
+        match_type: decision.match_type || "EXACT",
         confidence: decision.confidence || 0,
         reasoning: decision.reasoning || "",
         suggested_action: decision.suggested_action || "review",
@@ -727,6 +731,7 @@ function parseZeroResponse(response: string, movements: MovementToMatch[]): Matc
       decision: "needs_review" as const,
       matched_candidate_id: null,
       matched_candidate_ids: [],
+      match_type: "EXACT",
       confidence: 0,
       reasoning: "Failed to parse AI response",
       suggested_action: "review",
