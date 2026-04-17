@@ -153,6 +153,14 @@ async function processAIMatching(
       console.warn(`[AI Matcher Job ${jobId}] Invoice sync failed (continuing with existing data):`, syncErr)
     }
 
+    // Clear existing matches before re-running (fresh start each time)
+    console.log(`[AI Matcher Job ${jobId}] Clearing existing AR matches...`)
+    const deleteResult = await query(
+      `DELETE FROM ar_reconciliation_matches WHERE user_id = $1`,
+      [userId]
+    )
+    console.log(`[AI Matcher Job ${jobId}] Deleted ${deleteResult.rowCount || 0} existing matches`)
+
     // Load movements
     const movements = await fetchMovementsWithAvailableCash(userId)
     const cashEvents = await loadCashEvents(userId)
