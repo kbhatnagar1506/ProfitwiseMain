@@ -860,29 +860,18 @@ export default function ReconciliationCandidatesPage() {
               </div>
 
               <div className="flex items-center gap-4 mb-3">
-                {/* Semi-circle Gauge */}
-                <div className="relative w-24 h-12 overflow-hidden">
-                  <svg className="w-24 h-24" viewBox="0 0 100 50">
-                    <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="8" strokeLinecap="round" />
-                    <path 
-                      d="M 10 50 A 40 40 0 0 1 90 50" 
-                      fill="none" 
-                      stroke="url(#qualityGradient)" 
-                      strokeWidth="8" 
-                      strokeLinecap="round"
-                      strokeDasharray={`${stats.avg_confidence * 1.26} 126`}
-                      className="transition-all duration-1000"
+                {/* Circular Progress */}
+                <div className="relative">
+                  <div className="w-20 h-20 rounded-full border-4 border-white/10 flex items-center justify-center">
+                    <div 
+                      className="absolute inset-0 rounded-full"
+                      style={{
+                        background: `conic-gradient(#10b981 ${stats.avg_confidence * 3.6}deg, transparent 0deg)`
+                      }}
                     />
-                    <defs>
-                      <linearGradient id="qualityGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" stopColor="#f59e0b" />
-                        <stop offset="50%" stopColor="#22c55e" />
-                        <stop offset="100%" stopColor="#10b981" />
-                      </linearGradient>
-                    </defs>
-                  </svg>
-                  <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2">
-                    <span className="text-lg font-bold text-white">{stats.avg_confidence}%</span>
+                    <div className="w-14 h-14 rounded-full bg-[#141414] flex items-center justify-center z-10">
+                      <span className="text-lg font-bold text-white">{stats.avg_confidence}%</span>
+                    </div>
                   </div>
                 </div>
                 <div className="flex-1 grid grid-cols-2 gap-2">
@@ -901,26 +890,26 @@ export default function ReconciliationCandidatesPage() {
               <div className="space-y-1">
                 <div className="flex justify-between text-[9px] text-zinc-500">
                   <span>Confidence Distribution</span>
-                  <span>{stats.high_confidence_matches + stats.low_confidence_matches + (stats.paid_invoices - stats.high_confidence_matches - stats.low_confidence_matches)} matches</span>
+                  <span>{stats.paid_invoices} matches</span>
                 </div>
                 <div className="h-2.5 bg-white/5 rounded-full overflow-hidden flex">
                   <div 
-                    className="bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-500"
+                    className="bg-emerald-500 transition-all duration-500"
                     style={{ width: `${(stats.high_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
                     title={`High confidence: ${stats.high_confidence_matches}`}
                   />
                   <div 
-                    className="bg-gradient-to-r from-blue-600 to-blue-500 transition-all duration-500"
+                    className="bg-blue-500 transition-all duration-500"
                     style={{ width: `${((stats.paid_invoices - stats.high_confidence_matches - stats.low_confidence_matches) / Math.max(stats.paid_invoices, 1)) * 100}%` }}
                     title="Medium confidence"
                   />
                   <div 
-                    className="bg-gradient-to-r from-amber-600 to-amber-500 transition-all duration-500"
+                    className="bg-amber-500 transition-all duration-500"
                     style={{ width: `${(stats.low_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
                     title={`Low confidence: ${stats.low_confidence_matches}`}
                   />
                 </div>
-                <div className="flex gap-3 text-[8px]">
+                <div className="flex gap-3 text-[8px] text-zinc-500">
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />High</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Medium</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />Low</span>
@@ -988,26 +977,26 @@ export default function ReconciliationCandidatesPage() {
                 <span className="text-[10px] text-zinc-500 font-medium">Activity</span>
               </div>
               
-              {/* Activity Bars */}
+              {/* Activity Bars - Fixed pixel heights */}
               <div className="flex items-end gap-1 h-6">
-                {[
-                  { value: stats.matches_today, label: "Today" },
-                  { value: Math.round(stats.matches_this_week / 7), label: "Avg/day" },
-                  { value: stats.matches_this_week, label: "Week" },
-                ].map((item, i) => {
-                  const maxVal = Math.max(stats.matches_today, stats.matches_this_week, stats.matches_this_month)
-                  const height = maxVal > 0 ? (item.value / maxVal) * 100 : 0
-                  return (
-                    <div key={i} className="flex flex-col items-center gap-0.5">
+                {(() => {
+                  const maxVal = Math.max(stats.matches_today, stats.matches_this_week, stats.matches_this_month, 1)
+                  const bars = [
+                    { value: stats.matches_today, color: "bg-violet-500" },
+                    { value: stats.matches_this_week, color: "bg-violet-400" },
+                    { value: stats.matches_this_month, color: "bg-violet-300" },
+                  ]
+                  return bars.map((bar, i) => {
+                    const heightPx = Math.max(4, Math.round((bar.value / maxVal) * 24))
+                    return (
                       <div 
-                        className={`w-3 rounded-t transition-all duration-500 ${
-                          i === 0 ? "bg-violet-500" : i === 1 ? "bg-violet-400" : "bg-violet-300"
-                        }`}
-                        style={{ height: `${Math.max(height, 10)}%`, minHeight: "4px" }}
+                        key={i}
+                        className={`w-2 rounded-sm ${bar.color}`}
+                        style={{ height: `${heightPx}px` }}
                       />
-                    </div>
-                  )
-                })}
+                    )
+                  })
+                })()}
               </div>
 
               <div className="flex items-center gap-3">
