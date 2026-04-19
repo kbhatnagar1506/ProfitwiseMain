@@ -7,8 +7,28 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
-import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users, TrendingUp, CheckCircle2, AlertCircle, Clock, Zap, DollarSign, FileText, ArrowUpRight, ArrowDownRight, PieChart, BarChart3, Activity } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users, TrendingUp, CheckCircle2, AlertCircle, Clock, Zap, DollarSign, FileText, ArrowUpRight, ArrowDownRight, PieChart, BarChart3, Activity, Info } from "lucide-react"
 import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
+
+// Info Button Component
+function InfoButton({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button className="ml-1 text-zinc-500 hover:text-zinc-300 transition-colors">
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 bg-zinc-900 border-zinc-800 text-zinc-300 p-4" side="bottom" align="start">
+        <h4 className="font-semibold text-white text-sm mb-2">{title}</h4>
+        <div className="text-xs space-y-2 text-zinc-400">
+          {children}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 interface ReconciliationStats {
   // Invoice-Centric Coverage (PRIMARY)
@@ -707,7 +727,17 @@ export default function ReconciliationCandidatesPage() {
             <div className="flex items-center divide-x divide-zinc-800">
               {/* Coverage */}
               <div className="flex-1 pr-6">
-                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Coverage</p>
+                <div className="flex items-center">
+                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Coverage</p>
+                  <InfoButton title="Coverage Calculation">
+                    <p><strong className="text-zinc-200">Formula:</strong> (Paid Invoices / Total Invoices) × 100</p>
+                    <div className="mt-2 p-2 bg-zinc-800/50 rounded">
+                      <p>= ({stats.paid_invoices} / {stats.total_invoices}) × 100</p>
+                      <p className="text-emerald-400 font-medium">= {stats.coverage_percentage}%</p>
+                    </div>
+                    <p className="mt-2 text-zinc-500">An invoice is "paid" if it has an EXACT, FEE, or AGGREGATION match, or if total matched amount ≥ invoice amount.</p>
+                  </InfoButton>
+                </div>
                 <div className="flex items-baseline gap-2">
                   <span className="text-3xl font-semibold tracking-tight text-white tabular-nums">{stats.coverage_percentage}%</span>
                   <span className="text-sm text-zinc-500">{stats.paid_invoices}/{stats.total_invoices}</span>
@@ -722,31 +752,71 @@ export default function ReconciliationCandidatesPage() {
 
               {/* Paid */}
               <div className="flex-1 px-6">
-                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Paid</p>
+                <div className="flex items-center">
+                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Paid</p>
+                  <InfoButton title="Paid Invoices">
+                    <p><strong className="text-zinc-200">Definition:</strong> Sum of invoice amounts that are fully matched.</p>
+                    <div className="mt-2 p-2 bg-zinc-800/50 rounded space-y-1">
+                      <p>Invoices: <span className="text-emerald-400">{stats.paid_invoices}</span></p>
+                      <p>Amount: <span className="text-emerald-400">{formatCurrency(stats.paid_invoice_amount)}</span></p>
+                    </div>
+                    <p className="mt-2 text-zinc-500">Includes EXACT matches, FEE matches (payment minus processing fee), and AGGREGATION matches.</p>
+                  </InfoButton>
+                </div>
                 <p className="text-2xl font-semibold tracking-tight text-white tabular-nums">{formatCurrency(stats.paid_invoice_amount)}</p>
                 <p className="text-sm text-zinc-500 mt-0.5">{stats.paid_invoices} invoices</p>
               </div>
 
               {/* Unpaid */}
               <div className="flex-1 px-6">
-                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Unpaid</p>
+                <div className="flex items-center">
+                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Unpaid</p>
+                  <InfoButton title="Unpaid Invoices">
+                    <p><strong className="text-zinc-200">Definition:</strong> Invoices with no bank payment matches.</p>
+                    <div className="mt-2 p-2 bg-zinc-800/50 rounded space-y-1">
+                      <p>Invoices: <span className="text-rose-400">{stats.unpaid_invoices}</span></p>
+                      <p>Amount: <span className="text-rose-400">{formatCurrency(stats.unpaid_invoice_amount)}</span></p>
+                    </div>
+                    <p className="mt-2 text-zinc-500">These invoices have not been matched to any bank deposit. They may be awaiting payment or need manual review.</p>
+                  </InfoButton>
+                </div>
                 <p className="text-2xl font-semibold tracking-tight text-rose-400 tabular-nums">{formatCurrency(stats.unpaid_invoice_amount)}</p>
                 <p className="text-sm text-zinc-500 mt-0.5">{stats.unpaid_invoices} invoices</p>
               </div>
 
               {/* Divider - Visual separator between ledger and recon states */}
-              <div className="w-px h-12 bg-slate-700 mx-2" />
+              <div className="w-px h-12 bg-zinc-700 mx-2" />
 
               {/* Pending Review */}
               <div className="flex-1 px-6">
-                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Pending Review</p>
+                <div className="flex items-center">
+                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Pending Review</p>
+                  <InfoButton title="Pending Review">
+                    <p><strong className="text-zinc-200">Definition:</strong> AI-matched invoices awaiting human verification.</p>
+                    <div className="mt-2 p-2 bg-zinc-800/50 rounded space-y-1">
+                      <p>Matches: <span className="text-amber-400">{stats.pending_review}</span></p>
+                      <p>Amount: <span className="text-amber-400">{formatCurrency(stats.pending_review_amount)}</span></p>
+                    </div>
+                    <p className="mt-2 text-zinc-500">Matches are marked "pending" when: confidence &lt; 85%, match type is PARTIAL or AGGREGATION, or AI reasoning suggests review.</p>
+                  </InfoButton>
+                </div>
                 <p className="text-2xl font-semibold tracking-tight text-amber-400 tabular-nums">{formatCurrency(stats.pending_review_amount)}</p>
                 <p className="text-sm text-zinc-500 mt-0.5">{stats.pending_review} awaiting</p>
               </div>
 
               {/* Confirmed */}
               <div className="flex-1 pl-6">
-                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Confirmed</p>
+                <div className="flex items-center">
+                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-1">Confirmed</p>
+                  <InfoButton title="Confirmed Matches">
+                    <p><strong className="text-zinc-200">Definition:</strong> High-confidence matches verified by AI.</p>
+                    <div className="mt-2 p-2 bg-zinc-800/50 rounded space-y-1">
+                      <p>Matches: <span className="text-emerald-400">{stats.confirmed}</span></p>
+                      <p>Amount: <span className="text-emerald-400">{formatCurrency(stats.confirmed_amount)}</span></p>
+                    </div>
+                    <p className="mt-2 text-zinc-500">Matches are auto-confirmed when: confidence ≥ 85% AND match type is EXACT or FEE with clear reasoning.</p>
+                  </InfoButton>
+                </div>
                 <p className="text-2xl font-semibold tracking-tight text-emerald-400 tabular-nums">{formatCurrency(stats.confirmed_amount)}</p>
                 <p className="text-sm text-zinc-500 mt-0.5">{stats.confirmed} verified</p>
               </div>
@@ -758,7 +828,26 @@ export default function ReconciliationCandidatesPage() {
             {/* Invoice Status */}
             <div className="col-span-5 bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-4">
               <div className="flex items-center justify-between mb-4">
-                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Invoice Status</p>
+                <div className="flex items-center">
+                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Invoice Status</p>
+                  <InfoButton title="Invoice Status Breakdown">
+                    <p><strong className="text-zinc-200">Data Source:</strong> Invoices synced from QuickBooks/Xero</p>
+                    <div className="mt-2 space-y-2">
+                      <div className="p-2 bg-zinc-800/50 rounded">
+                        <p className="text-zinc-300">Total: {stats.total_invoices} invoices</p>
+                        <p className="text-zinc-500 text-[10px]">All AR invoices in the system</p>
+                      </div>
+                      <div className="p-2 bg-emerald-500/10 rounded border border-emerald-500/20">
+                        <p className="text-emerald-400">Paid: {stats.paid_invoices} ({formatCurrency(stats.paid_invoice_amount)})</p>
+                        <p className="text-zinc-500 text-[10px]">Matched to bank deposits</p>
+                      </div>
+                      <div className="p-2 bg-rose-500/10 rounded border border-rose-500/20">
+                        <p className="text-rose-400">Unpaid: {stats.unpaid_invoices} ({formatCurrency(stats.unpaid_invoice_amount)})</p>
+                        <p className="text-zinc-500 text-[10px]">No matching bank deposit found</p>
+                      </div>
+                    </div>
+                  </InfoButton>
+                </div>
                 <span className="text-xs text-zinc-500">{stats.coverage_percentage}% paid</span>
               </div>
               
@@ -795,7 +884,27 @@ export default function ReconciliationCandidatesPage() {
 
             {/* Match Quality */}
             <div className="col-span-4 bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-4">
-              <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-4">Match Quality</p>
+              <div className="flex items-center mb-4">
+                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Match Quality</p>
+                <InfoButton title="Match Quality Metrics">
+                  <p><strong className="text-zinc-200">AI Confidence Score:</strong> How certain the AI is about each match.</p>
+                  <div className="mt-2 space-y-2">
+                    <div className="p-2 bg-zinc-800/50 rounded">
+                      <p className="text-zinc-300">Average: {stats.avg_confidence}%</p>
+                      <p className="text-zinc-500 text-[10px]">Mean confidence across all matches</p>
+                    </div>
+                    <div className="p-2 bg-emerald-500/10 rounded border border-emerald-500/20">
+                      <p className="text-emerald-400">High (≥85%): {stats.high_confidence_matches}</p>
+                      <p className="text-zinc-500 text-[10px]">Auto-confirmed, reliable matches</p>
+                    </div>
+                    <div className="p-2 bg-amber-500/10 rounded border border-amber-500/20">
+                      <p className="text-amber-400">Low (&lt;70%): {stats.low_confidence_matches}</p>
+                      <p className="text-zinc-500 text-[10px]">Needs human review</p>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-zinc-500">Confidence is based on: amount match, customer name similarity, date proximity, and reference matching.</p>
+                </InfoButton>
+              </div>
 
               <div className="flex items-center gap-4 mb-4">
                 <div>
@@ -826,7 +935,7 @@ export default function ReconciliationCandidatesPage() {
                     style={{ width: `${(stats.high_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
                   />
                   <div 
-                    className="bg-slate-500 transition-all duration-500"
+                    className="bg-zinc-500 transition-all duration-500"
                     style={{ width: `${((stats.paid_invoices - stats.high_confidence_matches - stats.low_confidence_matches) / Math.max(stats.paid_invoices, 1)) * 100}%` }}
                   />
                   <div 
@@ -836,7 +945,7 @@ export default function ReconciliationCandidatesPage() {
                 </div>
                 <div className="flex gap-4 text-[10px] text-zinc-500">
                   <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" />High</span>
-                  <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-500" />Medium</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-zinc-500" />Medium</span>
                   <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500" />Low</span>
                 </div>
               </div>
@@ -844,7 +953,29 @@ export default function ReconciliationCandidatesPage() {
 
             {/* Match Types */}
             <div className="col-span-3 bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-4">
-              <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 mb-4">Match Types</p>
+              <div className="flex items-center mb-4">
+                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Match Types</p>
+                <InfoButton title="Match Type Definitions">
+                  <div className="space-y-2">
+                    <div className="p-2 bg-emerald-500/10 rounded border border-emerald-500/20">
+                      <p className="text-emerald-400 font-medium">EXACT</p>
+                      <p className="text-zinc-500 text-[10px]">Bank amount = Invoice amount (±$0.01)</p>
+                    </div>
+                    <div className="p-2 bg-amber-500/10 rounded border border-amber-500/20">
+                      <p className="text-amber-400 font-medium">FEE</p>
+                      <p className="text-zinc-500 text-[10px]">Bank amount = Invoice - Processing fee (1-5%)</p>
+                    </div>
+                    <div className="p-2 bg-purple-500/10 rounded border border-purple-500/20">
+                      <p className="text-purple-400 font-medium">PARTIAL</p>
+                      <p className="text-zinc-500 text-[10px]">Bank amount &lt; Invoice (partial payment)</p>
+                    </div>
+                    <div className="p-2 bg-cyan-500/10 rounded border border-cyan-500/20">
+                      <p className="text-cyan-400 font-medium">AGGREGATION</p>
+                      <p className="text-zinc-500 text-[10px]">One payment covers multiple invoices</p>
+                    </div>
+                  </div>
+                </InfoButton>
+              </div>
 
               <div className="space-y-3">
                 {stats.match_types.slice(0, 4).map((mt) => {
