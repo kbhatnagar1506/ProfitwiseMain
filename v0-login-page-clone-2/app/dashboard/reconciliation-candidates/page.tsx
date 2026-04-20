@@ -902,7 +902,7 @@ export default function ReconciliationCandidatesPage() {
                       <p className="text-zinc-500 text-[10px]">Needs human review</p>
                     </div>
                   </div>
-                  <p className="mt-2 text-zinc-500">Confidence is based on: amount match, customer name similarity, date proximity, and reference matching.</p>
+                  <p className="mt-2 text-zinc-500">Confidence is determined by the AI based on multiple matching signals.</p>
                 </InfoButton>
               </div>
 
