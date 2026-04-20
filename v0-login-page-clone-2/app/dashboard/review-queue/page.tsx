@@ -1,38 +1,53 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Input } from "@/components/ui/input"
-import { Zap, Search, ChevronRight, RefreshCw } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { RefreshCw, Search, CheckCircle2, XCircle, Clock, AlertCircle, Info, ChevronRight } from "lucide-react"
 
-interface SuggestedMatch {
-  movement_id: string
-  invoice_id?: string
-  bill_id?: string
-  confidence: number
-  reason: string
-  matched_amount: number
-  entity_name?: string | null
-}
-
-interface Movement {
+interface PendingMatch {
   id: string
-  date: string
-  amount: number
-  description: string
-  raw_description?: string | null
-  counterparty: string | null
-  economic_class: string | null
-  suggested_match?: SuggestedMatch
+  movement_id: string
+  cash_event_id: string
+  bank_date: string
+  bank_description: string | null
+  bank_counterparty: string | null
+  bank_amount: number
+  invoice_id: string
+  invoice_number: string | null
+  customer_name: string
+  invoice_amount: number
+  invoice_date: string | null
+  due_date: string | null
+  match_type: string
+  confidence: number
+  fee_amount: number
+  matched_amount: number
+  reasoning: string | null
+  status: string
+  created_at: string
 }
 
-interface ARAPStepResponse {
-  movements?: {
-    unmatched_inflows: Movement[]
-    unmatched_outflows: Movement[]
-  }
+interface UnmatchedInvoice {
+  id: string
+  invoice_id: string
+  invoice_number: string | null
+  customer_name: string
+  invoice_amount: number
+  invoice_date: string | null
+  due_date: string | null
+  status: string
+}
+
+interface ReviewQueueStats {
+  pending_matches: number
+  pending_amount: number
+  unmatched_invoices: number
+  unmatched_amount: number
+  high_confidence_pending: number
+  low_confidence_pending: number
 }
 
 function formatCurrency(n: number) {
@@ -44,82 +59,73 @@ function formatDate(d: string | null) {
   return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }
 
-function getConfidenceBadge(confidence: number) {
-  if (confidence >= 0.88) return { label: `${Math.round(confidence * 100)}%`, tier: "high", color: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" }
-  if (confidence >= 0.75) return { label: `${Math.round(confidence * 100)}%`, tier: "med", color: "bg-amber-500/10 text-amber-400 border-amber-500/20" }
-  return { label: `${Math.round(confidence * 100)}%`, tier: "low", color: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20" }
+function getMatchTypeColor(matchType: string): string {
+  switch (matchType) {
+    case "EXACT": return "bg-emerald-400/10 text-emerald-400"
+    case "FEE": return "bg-amber-400/10 text-amber-400"
+    case "PARTIAL": return "bg-purple-400/10 text-purple-400"
+    case "AGGREGATION": return "bg-cyan-400/10 text-cyan-400"
+    default: return "bg-zinc-400/10 text-zinc-400"
+  }
+}
+
+function InfoButton({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button className="ml-1 text-zinc-500 hover:text-zinc-300 transition-colors">
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 bg-zinc-900 border-zinc-800 text-zinc-300 p-3" side="bottom" align="start">
+        <h4 className="font-semibold text-white text-sm mb-2">{title}</h4>
+        <div className="text-xs space-y-1.5 text-zinc-400">{children}</div>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 export default function ReviewQueuePage() {
-  const [data, setData] = useState<ARAPStepResponse | null>(null)
+  const [pendingMatches, setPendingMatches] = useState<PendingMatch[]>([])
+  const [unmatchedInvoices, setUnmatchedInvoices] = useState<UnmatchedInvoice[]>([])
+  const [stats, setStats] = useState<ReviewQueueStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [cmdQueue, setCmdQueue] = useState<Movement[]>([])
-  const [cmdIndex, setCmdIndex] = useState(0)
-  const [cmdProcessed, setCmdProcessed] = useState<Map<string, "accepted" | "skipped">>(new Map())
-  const [selectedMovement, setSelectedMovement] = useState<Movement | null>(null)
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<"pending" | "unmatched">("pending")
   const [searchQuery, setSearchQuery] = useState("")
-  const [searchResults, setSearchResults] = useState<any[]>([])
-  const [searchLoading, setSearchLoading] = useState(false)
-  const [selectedMatches, setSelectedMatches] = useState<Array<{ id: string; entity_name: string; amount: number; amount_due: number; split_amount: number }>>([])
-  const [searchType, setSearchType] = useState<"ar" | "ap">("ar")
-  const cmdSidebarRef = useRef<HTMLDivElement>(null)
-
-  // Debounced search effect
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (searchQuery.trim()) {
-        handleSearch(searchQuery, searchType)
-      } else {
-        setSearchResults([])
-      }
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchQuery, searchType])
-
-  const handleSearch = async (query: string, type: "ar" | "ap") => {
-    if (!query.trim()) {
-      setSearchResults([])
-      return
-    }
-    setSearchLoading(true)
-    try {
-      const res = await fetch(`/api/dashboard/reconciliation/search?q=${encodeURIComponent(query)}&type=${type}&limit=50`)
-      if (res.ok) {
-        const json = await res.json()
-        setSearchResults(json.results || [])
-      }
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setSearchLoading(false)
-    }
-  }
+  const [processingId, setProcessingId] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch("/api/ar-ap-step")
-      if (!res.ok) throw new Error("Failed to fetch")
-      const json = await res.json()
-      setData(json)
-      setError(null)
-      // Auto-populate queue
-      const all = [
-        ...(json.movements?.unmatched_inflows || []),
-        ...(json.movements?.unmatched_outflows || []),
-      ]
-      const sorted = [...all].sort((a, b) => {
-        const ca = a.suggested_match?.confidence ?? 0
-        const cb = b.suggested_match?.confidence ?? 0
-        if (cb !== ca) return cb - ca
-        return Math.abs(b.amount) - Math.abs(a.amount)
+      setLoading(true)
+      
+      // Fetch pending matches
+      const matchesRes = await fetch("/api/ar-reconciliation/matches?status=pending&limit=500")
+      if (!matchesRes.ok) throw new Error("Failed to fetch pending matches")
+      const matchesJson = await matchesRes.json()
+      setPendingMatches(matchesJson.matches || [])
+
+      // Fetch unmatched invoices
+      const invoicesRes = await fetch("/api/ar-reconciliation/invoices?filter=unmatched&limit=500")
+      if (!invoicesRes.ok) throw new Error("Failed to fetch unmatched invoices")
+      const invoicesJson = await invoicesRes.json()
+      setUnmatchedInvoices(invoicesJson.invoices || [])
+
+      // Calculate stats
+      const pending = matchesJson.matches || []
+      const unmatched = invoicesJson.invoices || []
+      setStats({
+        pending_matches: pending.length,
+        pending_amount: pending.reduce((s: number, m: PendingMatch) => s + m.invoice_amount, 0),
+        unmatched_invoices: unmatched.length,
+        unmatched_amount: unmatched.reduce((s: number, i: UnmatchedInvoice) => s + i.invoice_amount, 0),
+        high_confidence_pending: pending.filter((m: PendingMatch) => m.confidence >= 0.85).length,
+        low_confidence_pending: pending.filter((m: PendingMatch) => m.confidence < 0.70).length,
       })
-      setCmdQueue(sorted)
-      setCmdIndex(0)
-      setCmdProcessed(new Map())
+
+      setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error")
+      setError(err instanceof Error ? err.message : "Error loading review queue")
     } finally {
       setLoading(false)
     }
@@ -129,77 +135,90 @@ export default function ReviewQueuePage() {
     fetchData()
   }, [fetchData])
 
-  const advanceQueue = useCallback((queue: Movement[], idx: number, processed: Map<string, "accepted" | "skipped">) => {
-    for (let i = idx + 1; i < queue.length; i++) {
-      if (!processed.has(queue[i].id)) {
-        setCmdIndex(i)
-        setTimeout(() => {
-          const el = cmdSidebarRef.current?.querySelector(`[data-idx="${i}"]`)
-          el?.scrollIntoView({ block: "nearest", behavior: "smooth" })
-        }, 0)
-        return
+  const handleConfirmMatch = async (matchId: string) => {
+    setProcessingId(matchId)
+    try {
+      const res = await fetch(`/api/ar-reconciliation/matches/${matchId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "confirmed" }),
+      })
+      if (res.ok) {
+        setPendingMatches(prev => prev.filter(m => m.id !== matchId))
+        if (stats) {
+          setStats({
+            ...stats,
+            pending_matches: stats.pending_matches - 1,
+          })
+        }
       }
+    } catch (err) {
+      console.error("Failed to confirm match:", err)
+    } finally {
+      setProcessingId(null)
     }
-  }, [])
+  }
 
-  const handleCmdAccept = useCallback(() => {
-    const movement = cmdQueue[cmdIndex]
-    if (!movement) return
-    const sm = movement.suggested_match
-    if (!sm || sm.confidence < 0.75) return
-    fetch("/api/dashboard/reconciliation/apply-match", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        movement_id: movement.id,
-        reference_id: sm.invoice_id || sm.bill_id,
-        component_type: sm.invoice_id ? "ar" : "ap",
-        entity_id: "",
-        amount: sm.matched_amount,
-      }),
-    }).catch(() => {})
-    const next = new Map(cmdProcessed)
-    next.set(movement.id, "accepted")
-    setCmdProcessed(next)
-    advanceQueue(cmdQueue, cmdIndex, next)
-  }, [cmdQueue, cmdIndex, cmdProcessed, advanceQueue])
-
-  const handleCmdSkip = useCallback(() => {
-    const movement = cmdQueue[cmdIndex]
-    if (!movement) return
-    const next = new Map(cmdProcessed)
-    next.set(movement.id, "skipped")
-    setCmdProcessed(next)
-    advanceQueue(cmdQueue, cmdIndex, next)
-  }, [cmdQueue, cmdIndex, cmdProcessed, advanceQueue])
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement).isContentEditable) return
-      if (e.key === "y" || e.key === "Y") { e.preventDefault(); handleCmdAccept() }
-      if (e.key === "n" || e.key === "N") { e.preventDefault(); handleCmdSkip() }
+  const handleRejectMatch = async (matchId: string) => {
+    setProcessingId(matchId)
+    try {
+      const res = await fetch(`/api/ar-reconciliation/matches/${matchId}`, {
+        method: "DELETE",
+      })
+      if (res.ok) {
+        setPendingMatches(prev => prev.filter(m => m.id !== matchId))
+        if (stats) {
+          setStats({
+            ...stats,
+            pending_matches: stats.pending_matches - 1,
+          })
+        }
+      }
+    } catch (err) {
+      console.error("Failed to reject match:", err)
+    } finally {
+      setProcessingId(null)
     }
-    window.addEventListener("keydown", handler)
-    return () => window.removeEventListener("keydown", handler)
-  }, [handleCmdAccept, handleCmdSkip])
+  }
+
+  const filteredPendingMatches = pendingMatches.filter(m => {
+    if (!searchQuery) return true
+    const q = searchQuery.toLowerCase()
+    return (
+      m.customer_name?.toLowerCase().includes(q) ||
+      m.invoice_id?.toLowerCase().includes(q) ||
+      m.bank_counterparty?.toLowerCase().includes(q) ||
+      m.bank_description?.toLowerCase().includes(q)
+    )
+  })
+
+  const filteredUnmatchedInvoices = unmatchedInvoices.filter(i => {
+    if (!searchQuery) return true
+    const q = searchQuery.toLowerCase()
+    return (
+      i.customer_name?.toLowerCase().includes(q) ||
+      i.invoice_id?.toLowerCase().includes(q) ||
+      i.invoice_number?.toLowerCase().includes(q)
+    )
+  })
 
   if (loading) {
     return (
-      <div className="p-8 space-y-4 bg-[#0A0A0A] min-h-screen">
-        <div className="h-8 w-48 bg-white/10 rounded animate-pulse" />
-        <div className="h-32 bg-white/10 rounded animate-pulse" />
+      <div className="p-8 space-y-4 bg-black min-h-screen">
+        <div className="h-8 w-48 bg-zinc-900 rounded animate-pulse" />
+        <div className="h-32 bg-zinc-900 rounded animate-pulse" />
+        <div className="h-96 bg-zinc-900 rounded animate-pulse" />
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="p-8 bg-[#0A0A0A] min-h-screen">
-        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6 text-red-400">
+      <div className="p-8 bg-black min-h-screen">
+        <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-6 text-rose-400">
           <p className="font-semibold">Error loading review queue</p>
           <p className="text-sm mt-2">{error}</p>
-          <Button onClick={() => fetchData()} className="mt-4 bg-red-600 hover:bg-red-700">
+          <Button onClick={() => fetchData()} className="mt-4 bg-rose-600 hover:bg-rose-700">
             Retry
           </Button>
         </div>
@@ -207,476 +226,264 @@ export default function ReviewQueuePage() {
     )
   }
 
-  const unmatched_inflows = data?.movements?.unmatched_inflows || []
-  const unmatched_outflows = data?.movements?.unmatched_outflows || []
-  const all = [...unmatched_inflows, ...unmatched_outflows]
-  const withAI = all.filter(m => m.suggested_match && m.suggested_match.confidence >= 0.75)
-  const highConf = all.filter(m => m.suggested_match && m.suggested_match.confidence >= 0.88)
-  const manual = all.filter(m => !m.suggested_match || m.suggested_match.confidence < 0.75)
-  const totalCash = all.reduce((s, m) => s + Math.abs(m.amount), 0)
-  const activeMov = cmdQueue[cmdIndex] || null
-  const sm = activeMov?.suggested_match
-  const isAR = !!sm?.invoice_id
-  const isInflow = (activeMov?.amount ?? 0) > 0
-  const processedCount = cmdProcessed.size
-  const totalCount = cmdQueue.length
-  const pct = totalCount > 0 ? Math.round((processedCount / totalCount) * 100) : 0
-  const hasMatch = sm && sm.confidence >= 0.75
-  const confBadge = sm ? getConfidenceBadge(sm.confidence) : null
-  const refId = sm?.invoice_id || sm?.bill_id
-  const refLabel = sm?.invoice_id ? `Inv #${refId}` : sm?.bill_id ? `Bill #${refId}` : null
+  const totalItems = (stats?.pending_matches || 0) + (stats?.unmatched_invoices || 0)
+  const totalAmount = (stats?.pending_amount || 0) + (stats?.unmatched_amount || 0)
 
   return (
-    <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
+    <div className="p-8 space-y-5 bg-black min-h-screen">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Review Queue</h1>
-          <p className="text-[12px] text-zinc-500 mt-0.5">Keyboard-driven batch matching · press Y to accept, N to skip</p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight">Review Queue</h1>
+          <p className="text-sm text-zinc-500 mt-1">Items requiring human review before reconciliation is complete</p>
         </div>
-        <Button onClick={() => fetchData()} variant="ghost" size="sm" className="text-zinc-400 hover:text-white">
-          <RefreshCw className="h-4 w-4" />
+        <Button
+          onClick={() => fetchData()}
+          disabled={loading}
+          className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+        >
+          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+          Refresh
         </Button>
       </div>
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-4 divide-x divide-white/[0.06] border border-white/[0.07] rounded-xl overflow-hidden bg-[#141414]">
-        <div className="px-5 py-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Needs Review</p>
-          <p className="text-[22px] font-mono tabular-nums font-bold text-white mt-1">{all.length}</p>
-          <p className="text-[11px] text-zinc-600 mt-0.5">{formatCurrency(totalCash)} unmatched</p>
-        </div>
-        <div className="px-5 py-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">AI Suggested</p>
-          <p className="text-[22px] font-mono tabular-nums font-bold text-emerald-400 mt-1">{withAI.length}</p>
-          <p className="text-[11px] text-zinc-600 mt-0.5">ready to accept</p>
-        </div>
-        <div className="px-5 py-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">High Confidence</p>
-          <p className="text-[22px] font-mono tabular-nums font-bold text-emerald-400/70 mt-1">{highConf.length}</p>
-          <p className="text-[11px] text-zinc-600 mt-0.5">≥88% · clear auto-accept</p>
-        </div>
-        <div className="px-5 py-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Need Manual</p>
-          <p className="text-[22px] font-mono tabular-nums font-bold text-zinc-400 mt-1">{manual.length}</p>
-          <p className="text-[11px] text-zinc-600 mt-0.5">search to link</p>
+      {/* Stats Banner */}
+      <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-5">
+        <div className="flex items-center divide-x divide-zinc-800">
+          {/* Total Needs Review */}
+          <div className="flex-1 pr-6">
+            <div className="flex items-center">
+              <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Total Needs Review</p>
+              <InfoButton title="Review Queue">
+                <p>Items that need human verification before being finalized.</p>
+                <p className="mt-1">Includes pending AI matches and unmatched invoices.</p>
+              </InfoButton>
+            </div>
+            <p className="text-3xl font-semibold tracking-tight text-white tabular-nums mt-1">{totalItems}</p>
+            <p className="text-sm text-zinc-500">{formatCurrency(totalAmount)}</p>
+          </div>
+
+          {/* Pending Matches */}
+          <div className="flex-1 px-6">
+            <div className="flex items-center">
+              <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Pending Matches</p>
+              <InfoButton title="Pending Matches">
+                <p>AI-suggested matches that need confirmation.</p>
+                <p className="mt-1">Review the match and confirm or reject.</p>
+              </InfoButton>
+            </div>
+            <p className="text-2xl font-semibold tracking-tight text-amber-400 tabular-nums mt-1">{stats?.pending_matches || 0}</p>
+            <p className="text-sm text-zinc-500">{formatCurrency(stats?.pending_amount || 0)}</p>
+          </div>
+
+          {/* Unmatched Invoices */}
+          <div className="flex-1 px-6">
+            <div className="flex items-center">
+              <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Unmatched Invoices</p>
+              <InfoButton title="Unmatched Invoices">
+                <p>Invoices with no matching bank payment found.</p>
+                <p className="mt-1">May need manual matching or are awaiting payment.</p>
+              </InfoButton>
+            </div>
+            <p className="text-2xl font-semibold tracking-tight text-rose-400 tabular-nums mt-1">{stats?.unmatched_invoices || 0}</p>
+            <p className="text-sm text-zinc-500">{formatCurrency(stats?.unmatched_amount || 0)}</p>
+          </div>
+
+          {/* Confidence Breakdown */}
+          <div className="flex-1 pl-6">
+            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Confidence Breakdown</p>
+            <div className="flex items-center gap-4 mt-2">
+              <div>
+                <p className="text-lg font-semibold text-emerald-400 tabular-nums">{stats?.high_confidence_pending || 0}</p>
+                <p className="text-[10px] text-zinc-500">High ≥85%</p>
+              </div>
+              <div>
+                <p className="text-lg font-semibold text-amber-400 tabular-nums">{stats?.low_confidence_pending || 0}</p>
+                <p className="text-[10px] text-zinc-500">Low &lt;70%</p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Main queue display */}
-      {all.length === 0 ? (
-        <div className="bg-[#141414] border border-white/10 rounded-xl p-14 text-center">
-          <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-3">
-            <span className="text-emerald-400 text-lg">✓</span>
-          </div>
-          <p className="text-white font-medium">Inbox Zero</p>
-          <p className="text-zinc-500 text-[12px] mt-1">All operating cash has been reconciled.</p>
+      {/* Tabs and Search */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveTab("pending")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === "pending"
+                ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                : "bg-zinc-900/50 text-zinc-400 border border-zinc-800/50 hover:text-zinc-300"
+            }`}
+          >
+            <Clock className="h-4 w-4 inline mr-2" />
+            Pending Matches ({stats?.pending_matches || 0})
+          </button>
+          <button
+            onClick={() => setActiveTab("unmatched")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === "unmatched"
+                ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                : "bg-zinc-900/50 text-zinc-400 border border-zinc-800/50 hover:text-zinc-300"
+            }`}
+          >
+            <AlertCircle className="h-4 w-4 inline mr-2" />
+            Unmatched Invoices ({stats?.unmatched_invoices || 0})
+          </button>
         </div>
-      ) : (
-        <div className="grid grid-cols-[240px_1fr] gap-4 bg-[#141414] border border-white/[0.07] rounded-xl overflow-hidden h-[600px]">
-          {/* Left sidebar */}
-          <div ref={cmdSidebarRef} className="border-r border-white/[0.07] overflow-y-auto bg-[#0a0a0a]">
-            <div className="px-3 py-2 border-b border-white/[0.05] sticky top-0 bg-[#0a0a0a]">
-              <span className="text-[9px] text-zinc-600 uppercase tracking-wider">Queue</span>
+
+        <div className="relative w-64">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-500" />
+          <Input
+            placeholder="Search..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="bg-zinc-900/50 border-zinc-800/50 pl-9 h-9 text-sm text-zinc-300 placeholder:text-zinc-600"
+          />
+        </div>
+      </div>
+
+      {/* Content */}
+      {totalItems === 0 ? (
+        <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-16 text-center">
+          <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-4">
+            <CheckCircle2 className="h-6 w-6 text-emerald-400" />
+          </div>
+          <p className="text-white font-medium text-lg">All Clear!</p>
+          <p className="text-zinc-500 text-sm mt-1">No items need review. All reconciliation is complete.</p>
+        </div>
+      ) : activeTab === "pending" ? (
+        <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl overflow-hidden">
+          {filteredPendingMatches.length === 0 ? (
+            <div className="p-12 text-center">
+              <p className="text-zinc-500">No pending matches found.</p>
             </div>
-            {cmdQueue.map((mov, idx) => {
-              const movSm = mov.suggested_match
-              const status = cmdProcessed.get(mov.id)
-              const isActive = idx === cmdIndex
-              const movIsInflow = mov.amount > 0
-              const tier = movSm ? getConfidenceBadge(movSm.confidence).tier : null
-              return (
-                <button
-                  key={mov.id}
-                  data-idx={idx}
-                  onClick={() => setCmdIndex(idx)}
-                  className={`w-full text-left px-3 py-2.5 border-b border-white/[0.04] flex items-center gap-2.5 transition-none
-                    ${isActive ? "bg-white/[0.07] border-l-2 border-l-emerald-500" : "border-l-2 border-l-transparent hover:bg-white/[0.03]"}
-                    ${status ? "opacity-40" : ""}`}
-                >
-                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${movIsInflow ? "bg-emerald-500" : "bg-red-500"}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-1">
-                      <span className={`text-[11px] font-mono tabular-nums font-semibold ${movIsInflow ? "text-emerald-400" : "text-red-400"} ${status ? "line-through" : ""}`}>
-                        {movIsInflow ? "+" : "−"}{formatCurrency(Math.abs(mov.amount))}
-                      </span>
-                      {tier && !status && (
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tier === "high" ? "bg-emerald-500" : tier === "med" ? "bg-amber-500" : "bg-zinc-600"}`} />
-                      )}
-                      {status === "accepted" && <span className="text-[9px] text-emerald-500">✓</span>}
-                      {status === "skipped" && <span className="text-[9px] text-zinc-600">—</span>}
-                    </div>
-                    <p className={`text-[10px] truncate mt-0.5 ${isActive ? "text-zinc-300" : "text-zinc-600"}`}>
-                      {movSm?.entity_name || mov.description}
-                    </p>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-
-          {/* Right panel */}
-          <div className="flex flex-col">
-            {!activeMov ? (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-3">
-                    <span className="text-emerald-400 text-lg">✓</span>
-                  </div>
-                  <p className="text-white font-medium">Queue Empty</p>
-                  <p className="text-zinc-500 text-[12px] mt-1">All movements processed.</p>
-                </div>
-              </div>
-            ) : (
-              <>
-                {/* Header */}
-                <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.07]">
-                  <span className="text-[10px] text-zinc-600 font-mono">#{cmdIndex + 1} of {cmdQueue.length}</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-24 h-1.5 bg-white/[0.07] rounded-full overflow-hidden">
-                      <div className="h-full bg-emerald-500 rounded-full transition-none" style={{ width: `${pct}%` }} />
-                    </div>
-                    <span className="text-[10px] font-mono text-zinc-400 tabular-nums">{processedCount} / {totalCount}</span>
-                  </div>
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    {/* Bank side */}
-                    <div className="bg-[#0a0a0a] border border-white/[0.07] rounded-lg p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-medium">Bank Movement</span>
-                        <div className={`w-1.5 h-1.5 rounded-full ${isInflow ? "bg-emerald-500" : "bg-red-500"}`} />
-                      </div>
-                      <p className="text-[14px] font-medium text-white leading-snug mb-1">{activeMov.description}</p>
-                      {activeMov.raw_description && activeMov.raw_description !== activeMov.description && (
-                        <p className="text-[11px] text-zinc-500 mb-2">{activeMov.raw_description}</p>
-                      )}
-                      <p className={`text-[24px] font-mono tabular-nums font-bold mt-2 ${isInflow ? "text-emerald-400" : "text-red-400"}`}>
-                        {isInflow ? "+" : "−"}{formatCurrency(Math.abs(activeMov.amount))}
-                      </p>
-                      <p className="text-[11px] text-zinc-500 mt-1">{formatDate(activeMov.date)}</p>
-                    </div>
-
-                    {/* Ledger side */}
-                    {hasMatch ? (
-                      <div className="bg-[#0a0a0a] border border-white/[0.07] rounded-lg p-4">
-                        <div className="flex items-center gap-2 mb-3">
-                          <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-medium">Ledger Match</span>
-                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${isAR ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>
-                            {isAR ? "AR" : "AP"}
-                          </span>
-                        </div>
-                        <p className="text-[14px] font-medium text-white leading-snug mb-1">{sm.entity_name || (isAR ? "Invoice" : "Bill")}</p>
-                        {refLabel && <p className="text-[11px] text-zinc-500 mb-2">{refLabel}</p>}
-                        <p className="text-[24px] font-mono tabular-nums font-bold mt-2 text-zinc-200">{formatCurrency(sm.matched_amount)}</p>
-                        <div className="mt-3 space-y-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-zinc-500">Confidence</span>
-                            <span className={`text-[10px] font-mono font-bold ${confBadge?.tier === "high" ? "text-emerald-400" : confBadge?.tier === "med" ? "text-amber-400" : "text-zinc-400"}`}>
-                              {confBadge?.label}
-                            </span>
-                          </div>
-                          <div className="w-full h-1 bg-white/[0.06] rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${confBadge?.tier === "high" ? "bg-emerald-500" : confBadge?.tier === "med" ? "bg-amber-500" : "bg-zinc-600"}`}
-                              style={{ width: `${Math.round(sm.confidence * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                        {sm.reason && <p className="text-[10px] text-zinc-500 mt-2">{sm.reason}</p>}
-                      </div>
-                    ) : (
-                      <div className="bg-[#0a0a0a] border border-white/[0.07] rounded-lg p-4 flex flex-col justify-between">
-                        <div>
-                          <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-medium">Ledger Match</span>
-                          <p className="text-[12px] text-zinc-500 italic mt-2">No AI suggestion</p>
-                        </div>
-                        <Button
-                          size="sm"
-                          className="mt-3 bg-white/[0.07] hover:bg-white/[0.12] text-zinc-300 text-[11px] h-7 border border-white/10 w-full"
-                          onClick={() => {
-                            setSelectedMovement(activeMov)
-                            setSelectedMatches([])
-                            setSearchQuery("")
-                            setSearchResults([])
-                            setIsDrawerOpen(true)
-                          }}
-                        >
-                          <Search className="h-3 w-3 mr-2" />
-                          Search &amp; Match
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Action bar */}
-                <div className="shrink-0 border-t border-white/[0.07] px-5 py-3 flex items-center justify-between bg-[#0a0a0a]">
-                  <div className="flex items-center gap-2 text-zinc-600 text-[10px]">
-                    <ChevronRight className="h-3 w-3" />
-                    <span>Click queue item to jump</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleCmdSkip}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.07] text-zinc-300 text-[11px] font-medium"
-                    >
-                      <kbd className="inline-flex items-center px-0.5 py-0 rounded bg-white/[0.07] text-[9px] font-mono text-zinc-400 border border-white/10">N</kbd>
-                      Skip
-                    </button>
-                    {hasMatch && !cmdProcessed.has(activeMov.id) && (
-                      <button
-                        onClick={handleCmdAccept}
-                        className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold"
-                      >
-                        <kbd className="inline-flex items-center px-0.5 py-0 rounded bg-white/20 text-[9px] font-mono text-white border border-white/20">Y</kbd>
-                        Accept
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Manual Match Sheet */}
-      <Sheet open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
-        <SheetContent className="bg-[#141414] border-l border-white/10 w-full sm:max-w-2xl overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle className="text-white text-base">Manual Match</SheetTitle>
-          </SheetHeader>
-          {selectedMovement && (
-            <div className="space-y-4 mt-5">
-              {/* Selected Movement Card */}
-              <div className="bg-[#0a0a0a] border border-white/[0.07] rounded-lg p-4">
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-2">Selected Movement</p>
-                <p className="text-[13px] font-medium text-white">{selectedMovement.description}</p>
-                <p className="text-[12px] font-mono tabular-nums text-emerald-400 mt-2">
-                  {selectedMovement.amount > 0 ? "+" : "−"}{formatCurrency(Math.abs(selectedMovement.amount))}
-                </p>
-                <p className="text-[11px] text-zinc-600 mt-1">{formatDate(selectedMovement.date)}</p>
-              </div>
-
-              {/* Search Controls */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-zinc-600 uppercase tracking-wider">Match Type:</span>
-                  <button
-                    onClick={() => { setSearchQuery(""); setSearchResults([]); setSelectedMatches([]); setSearchType("ar") }}
-                    className={`px-3 py-1.5 rounded text-[11px] font-medium transition-none ${
-                      searchType === "ar"
-                        ? "bg-emerald-600 text-white"
-                        : "bg-white/[0.07] text-zinc-400 hover:bg-white/[0.12]"
-                    }`}
-                  >
-                    AR (Invoices)
-                  </button>
-                  <button
-                    onClick={() => { setSearchQuery(""); setSearchResults([]); setSelectedMatches([]); setSearchType("ap") }}
-                    className={`px-3 py-1.5 rounded text-[11px] font-medium transition-none ${
-                      searchType === "ap"
-                        ? "bg-amber-600 text-white"
-                        : "bg-white/[0.07] text-zinc-400 hover:bg-white/[0.12]"
-                    }`}
-                  >
-                    AP (Bills)
-                  </button>
-                </div>
-
-                {/* Search Input */}
-                <div className="flex gap-2">
-                  <Input
-                    placeholder={`Search ${searchType === "ar" ? "invoices" : "bills"}...`}
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="bg-[#0a0a0a] border border-white/[0.07] text-white placeholder:text-zinc-600 text-[12px] h-8"
-                  />
-                  {searchLoading && <div className="w-8 h-8 border-2 border-white/10 border-t-emerald-500 rounded-full animate-spin" />}
-                </div>
-              </div>
-
-              {/* Search Results */}
-              {searchResults.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Results ({searchResults.length})</p>
-                  <div className="space-y-1 max-h-[200px] overflow-y-auto">
-                    {searchResults.map((result) => {
-                      const isSelected = selectedMatches.some(m => m.id === result.id)
-                      return (
-                        <button
-                          key={result.id}
-                          onClick={() => {
-                            if (isSelected) {
-                              setSelectedMatches(selectedMatches.filter(m => m.id !== result.id))
-                            } else {
-                              setSelectedMatches([
-                                ...selectedMatches,
-                                {
-                                  id: result.id,
-                                  entity_name: result.entity_name,
-                                  amount: result.amount,
-                                  amount_due: result.amount_due,
-                                  split_amount: result.amount_due,
-                                },
-                              ])
-                            }
-                          }}
-                          className={`w-full text-left px-3 py-2 rounded border transition-none flex items-center gap-2 ${
-                            isSelected
-                              ? "bg-white/[0.1] border-white/20"
-                              : "bg-white/[0.03] border-white/[0.07] hover:bg-white/[0.06]"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => {}}
-                            className="w-4 h-4 rounded border-white/20 cursor-pointer"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[12px] font-medium text-white truncate">{result.entity_name}</p>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-[11px] font-mono text-zinc-400">{formatCurrency(result.amount)}</span>
-                              <span className="text-[10px] text-zinc-600">Due: {formatCurrency(result.amount_due)}</span>
-                              <span className={`text-[9px] px-1.5 py-0.5 rounded ${
-                                result.status === "open"
-                                  ? "bg-amber-500/10 text-amber-400"
-                                  : result.status === "partially_paid"
-                                  ? "bg-blue-500/10 text-blue-400"
-                                  : "bg-emerald-500/10 text-emerald-400"
-                              }`}>
-                                {result.status}
-                              </span>
-                            </div>
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {searchQuery && !searchLoading && searchResults.length === 0 && (
-                <p className="text-[12px] text-zinc-600 text-center py-4">No results found</p>
-              )}
-
-              {/* Consumption Bar */}
-              {selectedMatches.length > 0 && (
-                <div className="space-y-2 bg-[#0a0a0a] border border-white/[0.07] rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-zinc-600 uppercase tracking-wider">Matched Amount</span>
-                    <span className="text-[12px] font-mono text-white">
-                      {formatCurrency(selectedMatches.reduce((s, m) => s + m.split_amount, 0))} / {formatCurrency(Math.abs(selectedMovement.amount))}
-                    </span>
-                  </div>
-                  {(() => {
-                    const matched = selectedMatches.reduce((s, m) => s + m.split_amount, 0)
-                    const total = Math.abs(selectedMovement.amount)
-                    const pct = total > 0 ? Math.min(100, (matched / total) * 100) : 0
-                    const isOver = matched > total
-                    return (
-                      <>
-                        <div className="w-full h-2 bg-white/[0.06] rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-none ${
-                              isOver ? "bg-red-500" : pct === 100 ? "bg-emerald-500" : "bg-amber-500"
-                            }`}
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                        {isOver && (
-                          <p className="text-[10px] text-red-400">Over by {formatCurrency(matched - total)}</p>
+          ) : (
+            <div className="max-h-[600px] overflow-y-auto">
+              <table className="w-full">
+                <thead className="sticky top-0 bg-zinc-900">
+                  <tr className="border-b border-zinc-800">
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Bank Payment</th>
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Invoice</th>
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Match Type</th>
+                    <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Confidence</th>
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Reasoning</th>
+                    <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPendingMatches.map((match) => (
+                    <tr key={match.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+                      <td className="px-4 py-3">
+                        <p className="text-sm text-zinc-200">{match.bank_counterparty || "Bank deposit"}</p>
+                        <p className="text-xs text-zinc-500">{formatDate(match.bank_date)}</p>
+                        <p className="text-sm font-medium text-emerald-400 tabular-nums mt-1">+{formatCurrency(match.bank_amount)}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-sm text-zinc-200">{match.customer_name}</p>
+                        <p className="text-xs text-zinc-500">#{match.invoice_id}</p>
+                        <p className="text-sm text-zinc-400 tabular-nums mt-1">{formatCurrency(match.invoice_amount)}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-2 py-1 rounded ${getMatchTypeColor(match.match_type)}`}>
+                          {match.match_type}
+                        </span>
+                        {match.fee_amount > 0 && (
+                          <p className="text-[10px] text-amber-400 mt-1">Fee: {formatCurrency(match.fee_amount)}</p>
                         )}
-                        {pct < 100 && (
-                          <p className="text-[10px] text-amber-400">Remaining: {formatCurrency(total - matched)}</p>
-                        )}
-                      </>
-                    )
-                  })()}
-
-                  {/* Split Amounts */}
-                  <div className="space-y-2 mt-3 pt-3 border-t border-white/[0.07]">
-                    <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Split Amounts</p>
-                    {selectedMatches.map((match, idx) => (
-                      <div key={match.id} className="flex items-center gap-2">
-                        <span className="text-[11px] text-zinc-400 flex-1 truncate">{match.entity_name}</span>
-                        <input
-                          type="number"
-                          value={match.split_amount}
-                          onChange={(e) => {
-                            const newVal = parseFloat(e.target.value) || 0
-                            const updated = [...selectedMatches]
-                            updated[idx].split_amount = Math.min(newVal, match.amount_due)
-                            setSelectedMatches(updated)
-                          }}
-                          className="w-24 px-2 py-1 rounded bg-[#141414] border border-white/[0.07] text-white text-[11px] font-mono text-right"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="flex gap-2 pt-4 border-t border-white/[0.07]">
-                <Button
-                  onClick={() => {
-                    setIsDrawerOpen(false)
-                    setSelectedMovement(null)
-                    setSelectedMatches([])
-                    setSearchQuery("")
-                    setSearchResults([])
-                  }}
-                  variant="ghost"
-                  className="flex-1 text-zinc-400 hover:text-white"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={async () => {
-                    if (!selectedMovement || selectedMatches.length === 0) return
-                    try {
-                      const res = await fetch("/api/dashboard/reconciliation/split-match", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          movement_id: selectedMovement.id,
-                          matches: selectedMatches.map(m => ({
-                            reference_id: m.id,
-                            component_type: searchType,
-                            amount: m.split_amount,
-                          })),
-                        }),
-                      })
-                      if (res.ok) {
-                        setIsDrawerOpen(false)
-                        setSelectedMovement(null)
-                        setSelectedMatches([])
-                        setSearchQuery("")
-                        setSearchResults([])
-                        await fetchData()
-                        handleCmdSkip()
-                      } else {
-                        setError("Failed to apply match")
-                      }
-                    } catch (err) {
-                      setError(err instanceof Error ? err.message : "Error")
-                    }
-                  }}
-                  disabled={selectedMatches.length === 0 || selectedMatches.reduce((s, m) => s + m.split_amount, 0) > Math.abs(selectedMovement.amount)}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Apply Match
-                </Button>
-              </div>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`text-sm font-medium tabular-nums ${
+                          match.confidence >= 0.85 ? "text-emerald-400" :
+                          match.confidence >= 0.70 ? "text-amber-400" :
+                          "text-rose-400"
+                        }`}>
+                          {Math.round(match.confidence * 100)}%
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-xs text-zinc-500 max-w-[200px] truncate" title={match.reasoning || ""}>
+                          {match.reasoning || "—"}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => handleConfirmMatch(match.id)}
+                            disabled={processingId === match.id}
+                            className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                            title="Confirm match"
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleRejectMatch(match.id)}
+                            disabled={processingId === match.id}
+                            className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-colors disabled:opacity-50"
+                            title="Reject match"
+                          >
+                            <XCircle className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
-        </SheetContent>
-      </Sheet>
+        </div>
+      ) : (
+        <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl overflow-hidden">
+          {filteredUnmatchedInvoices.length === 0 ? (
+            <div className="p-12 text-center">
+              <p className="text-zinc-500">No unmatched invoices found.</p>
+            </div>
+          ) : (
+            <div className="max-h-[600px] overflow-y-auto">
+              <table className="w-full">
+                <thead className="sticky top-0 bg-zinc-900">
+                  <tr className="border-b border-zinc-800">
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Invoice</th>
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Customer</th>
+                    <th className="text-right text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Amount</th>
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Invoice Date</th>
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Due Date</th>
+                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredUnmatchedInvoices.map((invoice) => (
+                    <tr key={invoice.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+                      <td className="px-4 py-3">
+                        <p className="text-sm text-zinc-200">#{invoice.invoice_number || invoice.invoice_id}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-sm text-zinc-200">{invoice.customer_name}</p>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="text-sm font-medium text-zinc-200 tabular-nums">{formatCurrency(invoice.invoice_amount)}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-sm text-zinc-400">{formatDate(invoice.invoice_date)}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-sm text-zinc-400">{formatDate(invoice.due_date)}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs px-2 py-1 rounded bg-rose-500/10 text-rose-400">
+                          No match found
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

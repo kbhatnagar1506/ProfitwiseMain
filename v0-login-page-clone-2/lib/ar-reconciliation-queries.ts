@@ -238,13 +238,17 @@ export interface ARMatch {
   bank_counterparty: string
   bank_amount: number
   invoice_id: string
+  invoice_number: string | null
   customer_name: string
   invoice_amount: number
+  invoice_date: string | null
+  due_date: string | null
   match_type: string
   confidence: number
   fee_amount: number
   matched_amount: number
   matched_by: string
+  reasoning: string | null
   status: string
   confirmed_at: string | null
   created_at: string
@@ -293,36 +297,48 @@ export async function getARMatches(
       arm.fee_amount,
       arm.matched_amount,
       arm.matched_by,
+      arm.ai_reasoning,
       arm.status,
       arm.confirmed_at,
-      arm.created_at
+      arm.created_at,
+      ce.expected_date as invoice_due_date,
+      ce.metadata as invoice_metadata
     FROM ar_reconciliation_matches arm
+    LEFT JOIN cash_events ce ON ce.id = arm.cash_event_id
     ${whereClause}
-    ORDER BY arm.bank_date DESC
+    ORDER BY arm.confidence ASC, arm.bank_date DESC
     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, limit, offset]
   )
 
-  const matches = matchesResult.rows.map((row) => ({
-    id: row.id,
-    movement_id: row.movement_id,
-    cash_event_id: row.cash_event_id,
-    bank_date: row.bank_date,
-    bank_description: row.bank_description,
-    bank_counterparty: row.bank_counterparty,
-    bank_amount: parseFloat(row.bank_amount),
-    invoice_id: row.invoice_id,
-    customer_name: row.customer_name,
-    invoice_amount: parseFloat(row.invoice_amount),
-    match_type: row.match_type,
-    confidence: parseFloat(row.confidence),
-    fee_amount: parseFloat(row.fee_amount),
-    matched_amount: parseFloat(row.matched_amount),
-    matched_by: row.matched_by,
-    status: row.status,
-    confirmed_at: row.confirmed_at,
-    created_at: row.created_at,
-  }))
+  const matches = matchesResult.rows.map((row) => {
+    const metadata = row.invoice_metadata as Record<string, unknown> || {}
+    const invoiceDate = (metadata.txn_date as string) || (metadata.date as string) || null
+    return {
+      id: row.id,
+      movement_id: row.movement_id,
+      cash_event_id: row.cash_event_id,
+      bank_date: row.bank_date,
+      bank_description: row.bank_description,
+      bank_counterparty: row.bank_counterparty,
+      bank_amount: parseFloat(row.bank_amount),
+      invoice_id: row.invoice_id,
+      invoice_number: (metadata.doc_number as string) || (metadata.invoice_number as string) || null,
+      customer_name: row.customer_name,
+      invoice_amount: parseFloat(row.invoice_amount),
+      invoice_date: invoiceDate,
+      due_date: row.invoice_due_date,
+      match_type: row.match_type,
+      confidence: parseFloat(row.confidence),
+      fee_amount: parseFloat(row.fee_amount),
+      matched_amount: parseFloat(row.matched_amount),
+      matched_by: row.matched_by,
+      reasoning: row.ai_reasoning,
+      status: row.status,
+      confirmed_at: row.confirmed_at,
+      created_at: row.created_at,
+    }
+  })
 
   return { matches, total }
 }
