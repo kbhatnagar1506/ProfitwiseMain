@@ -16,7 +16,6 @@ interface ClassifiedMovement {
   amount: number
   direction: "inflow" | "outflow"
   counterparty: string | null
-  display_name: string | null  // Resolved/normalized name
   economic_class: string | null
   classification: ClassificationResult
 }
@@ -589,7 +588,7 @@ export default function ReconciliationCandidatesPage() {
                   <tr key={movement.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
                     <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(movement.date)}</td>
                     <td className="px-3 py-2">
-                      <p className="text-[12px] text-white truncate max-w-[250px]">{movement.display_name || movement.counterparty || movement.id.slice(0, 12)}</p>
+                      <p className="text-[12px] text-white truncate max-w-[250px]">{movement.counterparty || movement.id.slice(0, 12)}</p>
                     </td>
                     <td className="px-3 py-2 text-right">
                       <span className={`text-[12px] font-mono tabular-nums font-semibold ${movement.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
@@ -656,14 +655,11 @@ export default function ReconciliationCandidatesPage() {
                 <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-3">Bank Movement</p>
                 <div className="space-y-2">
                   <div className="flex items-baseline justify-between">
-                    <p className="text-[13px] font-medium text-white">{selectedMovement.display_name || selectedMovement.counterparty || "Unknown"}</p>
+                    <p className="text-[13px] font-medium text-white">{selectedMovement.counterparty || "Unknown"}</p>
                     <p className={`text-lg font-mono tabular-nums font-semibold ${selectedMovement.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
                       {selectedMovement.direction === "inflow" ? "+" : "−"}{formatCurrency(Math.abs(selectedMovement.amount))}
                     </p>
                   </div>
-                  {selectedMovement.display_name && selectedMovement.counterparty && selectedMovement.display_name !== selectedMovement.counterparty && (
-                    <p className="text-[10px] text-zinc-600">Raw: {selectedMovement.counterparty}</p>
-                  )}
                   <p className="text-[11px] text-zinc-500">{formatDate(selectedMovement.date)}</p>
                   {selectedMovement.economic_class && (
                     <p className="text-[11px] text-zinc-600">Class: {selectedMovement.economic_class}</p>
