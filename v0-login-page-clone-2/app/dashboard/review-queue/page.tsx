@@ -1,11 +1,12 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { RefreshCw, Search, CheckCircle2, XCircle, Clock, AlertCircle, Info, ChevronRight } from "lucide-react"
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { RefreshCw, Search, CheckCircle2, XCircle, Clock, AlertCircle, Info, ChevronRight, ChevronDown, Zap } from "lucide-react"
 
 interface PendingMatch {
   id: string
@@ -30,24 +31,43 @@ interface PendingMatch {
   created_at: string
 }
 
-interface UnmatchedInvoice {
+interface Candidate {
   id: string
-  invoice_id: string
+  entity_id: string
+  entity_name: string
   invoice_number: string | null
   customer_name: string
-  invoice_amount: number
-  invoice_date: string | null
+  amount: number
+  outstanding_amount: number
   due_date: string | null
-  status: string
+  match_type: string
+  amount_diff: number
+  fee_implied: number | null
+  is_direct_link: boolean
+  reference_match: boolean
+  is_customer_match?: boolean
+  is_amount_match?: boolean
+  invoice_date: string | null
 }
 
-interface ReviewQueueStats {
-  pending_matches: number
-  pending_amount: number
-  unmatched_invoices: number
-  unmatched_amount: number
-  high_confidence_pending: number
-  low_confidence_pending: number
+interface MovementCandidates {
+  movement: {
+    id: string
+    date: string
+    amount: number
+    direction: string
+    counterparty: string | null
+    raw_description: string | null
+  }
+  classification: {
+    case_type: string
+    is_operational: boolean
+    flags: Record<string, boolean>
+    suggested_action: string
+  }
+  candidates: Candidate[]
+  existing_matches: Record<string, any>
+  total_candidates: number
 }
 
 function formatCurrency(n: number) {
@@ -69,6 +89,12 @@ function getMatchTypeColor(matchType: string): string {
   }
 }
 
+function getConfidenceColor(confidence: number): string {
+  if (confidence >= 0.85) return "text-emerald-400"
+  if (confidence >= 0.70) return "text-amber-400"
+  return "text-rose-400"
+}
+
 function InfoButton({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Popover>
@@ -87,42 +113,27 @@ function InfoButton({ title, children }: { title: string; children: React.ReactN
 
 export default function ReviewQueuePage() {
   const [pendingMatches, setPendingMatches] = useState<PendingMatch[]>([])
-  const [unmatchedInvoices, setUnmatchedInvoices] = useState<UnmatchedInvoice[]>([])
-  const [stats, setStats] = useState<ReviewQueueStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<"pending" | "unmatched">("pending")
   const [searchQuery, setSearchQuery] = useState("")
   const [processingId, setProcessingId] = useState<string | null>(null)
+  
+  // Triage Drawer state
+  const [triageOpen, setTriageOpen] = useState(false)
+  const [selectedMatch, setSelectedMatch] = useState<PendingMatch | null>(null)
+  const [candidates, setCandidates] = useState<MovementCandidates | null>(null)
+  const [candidatesLoading, setCandidatesLoading] = useState(false)
+  const [selectedCandidateIdx, setSelectedCandidateIdx] = useState(0)
+  const [splitMode, setSplitMode] = useState(false)
+  const [splitAllocations, setSplitAllocations] = useState<Map<string, number>>(new Map())
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true)
-      
-      // Fetch pending matches
       const matchesRes = await fetch("/api/ar-reconciliation/matches?status=pending&limit=500")
       if (!matchesRes.ok) throw new Error("Failed to fetch pending matches")
       const matchesJson = await matchesRes.json()
       setPendingMatches(matchesJson.matches || [])
-
-      // Fetch unmatched invoices
-      const invoicesRes = await fetch("/api/ar-reconciliation/invoices?filter=unmatched&limit=500")
-      if (!invoicesRes.ok) throw new Error("Failed to fetch unmatched invoices")
-      const invoicesJson = await invoicesRes.json()
-      setUnmatchedInvoices(invoicesJson.invoices || [])
-
-      // Calculate stats
-      const pending = matchesJson.matches || []
-      const unmatched = invoicesJson.invoices || []
-      setStats({
-        pending_matches: pending.length,
-        pending_amount: pending.reduce((s: number, m: PendingMatch) => s + m.invoice_amount, 0),
-        unmatched_invoices: unmatched.length,
-        unmatched_amount: unmatched.reduce((s: number, i: UnmatchedInvoice) => s + i.invoice_amount, 0),
-        high_confidence_pending: pending.filter((m: PendingMatch) => m.confidence >= 0.85).length,
-        low_confidence_pending: pending.filter((m: PendingMatch) => m.confidence < 0.70).length,
-      })
-
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error loading review queue")
@@ -135,6 +146,27 @@ export default function ReviewQueuePage() {
     fetchData()
   }, [fetchData])
 
+  const openTriageDrawer = useCallback(async (match: PendingMatch) => {
+    setSelectedMatch(match)
+    setCandidatesLoading(true)
+    setSelectedCandidateIdx(0)
+    setSplitMode(false)
+    setSplitAllocations(new Map())
+    
+    try {
+      const res = await fetch(`/api/ar-reconciliation/candidates?movement_id=${match.movement_id}`)
+      if (res.ok) {
+        const data = await res.json()
+        setCandidates(data)
+      }
+    } catch (err) {
+      console.error("Failed to fetch candidates:", err)
+    } finally {
+      setCandidatesLoading(false)
+      setTriageOpen(true)
+    }
+  }, [])
+
   const handleConfirmMatch = async (matchId: string) => {
     setProcessingId(matchId)
     try {
@@ -145,12 +177,8 @@ export default function ReviewQueuePage() {
       })
       if (res.ok) {
         setPendingMatches(prev => prev.filter(m => m.id !== matchId))
-        if (stats) {
-          setStats({
-            ...stats,
-            pending_matches: stats.pending_matches - 1,
-          })
-        }
+        setTriageOpen(false)
+        setSelectedMatch(null)
       }
     } catch (err) {
       console.error("Failed to confirm match:", err)
@@ -167,12 +195,8 @@ export default function ReviewQueuePage() {
       })
       if (res.ok) {
         setPendingMatches(prev => prev.filter(m => m.id !== matchId))
-        if (stats) {
-          setStats({
-            ...stats,
-            pending_matches: stats.pending_matches - 1,
-          })
-        }
+        setTriageOpen(false)
+        setSelectedMatch(null)
       }
     } catch (err) {
       console.error("Failed to reject match:", err)
@@ -181,7 +205,43 @@ export default function ReviewQueuePage() {
     }
   }
 
-  const filteredPendingMatches = pendingMatches.filter(m => {
+  // Keyboard navigation
+  useEffect(() => {
+    if (!triageOpen || !candidates) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return
+
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        e.preventDefault()
+        const direction = e.key === "ArrowUp" ? -1 : 1
+        setSelectedCandidateIdx(prev => {
+          const next = prev + direction
+          return Math.max(0, Math.min(next, candidates.candidates.length - 1))
+        })
+      }
+
+      if (e.key === "Enter" && selectedMatch && !splitMode) {
+        e.preventDefault()
+        handleConfirmMatch(selectedMatch.id)
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault()
+        setTriageOpen(false)
+      }
+
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault()
+        setSplitMode(!splitMode)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [triageOpen, candidates, selectedMatch, selectedCandidateIdx, splitMode])
+
+  const filteredMatches = pendingMatches.filter(m => {
     if (!searchQuery) return true
     const q = searchQuery.toLowerCase()
     return (
@@ -192,21 +252,10 @@ export default function ReviewQueuePage() {
     )
   })
 
-  const filteredUnmatchedInvoices = unmatchedInvoices.filter(i => {
-    if (!searchQuery) return true
-    const q = searchQuery.toLowerCase()
-    return (
-      i.customer_name?.toLowerCase().includes(q) ||
-      i.invoice_id?.toLowerCase().includes(q) ||
-      i.invoice_number?.toLowerCase().includes(q)
-    )
-  })
-
   if (loading) {
     return (
       <div className="p-8 space-y-4 bg-black min-h-screen">
         <div className="h-8 w-48 bg-zinc-900 rounded animate-pulse" />
-        <div className="h-32 bg-zinc-900 rounded animate-pulse" />
         <div className="h-96 bg-zinc-900 rounded animate-pulse" />
       </div>
     )
@@ -226,16 +275,15 @@ export default function ReviewQueuePage() {
     )
   }
 
-  const totalItems = (stats?.pending_matches || 0) + (stats?.unmatched_invoices || 0)
-  const totalAmount = (stats?.pending_amount || 0) + (stats?.unmatched_amount || 0)
+  const selectedCandidate = candidates?.candidates[selectedCandidateIdx]
 
   return (
     <div className="p-8 space-y-5 bg-black min-h-screen">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight">Review Queue</h1>
-          <p className="text-sm text-zinc-500 mt-1">Items requiring human review before reconciliation is complete</p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight">Triage Terminal</h1>
+          <p className="text-sm text-zinc-500 mt-1">High-speed reconciliation review · Click to open drawer, use arrow keys to navigate</p>
         </div>
         <Button
           onClick={() => fetchData()}
@@ -247,243 +295,269 @@ export default function ReviewQueuePage() {
         </Button>
       </div>
 
-      {/* Stats Banner */}
-      <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-5">
-        <div className="flex items-center divide-x divide-zinc-800">
-          {/* Total Needs Review */}
-          <div className="flex-1 pr-6">
-            <div className="flex items-center">
-              <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Total Needs Review</p>
-              <InfoButton title="Review Queue">
-                <p>Items that need human verification before being finalized.</p>
-                <p className="mt-1">Includes pending AI matches and unmatched invoices.</p>
-              </InfoButton>
-            </div>
-            <p className="text-3xl font-semibold tracking-tight text-white tabular-nums mt-1">{totalItems}</p>
-            <p className="text-sm text-zinc-500">{formatCurrency(totalAmount)}</p>
+      {/* Stats */}
+      <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Pending Review</p>
+            <p className="text-3xl font-semibold tracking-tight text-amber-400 tabular-nums mt-1">{pendingMatches.length}</p>
           </div>
-
-          {/* Pending Matches */}
-          <div className="flex-1 px-6">
-            <div className="flex items-center">
-              <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Pending Matches</p>
-              <InfoButton title="Pending Matches">
-                <p>AI-suggested matches that need confirmation.</p>
-                <p className="mt-1">Review the match and confirm or reject.</p>
-              </InfoButton>
-            </div>
-            <p className="text-2xl font-semibold tracking-tight text-amber-400 tabular-nums mt-1">{stats?.pending_matches || 0}</p>
-            <p className="text-sm text-zinc-500">{formatCurrency(stats?.pending_amount || 0)}</p>
-          </div>
-
-          {/* Unmatched Invoices */}
-          <div className="flex-1 px-6">
-            <div className="flex items-center">
-              <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Unmatched Invoices</p>
-              <InfoButton title="Unmatched Invoices">
-                <p>Invoices with no matching bank payment found.</p>
-                <p className="mt-1">May need manual matching or are awaiting payment.</p>
-              </InfoButton>
-            </div>
-            <p className="text-2xl font-semibold tracking-tight text-rose-400 tabular-nums mt-1">{stats?.unmatched_invoices || 0}</p>
-            <p className="text-sm text-zinc-500">{formatCurrency(stats?.unmatched_amount || 0)}</p>
-          </div>
-
-          {/* Confidence Breakdown */}
-          <div className="flex-1 pl-6">
-            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Confidence Breakdown</p>
-            <div className="flex items-center gap-4 mt-2">
-              <div>
-                <p className="text-lg font-semibold text-emerald-400 tabular-nums">{stats?.high_confidence_pending || 0}</p>
-                <p className="text-[10px] text-zinc-500">High ≥85%</p>
-              </div>
-              <div>
-                <p className="text-lg font-semibold text-amber-400 tabular-nums">{stats?.low_confidence_pending || 0}</p>
-                <p className="text-[10px] text-zinc-500">Low &lt;70%</p>
-              </div>
-            </div>
+          <div className="text-right">
+            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Total Amount</p>
+            <p className="text-2xl font-semibold tracking-tight text-white tabular-nums mt-1">
+              {formatCurrency(pendingMatches.reduce((s, m) => s + m.invoice_amount, 0))}
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Tabs and Search */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setActiveTab("pending")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === "pending"
-                ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                : "bg-zinc-900/50 text-zinc-400 border border-zinc-800/50 hover:text-zinc-300"
-            }`}
-          >
-            <Clock className="h-4 w-4 inline mr-2" />
-            Pending Matches ({stats?.pending_matches || 0})
-          </button>
-          <button
-            onClick={() => setActiveTab("unmatched")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === "unmatched"
-                ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                : "bg-zinc-900/50 text-zinc-400 border border-zinc-800/50 hover:text-zinc-300"
-            }`}
-          >
-            <AlertCircle className="h-4 w-4 inline mr-2" />
-            Unmatched Invoices ({stats?.unmatched_invoices || 0})
-          </button>
-        </div>
-
-        <div className="relative w-64">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-500" />
-          <Input
-            placeholder="Search..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-zinc-900/50 border-zinc-800/50 pl-9 h-9 text-sm text-zinc-300 placeholder:text-zinc-600"
-          />
-        </div>
+      {/* Search */}
+      <div className="relative w-full">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-500" />
+        <Input
+          placeholder="Search by customer, invoice, or bank description..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="bg-zinc-900/50 border-zinc-800/50 pl-9 h-10 text-sm text-zinc-300 placeholder:text-zinc-600"
+        />
       </div>
 
-      {/* Content */}
-      {totalItems === 0 ? (
+      {/* Matches Table */}
+      {filteredMatches.length === 0 ? (
         <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-16 text-center">
           <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-4">
             <CheckCircle2 className="h-6 w-6 text-emerald-400" />
           </div>
           <p className="text-white font-medium text-lg">All Clear!</p>
-          <p className="text-zinc-500 text-sm mt-1">No items need review. All reconciliation is complete.</p>
-        </div>
-      ) : activeTab === "pending" ? (
-        <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl overflow-hidden">
-          {filteredPendingMatches.length === 0 ? (
-            <div className="p-12 text-center">
-              <p className="text-zinc-500">No pending matches found.</p>
-            </div>
-          ) : (
-            <div className="max-h-[600px] overflow-y-auto">
-              <table className="w-full">
-                <thead className="sticky top-0 bg-zinc-900">
-                  <tr className="border-b border-zinc-800">
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Bank Payment</th>
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Invoice</th>
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Match Type</th>
-                    <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Confidence</th>
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Reasoning</th>
-                    <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPendingMatches.map((match) => (
-                    <tr key={match.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
-                      <td className="px-4 py-3">
-                        <p className="text-sm text-zinc-200">{match.bank_counterparty || "Bank deposit"}</p>
-                        <p className="text-xs text-zinc-500">{formatDate(match.bank_date)}</p>
-                        <p className="text-sm font-medium text-emerald-400 tabular-nums mt-1">+{formatCurrency(match.bank_amount)}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm text-zinc-200">{match.customer_name}</p>
-                        <p className="text-xs text-zinc-500">#{match.invoice_id}</p>
-                        <p className="text-sm text-zinc-400 tabular-nums mt-1">{formatCurrency(match.invoice_amount)}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs px-2 py-1 rounded ${getMatchTypeColor(match.match_type)}`}>
-                          {match.match_type}
-                        </span>
-                        {match.fee_amount > 0 && (
-                          <p className="text-[10px] text-amber-400 mt-1">Fee: {formatCurrency(match.fee_amount)}</p>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`text-sm font-medium tabular-nums ${
-                          match.confidence >= 0.85 ? "text-emerald-400" :
-                          match.confidence >= 0.70 ? "text-amber-400" :
-                          "text-rose-400"
-                        }`}>
-                          {Math.round(match.confidence * 100)}%
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-xs text-zinc-500 max-w-[200px] truncate" title={match.reasoning || ""}>
-                          {match.reasoning || "—"}
-                        </p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => handleConfirmMatch(match.id)}
-                            disabled={processingId === match.id}
-                            className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
-                            title="Confirm match"
-                          >
-                            <CheckCircle2 className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => handleRejectMatch(match.id)}
-                            disabled={processingId === match.id}
-                            className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-colors disabled:opacity-50"
-                            title="Reject match"
-                          >
-                            <XCircle className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <p className="text-zinc-500 text-sm mt-1">No pending matches. All reconciliation is complete.</p>
         </div>
       ) : (
         <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl overflow-hidden">
-          {filteredUnmatchedInvoices.length === 0 ? (
-            <div className="p-12 text-center">
-              <p className="text-zinc-500">No unmatched invoices found.</p>
-            </div>
-          ) : (
-            <div className="max-h-[600px] overflow-y-auto">
-              <table className="w-full">
-                <thead className="sticky top-0 bg-zinc-900">
-                  <tr className="border-b border-zinc-800">
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Invoice</th>
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Customer</th>
-                    <th className="text-right text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Amount</th>
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Invoice Date</th>
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Due Date</th>
-                    <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Status</th>
+          <div className="max-h-[600px] overflow-y-auto">
+            <table className="w-full">
+              <thead className="sticky top-0 bg-zinc-900">
+                <tr className="border-b border-zinc-800">
+                  <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Bank Payment</th>
+                  <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Invoice</th>
+                  <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Match Type</th>
+                  <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Confidence</th>
+                  <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredMatches.map((match) => (
+                  <tr
+                    key={match.id}
+                    onClick={() => openTriageDrawer(match)}
+                    className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer"
+                  >
+                    <td className="px-4 py-3">
+                      <p className="text-sm text-zinc-200">{match.bank_counterparty || "Bank deposit"}</p>
+                      <p className="text-xs text-zinc-500">{formatDate(match.bank_date)}</p>
+                      <p className="text-sm font-medium text-emerald-400 tabular-nums mt-1">+{formatCurrency(match.bank_amount)}</p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <p className="text-sm text-zinc-200">{match.customer_name}</p>
+                      <p className="text-xs text-zinc-500">#{match.invoice_id}</p>
+                      <p className="text-sm text-zinc-400 tabular-nums mt-1">{formatCurrency(match.invoice_amount)}</p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs px-2 py-1 rounded ${getMatchTypeColor(match.match_type)}`}>
+                        {match.match_type}
+                      </span>
+                      {match.fee_amount > 0 && (
+                        <p className="text-[10px] text-amber-400 mt-1">Fee: {formatCurrency(match.fee_amount)}</p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-sm font-medium tabular-nums ${getConfidenceColor(match.confidence)}`}>
+                        {Math.round(match.confidence * 100)}%
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openTriageDrawer(match)
+                        }}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium transition-colors"
+                      >
+                        <Zap className="h-3 w-3" />
+                        Triage
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {filteredUnmatchedInvoices.map((invoice) => (
-                    <tr key={invoice.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
-                      <td className="px-4 py-3">
-                        <p className="text-sm text-zinc-200">#{invoice.invoice_number || invoice.invoice_id}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm text-zinc-200">{invoice.customer_name}</p>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <p className="text-sm font-medium text-zinc-200 tabular-nums">{formatCurrency(invoice.invoice_amount)}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm text-zinc-400">{formatDate(invoice.invoice_date)}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm text-zinc-400">{formatDate(invoice.due_date)}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs px-2 py-1 rounded bg-rose-500/10 text-rose-400">
-                          No match found
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
+
+      {/* Triage Drawer */}
+      <Sheet open={triageOpen} onOpenChange={setTriageOpen}>
+        <SheetContent className="bg-black border-l border-zinc-800 w-full sm:max-w-3xl overflow-y-auto p-0">
+          {selectedMatch && candidates && (
+            <>
+              {/* Header - Bank Movement (Pinned) */}
+              <div className="sticky top-0 bg-black border-b border-zinc-800 p-6 space-y-4">
+                <SheetHeader>
+                  <SheetTitle className="text-white text-lg">Triage: Match Review</SheetTitle>
+                </SheetHeader>
+
+                {/* Bank Movement Card */}
+                <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-4">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Bank Movement</p>
+                      <p className="text-sm text-zinc-300 mt-1">{candidates.movement.counterparty || "Bank deposit"}</p>
+                    </div>
+                    <p className="text-2xl font-semibold tracking-tight text-emerald-400 tabular-nums">
+                      +{formatCurrency(candidates.movement.amount)}
+                    </p>
+                  </div>
+                  <p className="text-xs text-zinc-500">{candidates.movement.raw_description}</p>
+                  <p className="text-xs text-zinc-600 mt-2">{formatDate(candidates.movement.date)}</p>
+                </div>
+
+                {/* Keyboard Hints */}
+                <div className="flex items-center gap-4 text-[10px] text-zinc-500">
+                  <span>↑↓ Navigate</span>
+                  <span>Enter Confirm</span>
+                  <span>S Split</span>
+                  <span>Esc Close</span>
+                </div>
+              </div>
+
+              {/* Candidates Lineup */}
+              <div className="p-6 space-y-3">
+                <div className="flex items-center justify-between mb-4">
+                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
+                    Candidates ({candidates.candidates.length})
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    {selectedCandidateIdx + 1} / {candidates.candidates.length}
+                  </p>
+                </div>
+
+                {candidatesLoading ? (
+                  <div className="space-y-2">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className="h-24 bg-zinc-900 rounded-lg animate-pulse" />
+                    ))}
+                  </div>
+                ) : candidates.candidates.length === 0 ? (
+                  <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-8 text-center">
+                    <AlertCircle className="h-8 w-8 text-amber-400 mx-auto mb-2" />
+                    <p className="text-sm text-zinc-400">No candidates found for this payment</p>
+                  </div>
+                ) : (
+                  candidates.candidates.map((candidate, idx) => {
+                    const isSelected = idx === selectedCandidateIdx
+                    const existing = candidates.existing_matches[candidate.id]
+                    const amountDiff = Math.abs(candidates.movement.amount - candidate.amount)
+                    const diffPct = candidate.amount > 0 ? ((amountDiff / candidate.amount) * 100).toFixed(1) : "0"
+
+                    return (
+                      <button
+                        key={candidate.id}
+                        onClick={() => setSelectedCandidateIdx(idx)}
+                        className={`w-full text-left p-4 rounded-lg border transition-all ${
+                          isSelected
+                            ? "bg-zinc-800/50 border-emerald-500/50 ring-1 ring-emerald-500/30"
+                            : "bg-zinc-900/50 border-zinc-800/50 hover:border-zinc-700/50"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-white">{candidate.customer_name}</p>
+                            <p className="text-xs text-zinc-500">#{candidate.invoice_number || candidate.id}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-semibold text-zinc-200 tabular-nums">{formatCurrency(candidate.amount)}</p>
+                            {candidate.outstanding_amount < candidate.amount && (
+                              <p className="text-xs text-amber-400">Outstanding: {formatCurrency(candidate.outstanding_amount)}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Match Signals */}
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {candidate.is_direct_link && (
+                            <span className="text-[10px] px-2 py-1 rounded bg-emerald-500/10 text-emerald-400">Direct Link</span>
+                          )}
+                          {candidate.is_customer_match && (
+                            <span className="text-[10px] px-2 py-1 rounded bg-emerald-500/10 text-emerald-400">Customer Match</span>
+                          )}
+                          {candidate.is_amount_match && (
+                            <span className="text-[10px] px-2 py-1 rounded bg-emerald-500/10 text-emerald-400">Amount Match</span>
+                          )}
+                          {candidate.reference_match && (
+                            <span className="text-[10px] px-2 py-1 rounded bg-blue-500/10 text-blue-400">Reference</span>
+                          )}
+                          {candidate.fee_implied && candidate.fee_implied > 0 && (
+                            <span className="text-[10px] px-2 py-1 rounded bg-amber-500/10 text-amber-400">Fee: {formatCurrency(candidate.fee_implied)}</span>
+                          )}
+                        </div>
+
+                        {/* Amount Diff */}
+                        <div className="flex items-center justify-between text-xs text-zinc-500 mb-2">
+                          <span>Diff: {formatCurrency(amountDiff)} ({diffPct}%)</span>
+                          <span className={`text-xs px-2 py-1 rounded ${getMatchTypeColor(candidate.match_type)}`}>
+                            {candidate.match_type}
+                          </span>
+                        </div>
+
+                        {/* Dates */}
+                        <div className="flex items-center gap-4 text-xs text-zinc-600">
+                          {candidate.invoice_date && <span>Invoice: {formatDate(candidate.invoice_date)}</span>}
+                          {candidate.due_date && <span>Due: {formatDate(candidate.due_date)}</span>}
+                        </div>
+
+                        {/* Existing Match Badge */}
+                        {existing && (
+                          <div className="mt-2 pt-2 border-t border-zinc-800">
+                            <p className="text-[10px] text-zinc-500">
+                              Already matched: {existing.match_type} @ {Math.round(existing.confidence * 100)}%
+                            </p>
+                          </div>
+                        )}
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+
+              {/* Action Bar */}
+              {selectedCandidate && (
+                <div className="sticky bottom-0 bg-black border-t border-zinc-800 p-6 space-y-3">
+                  <div className="flex gap-3">
+                    <Button
+                      onClick={() => handleConfirmMatch(selectedMatch.id)}
+                      disabled={processingId === selectedMatch.id}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
+                    >
+                      <CheckCircle2 className="h-4 w-4 mr-2" />
+                      Accept Match
+                    </Button>
+                    <Button
+                      onClick={() => handleRejectMatch(selectedMatch.id)}
+                      disabled={processingId === selectedMatch.id}
+                      className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-semibold"
+                    >
+                      <XCircle className="h-4 w-4 mr-2" />
+                      Reject
+                    </Button>
+                  </div>
+                  <p className="text-xs text-zinc-500 text-center">
+                    Press <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[9px]">Enter</kbd> to accept
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }
