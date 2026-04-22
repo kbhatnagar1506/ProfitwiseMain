@@ -400,42 +400,34 @@ export default function ReviewQueuePage() {
           {selectedMatch && candidates && (
             <>
               {/* Header - Bank Movement (Pinned) */}
-              <div className="sticky top-0 bg-black border-b border-zinc-800 p-6 space-y-4">
+              <div className="sticky top-0 bg-black border-b border-slate-800 p-6 space-y-4">
                 <SheetHeader>
                   <SheetTitle className="text-white text-lg">Triage: Match Review</SheetTitle>
                 </SheetHeader>
 
                 {/* Bank Movement Card */}
-                <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-4">
+                <div className="bg-slate-900/50 border border-slate-800/50 rounded-lg p-4">
                   <div className="flex items-start justify-between mb-3">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Bank Movement</p>
-                      <p className="text-sm text-zinc-300 mt-1">{candidates.movement.counterparty || "Bank deposit"}</p>
+                      <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Bank Movement</p>
+                      <p className="text-sm text-slate-200 mt-1">{candidates.movement.counterparty || "Bank deposit"}</p>
                     </div>
                     <p className="text-2xl font-semibold tracking-tight text-emerald-400 tabular-nums">
                       +{formatCurrency(candidates.movement.amount)}
                     </p>
                   </div>
-                  <p className="text-xs text-zinc-500">{candidates.movement.raw_description}</p>
-                  <p className="text-xs text-zinc-600 mt-2">{formatDate(candidates.movement.date)}</p>
-                </div>
-
-                {/* Keyboard Hints */}
-                <div className="flex items-center gap-4 text-[10px] text-zinc-500">
-                  <span>↑↓ Navigate</span>
-                  <span>Enter Confirm</span>
-                  <span>S Split</span>
-                  <span>Esc Close</span>
+                  <p className="text-xs text-slate-500">{candidates.movement.raw_description}</p>
+                  <p className="text-xs text-slate-600 mt-2">{formatDate(candidates.movement.date)}</p>
                 </div>
               </div>
 
               {/* Candidates Lineup */}
               <div className="p-6 space-y-3">
                 <div className="flex items-center justify-between mb-4">
-                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
+                  <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
                     Candidates ({candidates.candidates.length})
                   </p>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-slate-500">
                     {selectedCandidateIdx + 1} / {candidates.candidates.length}
                   </p>
                 </div>
@@ -443,13 +435,13 @@ export default function ReviewQueuePage() {
                 {candidatesLoading ? (
                   <div className="space-y-2">
                     {[1, 2, 3].map(i => (
-                      <div key={i} className="h-24 bg-zinc-900 rounded-lg animate-pulse" />
+                      <div key={i} className="h-24 bg-slate-900 rounded-lg animate-pulse" />
                     ))}
                   </div>
                 ) : candidates.candidates.length === 0 ? (
-                  <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-8 text-center">
+                  <div className="bg-slate-900/50 border border-slate-800/50 rounded-lg p-8 text-center">
                     <AlertCircle className="h-8 w-8 text-amber-400 mx-auto mb-2" />
-                    <p className="text-sm text-zinc-400">No candidates found for this payment</p>
+                    <p className="text-sm text-slate-400">No candidates found for this payment</p>
                   </div>
                 ) : (
                   candidates.candidates.map((candidate, idx) => {
@@ -457,6 +449,7 @@ export default function ReviewQueuePage() {
                     const existing = candidates.existing_matches[candidate.id]
                     const amountDiff = Math.abs(candidates.movement.amount - candidate.amount)
                     const diffPct = candidate.amount > 0 ? ((amountDiff / candidate.amount) * 100).toFixed(1) : "0"
+                    const shortInvoiceId = candidate.invoice_number || candidate.id.slice(-6)
 
                     return (
                       <button
@@ -464,17 +457,17 @@ export default function ReviewQueuePage() {
                         onClick={() => setSelectedCandidateIdx(idx)}
                         className={`w-full text-left p-4 rounded-lg border transition-all ${
                           isSelected
-                            ? "bg-zinc-800/50 border-emerald-500/50 ring-1 ring-emerald-500/30"
-                            : "bg-zinc-900/50 border-zinc-800/50 hover:border-zinc-700/50"
+                            ? "bg-slate-800 border-slate-700 border-l-2 border-l-white"
+                            : "bg-transparent border-slate-800/50 hover:border-slate-700/50 border-l-2 border-l-transparent"
                         }`}
                       >
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex-1">
                             <p className="text-sm font-medium text-white">{candidate.customer_name}</p>
-                            <p className="text-xs text-zinc-500">#{candidate.invoice_number || candidate.id}</p>
+                            <p className="text-xs text-slate-500">#{shortInvoiceId}</p>
                           </div>
                           <div className="text-right">
-                            <p className="text-sm font-semibold text-zinc-200 tabular-nums">{formatCurrency(candidate.amount)}</p>
+                            <p className="text-sm font-semibold text-slate-200 tabular-nums">{formatCurrency(candidate.amount)}</p>
                             {candidate.outstanding_amount < candidate.amount && (
                               <p className="text-xs text-amber-400">Outstanding: {formatCurrency(candidate.outstanding_amount)}</p>
                             )}
@@ -500,8 +493,8 @@ export default function ReviewQueuePage() {
                           )}
                         </div>
 
-                        {/* Amount Diff */}
-                        <div className="flex items-center justify-between text-xs text-zinc-500 mb-2">
+                        {/* Amount Diff & Match Type */}
+                        <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
                           <span>Diff: {formatCurrency(amountDiff)} ({diffPct}%)</span>
                           <span className={`text-xs px-2 py-1 rounded ${getMatchTypeColor(candidate.match_type)}`}>
                             {candidate.match_type}
@@ -509,15 +502,15 @@ export default function ReviewQueuePage() {
                         </div>
 
                         {/* Dates */}
-                        <div className="flex items-center gap-4 text-xs text-zinc-600">
+                        <div className="flex items-center gap-4 text-xs text-slate-600">
                           {candidate.invoice_date && <span>Invoice: {formatDate(candidate.invoice_date)}</span>}
                           {candidate.due_date && <span>Due: {formatDate(candidate.due_date)}</span>}
                         </div>
 
                         {/* Existing Match Badge */}
                         {existing && (
-                          <div className="mt-2 pt-2 border-t border-zinc-800">
-                            <p className="text-[10px] text-zinc-500">
+                          <div className="mt-2 pt-2 border-t border-slate-800">
+                            <p className="text-[10px] text-slate-500">
                               Already matched: {existing.match_type} @ {Math.round(existing.confidence * 100)}%
                             </p>
                           </div>
@@ -530,28 +523,30 @@ export default function ReviewQueuePage() {
 
               {/* Action Bar */}
               {selectedCandidate && (
-                <div className="sticky bottom-0 bg-black border-t border-zinc-800 p-6 space-y-3">
-                  <div className="flex gap-3">
-                    <Button
-                      onClick={() => handleConfirmMatch(selectedMatch.id)}
-                      disabled={processingId === selectedMatch.id}
-                      className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
-                    >
-                      <CheckCircle2 className="h-4 w-4 mr-2" />
-                      Accept Match
-                    </Button>
-                    <Button
-                      onClick={() => handleRejectMatch(selectedMatch.id)}
-                      disabled={processingId === selectedMatch.id}
-                      className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-semibold"
-                    >
-                      <XCircle className="h-4 w-4 mr-2" />
-                      Reject
-                    </Button>
+                <div className="sticky bottom-0 bg-black border-t border-slate-800 p-6">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex gap-3 flex-1">
+                      <Button
+                        onClick={() => handleConfirmMatch(selectedMatch.id)}
+                        disabled={processingId === selectedMatch.id}
+                        className="flex-1 bg-white text-black hover:bg-slate-200 rounded-md py-2 px-4 font-medium"
+                      >
+                        <CheckCircle2 className="h-4 w-4 mr-2" />
+                        Accept Match
+                      </Button>
+                      <Button
+                        onClick={() => handleRejectMatch(selectedMatch.id)}
+                        disabled={processingId === selectedMatch.id}
+                        className="flex-1 bg-transparent border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md py-2 px-4 font-medium"
+                      >
+                        <XCircle className="h-4 w-4 mr-2" />
+                        Reject
+                      </Button>
+                    </div>
+                    <p className="text-xs text-slate-500 whitespace-nowrap">
+                      Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[9px]">Enter</kbd>
+                    </p>
                   </div>
-                  <p className="text-xs text-zinc-500 text-center">
-                    Press <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[9px]">Enter</kbd> to accept
-                  </p>
                 </div>
               )}
             </>
