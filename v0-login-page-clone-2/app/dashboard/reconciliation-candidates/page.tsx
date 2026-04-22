@@ -121,6 +121,7 @@ export default function ReconciliationCandidatesPage() {
   const [aiMatchResults, setAiMatchResults] = useState<Map<string, { decision: string; confidence: number; reasoning: string; matched_id: string | null }>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<"all" | "ar" | "operational" | "non_op" | "review">("ar")
+  const [invoiceFilter, setInvoiceFilter] = useState<"all" | "matched" | "unmatched">("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
   const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
@@ -664,13 +665,37 @@ export default function ReconciliationCandidatesPage() {
           <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <p className="text-[11px] text-zinc-400 font-medium">AR Invoices ({data.invoices.length})</p>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400">
-                  {data.invoices.filter(i => i.is_matched).length} Matched
-                </span>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-400">
-                  {data.invoices.filter(i => !i.is_matched).length} Unmatched
-                </span>
+              <div className="flex items-center gap-1 bg-[#0A0A0A] rounded-md p-0.5">
+                <button
+                  onClick={() => setInvoiceFilter("all")}
+                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
+                    invoiceFilter === "all" 
+                      ? "bg-white/10 text-white" 
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  All ({data.invoices.length})
+                </button>
+                <button
+                  onClick={() => setInvoiceFilter("matched")}
+                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
+                    invoiceFilter === "matched" 
+                      ? "bg-emerald-500/20 text-emerald-400" 
+                      : "text-zinc-500 hover:text-emerald-400"
+                  }`}
+                >
+                  Matched ({data.invoices.filter(i => i.is_matched).length})
+                </button>
+                <button
+                  onClick={() => setInvoiceFilter("unmatched")}
+                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
+                    invoiceFilter === "unmatched" 
+                      ? "bg-red-500/20 text-red-400" 
+                      : "text-zinc-500 hover:text-red-400"
+                  }`}
+                >
+                  Unmatched ({data.invoices.filter(i => !i.is_matched).length})
+                </button>
               </div>
             </div>
             <p className="text-[10px] text-zinc-500">
@@ -690,7 +715,13 @@ export default function ReconciliationCandidatesPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.invoices.map((invoice) => (
+                {data.invoices
+                  .filter(invoice => {
+                    if (invoiceFilter === "matched") return invoice.is_matched
+                    if (invoiceFilter === "unmatched") return !invoice.is_matched
+                    return true
+                  })
+                  .map((invoice) => (
                   <tr key={invoice.id} className={`border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100 ${invoice.is_matched ? 'opacity-60' : ''}`}>
                     <td className="px-3 py-2">
                       <p className="text-[12px] text-white truncate max-w-[200px]">{invoice.customer_name || "Unknown"}</p>
