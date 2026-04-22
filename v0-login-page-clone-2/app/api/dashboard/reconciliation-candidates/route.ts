@@ -93,10 +93,36 @@ async function loadCustomerMatches(userId: string): Promise<Map<string, string |
 }
 
 async function loadReconciliationDecisions(userId: string): Promise<Map<string, { movement_id: string; decision: string; confidence: number; payment_amount: number; payment_date: string }>> {
-  // AI matcher results are stored in memory, not in database
-  // For now, return empty map - invoice match status will be determined by other means
-  // TODO: Persist AI matcher decisions to database for cross-session access
-  return new Map()
+  // Load AR attributions - these link movements (payments) to cash_events (invoices)
+  // reference_id contains the cash_event (invoice) ID
+  const result = await query(
+    `SELECT 
+       ma.reference_id as invoice_id,
+       ma.movement_id,
+       ma.confidence,
+       ma.net_amount as payment_amount,
+       m.date as payment_date
+     FROM movement_attributions ma
+     JOIN movements m ON m.id = ma.movement_id
+     WHERE ma.user_id = $1
+       AND ma.component_type = 'ar'
+       AND ma.reference_id IS NOT NULL`,
+    [userId]
+  )
+  const decisions = new Map<string, { movement_id: string; decision: string; confidence: number; payment_amount: number; payment_date: string }>()
+  for (const row of result.rows) {
+    // Only keep the first match for each invoice (in case of duplicates)
+    if (!decisions.has(row.invoice_id)) {
+      decisions.set(row.invoice_id, {
+        movement_id: row.movement_id,
+        decision: 'match',
+        confidence: row.confidence || 0.8,
+        payment_amount: Math.abs(parseFloat(row.payment_amount) || 0),
+        payment_date: row.payment_date
+      })
+    }
+  }
+  return decisions
 }
 
 function buildInvoicesWithStatus(
