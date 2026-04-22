@@ -182,9 +182,16 @@ export async function runAIReconciliationMatcher(
     }
   }
 
-  const fullyMatchedCount = Array.from(invoiceStates.values()).filter(s => s.isFullyMatched).length
-  const partiallyMatchedCount = Array.from(invoiceStates.values()).filter(s => s.matchedPayments.length > 0 && !s.isFullyMatched).length
-  console.log(`[AI Matcher] Completed. Invoices: ${fullyMatchedCount} fully matched, ${partiallyMatchedCount} partially matched`)
+  const fullyMatchedInvoices = Array.from(invoiceStates.values()).filter(s => s.isFullyMatched).length
+  const partiallyMatchedInvoices = Array.from(invoiceStates.values()).filter(s => s.matchedPayments.length > 0 && !s.isFullyMatched).length
+  
+  // Count payment (movement) match stats
+  const matchedPayments = results.filter(r => r.decision === 'match').length
+  const unmatchedPayments = results.filter(r => r.decision === 'no_match' || r.decision === 'needs_review').length
+  
+  console.log(`[AI Matcher] Completed.`)
+  console.log(`[AI Matcher] Payments: ${matchedPayments} matched, ${unmatchedPayments} unmatched (${results.length} total)`)
+  console.log(`[AI Matcher] Invoices: ${fullyMatchedInvoices} fully matched, ${partiallyMatchedInvoices} partially matched (${invoiceStates.size} total)`)
 
   return {
     total_processed: movementsToProcess.length,
