@@ -81,31 +81,31 @@ function formatDate(d: string | null) {
 
 function getMatchTypeColor(matchType: string): string {
   switch (matchType) {
-    case "EXACT": return "bg-emerald-400/10 text-emerald-400"
-    case "FEE": return "bg-amber-400/10 text-amber-400"
-    case "PARTIAL": return "bg-purple-400/10 text-purple-400"
-    case "AGGREGATION": return "bg-cyan-400/10 text-cyan-400"
-    default: return "bg-zinc-400/10 text-zinc-400"
+    case "EXACT": return "bg-emerald-500/20 text-emerald-300"
+    case "FEE": return "bg-amber-500/20 text-amber-300"
+    case "PARTIAL": return "bg-purple-500/20 text-purple-300"
+    case "AGGREGATION": return "bg-cyan-500/20 text-cyan-300"
+    default: return "bg-slate-500/20 text-slate-300"
   }
 }
 
 function getConfidenceColor(confidence: number): string {
-  if (confidence >= 0.85) return "text-emerald-400"
-  if (confidence >= 0.70) return "text-amber-400"
-  return "text-rose-400"
+  if (confidence >= 0.85) return "text-emerald-300"
+  if (confidence >= 0.70) return "text-amber-300"
+  return "text-rose-300"
 }
 
 function InfoButton({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button className="ml-1 text-zinc-500 hover:text-zinc-300 transition-colors">
+        <button className="ml-1 text-slate-500 hover:text-slate-300 transition-colors">
           <Info className="h-3.5 w-3.5" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 bg-zinc-900 border-zinc-800 text-zinc-300 p-3" side="bottom" align="start">
-        <h4 className="font-semibold text-white text-sm mb-2">{title}</h4>
-        <div className="text-xs space-y-1.5 text-zinc-400">{children}</div>
+      <PopoverContent className="w-72 bg-slate-900 border-slate-700 text-slate-200 p-3" side="bottom" align="start">
+        <h4 className="font-semibold text-slate-100 text-sm mb-2">{title}</h4>
+        <div className="text-xs space-y-1.5 text-slate-400">{children}</div>
       </PopoverContent>
     </Popover>
   )
@@ -254,17 +254,17 @@ export default function ReviewQueuePage() {
 
   if (loading) {
     return (
-      <div className="p-8 space-y-4 bg-black min-h-screen">
-        <div className="h-8 w-48 bg-zinc-900 rounded animate-pulse" />
-        <div className="h-96 bg-zinc-900 rounded animate-pulse" />
+      <div className="p-8 space-y-4 bg-slate-950 min-h-screen">
+        <div className="h-8 w-48 bg-slate-800 rounded animate-pulse" />
+        <div className="h-96 bg-slate-800 rounded animate-pulse" />
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="p-8 bg-black min-h-screen">
-        <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-6 text-rose-400">
+      <div className="p-8 bg-slate-950 min-h-screen">
+        <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-6 text-rose-300">
           <p className="font-semibold">Error loading review queue</p>
           <p className="text-sm mt-2">{error}</p>
           <Button onClick={() => fetchData()} className="mt-4 bg-rose-600 hover:bg-rose-700">
@@ -278,17 +278,17 @@ export default function ReviewQueuePage() {
   const selectedCandidate = candidates?.candidates[selectedCandidateIdx]
 
   return (
-    <div className="p-8 space-y-5 bg-black min-h-screen">
+    <div className="p-8 space-y-5 bg-slate-950 min-h-screen">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight">Triage Terminal</h1>
-          <p className="text-sm text-zinc-500 mt-1">High-speed reconciliation review · Click to open drawer, use arrow keys to navigate</p>
+          <h1 className="text-2xl font-semibold text-slate-100 tracking-tight">Triage Terminal</h1>
+          <p className="text-sm text-slate-400 mt-1">High-speed reconciliation review · Click to open drawer, use arrow keys to navigate</p>
         </div>
         <Button
           onClick={() => fetchData()}
           disabled={loading}
-          className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+          className="bg-slate-800 hover:bg-slate-700 text-slate-200"
         >
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
           Refresh
@@ -296,15 +296,15 @@ export default function ReviewQueuePage() {
       </div>
 
       {/* Stats */}
-      <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Pending Review</p>
-            <p className="text-3xl font-semibold tracking-tight text-amber-400 tabular-nums mt-1">{pendingMatches.length}</p>
+            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Pending Review</p>
+            <p className="text-3xl font-semibold tracking-tight text-amber-300 tabular-nums mt-1">{pendingMatches.length}</p>
           </div>
           <div className="text-right">
-            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">Total Amount</p>
-            <p className="text-2xl font-semibold tracking-tight text-white tabular-nums mt-1">
+            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Total Amount</p>
+            <p className="text-2xl font-semibold tracking-tight text-slate-100 tabular-nums mt-1">
               {formatCurrency(pendingMatches.reduce((s, m) => s + m.invoice_amount, 0))}
             </p>
           </div>
@@ -313,35 +313,35 @@ export default function ReviewQueuePage() {
 
       {/* Search */}
       <div className="relative w-full">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-500" />
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-500" />
         <Input
           placeholder="Search by customer, invoice, or bank description..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="bg-zinc-900/50 border-zinc-800/50 pl-9 h-10 text-sm text-zinc-300 placeholder:text-zinc-600"
+          className="bg-slate-900 border-slate-800 pl-9 h-10 text-sm text-slate-200 placeholder:text-slate-500"
         />
       </div>
 
       {/* Matches Table */}
       {filteredMatches.length === 0 ? (
-        <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-16 text-center">
-          <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-4">
-            <CheckCircle2 className="h-6 w-6 text-emerald-400" />
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-16 text-center">
+          <div className="w-12 h-12 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center mx-auto mb-4">
+            <CheckCircle2 className="h-6 w-6 text-emerald-300" />
           </div>
-          <p className="text-white font-medium text-lg">All Clear!</p>
-          <p className="text-zinc-500 text-sm mt-1">No pending matches. All reconciliation is complete.</p>
+          <p className="text-slate-100 font-medium text-lg">All Clear!</p>
+          <p className="text-slate-400 text-sm mt-1">No pending matches. All reconciliation is complete.</p>
         </div>
       ) : (
-        <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl overflow-hidden">
+        <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
           <div className="max-h-[600px] overflow-y-auto">
             <table className="w-full">
-              <thead className="sticky top-0 bg-zinc-900">
-                <tr className="border-b border-zinc-800">
-                  <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Bank Payment</th>
-                  <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Invoice</th>
-                  <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Match Type</th>
-                  <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Confidence</th>
-                  <th className="text-center text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Action</th>
+              <thead className="sticky top-0 bg-slate-900">
+                <tr className="border-b border-slate-800">
+                  <th className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Bank Payment</th>
+                  <th className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Invoice</th>
+                  <th className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Match Type</th>
+                  <th className="text-center text-xs font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Confidence</th>
+                  <th className="text-center text-xs font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -349,24 +349,24 @@ export default function ReviewQueuePage() {
                   <tr
                     key={match.id}
                     onClick={() => openTriageDrawer(match)}
-                    className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer"
+                    className="border-b border-slate-800 hover:bg-slate-800/50 transition-colors cursor-pointer"
                   >
                     <td className="px-4 py-3">
-                      <p className="text-sm text-zinc-200">{match.bank_counterparty || "Bank deposit"}</p>
-                      <p className="text-xs text-zinc-500">{formatDate(match.bank_date)}</p>
-                      <p className="text-sm font-medium text-emerald-400 tabular-nums mt-1">+{formatCurrency(match.bank_amount)}</p>
+                      <p className="text-sm text-slate-100">{match.bank_counterparty || "Bank deposit"}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{formatDate(match.bank_date)}</p>
+                      <p className="text-sm font-medium text-emerald-300 tabular-nums mt-1">+{formatCurrency(match.bank_amount)}</p>
                     </td>
                     <td className="px-4 py-3">
-                      <p className="text-sm text-zinc-200">{match.customer_name}</p>
-                      <p className="text-xs text-zinc-500">#{match.invoice_id}</p>
-                      <p className="text-sm text-zinc-400 tabular-nums mt-1">{formatCurrency(match.invoice_amount)}</p>
+                      <p className="text-sm text-slate-100">{match.customer_name}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">#{match.invoice_id}</p>
+                      <p className="text-sm text-slate-300 tabular-nums mt-1">{formatCurrency(match.invoice_amount)}</p>
                     </td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2 py-1 rounded ${getMatchTypeColor(match.match_type)}`}>
                         {match.match_type}
                       </span>
                       {match.fee_amount > 0 && (
-                        <p className="text-[10px] text-amber-400 mt-1">Fee: {formatCurrency(match.fee_amount)}</p>
+                        <p className="text-xs text-amber-300 mt-1">Fee: {formatCurrency(match.fee_amount)}</p>
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -380,7 +380,7 @@ export default function ReviewQueuePage() {
                           e.stopPropagation()
                           openTriageDrawer(match)
                         }}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium transition-colors"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
                       >
                         <Zap className="h-3 w-3" />
                         Triage
@@ -396,35 +396,35 @@ export default function ReviewQueuePage() {
 
       {/* Triage Drawer */}
       <Sheet open={triageOpen} onOpenChange={setTriageOpen}>
-        <SheetContent className="bg-black border-l border-zinc-800 w-full sm:max-w-3xl overflow-y-auto p-0">
+        <SheetContent className="bg-slate-950 border-l border-slate-800 w-full sm:max-w-3xl overflow-y-auto p-0">
           {selectedMatch && candidates && (
             <>
               {/* Header - Bank Movement (Pinned) */}
-              <div className="sticky top-0 bg-black border-b border-slate-800 p-6 space-y-4">
+              <div className="sticky top-0 bg-slate-950 border-b border-slate-800 p-6 space-y-4">
                 <SheetHeader>
-                  <SheetTitle className="text-white text-lg">Triage: Match Review</SheetTitle>
+                  <SheetTitle className="text-slate-100 text-lg">Triage: Match Review</SheetTitle>
                 </SheetHeader>
 
                 {/* Bank Movement Card */}
-                <div className="bg-slate-900/50 border border-slate-800/50 rounded-lg p-4">
+                <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
                   <div className="flex items-start justify-between mb-3">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Bank Movement</p>
-                      <p className="text-sm text-slate-200 mt-1">{candidates.movement.counterparty || "Bank deposit"}</p>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Bank Movement</p>
+                      <p className="text-sm text-slate-100 mt-1">{candidates.movement.counterparty || "Bank deposit"}</p>
                     </div>
-                    <p className="text-2xl font-semibold tracking-tight text-emerald-400 tabular-nums">
+                    <p className="text-2xl font-semibold tracking-tight text-emerald-300 tabular-nums">
                       +{formatCurrency(candidates.movement.amount)}
                     </p>
                   </div>
-                  <p className="text-xs text-slate-500">{candidates.movement.raw_description}</p>
-                  <p className="text-xs text-slate-600 mt-2">{formatDate(candidates.movement.date)}</p>
+                  <p className="text-xs text-slate-400">{candidates.movement.raw_description}</p>
+                  <p className="text-xs text-slate-500 mt-2">{formatDate(candidates.movement.date)}</p>
                 </div>
               </div>
 
               {/* Candidates Lineup */}
               <div className="p-6 space-y-3">
                 <div className="flex items-center justify-between mb-4">
-                  <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                     Candidates ({candidates.candidates.length})
                   </p>
                   <p className="text-xs text-slate-500">
@@ -435,13 +435,13 @@ export default function ReviewQueuePage() {
                 {candidatesLoading ? (
                   <div className="space-y-2">
                     {[1, 2, 3].map(i => (
-                      <div key={i} className="h-24 bg-slate-900 rounded-lg animate-pulse" />
+                      <div key={i} className="h-24 bg-slate-800 rounded-lg animate-pulse" />
                     ))}
                   </div>
                 ) : candidates.candidates.length === 0 ? (
-                  <div className="bg-slate-900/50 border border-slate-800/50 rounded-lg p-8 text-center">
-                    <AlertCircle className="h-8 w-8 text-amber-400 mx-auto mb-2" />
-                    <p className="text-sm text-slate-400">No candidates found for this payment</p>
+                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-8 text-center">
+                    <AlertCircle className="h-8 w-8 text-amber-300 mx-auto mb-2" />
+                    <p className="text-sm text-slate-300">No candidates found for this payment</p>
                   </div>
                 ) : (
                   candidates.candidates.map((candidate, idx) => {
@@ -457,19 +457,19 @@ export default function ReviewQueuePage() {
                         onClick={() => setSelectedCandidateIdx(idx)}
                         className={`w-full text-left p-4 rounded-lg border transition-all ${
                           isSelected
-                            ? "bg-slate-800 border-slate-700 border-l-2 border-l-white"
-                            : "bg-transparent border-slate-800/50 hover:border-slate-700/50 border-l-2 border-l-transparent"
+                            ? "bg-slate-800 border-slate-700"
+                            : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
                         }`}
                       >
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex-1">
-                            <p className="text-sm font-medium text-white">{candidate.customer_name}</p>
-                            <p className="text-xs text-slate-500">#{shortInvoiceId}</p>
+                            <p className="text-sm font-semibold text-slate-100">{candidate.customer_name}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">#{shortInvoiceId}</p>
                           </div>
                           <div className="text-right">
-                            <p className="text-sm font-semibold text-slate-200 tabular-nums">{formatCurrency(candidate.amount)}</p>
+                            <p className="text-sm font-semibold text-slate-100 tabular-nums">{formatCurrency(candidate.amount)}</p>
                             {candidate.outstanding_amount < candidate.amount && (
-                              <p className="text-xs text-amber-400">Outstanding: {formatCurrency(candidate.outstanding_amount)}</p>
+                              <p className="text-xs text-amber-300 mt-0.5">Outstanding: {formatCurrency(candidate.outstanding_amount)}</p>
                             )}
                           </div>
                         </div>
@@ -477,24 +477,24 @@ export default function ReviewQueuePage() {
                         {/* Match Signals */}
                         <div className="flex flex-wrap gap-2 mb-2">
                           {candidate.is_direct_link && (
-                            <span className="text-[10px] px-2 py-1 rounded bg-emerald-500/10 text-emerald-400">Direct Link</span>
+                            <span className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300">Direct Link</span>
                           )}
                           {candidate.is_customer_match && (
-                            <span className="text-[10px] px-2 py-1 rounded bg-emerald-500/10 text-emerald-400">Customer Match</span>
+                            <span className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300">Customer Match</span>
                           )}
                           {candidate.is_amount_match && (
-                            <span className="text-[10px] px-2 py-1 rounded bg-emerald-500/10 text-emerald-400">Amount Match</span>
+                            <span className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-300">Amount Match</span>
                           )}
                           {candidate.reference_match && (
-                            <span className="text-[10px] px-2 py-1 rounded bg-blue-500/10 text-blue-400">Reference</span>
+                            <span className="text-xs px-2 py-1 rounded bg-blue-500/20 text-blue-300">Reference</span>
                           )}
                           {candidate.fee_implied && candidate.fee_implied > 0 && (
-                            <span className="text-[10px] px-2 py-1 rounded bg-amber-500/10 text-amber-400">Fee: {formatCurrency(candidate.fee_implied)}</span>
+                            <span className="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-300">Fee: {formatCurrency(candidate.fee_implied)}</span>
                           )}
                         </div>
 
                         {/* Amount Diff & Match Type */}
-                        <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
+                        <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
                           <span>Diff: {formatCurrency(amountDiff)} ({diffPct}%)</span>
                           <span className={`text-xs px-2 py-1 rounded ${getMatchTypeColor(candidate.match_type)}`}>
                             {candidate.match_type}
@@ -502,7 +502,7 @@ export default function ReviewQueuePage() {
                         </div>
 
                         {/* Dates */}
-                        <div className="flex items-center gap-4 text-xs text-slate-600">
+                        <div className="flex items-center gap-4 text-xs text-slate-500">
                           {candidate.invoice_date && <span>Invoice: {formatDate(candidate.invoice_date)}</span>}
                           {candidate.due_date && <span>Due: {formatDate(candidate.due_date)}</span>}
                         </div>
@@ -510,7 +510,7 @@ export default function ReviewQueuePage() {
                         {/* Existing Match Badge */}
                         {existing && (
                           <div className="mt-2 pt-2 border-t border-slate-800">
-                            <p className="text-[10px] text-slate-500">
+                            <p className="text-xs text-slate-500">
                               Already matched: {existing.match_type} @ {Math.round(existing.confidence * 100)}%
                             </p>
                           </div>
@@ -523,13 +523,13 @@ export default function ReviewQueuePage() {
 
               {/* Action Bar */}
               {selectedCandidate && (
-                <div className="sticky bottom-0 bg-black border-t border-slate-800 p-6">
+                <div className="sticky bottom-0 bg-slate-950 border-t border-slate-800 p-6">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex gap-3 flex-1">
                       <Button
                         onClick={() => handleConfirmMatch(selectedMatch.id)}
                         disabled={processingId === selectedMatch.id}
-                        className="flex-1 bg-white text-black hover:bg-slate-200 rounded-md py-2 px-4 font-medium"
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md py-2 px-4 font-medium"
                       >
                         <CheckCircle2 className="h-4 w-4 mr-2" />
                         Accept Match
@@ -537,14 +537,14 @@ export default function ReviewQueuePage() {
                       <Button
                         onClick={() => handleRejectMatch(selectedMatch.id)}
                         disabled={processingId === selectedMatch.id}
-                        className="flex-1 bg-transparent border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md py-2 px-4 font-medium"
+                        className="flex-1 bg-transparent border border-slate-700 text-slate-300 hover:text-slate-100 hover:bg-slate-800 rounded-md py-2 px-4 font-medium"
                       >
                         <XCircle className="h-4 w-4 mr-2" />
                         Reject
                       </Button>
                     </div>
                     <p className="text-xs text-slate-500 whitespace-nowrap">
-                      Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[9px]">Enter</kbd>
+                      Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono text-[9px]">Enter</kbd>
                     </p>
                   </div>
                 </div>
