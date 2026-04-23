@@ -1063,16 +1063,16 @@ export default function ReconciliationCandidatesPage() {
       </div>
 
       {/* Movements Table */}
-      <div className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl overflow-hidden">
+      <div className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl overflow-hidden flex flex-col h-[500px]">
         {data.movements.length === 0 ? (
           <div className="p-12 text-center">
             <p className="text-zinc-500 text-sm">No movements found matching your filters.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto overflow-y-auto flex-1 min-h-0">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-zinc-800">
+                <tr className="border-b border-zinc-800 sticky top-0 bg-zinc-900/50">
                   <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Date</th>
                   <th className="text-left text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Description</th>
                   <th className="text-right text-[10px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">Amount</th>
