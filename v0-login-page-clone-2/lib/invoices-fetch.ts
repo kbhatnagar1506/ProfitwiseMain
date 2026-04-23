@@ -407,15 +407,17 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
       const balance = safeParseFloat(d.Balance)
       const totalAmt = safeParseFloat(d.TotalAmt, balance)
       const txnDate = (d.TxnDate as string) ?? ""
-      if (Math.abs(balance) < 0.01) continue
+      // Skip if older than cutoff (180 days)
       if (txnDate < cutoffStr) continue
+      // Skip if already in outstanding list (has balance > 0)
+      const existing = outstanding.find((i) => i.invoice_id === row.entity_id)
+      if (existing) continue
+      // Include paid invoices (balance = 0) for reconciliation
       const custRef = d.CustomerRef as Record<string, unknown> | undefined
       const custName = String(custRef?.name ?? custRef?.value ?? "Unknown")
       const custSourceId = custRef?.value != null ? String(custRef.value) : null
       const dueDate = (d.DueDate as string) ?? null
       const entityId = custSourceId ? (sourceIdToEntity.get(custSourceId) ?? null) : null
-      const existing = outstanding.find((i) => i.invoice_id === row.entity_id)
-      if (existing) continue
       outstanding.push({
         invoice_id: row.entity_id,
         source: "qbo",
@@ -424,11 +426,11 @@ export async function fetchInvoicesForReconciliation(userId: string): Promise<Ou
         entity_id: entityId,
         entity_uri: toEntityUriAr("qbo", row.entity_id),
         amount: totalAmt,
-        amount_due: 0,
+        amount_due: balance,  // Use actual balance (could be 0 for paid, or partial)
         due_date: dueDate,
         days_until_due: null,
         days_overdue: null,
-        status: "paid",
+        status: balance <= 0.01 ? "paid" : "partially_paid",
       })
     }
   } catch (e) {
