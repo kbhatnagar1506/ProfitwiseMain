@@ -121,7 +121,7 @@ export default function ReconciliationCandidatesPage() {
   const [aiMatchResults, setAiMatchResults] = useState<Map<string, { decision: string; confidence: number; reasoning: string; matched_id: string | null }>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<"all" | "ar" | "operational" | "non_op" | "review">("ar")
-  const [invoiceFilter, setInvoiceFilter] = useState<"all" | "matched" | "unmatched">("all")
+  const [invoiceFilter, setInvoiceFilter] = useState<"all" | "matched" | "unmatched" | "paid" | "open">("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
   const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
@@ -677,6 +677,27 @@ export default function ReconciliationCandidatesPage() {
                   All ({data.invoices.length})
                 </button>
                 <button
+                  onClick={() => setInvoiceFilter("open")}
+                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
+                    invoiceFilter === "open" 
+                      ? "bg-blue-500/20 text-blue-400" 
+                      : "text-zinc-500 hover:text-blue-400"
+                  }`}
+                >
+                  Open ({data.invoices.filter(i => i.status === 'open' || !i.status).length})
+                </button>
+                <button
+                  onClick={() => setInvoiceFilter("paid")}
+                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
+                    invoiceFilter === "paid" 
+                      ? "bg-emerald-500/20 text-emerald-400" 
+                      : "text-zinc-500 hover:text-emerald-400"
+                  }`}
+                >
+                  Paid ({data.invoices.filter(i => i.status === 'paid').length})
+                </button>
+                <span className="text-zinc-600 px-1">|</span>
+                <button
                   onClick={() => setInvoiceFilter("matched")}
                   className={`text-[10px] px-2 py-1 rounded transition-colors ${
                     invoiceFilter === "matched" 
@@ -684,7 +705,7 @@ export default function ReconciliationCandidatesPage() {
                       : "text-zinc-500 hover:text-emerald-400"
                   }`}
                 >
-                  Matched ({data.invoices.filter(i => i.is_matched).length})
+                  Reconciled ({data.invoices.filter(i => i.is_matched).length})
                 </button>
                 <button
                   onClick={() => setInvoiceFilter("unmatched")}
@@ -694,7 +715,7 @@ export default function ReconciliationCandidatesPage() {
                       : "text-zinc-500 hover:text-red-400"
                   }`}
                 >
-                  Unmatched ({data.invoices.filter(i => !i.is_matched).length})
+                  Unreconciled ({data.invoices.filter(i => !i.is_matched).length})
                 </button>
               </div>
             </div>
@@ -710,7 +731,8 @@ export default function ReconciliationCandidatesPage() {
                   <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Amount</th>
                   <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Outstanding</th>
                   <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Due Date</th>
-                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Status</th>
+                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice Status</th>
+                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Recon Status</th>
                   <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Matched Payment</th>
                 </tr>
               </thead>
@@ -719,6 +741,8 @@ export default function ReconciliationCandidatesPage() {
                   .filter(invoice => {
                     if (invoiceFilter === "matched") return invoice.is_matched
                     if (invoiceFilter === "unmatched") return !invoice.is_matched
+                    if (invoiceFilter === "paid") return invoice.status === 'paid'
+                    if (invoiceFilter === "open") return invoice.status === 'open' || !invoice.status
                     return true
                   })
                   .map((invoice) => (
@@ -739,6 +763,18 @@ export default function ReconciliationCandidatesPage() {
                     </td>
                     <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">
                       {formatDate(invoice.due_date)}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <Badge className={`text-[10px] px-2 py-0.5 border ${
+                        invoice.status === 'paid' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                        invoice.status === 'open' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                        invoice.status === 'overdue' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                        invoice.status === 'partial' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                        invoice.status === 'voided' ? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20' :
+                        'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                      }`}>
+                        {invoice.status || 'open'}
+                      </Badge>
                     </td>
                     <td className="px-3 py-2 text-center">
                       {invoice.is_matched ? (
