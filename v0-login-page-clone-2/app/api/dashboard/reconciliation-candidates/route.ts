@@ -142,6 +142,15 @@ export async function GET(request: Request): Promise<NextResponse> {
     // This ensures newly created invoices appear as candidates
     try {
       const invoices = await fetchInvoicesForReconciliation(userId)
+      // Debug: Check for specific invoice
+      const inv1245 = invoices.find(i => i.invoice_id === '1245' || i.invoice_id.includes('1245'))
+      if (inv1245) {
+        console.log(`[reconciliation-candidates] Found invoice 1245:`, JSON.stringify(inv1245))
+      } else {
+        console.log(`[reconciliation-candidates] Invoice 1245 NOT found in ${invoices.length} invoices`)
+        // Log a few invoice IDs to see the format
+        console.log(`[reconciliation-candidates] Sample invoice IDs:`, invoices.slice(0, 5).map(i => i.invoice_id))
+      }
       await syncCashEventsForUser(userId, invoices, [])  // Empty AP obligations - AR only
       console.log(`[reconciliation-candidates] Synced ${invoices.length} invoices to cash_events`)
     } catch (syncErr) {
