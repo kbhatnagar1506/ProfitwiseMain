@@ -142,14 +142,36 @@ export async function GET(request: Request): Promise<NextResponse> {
     // This ensures newly created invoices appear as candidates
     try {
       const invoices = await fetchInvoicesForReconciliation(userId)
-      // Debug: Check for specific invoice
+      // Debug: Check for specific invoice by ID or by searching metadata
       const inv1245 = invoices.find(i => i.invoice_id === '1245' || i.invoice_id.includes('1245'))
       if (inv1245) {
         console.log(`[reconciliation-candidates] Found invoice 1245:`, JSON.stringify(inv1245))
       } else {
-        console.log(`[reconciliation-candidates] Invoice 1245 NOT found in ${invoices.length} invoices`)
-        // Log a few invoice IDs to see the format
-        console.log(`[reconciliation-candidates] Sample invoice IDs:`, invoices.slice(0, 5).map(i => i.invoice_id))
+        console.log(`[reconciliation-candidates] Invoice ID 1245 NOT found in ${invoices.length} invoices`)
+        // Check if any invoice has amount $279.90
+        const inv279 = invoices.filter(i => Math.abs(i.amount - 279.90) < 0.01 || Math.abs(i.amount_due - 279.90) < 0.01)
+        if (inv279.length > 0) {
+          console.log(`[reconciliation-candidates] Found ${inv279.length} invoices with amount ~$279.90:`, JSON.stringify(inv279))
+        } else {
+          console.log(`[reconciliation-candidates] No invoices with amount $279.90 found`)
+          // Check raw QBO data for DocNumber 1245
+          try {
+            const rawCheck = await query(
+              `SELECT e.entity_id, e.data->>'DocNumber' as doc_number, e.data->>'TotalAmt' as total, e.data->>'Balance' as balance, e.data->>'TxnDate' as txn_date
+               FROM qbo_entities e
+               JOIN qbo_connections c ON c.realm_id = e.realm_id
+               WHERE c.user_id = $1 AND e.entity_type = 'Invoice' AND (e.data->>'DocNumber' = '1245' OR e.data->>'TotalAmt' = '279.90')`,
+              [userId]
+            )
+            if (rawCheck.rows.length > 0) {
+              console.log(`[reconciliation-candidates] Raw QBO check found:`, JSON.stringify(rawCheck.rows))
+            } else {
+              console.log(`[reconciliation-candidates] Invoice 1245 / $279.90 NOT in qbo_entities table`)
+            }
+          } catch (e) {
+            console.log(`[reconciliation-candidates] Raw QBO check failed:`, e)
+          }
+        }
       }
       await syncCashEventsForUser(userId, invoices, [])  // Empty AP obligations - AR only
       console.log(`[reconciliation-candidates] Synced ${invoices.length} invoices to cash_events`)
