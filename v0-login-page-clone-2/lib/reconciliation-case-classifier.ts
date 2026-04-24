@@ -13,6 +13,76 @@ import { heuristicAliasMatch, normalizeForMatch } from "./alias-normalize"
 const EPS = 0.01
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Customer Name Similarity
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Calculate similarity between two customer names using multiple strategies.
+ * Returns a score from 0 to 1 where 1 is a perfect match.
+ */
+function calculateNameSimilarity(name1: string | null, name2: string | null): number {
+  if (!name1 || !name2) return 0
+  
+  const n1 = normalizeForMatch(name1)
+  const n2 = normalizeForMatch(name2)
+  
+  // Exact match after normalization
+  if (n1 === n2) return 1.0
+  
+  // One contains the other (e.g., "John Smith" contains "John")
+  if (n1.includes(n2) || n2.includes(n1)) {
+    const shorter = n1.length < n2.length ? n1 : n2
+    const longer = n1.length < n2.length ? n2 : n1
+    return shorter.length / longer.length * 0.9
+  }
+  
+  // Check if first/last names match (for "John Smith" vs "Smith, John")
+  const words1 = n1.split(/\s+/).filter(w => w.length > 1)
+  const words2 = n2.split(/\s+/).filter(w => w.length > 1)
+  const commonWords = words1.filter(w => words2.includes(w))
+  if (commonWords.length > 0) {
+    const maxWords = Math.max(words1.length, words2.length)
+    return commonWords.length / maxWords * 0.85
+  }
+  
+  // Levenshtein distance for fuzzy matching
+  const distance = levenshteinDistance(n1, n2)
+  const maxLen = Math.max(n1.length, n2.length)
+  const similarity = 1 - (distance / maxLen)
+  
+  return similarity
+}
+
+/**
+ * Levenshtein distance between two strings
+ */
+function levenshteinDistance(s1: string, s2: string): number {
+  const m = s1.length
+  const n = s2.length
+  
+  if (m === 0) return n
+  if (n === 0) return m
+  
+  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0))
+  
+  for (let i = 0; i <= m; i++) dp[i][0] = i
+  for (let j = 0; j <= n; j++) dp[0][j] = j
+  
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,      // deletion
+        dp[i][j - 1] + 1,      // insertion
+        dp[i - 1][j - 1] + cost // substitution
+      )
+    }
+  }
+  
+  return dp[m][n]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Type Definitions - AR FOCUSED
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -99,6 +169,7 @@ export interface Candidate {
   reference_match: boolean
   is_customer_match?: boolean  // NEW: matched via customer name
   is_amount_match?: boolean    // NEW: matched via amount tolerance
+  name_similarity?: number     // NEW: 0-1 score of customer name similarity
 }
 
 export interface ClassificationFlags {
@@ -307,6 +378,9 @@ function buildCandidates(
   // Track which candidates are amount-based vs customer-based
   const amountBasedIds = new Set<string>()
   const customerBasedIds = new Set<string>()
+  
+  // Get bank counterparty for name similarity calculation
+  const bankCounterparty = movement.counterparty || ""
 
   for (const event of cashEvents) {
     // Check both target type and reverse type (for reversals)
@@ -325,6 +399,10 @@ function buildCandidates(
       const candRef = String(event.metadata?.invoice_number || event.metadata?.bill_number || "")
       return candRef === ref // Exact match
     })
+    
+    // Calculate customer name similarity
+    const nameSimilarity = calculateNameSimilarity(bankCounterparty, entityName)
+    const isCustomerNameMatch = nameSimilarity >= 0.6  // 60% similarity threshold
 
     // Determine all applicable match types
     const matchTypes: MatchType[] = []
@@ -363,9 +441,10 @@ function buildCandidates(
       const primaryMatchType = matchTypes[0] || "EXACT"
       const secondaryMatchTypes = matchTypes.slice(1)
 
-      // Check if this is an amount-based match (within 20%)
+      // Check if this is an amount-based match (within 5% for strict, 20% for loose)
       const diffRatio = amountDiff / event.amount
-      const isAmountMatch = diffRatio <= 0.2 || primaryMatchType === "DIRECT_LINK" || amountDiff < EPS
+      // TIGHTENED: Only consider amount match if within 5% OR direct link OR exact
+      const isAmountMatch = diffRatio <= 0.05 || primaryMatchType === "DIRECT_LINK" || amountDiff < EPS
       if (isAmountMatch) {
         amountBasedIds.add(event.id)
       }
@@ -384,7 +463,8 @@ function buildCandidates(
         is_direct_link: isDirectLink,
         reference_match: !!refMatch,
         is_amount_match: isAmountMatch,
-        is_customer_match: false,  // Will be set below
+        is_customer_match: isCustomerNameMatch,  // NOW SET BASED ON NAME SIMILARITY
+        name_similarity: nameSimilarity,
       })
     } else {
       // Reversal candidate
@@ -402,7 +482,8 @@ function buildCandidates(
         is_direct_link: isDirectLink,
         reference_match: !!refMatch,
         is_amount_match: false,
-        is_customer_match: false,
+        is_customer_match: isCustomerNameMatch,
+        name_similarity: nameSimilarity,
       })
     }
   }
@@ -465,19 +546,36 @@ function buildCandidates(
     // Customer match
     if (a.is_customer_match !== b.is_customer_match) return a.is_customer_match ? -1 : 1
     
-    // EXACT match type
-    if (a.match_type === "EXACT" && b.match_type !== "EXACT") return -1
-    if (a.match_type !== "EXACT" && b.match_type === "EXACT") return 1
+    // Name similarity - higher similarity first
+    if ((a.name_similarity || 0) !== (b.name_similarity || 0)) {
+      return (b.name_similarity || 0) - (a.name_similarity || 0)
+    }
     
     // Amount diff
     return a.amount_diff - b.amount_diff
   })
 
-  // Filter out low-quality matches (amount diff > 20%), but keep customer matches
+  // CRITICAL FIX: Filter out candidates that don't have EITHER:
+  // 1. Customer name match (similarity >= 60%), OR
+  // 2. Direct link (invoice ID in bank data), OR
+  // 3. Reference match (invoice number in description)
+  // This prevents matching "Leann Brenneke" payment to "Lacey Carpovich" invoice
   const qualityCandidates = candidates.filter((c) => {
+    // Always keep direct links and reference matches
+    if (c.is_direct_link || c.reference_match) return true
+    
+    // Keep if customer name matches (similarity >= 60%)
+    if (c.is_customer_match) return true
+    
+    // Keep if amount is exact AND name similarity is at least 40%
+    if (c.amount_diff < EPS && (c.name_similarity || 0) >= 0.4) return true
+    
+    // Keep if amount is within 5% AND name similarity is at least 50%
     const diffRatio = c.amount_diff / c.amount
-    // Keep if: within 20% diff, OR direct link, OR truly exact, OR customer match
-    return diffRatio <= 0.2 || c.match_type === "DIRECT_LINK" || c.amount_diff < EPS || c.is_customer_match
+    if (diffRatio <= 0.05 && (c.name_similarity || 0) >= 0.5) return true
+    
+    // Reject candidates with poor name match even if amount matches
+    return false
   })
 
   // Return top N candidates

@@ -387,8 +387,9 @@ async function matchMovementsWithCandidates(
         is_direct_link: c.is_direct_link,
         reference_match: c.reference_match,
         fee_implied: c.fee_implied,
-        is_customer_match: c.is_customer_match ?? false,  // NEW: matched via customer name
-        is_amount_match: c.is_amount_match ?? false,      // NEW: matched via amount tolerance
+        is_customer_match: c.is_customer_match ?? false,
+        is_amount_match: c.is_amount_match ?? false,
+        name_similarity: c.name_similarity ?? 0,  // NEW: 0-1 score of name similarity
       }))
     }
   })
@@ -398,20 +399,19 @@ async function matchMovementsWithCandidates(
 ## YOUR TASK
 For each bank INFLOW (customer payment), find the matching INVOICE(s).
 
+## CRITICAL RULE: CUSTOMER NAME MUST MATCH
+You MUST NOT match a payment to an invoice if the customer names are clearly different.
+- "Leann Brenneke" payment CANNOT match "Lacey Carpovich" invoice (different people!)
+- "Kenzie Masters" payment CANNOT match "Allison Keim" invoice (different people!)
+- "Jack" payment CANNOT match "Kelsee Gomes" invoice (different people!)
+
+Use the name_similarity score: 
+- 0.8+ = Same person (match allowed)
+- 0.5-0.8 = Possibly same person (needs review)
+- Below 0.5 = Different people (DO NOT MATCH)
+
 ## CRITICAL RULE: ONE INVOICE = ONE PAYMENT
 Each invoice ID can only be matched to ONE payment. If the same invoice appears as a candidate for multiple payments, you must choose the BEST match and leave others unmatched.
-
-Example: Customer "John Smith" has two $500 invoices (INV-001, INV-002)
-- Payment 1: $500 from "John Smith" → Match to INV-001
-- Payment 2: $500 from "John Smith" → Match to INV-002 (NOT INV-001 again!)
-- Payment 3: $500 from "John Smith" → No match (both invoices already used)
-
-## CANDIDATE SOURCES (NEW)
-Candidates are categorized by how they were matched:
-- **is_amount_match=true**: Payment amount is within 20% of invoice (amount-based matching)
-- **is_customer_match=true**: Invoice customer name matches bank counterparty (customer-based matching)
-- **Both true**: HIGHEST CONFIDENCE - amount AND customer both match
-- **is_direct_link=true**: Invoice ID found directly in bank description (overrides other sources)
 
 ## CANDIDATE FIELDS EXPLAINED
 - **id**: Unique invoice ID (use this for matching)
@@ -424,8 +424,9 @@ Candidates are categorized by how they were matched:
 - **reference_match**: true if reference number matches
 - **fee_implied**: Payment processor fee (Stripe, Square, PayPal deducted this)
 - **due_date**: Invoice due date
-- **is_customer_match**: true if invoice customer matches bank counterparty
-- **is_amount_match**: true if payment amount is within 20% of invoice
+- **is_customer_match**: true if invoice customer matches bank counterparty (name_similarity >= 0.6)
+- **is_amount_match**: true if payment amount is within 5% of invoice
+- **name_similarity**: 0-1 score of how similar the names are (1.0 = exact match)
 
 ## MATCHING RULES (in priority order)
 
@@ -435,47 +436,30 @@ Candidates are categorized by how they were matched:
 2. **BOTH MATCH** (is_customer_match=true AND is_amount_match=true): Customer + amount both match
    → Highest confidence (0.95+) - this is the gold standard
 
-3. **EXACT MATCH**: Payment = Invoice amount (diff ≈ 0)
-   → High confidence if customer names are similar
+3. **EXACT MATCH with name_similarity >= 0.8**: Payment = Invoice amount AND same customer
+   → High confidence (0.90+)
 
-4. **FEE-ADJUSTED MATCH**: Payment = Invoice - processor fee (0-5%)
-   → Common: Stripe/Square/PayPal deduct fees before deposit
-   → Example: Invoice $100, Bank $97, fee_implied=$3 = MATCH
-   → Even small fees (0.5-1%) are valid - ACH fees are often lower
-   → IMPORTANT: If payment is 0-5% LESS than invoice, treat as fee-adjusted match with HIGH confidence
+4. **FEE-ADJUSTED MATCH with name_similarity >= 0.8**: Payment = Invoice - fee AND same customer
+   → High confidence (0.85+)
 
-5. **CUSTOMER NAME MATCHING**:
-   - "MichaelHouk" = "Michael Houk" = "M. Houk" (same person)
-   - "Kelsee Gomes (NY Yankees)" matches invoice for "Kelsee Gomes"
-   - Ignore parenthetical info like team names - focus on the PERSON NAME
-   - Company variations: "ABC Corp" = "ABC Corporation" = "ABC Inc"
+5. **PARTIAL PAYMENT with name_similarity >= 0.8**: Payment < Invoice AND same customer
+   → Medium confidence (0.70-0.85), always pending
 
-6. **PARTIAL PAYMENT**: Payment < Invoice amount
-   → Only match if customer names match clearly
+6. **AGGREGATION with name_similarity >= 0.8**: Multiple invoices, same customer
+   → Medium confidence (0.70-0.85), always pending
 
-7. **AGGREGATION**: Single payment covers multiple invoices
-   → Return multiple invoice IDs in matched_candidate_ids
+## CONFIDENCE SCORING (STRICT RULES)
+- 0.95-1.00: ONLY for direct link OR (exact amount + name_similarity >= 0.9)
+- 0.85-0.94: ONLY for (amount within 5% + name_similarity >= 0.8)
+- 0.70-0.84: For matches with name_similarity 0.6-0.8
+- 0.50-0.69: For uncertain matches (needs_review)
+- Below 0.50: DO NOT MATCH - return "no_match"
 
-## CONFIDENCE SCORING
-- 0.95-1.00: Direct link OR (exact amount + exact customer name) OR (both match flags true)
-- 0.90-0.99: Fee-adjusted (0-5% less) + exact customer name match
-- 0.85-0.94: Exact amount + similar customer name
-- 0.75-0.89: Fee-adjusted match with good name match
-- 0.50-0.74: Partial payment or uncertain customer
-- Below 0.50: Weak match, needs review
-
-## STATUS DECISION (YOU MUST SET THIS)
-Based on your confidence and reasoning, decide the match status:
-- **"confirmed"**: Use when you are HIGHLY confident (0.85+) the match is correct:
-  - Direct link found
-  - Both customer AND amount match clearly
-  - Exact or fee-adjusted match with clear customer name
-- **"pending"**: Use when match needs human review:
-  - Confidence below 0.85
-  - Customer name is uncertain or partial match
-  - Partial payment (FIFO scenario)
-  - Aggregation (multiple invoices)
-  - Any doubt about the match
+## CRITICAL: CONFIDENCE CAPS
+- If name_similarity < 0.5: MAX confidence = 0.40 (return "no_match")
+- If name_similarity 0.5-0.6: MAX confidence = 0.60 (return "needs_review")
+- If name_similarity 0.6-0.8: MAX confidence = 0.80 (return "pending")
+- If name_similarity >= 0.8: Can use full confidence range
 
 ## OUTPUT FORMAT
 Return JSON with decisions array. Each decision:
@@ -485,9 +469,8 @@ Return JSON with decisions array. Each decision:
   "matched_candidate_id": "invoice ID or null",
   "matched_candidate_ids": ["id1", "id2"], // for aggregation only
   "match_type": "EXACT" | "FEE" | "PARTIAL" | "AGGREGATION",
-  "status": "confirmed" | "pending",  // YOU MUST SET THIS based on confidence
   "confidence": 0.0-1.0,
-  "reasoning": "Brief: [customer match] + [amount match]"
+  "reasoning": "Brief: name_similarity=X.XX, [reason]"
 }
 
 ${entityContext ? `\n## KNOWN CUSTOMERS (from memory)\n${entityContext}` : ""}`

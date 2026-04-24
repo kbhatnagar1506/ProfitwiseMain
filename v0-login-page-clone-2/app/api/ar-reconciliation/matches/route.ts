@@ -26,17 +26,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Get matches
     const { matches, total } = await getARMatches(user.id, status, limit, offset)
 
-    // Get summary counts for all statuses
+    // Get summary counts for all statuses - USE SAME METHOD AS STATS API
+    // Count unique invoices (not matches) and use invoice_amount for consistency
     const summaryResult = await query(
       `SELECT
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE status = 'pending') as pending,
-        COUNT(*) FILTER (WHERE status = 'confirmed') as confirmed,
-        COALESCE(SUM(bank_amount), 0)::float as total_amount,
-        COALESCE(SUM(bank_amount) FILTER (WHERE status = 'confirmed'), 0)::float as confirmed_amount,
-        COALESCE(SUM(bank_amount) FILTER (WHERE status = 'pending'), 0)::float as pending_amount
-      FROM ar_reconciliation_matches
-      WHERE user_id = $1`,
+        COUNT(DISTINCT cash_event_id) as total,
+        COUNT(DISTINCT cash_event_id) FILTER (WHERE status = 'pending') as pending,
+        COUNT(DISTINCT cash_event_id) FILTER (WHERE status = 'confirmed') as confirmed,
+        COALESCE(SUM(DISTINCT invoice_amount), 0)::float as total_amount,
+        COALESCE(SUM(CASE WHEN status = 'confirmed' THEN invoice_amount ELSE 0 END), 0)::float as confirmed_amount,
+        COALESCE(SUM(CASE WHEN status = 'pending' THEN invoice_amount ELSE 0 END), 0)::float as pending_amount
+      FROM (
+        SELECT DISTINCT ON (cash_event_id) cash_event_id, invoice_amount, status
+        FROM ar_reconciliation_matches
+        WHERE user_id = $1
+        ORDER BY cash_event_id, confidence DESC
+      ) unique_matches`,
       [user.id]
     )
     
