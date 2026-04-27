@@ -4,6 +4,8 @@
  */
 
 import { query } from "./db"
+import type { PoolClient } from "pg"
+import { writeStatusChange, statusFromOutstanding, type StatusChangeTrigger } from "./ar-ap-status"
 
 export interface ARReconciliationSummary {
   // Top cards
@@ -396,19 +398,46 @@ export async function createARMatch(
 }
 
 /**
- * Update AR match status
+ * Update AR match status (within a transaction)
+ * Returns the match details needed for syncing invoice status
  */
 export async function updateARMatchStatus(
+  client: PoolClient,
   matchId: string,
   status: "confirmed" | "rejected",
   confirmedBy?: string
-): Promise<void> {
-  await query(
+): Promise<{ cashEventId: string; matchedAmount: number; userId: string }> {
+  // First get the match details we need
+  const matchResult = await client.query<{
+    cash_event_id: string
+    matched_amount: string
+    user_id: string
+  }>(
+    `SELECT cash_event_id, matched_amount, user_id
+     FROM ar_reconciliation_matches
+     WHERE id = $1`,
+    [matchId]
+  )
+
+  if (matchResult.rows.length === 0) {
+    throw new Error(`Match not found: ${matchId}`)
+  }
+
+  const match = matchResult.rows[0]
+
+  // Update the match status
+  await client.query(
     `UPDATE ar_reconciliation_matches
     SET status = $1, confirmed_at = NOW(), confirmed_by = $2, updated_at = NOW()
     WHERE id = $3`,
     [status, confirmedBy || null, matchId]
   )
+
+  return {
+    cashEventId: match.cash_event_id,
+    matchedAmount: parseFloat(match.matched_amount),
+    userId: match.user_id,
+  }
 }
 
 /**
@@ -448,4 +477,64 @@ export async function getARMatch(matchId: string): Promise<ARMatch | null> {
     confirmed_at: row.confirmed_at,
     created_at: row.created_at,
   }
+}
+
+/**
+ * Sync invoice (cash_event) status based on AR reconciliation match.
+ * Called when a match is confirmed or rejected/deleted.
+ * 
+ * @param client - Database transaction client
+ * @param userId - User ID
+ * @param cashEventId - The invoice's cash_event ID
+ * @param matchedAmountDelta - Positive when confirming (reduces outstanding), negative when rejecting (restores outstanding)
+ * @param triggeredBy - The trigger type for audit logging
+ */
+export async function syncInvoiceStatusFromMatch(
+  client: PoolClient,
+  userId: string,
+  cashEventId: string,
+  matchedAmountDelta: number,
+  triggeredBy: "ar_match_confirm" | "ar_match_reject"
+): Promise<void> {
+  // Lock and read current cash_event state
+  const lockResult = await client.query<{
+    id: string
+    status: string
+    outstanding_amount: string
+    amount: string
+  }>(
+    `SELECT id, status, outstanding_amount, amount
+     FROM cash_events
+     WHERE id = $1 AND user_id = $2
+     FOR UPDATE`,
+    [cashEventId, userId]
+  )
+
+  const cashEvent = lockResult.rows[0]
+  if (!cashEvent) {
+    console.warn(`[syncInvoiceStatusFromMatch] Cash event not found: ${cashEventId}`)
+    return
+  }
+
+  const currentOutstanding = parseFloat(cashEvent.outstanding_amount)
+  const originalAmount = parseFloat(cashEvent.amount)
+  const currentStatus = cashEvent.status
+
+  // Calculate new outstanding amount
+  // For confirm: matchedAmountDelta is positive, so we subtract it
+  // For reject: matchedAmountDelta is negative, so subtracting adds it back
+  const newOutstanding = Math.max(0, currentOutstanding - matchedAmountDelta)
+  const newStatus = statusFromOutstanding(newOutstanding, originalAmount)
+
+  // Use canonical writeStatusChange for atomic update + audit log
+  await writeStatusChange(client, {
+    cashEventId,
+    userId,
+    fromStatus: currentStatus,
+    toStatus: newStatus,
+    fromOutstanding: currentOutstanding,
+    toOutstanding: newOutstanding,
+    triggeredBy: triggeredBy as StatusChangeTrigger,
+    forceReconciledAt: triggeredBy === "ar_match_confirm",
+  })
 }
