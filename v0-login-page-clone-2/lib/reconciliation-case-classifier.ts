@@ -555,30 +555,31 @@ function buildCandidates(
     return a.amount_diff - b.amount_diff
   })
 
-  // CRITICAL FIX: Filter out candidates that don't have EITHER:
-  // 1. Customer name match (similarity >= 60%), OR
-  // 2. Direct link (invoice ID in bank data), OR
-  // 3. Reference match (invoice number in description)
-  // This prevents matching "Leann Brenneke" payment to "Lacey Carpovich" invoice
+  // INCLUSIVE CANDIDATE APPROACH:
+  // Keep ALL candidates that have ANY potential match signal.
+  // The AI matcher will do the strict filtering - candidates should show all possibilities.
+  // This ensures invoices appear as candidates even with weak name matches.
   const qualityCandidates = candidates.filter((c) => {
-    // Always keep direct links and reference matches
+    // Always keep direct links and reference matches (strongest signals)
     if (c.is_direct_link || c.reference_match) return true
     
-    // Keep if customer name matches (similarity >= 60%)
-    if (c.is_customer_match) return true
+    // Keep if customer name has ANY similarity (>= 20%)
+    if ((c.name_similarity || 0) >= 0.2) return true
     
-    // Keep if amount is exact AND name similarity is at least 40%
-    if (c.amount_diff < EPS && (c.name_similarity || 0) >= 0.4) return true
+    // Keep if amount is exact or very close (within 1%)
+    if (c.amount_diff < EPS) return true
+    const diffRatio = c.amount !== 0 ? c.amount_diff / c.amount : 1
+    if (diffRatio <= 0.01) return true
     
-    // Keep if amount is within 5% AND name similarity is at least 50%
-    const diffRatio = c.amount_diff / c.amount
-    if (diffRatio <= 0.05 && (c.name_similarity || 0) >= 0.5) return true
+    // Keep if amount is within 10% (could be fee-adjusted)
+    if (diffRatio <= 0.10) return true
     
-    // Reject candidates with poor name match even if amount matches
+    // Drop candidates with zero name similarity AND large amount difference
+    // These are truly unrelated
     return false
   })
 
-  // Return top N candidates
+  // Return top N candidates (sorted by quality from above)
   return qualityCandidates.slice(0, maxCandidates)
 }
 
