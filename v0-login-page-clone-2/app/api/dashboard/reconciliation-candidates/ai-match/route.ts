@@ -671,13 +671,27 @@ async function saveMatchesToDatabase(
       
       // Determine status: use static confidence threshold (not AI decision)
       // Confirmed if: confidence >= 85% AND match type is EXACT or FEE AND name similarity >= 0.7
+      //               AND amount difference is reasonable (< 10% for FEE, < $1 for EXACT)
       // Otherwise: pending for review
       let finalStatus: "confirmed" | "pending" = "pending"
       if (!statusOverride) {
         const isHighConfidence = adjustedConfidence >= 0.85
         const isReliableType = matchType === "EXACT" || matchType === "FEE"
         const hasGoodNameMatch = nameSimilarity >= 0.7
-        finalStatus = (isHighConfidence && isReliableType && hasGoodNameMatch) ? "confirmed" : "pending"
+        
+        // CRITICAL: Check amount difference to prevent overpayment auto-confirms
+        const amountDiff = Math.abs(Math.abs(movement.amount) - cashEvent.amount)
+        const amountDiffPct = cashEvent.amount > 0 ? amountDiff / cashEvent.amount : 1
+        const hasReasonableAmountDiff = matchType === "EXACT" 
+          ? amountDiff < 1.00  // EXACT: must be within $1
+          : amountDiffPct < 0.10  // FEE: must be within 10%
+        
+        finalStatus = (isHighConfidence && isReliableType && hasGoodNameMatch && hasReasonableAmountDiff) ? "confirmed" : "pending"
+        
+        // Log if we're forcing pending due to amount mismatch
+        if (isHighConfidence && isReliableType && hasGoodNameMatch && !hasReasonableAmountDiff) {
+          console.log(`[AI Matcher] Forcing pending due to large amount diff: $${amountDiff.toFixed(2)} (${(amountDiffPct * 100).toFixed(1)}%) for ${matchType} match`)
+        }
       } else {
         finalStatus = statusOverride
       }
