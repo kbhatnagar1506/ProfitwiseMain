@@ -461,6 +461,19 @@ Each invoice ID can only be matched to ONE payment. If the same invoice appears 
 - If name_similarity 0.6-0.8: MAX confidence = 0.80 (return "pending")
 - If name_similarity >= 0.8: Can use full confidence range
 
+## STATUS DECISION (YOU DECIDE)
+You must set the "status" field for each match:
+- "confirmed": High confidence match that can be auto-applied (confidence >= 0.85, exact/near amount, same customer)
+- "pending": Match needs human review before applying (any uncertainty)
+
+Rules for "confirmed":
+- Confidence >= 0.85
+- Amount difference < 5% OR exact match
+- Name similarity >= 0.8
+- Match type is EXACT or FEE (not PARTIAL, AGGREGATION, or OVERPAYMENT)
+
+If ANY of these conditions fail, set status = "pending"
+
 ## OUTPUT FORMAT
 Return JSON with decisions array. Each decision:
 {
@@ -469,6 +482,7 @@ Return JSON with decisions array. Each decision:
   "matched_candidate_id": "invoice ID or null",
   "matched_candidate_ids": ["id1", "id2"], // for aggregation only
   "match_type": "EXACT" | "FEE" | "PARTIAL" | "AGGREGATION",
+  "status": "confirmed" | "pending",
   "confidence": 0.0-1.0,
   "reasoning": "Brief: name_similarity=X.XX, [reason]"
 }
