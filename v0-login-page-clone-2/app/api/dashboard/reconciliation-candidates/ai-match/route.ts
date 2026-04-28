@@ -592,32 +592,12 @@ async function saveMatchesToDatabase(
       const invoiceDocNumber = (metadata.doc_number as string) || (metadata.invoice_number as string) || cashEvent.id
       const customerName = (metadata.customer_name as string) || (metadata.entity_name as string) || "Unknown"
       
-      // VALIDATION: Check customer name similarity
+      // Calculate name similarity for logging purposes only
       const bankCounterparty = movement.counterparty || ""
       const nameSimilarity = calculateNameSimilarity(bankCounterparty, customerName)
       
-      // If names are clearly different (similarity < 0.4), reject the match
-      if (nameSimilarity < 0.4 && !match.matched_candidate_id?.startsWith("DIRECT_LINK")) {
-        console.warn(`[AI Matcher] Rejecting match due to name mismatch: "${bankCounterparty}" vs "${customerName}" (similarity: ${nameSimilarity.toFixed(2)})`)
-        skippedCount++
-        continue
-      }
-      
-      // If names are uncertain (similarity 0.4-0.6), force to pending
-      if (nameSimilarity < 0.6) {
-        console.log(`[AI Matcher] Forcing pending due to uncertain name match: "${bankCounterparty}" vs "${customerName}" (similarity: ${nameSimilarity.toFixed(2)})`)
-        statusOverride = "pending"
-      }
-      
-      // Cap confidence based on name similarity
-      let adjustedConfidence = match.confidence
-      if (nameSimilarity < 0.5) {
-        adjustedConfidence = Math.min(adjustedConfidence, 0.50)
-      } else if (nameSimilarity < 0.6) {
-        adjustedConfidence = Math.min(adjustedConfidence, 0.65)
-      } else if (nameSimilarity < 0.8) {
-        adjustedConfidence = Math.min(adjustedConfidence, 0.80)
-      }
+      // Use AI's confidence directly (no adjustment)
+      const adjustedConfidence = match.confidence
       
       // Determine match type based on amounts and reasoning
       const matchType = isAggregation 
@@ -669,20 +649,15 @@ async function saveMatchesToDatabase(
         matchedAmount = cashEvent.amount
       }
       
-      // Use AI's status decision (confirmed or pending)
-      // The AI decides based on its confidence and match quality assessment
-      // Only override if we detected a name mismatch issue (statusOverride)
+      // Use AI's status decision directly - AI has full discretion
+      // Only exception: if AI hallucinated an invoice not in candidates, force pending
       let finalStatus: "confirmed" | "pending" = "pending"
       if (statusOverride) {
-        // Name similarity issue detected - force pending
-        finalStatus = statusOverride
+        finalStatus = statusOverride  // AI hallucinated - force pending
       } else if (match.status === "confirmed" || match.status === "pending") {
-        // Trust AI's decision
-        finalStatus = match.status
-      } else {
-        // Fallback: use confidence threshold if AI didn't provide status
-        finalStatus = adjustedConfidence >= 0.85 ? "confirmed" : "pending"
+        finalStatus = match.status  // Trust AI's decision
       }
+      // If AI didn't provide status, default to pending
       
       
       try {
