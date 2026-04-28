@@ -8,12 +8,13 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { query, ensureARMatchesSchema } from "@/lib/db"
+import { query, ensureARMatchesSchema, withTransaction } from "@/lib/db"
 import { classifyMovement, type CashEventRow } from "@/lib/reconciliation-case-classifier"
 import { runAIReconciliationMatcher, type MovementToMatch, type AIMatcherResult } from "@/lib/reconciliation-ai-matcher"
 import { syncCashEventsForUser } from "@/lib/cash-events-build"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { normalizeForMatch } from "@/lib/alias-normalize"
+import { syncInvoiceStatusFromMatch } from "@/lib/ar-reconciliation-queries"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Customer Name Similarity (duplicated from classifier for validation)
@@ -212,12 +213,40 @@ async function processAIMatching(
     }
 
     // Clear existing matches before re-running (fresh start each time)
-    console.log(`[AI Matcher Job ${jobId}] Clearing existing AR matches...`)
-    const deleteResult = await query(
-      `DELETE FROM ar_reconciliation_matches WHERE user_id = $1`,
-      [userId]
-    )
-    console.log(`[AI Matcher Job ${jobId}] Deleted ${deleteResult.rowCount || 0} existing matches`)
+    // Also reset invoice statuses that were marked paid by previous matches
+    console.log(`[AI Matcher Job ${jobId}] Clearing existing AR matches and resetting invoice statuses...`)
+    
+    await withTransaction(async (client) => {
+      // First, get all confirmed matches to restore their invoice statuses
+      const confirmedMatches = await client.query<{
+        cash_event_id: string
+        matched_amount: string
+      }>(
+        `SELECT cash_event_id, matched_amount
+         FROM ar_reconciliation_matches
+         WHERE user_id = $1 AND status = 'confirmed'`,
+        [userId]
+      )
+      
+      // Reset each invoice's outstanding amount
+      for (const match of confirmedMatches.rows) {
+        await syncInvoiceStatusFromMatch(
+          client,
+          userId,
+          match.cash_event_id,
+          -parseFloat(match.matched_amount),  // Negative = restores outstanding
+          "ar_match_reject"
+        )
+      }
+      
+      // Now delete all matches
+      const deleteResult = await client.query(
+        `DELETE FROM ar_reconciliation_matches WHERE user_id = $1`,
+        [userId]
+      )
+      
+      console.log(`[AI Matcher Job ${jobId}] Reset ${confirmedMatches.rows.length} invoice statuses, deleted ${deleteResult.rowCount || 0} matches`)
+    })
 
     // Load movements
     const movements = await fetchMovementsWithAvailableCash(userId)
@@ -731,54 +760,69 @@ async function saveMatchesToDatabase(
       
       
       try {
-        await query(
-          `INSERT INTO ar_reconciliation_matches (
-            user_id, movement_id, cash_event_id,
-            bank_amount, bank_date, bank_description, bank_counterparty,
-            invoice_id, invoice_amount, customer_name,
-            match_type, confidence, fee_amount, matched_amount,
-            matched_by, ai_reasoning, status
-          ) VALUES (
-            $1, $2, $3,
-            $4, $5, $6, $7,
-            $8, $9, $10,
-            $11, $12, $13, $14,
-            $15, $16, $17
+        // Use transaction to atomically save match AND sync invoice status
+        await withTransaction(async (client) => {
+          // Insert/update the match
+          await client.query(
+            `INSERT INTO ar_reconciliation_matches (
+              user_id, movement_id, cash_event_id,
+              bank_amount, bank_date, bank_description, bank_counterparty,
+              invoice_id, invoice_amount, customer_name,
+              match_type, confidence, fee_amount, matched_amount,
+              matched_by, ai_reasoning, status
+            ) VALUES (
+              $1, $2, $3,
+              $4, $5, $6, $7,
+              $8, $9, $10,
+              $11, $12, $13, $14,
+              $15, $16, $17
+            )
+            ON CONFLICT (movement_id, cash_event_id) DO UPDATE SET
+              bank_amount = EXCLUDED.bank_amount,
+              bank_date = EXCLUDED.bank_date,
+              bank_description = EXCLUDED.bank_description,
+              bank_counterparty = EXCLUDED.bank_counterparty,
+              invoice_amount = EXCLUDED.invoice_amount,
+              customer_name = EXCLUDED.customer_name,
+              match_type = EXCLUDED.match_type,
+              confidence = EXCLUDED.confidence,
+              fee_amount = EXCLUDED.fee_amount,
+              matched_amount = EXCLUDED.matched_amount,
+              ai_reasoning = EXCLUDED.ai_reasoning,
+              status = EXCLUDED.status,
+              updated_at = NOW()`,
+            [
+              userId,
+              movement.id,
+              cashEvent.id,
+              Math.abs(movement.amount),
+              movement.date,
+              movement.raw_description,
+              movement.counterparty,
+              invoiceDocNumber,
+              cashEvent.amount,
+              customerName,
+              matchType,
+              adjustedConfidence,  // Use adjusted confidence (capped by guardrails)
+              feeAmount,
+              matchedAmount,
+              "ai",
+              `${match.reasoning} [name_sim=${nameSimilarity.toFixed(2)}]${confidencePenaltyReason ? ` ${confidencePenaltyReason}` : ""}${guardrailReason ? ` [GUARDRAIL: ${guardrailReason}]` : ""}`,
+              finalStatus
+            ]
           )
-          ON CONFLICT (movement_id, cash_event_id) DO UPDATE SET
-            bank_amount = EXCLUDED.bank_amount,
-            bank_date = EXCLUDED.bank_date,
-            bank_description = EXCLUDED.bank_description,
-            bank_counterparty = EXCLUDED.bank_counterparty,
-            invoice_amount = EXCLUDED.invoice_amount,
-            customer_name = EXCLUDED.customer_name,
-            match_type = EXCLUDED.match_type,
-            confidence = EXCLUDED.confidence,
-            fee_amount = EXCLUDED.fee_amount,
-            matched_amount = EXCLUDED.matched_amount,
-            ai_reasoning = EXCLUDED.ai_reasoning,
-            status = EXCLUDED.status,
-            updated_at = NOW()`,
-          [
-            userId,
-            movement.id,
-            cashEvent.id,
-            Math.abs(movement.amount),
-            movement.date,
-            movement.raw_description,
-            movement.counterparty,
-            invoiceDocNumber,
-            cashEvent.amount,
-            customerName,
-            matchType,
-            adjustedConfidence,  // Use adjusted confidence (capped by guardrails)
-            feeAmount,
-            matchedAmount,
-            "ai",
-            `${match.reasoning} [name_sim=${nameSimilarity.toFixed(2)}]${confidencePenaltyReason ? ` ${confidencePenaltyReason}` : ""}${guardrailReason ? ` [GUARDRAIL: ${guardrailReason}]` : ""}`,
-            finalStatus
-          ]
-        )
+          
+          // If confirmed, sync invoice status to mark as paid
+          if (finalStatus === "confirmed") {
+            await syncInvoiceStatusFromMatch(
+              client,
+              userId,
+              cashEvent.id,
+              matchedAmount,  // Positive = reduces outstanding
+              "ar_match_confirm"
+            )
+          }
+        })
         
         // Track this invoice as matched in this run
         invoicesMatchedInThisRun.add(cashEvent.id)
