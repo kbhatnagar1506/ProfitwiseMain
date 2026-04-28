@@ -538,3 +538,87 @@ export async function syncInvoiceStatusFromMatch(
     forceReconciledAt: triggeredBy === "ar_match_confirm",
   })
 }
+
+/**
+ * Sync movement reconciliation status based on AR matches.
+ * Updates the movement's reconciliation_status, reconciled_amount, and reconciled_invoice_ids.
+ * 
+ * @param client - Database transaction client
+ * @param userId - User ID
+ * @param movementId - The movement ID
+ * @param invoiceId - The invoice ID being matched/unmatched
+ * @param matchedAmount - Amount being matched (positive) or unmatched (negative)
+ * @param isConfirm - true if confirming, false if rejecting/deleting
+ */
+export async function syncMovementReconciliationStatus(
+  client: PoolClient,
+  userId: string,
+  movementId: string,
+  invoiceId: string,
+  matchedAmount: number,
+  isConfirm: boolean
+): Promise<void> {
+  // Lock and read current movement state
+  const lockResult = await client.query<{
+    id: string
+    amount: string
+    reconciliation_status: string
+    reconciled_amount: string
+    reconciled_invoice_ids: string[] | null
+  }>(
+    `SELECT id, amount, reconciliation_status, reconciled_amount, reconciled_invoice_ids
+     FROM movements
+     WHERE id = $1 AND user_id = $2
+     FOR UPDATE`,
+    [movementId, userId]
+  )
+
+  const movement = lockResult.rows[0]
+  if (!movement) {
+    console.warn(`[syncMovementReconciliationStatus] Movement not found: ${movementId}`)
+    return
+  }
+
+  const movementAmount = Math.abs(parseFloat(movement.amount))
+  const currentReconciledAmount = parseFloat(movement.reconciled_amount || "0")
+  const currentInvoiceIds = movement.reconciled_invoice_ids || []
+
+  // Calculate new reconciled amount and invoice IDs
+  let newReconciledAmount: number
+  let newInvoiceIds: string[]
+
+  if (isConfirm) {
+    newReconciledAmount = currentReconciledAmount + matchedAmount
+    newInvoiceIds = currentInvoiceIds.includes(invoiceId) 
+      ? currentInvoiceIds 
+      : [...currentInvoiceIds, invoiceId]
+  } else {
+    newReconciledAmount = Math.max(0, currentReconciledAmount - matchedAmount)
+    newInvoiceIds = currentInvoiceIds.filter(id => id !== invoiceId)
+  }
+
+  // Determine new status based on reconciled amount vs movement amount
+  let newStatus: string
+  const reconciledRatio = newReconciledAmount / movementAmount
+
+  if (reconciledRatio >= 0.99) {
+    newStatus = "matched"  // Fully matched (within 1% tolerance)
+  } else if (reconciledRatio > 0) {
+    newStatus = "partial"  // Partially matched
+  } else {
+    newStatus = "unmatched"  // No matches
+  }
+
+  // Update movement
+  await client.query(
+    `UPDATE movements
+     SET reconciliation_status = $1,
+         reconciled_amount = $2,
+         reconciled_invoice_ids = $3,
+         reconciled_at = CASE WHEN $1 = 'matched' THEN NOW() ELSE reconciled_at END
+     WHERE id = $4`,
+    [newStatus, newReconciledAmount, newInvoiceIds, movementId]
+  )
+
+  console.log(`[syncMovementReconciliationStatus] Movement ${movementId}: ${movement.reconciliation_status} -> ${newStatus} ($${newReconciledAmount.toFixed(2)}/${movementAmount.toFixed(2)})`)
+}

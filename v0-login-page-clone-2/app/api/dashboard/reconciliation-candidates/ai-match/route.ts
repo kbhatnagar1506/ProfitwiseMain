@@ -14,7 +14,7 @@ import { runAIReconciliationMatcher, type MovementToMatch, type AIMatcherResult 
 import { syncCashEventsForUser } from "@/lib/cash-events-build"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
 import { normalizeForMatch } from "@/lib/alias-normalize"
-import { syncInvoiceStatusFromMatch } from "@/lib/ar-reconciliation-queries"
+import { syncInvoiceStatusFromMatch, syncMovementReconciliationStatus } from "@/lib/ar-reconciliation-queries"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Customer Name Similarity (duplicated from classifier for validation)
@@ -213,22 +213,23 @@ async function processAIMatching(
     }
 
     // Clear existing matches before re-running (fresh start each time)
-    // Also reset invoice statuses that were marked paid by previous matches
-    console.log(`[AI Matcher Job ${jobId}] Clearing existing AR matches and resetting invoice statuses...`)
+    // Also reset invoice and movement statuses that were marked by previous matches
+    console.log(`[AI Matcher Job ${jobId}] Clearing existing AR matches and resetting statuses...`)
     
     await withTransaction(async (client) => {
-      // First, get all confirmed matches to restore their invoice statuses
+      // First, get all confirmed matches to restore their invoice and movement statuses
       const confirmedMatches = await client.query<{
+        movement_id: string
         cash_event_id: string
         matched_amount: string
       }>(
-        `SELECT cash_event_id, matched_amount
+        `SELECT movement_id, cash_event_id, matched_amount
          FROM ar_reconciliation_matches
          WHERE user_id = $1 AND status = 'confirmed'`,
         [userId]
       )
       
-      // Reset each invoice's outstanding amount
+      // Reset each invoice's outstanding amount and movement's reconciliation status
       for (const match of confirmedMatches.rows) {
         await syncInvoiceStatusFromMatch(
           client,
@@ -236,6 +237,15 @@ async function processAIMatching(
           match.cash_event_id,
           -parseFloat(match.matched_amount),  // Negative = restores outstanding
           "ar_match_reject"
+        )
+        
+        await syncMovementReconciliationStatus(
+          client,
+          userId,
+          match.movement_id,
+          match.cash_event_id,
+          parseFloat(match.matched_amount),
+          false  // isConfirm = false (rejecting)
         )
       }
       
@@ -245,7 +255,7 @@ async function processAIMatching(
         [userId]
       )
       
-      console.log(`[AI Matcher Job ${jobId}] Reset ${confirmedMatches.rows.length} invoice statuses, deleted ${deleteResult.rowCount || 0} matches`)
+      console.log(`[AI Matcher Job ${jobId}] Reset ${confirmedMatches.rows.length} invoice/movement statuses, deleted ${deleteResult.rowCount || 0} matches`)
     })
 
     // Load movements
@@ -812,7 +822,7 @@ async function saveMatchesToDatabase(
             ]
           )
           
-          // If confirmed, sync invoice status to mark as paid
+          // If confirmed, sync invoice status to mark as paid AND movement status
           if (finalStatus === "confirmed") {
             await syncInvoiceStatusFromMatch(
               client,
@@ -820,6 +830,15 @@ async function saveMatchesToDatabase(
               cashEvent.id,
               matchedAmount,  // Positive = reduces outstanding
               "ar_match_confirm"
+            )
+            
+            await syncMovementReconciliationStatus(
+              client,
+              userId,
+              movement.id,
+              cashEvent.id,
+              matchedAmount,
+              true  // isConfirm
             )
           }
         })

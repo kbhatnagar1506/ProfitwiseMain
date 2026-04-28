@@ -1936,5 +1936,18 @@ export async function ensureARMatchesSchema(): Promise<void> {
     console.error("[DB] ar_reconciliation_matches index creation failed:", err instanceof Error ? err.message : String(err))
   }
 
+  // Add reconciliation tracking columns to movements table
+  console.log("[DB] Adding reconciliation columns to movements...")
+  try {
+    await p.query("ALTER TABLE movements ADD COLUMN IF NOT EXISTS reconciliation_status TEXT DEFAULT 'unmatched'")
+    await p.query("ALTER TABLE movements ADD COLUMN IF NOT EXISTS reconciled_amount NUMERIC(12,2) DEFAULT 0")
+    await p.query("ALTER TABLE movements ADD COLUMN IF NOT EXISTS reconciled_at TIMESTAMPTZ")
+    await p.query("ALTER TABLE movements ADD COLUMN IF NOT EXISTS reconciled_invoice_ids TEXT[]")
+    await p.query("CREATE INDEX IF NOT EXISTS idx_movements_recon_status ON movements(user_id, reconciliation_status)")
+    console.log("[DB] movements reconciliation columns added")
+  } catch (err) {
+    console.error("[DB] movements reconciliation columns failed:", err instanceof Error ? err.message : String(err))
+  }
+
   arMatchesSchemaEnsured = true
 }
