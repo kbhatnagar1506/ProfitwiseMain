@@ -420,11 +420,6 @@ function buildCandidates(
 
       const eventCustomerName = (event.metadata?.customer_name || event.metadata?.vendor_name) as string
       
-      // Debug: Log comparison for Hailey
-      if (matchedCustomer.toLowerCase().includes('hailey lacy') && event.entity_id?.includes('462')) {
-        console.log(`[buildCandidates] Comparing: matchedCustomer="${matchedCustomer}" (normalized="${normalizedMatchedCustomer}") vs eventCustomer="${eventCustomerName}" (normalized="${normalizeForMatch(eventCustomerName)}")`)
-      }
-      
       // Check if customer names match using normalized comparison
       // This ensures ALL invoices for the matched customer are included, regardless of minor name variations
       if (eventCustomerName && normalizeForMatch(eventCustomerName) === normalizedMatchedCustomer) {

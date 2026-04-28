@@ -186,18 +186,6 @@ export async function GET(request: Request): Promise<NextResponse> {
       // Pass all movements for cross-movement analysis (duplicate detection, separate fee detection)
       // Also pass the matched customer from LLM
       const matchedCustomer = customerMatches.get(movement.id)
-      
-      // Debug: Check Hailey Lacy movement
-      if (movement.counterparty?.toLowerCase().includes('hailey lacy') || 
-          (Math.abs(movement.amount - 279.90) < 0.01 && movement.direction === 'inflow')) {
-        console.log(`[reconciliation-candidates] Hailey movement: id=${movement.id}, amount=${movement.amount}, available_cash=${movement.available_cash}, counterparty=${movement.counterparty}, matchedCustomer=${matchedCustomer}`)
-        // Check if invoice 462 is in cash events
-        const inv462 = cashEvents.find(e => e.entity_id?.includes('462') || e.metadata?.invoice_id === '462')
-        if (inv462) {
-          console.log(`[reconciliation-candidates] Invoice 462 in cashEvents: amount=${inv462.amount}, outstanding=${inv462.outstanding_amount}, status=${inv462.status}, customer=${inv462.metadata?.customer_name}`)
-        }
-      }
-      
       const classification = classifyMovement(movement, cashEvents, movements, matchedCustomer)
 
       // Track AR count for summary (before filters)
