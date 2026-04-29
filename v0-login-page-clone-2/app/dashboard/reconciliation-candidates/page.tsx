@@ -10,6 +10,27 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users } from "lucide-react"
 import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
 
+interface ARMatch {
+  id: string
+  movement_id: string
+  cash_event_id: string
+  bank_date: string
+  bank_description: string | null
+  bank_counterparty: string | null
+  bank_amount: number
+  invoice_id: string
+  customer_name: string
+  invoice_amount: number
+  match_type: string
+  confidence: number
+  fee_amount: number
+  matched_amount: number
+  matched_by: string
+  status: string
+  confirmed_at: string | null
+  created_at: string
+}
+
 interface ClassifiedMovement {
   id: string
   date: string
@@ -111,6 +132,12 @@ export default function ReconciliationCandidatesPage() {
   const [selectedMovement, setSelectedMovement] = useState<ClassifiedMovement | null>(null)
   const [isDetailsPanelOpen, setIsDetailsPanelOpen] = useState(false)
   const [aiEnhancements, setAiEnhancements] = useState<Map<string, { suggested_case_type: string; confidence: number; reasoning: string }>>(new Map())
+  
+  // AR Matches state
+  const [arMatches, setArMatches] = useState<ARMatch[]>([])
+  const [arMatchesTotal, setArMatchesTotal] = useState(0)
+  const [arMatchesLoading, setArMatchesLoading] = useState(false)
+  const [arMatchFilter, setArMatchFilter] = useState<"all" | "pending" | "confirmed">("all")
 
   const fetchData = useCallback(async () => {
     try {
@@ -134,6 +161,29 @@ export default function ReconciliationCandidatesPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // Fetch AR matches from database
+  const fetchArMatches = useCallback(async () => {
+    try {
+      setArMatchesLoading(true)
+      const params = new URLSearchParams()
+      if (arMatchFilter !== "all") params.append("status", arMatchFilter)
+      
+      const res = await fetch(`/api/ar-reconciliation/matches?${params.toString()}`)
+      if (!res.ok) throw new Error("Failed to fetch AR matches")
+      const json = await res.json()
+      setArMatches(json.matches || [])
+      setArMatchesTotal(json.total || 0)
+    } catch (err) {
+      console.error("Failed to fetch AR matches:", err)
+    } finally {
+      setArMatchesLoading(false)
+    }
+  }, [arMatchFilter])
+
+  useEffect(() => {
+    fetchArMatches()
+  }, [fetchArMatches])
 
   const handleSelectMovement = (movement: ClassifiedMovement) => {
     setSelectedMovement(movement)
@@ -635,6 +685,113 @@ export default function ReconciliationCandidatesPage() {
                     </td>
                   </tr>
                 )})}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* AR Matches Section - Persisted matches from database */}
+      <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-[13px] font-semibold text-white">AR Matches</h2>
+            <span className="text-[11px] text-zinc-500">({arMatchesTotal} total)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setArMatchFilter("all")}
+              className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "all" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setArMatchFilter("pending")}
+              className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "pending" ? "bg-amber-500/20 text-amber-400" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              Pending
+            </button>
+            <button
+              onClick={() => setArMatchFilter("confirmed")}
+              className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "confirmed" ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              Confirmed
+            </button>
+            <Button
+              size="sm"
+              onClick={fetchArMatches}
+              disabled={arMatchesLoading}
+              className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2 ml-2"
+            >
+              <RefreshCw className={`h-3 w-3 ${arMatchesLoading ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
+        </div>
+        
+        {arMatchesLoading ? (
+          <div className="p-8 text-center">
+            <p className="text-zinc-500 text-sm">Loading matches...</p>
+          </div>
+        ) : arMatches.length === 0 ? (
+          <div className="p-8 text-center">
+            <p className="text-zinc-500 text-sm">No AR matches found. Run AI Match to create matches.</p>
+          </div>
+        ) : (
+          <div className="max-h-[400px] overflow-y-auto">
+            <table className="w-full">
+              <thead className="sticky top-0 bg-[#141414]">
+                <tr className="border-b border-white/10">
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Transaction</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Date</th>
+                  <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Amount</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice</th>
+                  <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice Amount</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Match Type</th>
+                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Confidence</th>
+                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {arMatches.map((match) => (
+                  <tr key={match.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
+                    <td className="px-3 py-2">
+                      <p className="text-[12px] text-white truncate max-w-[200px]">{match.bank_counterparty || "Unknown"}</p>
+                      <p className="text-[10px] text-zinc-600 truncate max-w-[200px]">{match.bank_description || ""}</p>
+                    </td>
+                    <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(match.bank_date)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <span className="text-[12px] font-mono tabular-nums font-semibold text-emerald-400">
+                        +{formatCurrency(match.bank_amount)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <p className="text-[12px] text-white">#{match.invoice_id}</p>
+                      <p className="text-[10px] text-zinc-500">{match.customer_name}</p>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <span className="text-[12px] font-mono tabular-nums text-zinc-300">
+                        {formatCurrency(match.invoice_amount)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Badge className={`text-[9px] px-1.5 py-0 ${getMatchTypeColor(match.match_type)}`}>
+                        {match.match_type}
+                      </Badge>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <span className="text-[11px] font-mono text-zinc-400">{Math.round(match.confidence * 100)}%</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Badge className={`text-[9px] px-1.5 py-0 ${
+                        match.status === "confirmed" ? "bg-emerald-500/10 text-emerald-400" :
+                        match.status === "pending" ? "bg-amber-500/10 text-amber-400" :
+                        "bg-zinc-500/10 text-zinc-400"
+                      }`}>
+                        {match.status}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
