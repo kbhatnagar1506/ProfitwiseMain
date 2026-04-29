@@ -64,7 +64,7 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
       COUNT(*) FILTER (WHERE id IN (SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as reconciled_count,
       SUM(amount) FILTER (WHERE id IN (SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as matched_amount
     FROM movements
-    WHERE user_id = $1 AND direction = 'inflow' AND is_operational = true`,
+    WHERE user_id = $1 AND direction = 'inflow' AND pnl_eligible = true`,
     [userId]
   )
 
@@ -80,7 +80,7 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
       COUNT(*) as excluded_count,
       SUM(amount) as excluded_amount
     FROM movements
-    WHERE user_id = $1 AND is_operational = false`,
+    WHERE user_id = $1 AND pnl_eligible = false`,
     [userId]
   )
 
@@ -93,7 +93,7 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
     `SELECT
       SUM(amount) as total_amount
     FROM movements
-    WHERE user_id = $1 AND direction = 'inflow' AND is_operational = true`,
+    WHERE user_id = $1 AND direction = 'inflow' AND pnl_eligible = true`,
     [userId]
   )
 
@@ -180,7 +180,7 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
     FROM movements m
     WHERE m.user_id = $1
       AND m.direction = 'inflow'
-      AND m.is_operational = true
+      AND m.pnl_eligible = true
       AND m.id NOT IN (
         SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed'
       )`,
