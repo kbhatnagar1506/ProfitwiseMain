@@ -54,17 +54,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     await ensureARMatchesSchema()
 
-    // 1. Invoice Stats with CALCULATED outstanding (not QBO's)
+    // 1. Invoice Stats - RECONCILIATION BASED (only confirmed matches count as paid)
     // An invoice is:
-    //   - "fully paid" if SUM(matched_amount) >= invoice_amount (or has EXACT/FEE match)
-    //   - "partially paid" if has matches but SUM(matched_amount) < invoice_amount
-    //   - "unpaid" if has no matches at all
+    //   - "paid" if has CONFIRMED match with EXACT/FEE/AGGREGATION type OR sum of confirmed matches >= invoice amount
+    //   - "partial" if has confirmed matches but sum < invoice amount
+    //   - "unpaid" if has no confirmed matches
     const invoiceResult = await query(
       `SELECT 
         COUNT(*) as total_count,
         COALESCE(SUM(ce.amount), 0)::float as total_amount,
         
-        -- Fully paid: has EXACT/FEE match OR sum of matches >= invoice amount
+        -- Fully paid: has CONFIRMED EXACT/FEE/AGGREGATION match OR sum of confirmed matches >= invoice amount
         COUNT(*) FILTER (
           WHERE matched.match_type IN ('EXACT', 'FEE', 'AGGREGATION')
           OR (matched.total_matched IS NOT NULL AND ce.amount - matched.total_matched <= 0.01)
@@ -74,7 +74,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           OR (matched.total_matched IS NOT NULL AND ce.amount - matched.total_matched <= 0.01)
         ), 0)::float as paid_amount,
         
-        -- Partially paid: has matches but not fully paid
+        -- Partially paid: has confirmed matches but not fully paid
         COUNT(*) FILTER (
           WHERE matched.total_matched IS NOT NULL 
           AND matched.total_matched > 0
@@ -88,11 +88,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           AND ce.amount - matched.total_matched > 0.01
         ), 0)::float as partial_amount,
         
-        -- Unpaid: no matches at all
+        -- Unpaid: no confirmed matches at all
         COUNT(*) FILTER (WHERE matched.total_matched IS NULL OR matched.total_matched = 0) as unpaid_count,
         COALESCE(SUM(ce.amount) FILTER (WHERE matched.total_matched IS NULL OR matched.total_matched = 0), 0)::float as unpaid_amount,
         
-        -- Calculated outstanding (invoice amount - matched amount)
+        -- Calculated outstanding (invoice amount - confirmed matched amount)
         COALESCE(SUM(
           GREATEST(ce.amount - COALESCE(matched.total_matched, 0), 0)
         ), 0)::float as calculated_outstanding
@@ -104,7 +104,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           SUM(matched_amount)::float as total_matched,
           MAX(match_type) as match_type
         FROM ar_reconciliation_matches
-        WHERE user_id = $1
+        WHERE user_id = $1 AND status = 'confirmed'
         GROUP BY cash_event_id
       ) matched ON matched.cash_event_id = ce.id
       WHERE ce.user_id = $1
@@ -143,14 +143,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const matchStatus = matchStatusResult.rows[0]
 
-    // 3. Match Types Breakdown (by invoice amount)
+    // 3. Match Types Breakdown (by invoice amount) - CONFIRMED ONLY
     const matchTypesResult = await query(
       `SELECT 
         match_type as type,
         COUNT(*) as count,
         COALESCE(SUM(invoice_amount), 0)::float as amount
       FROM ar_reconciliation_matches
-      WHERE user_id = $1
+      WHERE user_id = $1 AND status = 'confirmed'
       GROUP BY match_type
       ORDER BY count DESC`,
       [user.id]
@@ -162,13 +162,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       amount: row.amount
     }))
 
-    // 4. Fee Analysis
+    // 4. Fee Analysis - CONFIRMED ONLY
     const feeResult = await query(
       `SELECT 
         COUNT(*) as fee_count,
         COALESCE(SUM(fee_amount), 0)::float as fee_amount
       FROM ar_reconciliation_matches
       WHERE user_id = $1
+        AND status = 'confirmed'
         AND fee_amount > 0`,
       [user.id]
     )
