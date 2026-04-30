@@ -56,15 +56,18 @@ export interface ARReconciliationSummary {
 
 /**
  * Get comprehensive AR reconciliation summary with all computed metrics
+ * ALL STATS ARE RECONCILIATION-BASED - derived from ar_reconciliation_matches
  */
 export async function getARReconciliationSummary(userId: string): Promise<ARReconciliationSummary> {
-  // 1. Unmatched cash and reconciled count
+  // 1. Unmatched cash and reconciled count (from movements + matches)
   const unmatchedResult = await query(
     `SELECT
-      COUNT(*) FILTER (WHERE id NOT IN (SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as unmatched_count,
-      SUM(amount) FILTER (WHERE id NOT IN (SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as unmatched_cash,
-      COUNT(*) FILTER (WHERE id IN (SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as reconciled_count,
-      SUM(amount) FILTER (WHERE id IN (SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as matched_amount
+      COUNT(*) FILTER (WHERE reconciliation_status = 'unmatched' OR reconciliation_status IS NULL) as unmatched_count,
+      SUM(amount) FILTER (WHERE reconciliation_status = 'unmatched' OR reconciliation_status IS NULL) as unmatched_cash,
+      COUNT(*) FILTER (WHERE reconciliation_status = 'matched') as reconciled_count,
+      SUM(amount) FILTER (WHERE reconciliation_status = 'matched') as matched_amount,
+      COUNT(*) FILTER (WHERE reconciliation_status = 'partial') as partial_count,
+      SUM(reconciled_amount) FILTER (WHERE reconciliation_status = 'partial') as partial_amount
     FROM movements
     WHERE user_id = $1 AND direction = 'inflow' AND pnl_eligible = true`,
     [userId]
@@ -90,7 +93,7 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
   const excluded_count = parseInt(excludedRow.excluded_count || "0")
   const excluded_amount = parseFloat(excludedRow.excluded_amount || "0")
 
-  // 3. Coverage percentage
+  // 3. Coverage percentage (based on reconciliation)
   const coverageResult = await query(
     `SELECT
       SUM(amount) as total_amount
@@ -103,7 +106,7 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
   const total_amount = parseFloat(coverageRow.total_amount || "0")
   const coverage_percent = total_amount > 0 ? Math.round((matched_amount / total_amount) * 100) : 0
 
-  // 4. Bank cash cleared
+  // 4. Bank cash cleared (from confirmed matches only)
   const clearedResult = await query(
     `SELECT SUM(matched_amount) as bank_cash_cleared
     FROM ar_reconciliation_matches
@@ -114,19 +117,19 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
   const clearedRow = clearedResult.rows[0] || {}
   const bank_cash_cleared = parseFloat(clearedRow.bank_cash_cleared || "0")
 
-  // 5. AR Summary
+  // 5. AR Summary - RECONCILIATION BASED
+  // Paid = has confirmed match, Unpaid = no confirmed match
   const arResult = await query(
     `SELECT
       COUNT(*) as total_invoices,
-      SUM(amount) as total_ar_amount,
-      COUNT(*) FILTER (WHERE id IN (SELECT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as matched_count,
-      SUM(amount) FILTER (WHERE id IN (SELECT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as matched_amount,
-      COUNT(*) FILTER (WHERE id NOT IN (SELECT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as unmatched_count,
-      SUM(amount) FILTER (WHERE id NOT IN (SELECT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed')) as unmatched_amount,
-      COUNT(*) FILTER (WHERE status = 'open') as outstanding_count,
-      SUM(outstanding_amount) FILTER (WHERE status = 'open') as outstanding_amount
-    FROM cash_events
-    WHERE user_id = $1 AND event_type = 'ar'`,
+      SUM(ce.amount) as total_ar_amount,
+      COUNT(DISTINCT arm.cash_event_id) FILTER (WHERE arm.status = 'confirmed') as matched_count,
+      SUM(ce.amount) FILTER (WHERE arm.status = 'confirmed') as matched_amount,
+      COUNT(*) FILTER (WHERE arm.cash_event_id IS NULL) as unmatched_count,
+      SUM(ce.amount) FILTER (WHERE arm.cash_event_id IS NULL) as unmatched_amount
+    FROM cash_events ce
+    LEFT JOIN ar_reconciliation_matches arm ON arm.cash_event_id = ce.id AND arm.status = 'confirmed'
+    WHERE ce.user_id = $1 AND ce.event_type = 'ar'`,
     [userId]
   )
 
@@ -137,22 +140,17 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
   const ar_matched_amount = parseFloat(arRow.matched_amount || "0")
   const ar_unmatched_count = parseInt(arRow.unmatched_count || "0")
   const ar_unmatched_amount = parseFloat(arRow.unmatched_amount || "0")
-  const ar_outstanding_count = parseInt(arRow.outstanding_count || "0")
-  const ar_outstanding_amount = parseFloat(arRow.outstanding_amount || "0")
+  
+  // Outstanding = unmatched (no confirmed reconciliation match)
+  const ar_outstanding_count = ar_unmatched_count
+  const ar_outstanding_amount = ar_unmatched_amount
   const ar_verified_percent = ar_total_invoices > 0 ? Math.round((ar_matched_count / ar_total_invoices) * 100) : 0
 
-  // 6. Books paid amount (from QBO)
-  const booksResult = await query(
-    `SELECT SUM(amount) as books_paid_amount
-    FROM cash_events
-    WHERE user_id = $1 AND event_type = 'ar' AND status = 'paid'`,
-    [userId]
-  )
+  // 6. Books paid amount = reconciliation confirmed amount (not QBO status)
+  // This is now the same as matched_amount since we only consider reconciliation
+  const books_paid_amount = ar_matched_amount
 
-  const booksRow = booksResult.rows[0] || {}
-  const books_paid_amount = parseFloat(booksRow.books_paid_amount || "0")
-
-  // 7. Match statistics
+  // 7. Match statistics (from confirmed matches)
   const matchStatsResult = await query(
     `SELECT
       COUNT(*) FILTER (WHERE match_type = 'EXACT') as exact_matches,
@@ -176,16 +174,14 @@ export async function getARReconciliationSummary(userId: string): Promise<ARReco
   const avg_confidence = parseFloat(matchStatsRow.avg_confidence || "0")
   const total_fees = parseFloat(matchStatsRow.total_fees || "0")
 
-  // 8. Review queue count
+  // 8. Review queue count (movements without confirmed match)
   const reviewResult = await query(
     `SELECT COUNT(*) as review_count
     FROM movements m
     WHERE m.user_id = $1
       AND m.direction = 'inflow'
       AND m.pnl_eligible = true
-      AND m.id NOT IN (
-        SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed'
-      )`,
+      AND (m.reconciliation_status = 'unmatched' OR m.reconciliation_status IS NULL)`,
     [userId]
   )
 
