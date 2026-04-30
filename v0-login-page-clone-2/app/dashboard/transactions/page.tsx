@@ -371,35 +371,39 @@ export default function TransactionsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">Transactions</h1>
-        {summary && (
-          <div className="flex gap-6 mt-3 text-[13px] font-mono tracking-tight">
-            <div>
-              <span className="text-neutral-600">Inflows:</span>{" "}
-              <span className="text-emerald-400 font-medium tabular-nums">
-                {formatCurrency(summary.total_inflow)}
-              </span>
-            </div>
-            <div>
-              <span className="text-neutral-600">Outflows:</span>{" "}
-              <span className="text-zinc-100 font-medium tabular-nums">
-                {formatCurrency(summary.total_outflow)}
-              </span>
-            </div>
-            <div>
-              <span className="text-neutral-600">Net:</span>{" "}
-              <span className="text-zinc-100 font-medium tabular-nums">
-                {formatCurrency(summary.net)}
-              </span>
-            </div>
-            {summary.review_needed_count > 0 && (
-              <div className="flex items-center gap-1 text-amber-400">
-                <AlertCircle className="h-3.5 w-3.5" />
-                <span>{summary.review_needed_count} need review</span>
-              </div>
-            )}
-          </div>
-        )}
       </div>
+
+      {summary && (
+        <div className="flex items-center border-y border-zinc-800/80 py-2 mb-4">
+          <div className="pr-4 mr-4 border-r border-zinc-800/80">
+            <span className="text-zinc-500 text-xs uppercase tracking-wider">Inflows</span>
+            <div className="font-mono text-sm tracking-tight text-emerald-400 font-medium tabular-nums">
+              {formatCurrency(summary.total_inflow)}
+            </div>
+          </div>
+
+          <div className="pr-4 mr-4 border-r border-zinc-800/80">
+            <span className="text-zinc-500 text-xs uppercase tracking-wider">Outflows</span>
+            <div className="font-mono text-sm tracking-tight text-zinc-100 font-medium tabular-nums">
+              {formatCurrency(summary.total_outflow)}
+            </div>
+          </div>
+
+          <div className="pr-4 mr-4 border-r border-zinc-800/80">
+            <span className="text-zinc-500 text-xs uppercase tracking-wider">Net</span>
+            <div className="font-mono text-sm tracking-tight text-zinc-100 font-medium tabular-nums">
+              {formatCurrency(summary.net)}
+            </div>
+          </div>
+
+          {summary.review_needed_count > 0 && (
+            <div className="ml-auto flex items-center gap-2 text-amber-500 font-mono text-sm">
+              <AlertCircle className="h-4 w-4" />
+              <span>{summary.review_needed_count} need review</span>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="space-y-3 border-b border-zinc-800/80 pb-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
