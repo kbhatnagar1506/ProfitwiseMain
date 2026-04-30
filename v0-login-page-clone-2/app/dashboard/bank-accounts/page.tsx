@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Badge } from "@/components/ui/badge"
 
 interface BankAccount {
   account_id: string
@@ -72,16 +71,31 @@ function formatShortDate(dateStr: string): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }
 
-function getAccountTypeLabel(type: string | null, subtype: string | null): string {
-  if (!type) return "Account"
-  if (type === "depository") {
-    if (subtype === "checking") return "Checking"
-    if (subtype === "savings") return "Savings"
-    return "Depository"
+function getAccountShortName(name: string | null): string {
+  if (!name) return "ACC"
+  const normalized = name.toUpperCase()
+  if (normalized.includes("MMA") || normalized.includes("MONEY MARKET")) return "MMA"
+  if (normalized.includes("LLC")) return "LLC"
+  if (normalized.includes("CHECKING")) return "CHK"
+  if (normalized.includes("SAVINGS")) return "SAV"
+  if (normalized.includes("CREDIT")) return "CC"
+  const words = name.split(/\s+/)
+  if (words.length >= 2) {
+    return words.slice(0, 2).map(w => w[0]).join("").toUpperCase()
   }
-  if (type === "credit") return "Credit Card"
-  if (type === "investment") return "Investment"
-  return type.charAt(0).toUpperCase() + type.slice(1)
+  return name.slice(0, 3).toUpperCase()
+}
+
+function getAccountTypeLabel(type: string | null, subtype: string | null): string {
+  if (!type) return "ACCOUNT"
+  if (type === "depository") {
+    if (subtype === "checking") return "CHECKING"
+    if (subtype === "savings") return "SAVINGS"
+    return "DEPOSITORY"
+  }
+  if (type === "credit") return "CREDIT"
+  if (type === "investment") return "INVESTMENT"
+  return type.toUpperCase()
 }
 
 function Sparkline({ data, width = 120, height = 32 }: { data: number[]; width?: number; height?: number }) {
@@ -169,22 +183,22 @@ export default function BankAccountsPage() {
       <div className="space-y-8">
         <div>
           <h1 className="text-2xl font-semibold text-foreground tracking-tight">Bank Accounts</h1>
-          <p className="text-sm text-neutral-500 mt-1">Manage your bank accounts</p>
+          <p className="text-sm text-zinc-500 mt-1">Manage your bank accounts</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[1, 2].map((i) => (
-            <div key={i} className="flex flex-col justify-between p-6 bg-[#141414] border border-white/[0.08] rounded-xl min-h-[220px]">
+            <div key={i} className="flex flex-col justify-between p-6 bg-zinc-950 border border-zinc-800 rounded-xl min-h-[220px]">
               <div className="flex items-start justify-between">
                 <div>
                   <Skeleton className="h-3.5 w-32 mb-1.5" />
                   <Skeleton className="h-3 w-16" />
                 </div>
-                <Skeleton className="h-5 w-16 rounded-full" />
+                <Skeleton className="h-5 w-16 rounded" />
               </div>
               <Skeleton className="h-9 w-44" />
               <Skeleton className="h-8 w-full rounded" />
-              <div className="grid grid-cols-3 gap-3 pt-4 border-t border-white/[0.06]">
+              <div className="grid grid-cols-3 gap-3 pt-4 border-t border-zinc-800/80">
                 <Skeleton className="h-8 w-full" />
                 <Skeleton className="h-8 w-full" />
                 <Skeleton className="h-8 w-full" />
@@ -195,9 +209,11 @@ export default function BankAccountsPage() {
 
         <div>
           <Skeleton className="h-4 w-40 mb-4" />
-          <div className="bg-[#141414] border border-white/[0.08] rounded-xl p-4 space-y-3">
+          <div className="space-y-0">
             {[1, 2, 3, 4, 5].map((i) => (
-              <Skeleton key={i} className="h-6 w-full" />
+              <div key={i} className="border-b border-zinc-800/80 py-3">
+                <Skeleton className="h-5 w-full" />
+              </div>
             ))}
           </div>
         </div>
@@ -212,20 +228,20 @@ export default function BankAccountsPage() {
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">Bank Accounts</h1>
-        <p className="text-sm text-neutral-500 mt-1">
+        <p className="text-sm text-zinc-500 mt-1">
           {totals.account_count} account{totals.account_count !== 1 ? "s" : ""} · Total balance{" "}
-          <span className="text-emerald-400/90 font-medium tabular-nums">{formatCurrency(totals.total_balance)}</span>
+          <span className="text-emerald-400 font-medium font-mono tabular-nums tracking-tight">{formatCurrency(totals.total_balance)}</span>
         </p>
       </div>
 
       {accounts.length === 0 ? (
-        <div className="bg-[#141414] border border-white/[0.06] rounded-xl p-8 text-center">
-          <p className="text-neutral-400">No bank accounts connected</p>
-          <p className="text-sm text-neutral-600 mt-2">Connect a bank account to get started</p>
+        <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-8 text-center">
+          <p className="text-zinc-400">No bank accounts connected</p>
+          <p className="text-sm text-zinc-600 mt-2">Connect a bank account to get started</p>
         </div>
       ) : (
         <>
-          {/* Account Cards */}
+          {/* Account Cards - Premium Credit Card Style */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {accounts.map((account) => {
               const hasStats = account.total_inflow > 0 || account.total_outflow > 0 || account.txn_count > 0
@@ -233,7 +249,7 @@ export default function BankAccountsPage() {
               return (
                 <div
                   key={account.account_id}
-                  className="flex flex-col justify-between p-6 bg-[#141414] border border-white/[0.08] rounded-xl shadow-lg hover:border-white/[0.15] transition-colors"
+                  className="flex flex-col justify-between p-6 bg-zinc-950 border border-zinc-800 rounded-xl hover:border-zinc-700 transition-colors"
                 >
                   {/* Top: Name + mask + type badge */}
                   <div className="flex items-start justify-between gap-3">
@@ -242,25 +258,22 @@ export default function BankAccountsPage() {
                         {account.normalized_name || account.name || "Account"}
                       </h3>
                       {account.mask && (
-                        <p className="text-[11px] text-zinc-600 mt-0.5">...{account.mask}</p>
+                        <p className="text-[11px] text-zinc-600 mt-0.5 font-mono tracking-tight">...{account.mask}</p>
                       )}
                     </div>
-                    <Badge
-                      variant="secondary"
-                      className="bg-white/5 text-zinc-400 border-white/10 text-[10px] h-5 flex-shrink-0"
-                    >
+                    <span className="bg-zinc-800 border border-zinc-700 text-zinc-300 text-[10px] uppercase px-2 py-0.5 rounded font-mono flex-shrink-0">
                       {getAccountTypeLabel(account.type, account.subtype)}
-                    </Badge>
+                    </span>
                   </div>
 
                   {/* Middle: Balance hero + sparkline */}
                   <div className="py-4">
                     <p className="text-[10px] uppercase tracking-[0.12em] text-zinc-600 font-medium mb-1">Current Balance</p>
-                    <p className="text-[28px] font-semibold text-foreground tabular-nums tracking-tight leading-none">
+                    <p className="text-3xl text-white font-mono font-medium tabular-nums tracking-tighter leading-none">
                       {formatCurrency(account.current_balance)}
                     </p>
                     {account.available_balance !== account.current_balance && (
-                      <p className="text-[11px] text-zinc-600 mt-1.5 tabular-nums">
+                      <p className="text-[11px] text-zinc-600 mt-1.5 font-mono tabular-nums tracking-tight">
                         {formatCurrency(account.available_balance)} available
                       </p>
                     )}
@@ -274,22 +287,22 @@ export default function BankAccountsPage() {
 
                   {/* Bottom: Stats mini-grid (hidden when all zeros) */}
                   {hasStats && (
-                    <div className="grid grid-cols-3 gap-3 pt-4 border-t border-white/[0.06]">
+                    <div className="grid grid-cols-3 gap-3 pt-4 border-t border-zinc-800/80">
                       <div>
                         <p className="text-[10px] text-zinc-600 font-medium mb-0.5">Inflows</p>
-                        <p className="text-[12px] font-medium text-emerald-400/90 tabular-nums">
+                        <p className="text-[12px] font-medium text-emerald-400 font-mono tabular-nums tracking-tight">
                           {formatCompactCurrency(account.total_inflow)}
                         </p>
                       </div>
                       <div>
                         <p className="text-[10px] text-zinc-600 font-medium mb-0.5">Outflows</p>
-                        <p className="text-[12px] font-medium text-zinc-400 tabular-nums">
+                        <p className="text-[12px] font-medium text-zinc-200 font-mono tabular-nums tracking-tight">
                           {formatCompactCurrency(account.total_outflow)}
                         </p>
                       </div>
                       <div>
                         <p className="text-[10px] text-zinc-600 font-medium mb-0.5">Txns</p>
-                        <p className="text-[12px] font-medium text-zinc-300 tabular-nums">
+                        <p className="text-[12px] font-medium text-zinc-300 font-mono tabular-nums">
                           {account.txn_count}
                         </p>
                       </div>
@@ -298,7 +311,7 @@ export default function BankAccountsPage() {
 
                   {/* Footer: Last activity */}
                   {account.last_txn_date && (
-                    <p className="text-[10px] text-zinc-600 mt-3">
+                    <p className="text-[10px] text-zinc-600 mt-3 font-mono tracking-tight">
                       Last activity {formatDate(account.last_txn_date)}
                     </p>
                   )}
@@ -307,42 +320,52 @@ export default function BankAccountsPage() {
             })}
           </div>
 
-          {/* Recent Activity Ledger */}
+          {/* Recent Activity Ledger - Flat, Infinite List Style */}
           {recent_transactions && recent_transactions.length > 0 && (
             <div className="mt-2">
-              <p className="text-sm text-zinc-400 mb-4">Recent Account Activity</p>
-              <div className="bg-[#141414] border border-white/[0.08] rounded-xl overflow-hidden">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-white/[0.06]">
-                      <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Date</th>
-                      <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Description</th>
-                      <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Account</th>
-                      <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4 text-right">Amount</th>
+              <p className="text-sm text-zinc-500 mb-4 font-medium tracking-tight">Recent Account Activity</p>
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-zinc-800/80">
+                    <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 pr-4">Date</th>
+                    <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Description</th>
+                    <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 px-4">Account</th>
+                    <th className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider py-2.5 pl-4 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recent_transactions.map((txn) => (
+                    <tr key={txn.id} className="border-b border-zinc-800/80 last:border-0 hover:bg-zinc-900/40 transition-colors">
+                      <td className="text-[12px] text-zinc-500 py-3 pr-4 font-mono tabular-nums tracking-tight">
+                        {formatShortDate(txn.date)}
+                      </td>
+                      <td className="text-[12px] text-zinc-300 py-3 px-4 truncate max-w-[280px]">
+                        {txn.display_name}
+                      </td>
+                      <td className="text-[11px] text-zinc-500 py-3 px-4 font-mono tracking-tight">
+                        {txn.account_mask ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
+                            {getAccountShortName(txn.account_name)} ...{txn.account_mask}
+                          </span>
+                        ) : txn.account_name ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
+                            {getAccountShortName(txn.account_name)}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={`text-[12px] font-medium font-mono tabular-nums tracking-tight py-3 pl-4 text-right ${
+                        txn.direction === "inflow" ? "text-emerald-400" : "text-zinc-200"
+                      }`}>
+                        {txn.direction === "inflow" ? "+" : "−"}{formatCurrency(txn.amount)}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {recent_transactions.map((txn) => (
-                      <tr key={txn.id} className="border-b border-white/[0.03] last:border-0 hover:bg-white/[0.02] transition-colors">
-                        <td className="text-[12px] text-zinc-500 py-2 px-4 tabular-nums">
-                          {formatShortDate(txn.date)}
-                        </td>
-                        <td className="text-[12px] text-zinc-300 py-2 px-4 truncate max-w-[280px]">
-                          {txn.display_name}
-                        </td>
-                        <td className="text-[11px] text-zinc-500 py-2 px-4">
-                          {txn.account_mask ? `...${txn.account_mask}` : txn.account_name || "—"}
-                        </td>
-                        <td className={`text-[12px] font-medium tabular-nums py-2 px-4 text-right ${
-                          txn.direction === "inflow" ? "text-emerald-400/90" : "text-zinc-400"
-                        }`}>
-                          {txn.direction === "inflow" ? "+" : "−"}{formatCurrency(txn.amount)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </>
