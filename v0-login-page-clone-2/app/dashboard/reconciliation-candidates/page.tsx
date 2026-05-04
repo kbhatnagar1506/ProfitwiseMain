@@ -43,6 +43,7 @@ interface InvoiceWithMatch {
   invoice_status: string
   is_matched: boolean
   match_id: string | null
+  match_count: number
   bank_amount: number | null
   bank_date: string | null
   bank_counterparty: string | null
@@ -1062,13 +1063,20 @@ export default function ReconciliationCandidatesPage() {
                         </td>
                         <td className="px-3 py-2">
                           {invoice.is_matched ? (
-                            <Badge className={`text-[9px] px-1.5 py-0 ${
-                              invoice.match_status === "confirmed" ? "bg-emerald-500/10 text-emerald-400" :
-                              invoice.match_status === "pending" ? "bg-amber-500/10 text-amber-400" :
-                              "bg-zinc-500/10 text-zinc-400"
-                            }`}>
-                              {invoice.match_status || "matched"}
-                            </Badge>
+                            <div className="flex items-center gap-1">
+                              <Badge className={`text-[9px] px-1.5 py-0 ${
+                                invoice.match_status === "confirmed" ? "bg-emerald-500/10 text-emerald-400" :
+                                invoice.match_status === "pending" ? "bg-amber-500/10 text-amber-400" :
+                                "bg-zinc-500/10 text-zinc-400"
+                              }`}>
+                                {invoice.match_status || "matched"}
+                              </Badge>
+                              {invoice.match_count > 1 && (
+                                <span className="text-[9px] text-cyan-400" title={`${invoice.match_count} potential matches - showing best`}>
+                                  +{invoice.match_count - 1}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <Badge className="text-[9px] px-1.5 py-0 bg-red-500/10 text-red-400">
                               unmatched
