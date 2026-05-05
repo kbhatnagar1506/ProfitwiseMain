@@ -321,35 +321,21 @@ export async function syncCashEventsForUser(
 
   const upsertArSql = `INSERT INTO cash_events (
       user_id, entity_id, event_type, amount, outstanding_amount, status, probability, expected_date, source, metadata
-    ) VALUES ($1, $2, 'ar', $3, $3, $4, $5, $6::date, 'invoice', $7::jsonb)
+    ) VALUES ($1, $2, 'ar', $3, $4, $5, $6, $7::date, 'invoice', $8::jsonb)
     ON CONFLICT (user_id, event_type, entity_id) DO UPDATE SET
       amount = EXCLUDED.amount,
+      outstanding_amount = EXCLUDED.outstanding_amount,
       probability = EXCLUDED.probability,
       expected_date = EXCLUDED.expected_date,
       source = EXCLUDED.source,
       metadata = EXCLUDED.metadata,
       updated_at = NOW(),
-      outstanding_amount = CASE
-        WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
-        THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
-        ELSE EXCLUDED.amount
-      END,
       status = CASE
-        -- F3: Never overwrite a manually-verified or bank-reconciled payment back to open
         WHEN (cash_events.metadata->>'manual_paid')::boolean = true THEN cash_events.status
         WHEN cash_events.last_reconciled_at IS NOT NULL
           AND COALESCE(cash_events.outstanding_amount, cash_events.amount) <= 0.01 THEN 'paid'
-        -- Normal outstanding-amount-derived status (using the already-computed new outstanding)
-        WHEN (CASE
-          WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
-          THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
-          ELSE EXCLUDED.amount
-        END) <= 0.01 THEN 'paid'
-        WHEN (CASE
-          WHEN COALESCE(cash_events.outstanding_amount, cash_events.amount) < cash_events.amount
-          THEN LEAST(COALESCE(cash_events.outstanding_amount, cash_events.amount), EXCLUDED.amount)
-          ELSE EXCLUDED.amount
-        END) < EXCLUDED.amount THEN 'partially_paid'
+        WHEN EXCLUDED.outstanding_amount <= 0.01 THEN 'paid'
+        WHEN EXCLUDED.outstanding_amount < EXCLUDED.amount THEN 'partially_paid'
         ELSE 'open'
       END`
 
@@ -427,11 +413,12 @@ export async function syncCashEventsForUser(
       const expected = expectedFromArLayer2 ?? fallbackExpected
       const prob =
         inv.status === "overdue" ? 0.55 : inv.status === "partially_paid" ? 0.75 : 0.85
-      const statusInit: "open" | "partially_paid" | "paid" = "open"
+      const statusInit: "open" | "partially_paid" | "paid" = inv.amount_due < inv.amount ? "partially_paid" : "open"
       await query(upsertArSql, [
         userId,
         entityLabel,
-        inv.amount_due,
+        inv.amount,      // Original invoice total
+        inv.amount_due,  // Outstanding amount
         statusInit,
         prob,
         expected,

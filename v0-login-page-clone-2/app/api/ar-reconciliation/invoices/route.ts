@@ -133,15 +133,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       filteredInvoices = invoices.filter(inv => !inv.is_matched)
     }
 
-    // Calculate summary
+    // Calculate summary from the fetched invoices with proper precision
+    // Round to 2 decimal places to avoid floating point errors
+    const roundTo2 = (n: number) => Math.round(n * 100) / 100
+    
+    const matchedInvoices = invoices.filter(inv => inv.is_matched)
+    const unmatchedInvoices = invoices.filter(inv => !inv.is_matched)
+    
     const summary = {
       total_invoices: invoices.length,
-      matched_count: invoices.filter(inv => inv.is_matched).length,
-      unmatched_count: invoices.filter(inv => !inv.is_matched).length,
-      total_invoice_amount: invoices.reduce((sum, inv) => sum + inv.invoice_amount, 0),
-      matched_amount: invoices.filter(inv => inv.is_matched).reduce((sum, inv) => sum + inv.invoice_amount, 0),
-      unmatched_amount: invoices.filter(inv => !inv.is_matched).reduce((sum, inv) => sum + inv.invoice_amount, 0),
-      outstanding_amount: invoices.reduce((sum, inv) => sum + inv.outstanding_amount, 0),
+      matched_count: matchedInvoices.length,
+      unmatched_count: unmatchedInvoices.length,
+      total_invoice_amount: roundTo2(invoices.reduce((sum, inv) => sum + (inv.invoice_amount || 0), 0)),
+      matched_amount: roundTo2(matchedInvoices.reduce((sum, inv) => sum + (inv.invoice_amount || 0), 0)),
+      unmatched_amount: roundTo2(unmatchedInvoices.reduce((sum, inv) => sum + (inv.invoice_amount || 0), 0)),
+      outstanding_amount: roundTo2(invoices.reduce((sum, inv) => sum + (inv.outstanding_amount || 0), 0)),
     }
 
     return NextResponse.json({
