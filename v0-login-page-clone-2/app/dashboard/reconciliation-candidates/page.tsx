@@ -7,8 +7,39 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
-import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users } from "lucide-react"
+import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users, TrendingUp, CheckCircle2, AlertCircle, Clock, Zap, DollarSign, FileText, ArrowUpRight, ArrowDownRight } from "lucide-react"
 import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
+
+interface ReconciliationStats {
+  total_bank_inflows: number
+  total_bank_inflow_amount: number
+  matched_bank_inflows: number
+  matched_bank_amount: number
+  unmatched_bank_inflows: number
+  unmatched_bank_amount: number
+  coverage_percentage: number
+  total_invoices: number
+  total_invoice_amount: number
+  matched_invoices: number
+  matched_invoice_amount: number
+  unmatched_invoices: number
+  unmatched_invoice_amount: number
+  outstanding_amount: number
+  ar_match_rate: number
+  confirmed_matches: number
+  confirmed_amount: number
+  pending_matches: number
+  pending_amount: number
+  high_confidence_matches: number
+  low_confidence_matches: number
+  avg_confidence: number
+  match_types: { type: string; count: number; amount: number }[]
+  total_fees_detected: number
+  fee_amount: number
+  matches_today: number
+  matches_this_week: number
+  matches_this_month: number
+}
 
 interface ARMatch {
   id: string
@@ -54,24 +85,13 @@ interface InvoiceWithMatch {
 }
 
 interface InvoiceSummary {
-  // Totals (from original QBO/Xero data)
   total_invoices: number
-  total_invoice_amount: number
-  total_outstanding: number
-  // Matched breakdown
   matched_count: number
-  matched_invoice_amount: number
-  matched_outstanding: number
-  matched_bank_amount: number
-  total_fee_amount: number
-  avg_confidence: number
-  // Status breakdown
-  pending_count: number
-  confirmed_count: number
-  // Unmatched
   unmatched_count: number
-  unmatched_invoice_amount: number
-  unmatched_outstanding: number
+  total_invoice_amount: number
+  matched_amount: number
+  unmatched_amount: number
+  outstanding_amount: number
 }
 
 interface ClassifiedMovement {
@@ -195,15 +215,16 @@ export default function ReconciliationCandidatesPage() {
   // Invoice View state
   const [invoices, setInvoices] = useState<InvoiceWithMatch[]>([])
   const [invoiceSummary, setInvoiceSummary] = useState<InvoiceSummary>({
-    total_invoices: 0, total_invoice_amount: 0, total_outstanding: 0,
-    matched_count: 0, matched_invoice_amount: 0, matched_outstanding: 0,
-    matched_bank_amount: 0, total_fee_amount: 0, avg_confidence: 0,
-    pending_count: 0, confirmed_count: 0,
-    unmatched_count: 0, unmatched_invoice_amount: 0, unmatched_outstanding: 0
+    total_invoices: 0, matched_count: 0, unmatched_count: 0,
+    total_invoice_amount: 0, matched_amount: 0, unmatched_amount: 0, outstanding_amount: 0
   })
   const [invoicesLoading, setInvoicesLoading] = useState(false)
   const [invoiceFilter, setInvoiceFilter] = useState<"all" | "matched" | "unmatched">("all")
   const [activeView, setActiveView] = useState<"bank" | "invoice">("bank")
+  
+  // Comprehensive stats
+  const [stats, setStats] = useState<ReconciliationStats | null>(null)
+  const [statsLoading, setStatsLoading] = useState(false)
 
   const fetchData = useCallback(async () => {
     try {
@@ -280,6 +301,25 @@ export default function ReconciliationCandidatesPage() {
   useEffect(() => {
     fetchInvoices()
   }, [fetchInvoices])
+
+  // Fetch comprehensive stats
+  const fetchStats = useCallback(async () => {
+    try {
+      setStatsLoading(true)
+      const res = await fetch("/api/ar-reconciliation/stats")
+      if (!res.ok) throw new Error("Failed to fetch stats")
+      const json = await res.json()
+      setStats(json)
+    } catch (err) {
+      console.error("Failed to fetch stats:", err)
+    } finally {
+      setStatsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchStats()
+  }, [fetchStats])
 
   const handleSelectMovement = (movement: ClassifiedMovement) => {
     setSelectedMovement(movement)
@@ -548,6 +588,11 @@ export default function ReconciliationCandidatesPage() {
           const matchCount = result.matches?.filter((m: { decision: string }) => m.decision === "match").length || 0
           const reviewCount = result.matches?.filter((m: { decision: string }) => m.decision === "needs_review").length || 0
           alert(`AI Matching Complete!\n\n• ${result.total_processed || 0} movements analyzed\n• ${matchCount} matches found\n• ${reviewCount} need review\n• ${result.errors?.length || 0} errors\n• Time: ${(result.processing_time_ms / 1000).toFixed(1)}s`)
+          
+          // Refresh all data
+          fetchStats()
+          fetchArMatches()
+          fetchInvoices()
           return
         } else if (pollJson.status === "failed") {
           throw new Error(pollJson.error || "AI matching job failed")
@@ -650,25 +695,247 @@ export default function ReconciliationCandidatesPage() {
         </div>
       </div>
 
-      {/* Summary Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Total Movements</p>
-          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-white">{data.summary.total}</p>
+      {/* Comprehensive Stats Dashboard */}
+      {stats && (
+        <div className="space-y-4">
+          {/* Top Row - Key Metrics */}
+          <div className="grid grid-cols-5 gap-3">
+            {/* Coverage Card - Highlighted */}
+            <div className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border border-emerald-500/20 rounded-xl p-4 relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-500/10 rounded-full blur-2xl -mr-10 -mt-10" />
+              <div className="relative">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="h-8 w-8 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                    <TrendingUp className="h-4 w-4 text-emerald-400" />
+                  </div>
+                  <p className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">Coverage</p>
+                </div>
+                <p className="text-3xl font-bold font-mono tabular-nums text-white">{stats.coverage_percentage}%</p>
+                <div className="mt-2 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(stats.coverage_percentage, 100)}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-zinc-500 mt-1.5">{formatCurrency(stats.matched_bank_amount)} of {formatCurrency(stats.total_bank_inflow_amount)}</p>
+              </div>
+            </div>
+
+            {/* Matched Bank */}
+            <div className="bg-[#141414] border border-white/10 rounded-xl p-4 hover:border-white/20 transition-colors">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="h-7 w-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-blue-400" />
+                </div>
+                <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Matched</p>
+              </div>
+              <p className="text-2xl font-bold font-mono tabular-nums text-white">{formatCurrency(stats.matched_bank_amount)}</p>
+              <p className="text-[10px] text-zinc-500 mt-1">{stats.matched_bank_inflows} bank transactions</p>
+            </div>
+
+            {/* Unmatched Bank */}
+            <div className="bg-[#141414] border border-red-500/20 rounded-xl p-4 hover:border-red-500/30 transition-colors">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="h-7 w-7 rounded-lg bg-red-500/10 flex items-center justify-center">
+                  <AlertCircle className="h-3.5 w-3.5 text-red-400" />
+                </div>
+                <p className="text-[10px] text-red-400 uppercase tracking-wider">Unmatched</p>
+              </div>
+              <p className="text-2xl font-bold font-mono tabular-nums text-red-400">{formatCurrency(stats.unmatched_bank_amount)}</p>
+              <p className="text-[10px] text-zinc-500 mt-1">{stats.unmatched_bank_inflows} need action</p>
+            </div>
+
+            {/* Pending Review */}
+            <div className="bg-[#141414] border border-amber-500/20 rounded-xl p-4 hover:border-amber-500/30 transition-colors">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="h-7 w-7 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                  <Clock className="h-3.5 w-3.5 text-amber-400" />
+                </div>
+                <p className="text-[10px] text-amber-400 uppercase tracking-wider">Pending</p>
+              </div>
+              <p className="text-2xl font-bold font-mono tabular-nums text-amber-400">{formatCurrency(stats.pending_amount)}</p>
+              <p className="text-[10px] text-zinc-500 mt-1">{stats.pending_matches} awaiting review</p>
+            </div>
+
+            {/* Confirmed */}
+            <div className="bg-[#141414] border border-emerald-500/20 rounded-xl p-4 hover:border-emerald-500/30 transition-colors">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="h-7 w-7 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                  <Zap className="h-3.5 w-3.5 text-emerald-400" />
+                </div>
+                <p className="text-[10px] text-emerald-400 uppercase tracking-wider">Confirmed</p>
+              </div>
+              <p className="text-2xl font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(stats.confirmed_amount)}</p>
+              <p className="text-[10px] text-zinc-500 mt-1">{stats.confirmed_matches} verified</p>
+            </div>
+          </div>
+
+          {/* Second Row - AR Stats & Match Quality */}
+          <div className="grid grid-cols-12 gap-3">
+            {/* AR Invoice Coverage - Wider */}
+            <div className="col-span-5 bg-[#141414] border border-white/10 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="h-7 w-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                    <FileText className="h-3.5 w-3.5 text-purple-400" />
+                  </div>
+                  <p className="text-[11px] text-white font-semibold">AR Invoice Coverage</p>
+                </div>
+                <Badge className="bg-purple-500/10 text-purple-400 border-purple-500/20 text-[10px]">
+                  {stats.ar_match_rate}% matched
+                </Badge>
+              </div>
+              
+              {/* Progress Bar */}
+              <div className="h-3 bg-white/5 rounded-full overflow-hidden mb-3">
+                <div className="h-full flex">
+                  <div 
+                    className="bg-emerald-500 transition-all duration-500"
+                    style={{ width: `${(stats.matched_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
+                  />
+                  <div 
+                    className="bg-red-500/50 transition-all duration-500"
+                    style={{ width: `${(stats.unmatched_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-[#0A0A0A] rounded-lg p-2.5">
+                  <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total</p>
+                  <p className="text-sm font-bold font-mono tabular-nums text-white">{stats.total_invoices}</p>
+                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.total_invoice_amount)}</p>
+                </div>
+                <div className="bg-[#0A0A0A] rounded-lg p-2.5">
+                  <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Matched</p>
+                  <p className="text-sm font-bold font-mono tabular-nums text-emerald-400">{stats.matched_invoices}</p>
+                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.matched_invoice_amount)}</p>
+                </div>
+                <div className="bg-[#0A0A0A] rounded-lg p-2.5">
+                  <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched</p>
+                  <p className="text-sm font-bold font-mono tabular-nums text-red-400">{stats.unmatched_invoices}</p>
+                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.unmatched_invoice_amount)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Match Quality */}
+            <div className="col-span-4 bg-[#141414] border border-white/10 rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-7 w-7 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+                  <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+                </div>
+                <p className="text-[11px] text-white font-semibold">Match Quality</p>
+              </div>
+
+              <div className="flex items-center gap-4 mb-3">
+                <div className="flex-1">
+                  <div className="flex items-baseline gap-1">
+                    <p className="text-2xl font-bold font-mono tabular-nums text-white">{stats.avg_confidence}%</p>
+                    <p className="text-[10px] text-zinc-500">avg confidence</p>
+                  </div>
+                </div>
+                <div className="h-12 w-px bg-white/10" />
+                <div className="flex-1 grid grid-cols-2 gap-2">
+                  <div className="text-center">
+                    <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{stats.high_confidence_matches}</p>
+                    <p className="text-[9px] text-zinc-500">High (≥85%)</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{stats.low_confidence_matches}</p>
+                    <p className="text-[9px] text-zinc-500">Low (&lt;70%)</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Confidence Distribution Bar */}
+              <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                <div className="h-full flex">
+                  <div 
+                    className="bg-emerald-500"
+                    style={{ width: `${(stats.high_confidence_matches / Math.max(stats.matched_bank_inflows, 1)) * 100}%` }}
+                  />
+                  <div 
+                    className="bg-amber-500"
+                    style={{ width: `${(stats.low_confidence_matches / Math.max(stats.matched_bank_inflows, 1)) * 100}%` }}
+                  />
+                  <div className="flex-1 bg-blue-500/50" />
+                </div>
+              </div>
+            </div>
+
+            {/* Match Types Breakdown */}
+            <div className="col-span-3 bg-[#141414] border border-white/10 rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-7 w-7 rounded-lg bg-pink-500/10 flex items-center justify-center">
+                  <DollarSign className="h-3.5 w-3.5 text-pink-400" />
+                </div>
+                <p className="text-[11px] text-white font-semibold">Match Types</p>
+              </div>
+
+              <div className="space-y-1.5 max-h-[100px] overflow-y-auto">
+                {stats.match_types.slice(0, 5).map((mt) => (
+                  <div key={mt.type} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Badge className={`text-[8px] px-1.5 py-0 ${getMatchTypeColor(mt.type)}`}>
+                        {mt.type}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-zinc-400">{mt.count}</span>
+                      <span className="text-[9px] text-zinc-600">{formatCurrency(mt.amount)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {stats.total_fees_detected > 0 && (
+                <div className="mt-2 pt-2 border-t border-white/5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-zinc-500">Fees Detected</span>
+                    <span className="text-[10px] font-mono text-amber-400">{stats.total_fees_detected} ({formatCurrency(stats.fee_amount)})</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Activity Row */}
+          <div className="flex items-center gap-4 px-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-zinc-500">Activity:</span>
+              <Badge className="bg-white/5 text-zinc-400 border-white/10 text-[9px]">
+                Today: {stats.matches_today}
+              </Badge>
+              <Badge className="bg-white/5 text-zinc-400 border-white/10 text-[9px]">
+                This Week: {stats.matches_this_week}
+              </Badge>
+              <Badge className="bg-white/5 text-zinc-400 border-white/10 text-[9px]">
+                This Month: {stats.matches_this_month}
+              </Badge>
+            </div>
+            <div className="flex-1" />
+            <Button
+              size="sm"
+              onClick={fetchStats}
+              disabled={statsLoading}
+              className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2"
+            >
+              <RefreshCw className={`h-3 w-3 mr-1 ${statsLoading ? "animate-spin" : ""}`} />
+              Refresh Stats
+            </Button>
+          </div>
         </div>
-        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Operational</p>
-          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-emerald-400">{data.summary.operational}</p>
+      )}
+
+      {/* Stats Loading State */}
+      {statsLoading && !stats && (
+        <div className="grid grid-cols-5 gap-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="h-28 rounded-xl" />
+          ))}
         </div>
-        <div className="bg-[#141414] border border-white/10 rounded-lg p-4">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Non-Operational</p>
-          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-zinc-400">{data.summary.non_operational}</p>
-        </div>
-        <div className="bg-[#141414] border border-red-500/30 rounded-lg p-4">
-          <p className="text-[10px] text-red-400 uppercase tracking-wider">Review</p>
-          <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-red-400">{data.summary.zero_candidates || 0}</p>
-        </div>
-      </div>
+      )}
 
       {/* Filter Bar */}
       <div className="bg-[#141414] border border-white/10 rounded-lg p-4 space-y-3">
@@ -900,7 +1167,7 @@ export default function ReconciliationCandidatesPage() {
           
           {/* Summary Stats - Invoice View */}
           {activeView === "invoice" && (
-            <div className="grid grid-cols-5 gap-3">
+            <div className="grid grid-cols-4 gap-3">
               <div className="bg-[#0A0A0A] border border-white/5 rounded px-3 py-2">
                 <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total Invoices</p>
                 <p className="text-lg font-bold font-mono tabular-nums text-white">{formatCurrency(invoiceSummary.total_invoice_amount)}</p>
@@ -908,22 +1175,17 @@ export default function ReconciliationCandidatesPage() {
               </div>
               <div className="bg-[#0A0A0A] border border-emerald-500/20 rounded px-3 py-2">
                 <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Matched</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(invoiceSummary.matched_invoice_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{invoiceSummary.matched_count} invoices • {invoiceSummary.avg_confidence > 0 ? `${Math.round(invoiceSummary.avg_confidence * 100)}% avg` : ""}</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(invoiceSummary.matched_amount)}</p>
+                <p className="text-[10px] text-zinc-500">{invoiceSummary.matched_count} invoices</p>
               </div>
               <div className="bg-[#0A0A0A] border border-red-500/20 rounded px-3 py-2">
                 <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-red-400">{formatCurrency(invoiceSummary.unmatched_invoice_amount)}</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-red-400">{formatCurrency(invoiceSummary.unmatched_amount)}</p>
                 <p className="text-[10px] text-zinc-500">{invoiceSummary.unmatched_count} invoices</p>
-              </div>
-              <div className="bg-[#0A0A0A] border border-cyan-500/20 rounded px-3 py-2">
-                <p className="text-[9px] text-cyan-400 uppercase tracking-wider">Bank Received</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-cyan-400">{formatCurrency(invoiceSummary.matched_bank_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{invoiceSummary.total_fee_amount > 0 ? `${formatCurrency(invoiceSummary.total_fee_amount)} fees` : "from matched"}</p>
               </div>
               <div className="bg-[#0A0A0A] border border-amber-500/20 rounded px-3 py-2">
                 <p className="text-[9px] text-amber-400 uppercase tracking-wider">Outstanding</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(invoiceSummary.total_outstanding)}</p>
+                <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(invoiceSummary.outstanding_amount)}</p>
                 <p className="text-[10px] text-zinc-500">remaining balance</p>
               </div>
             </div>
