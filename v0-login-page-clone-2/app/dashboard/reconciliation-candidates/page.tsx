@@ -11,31 +11,35 @@ import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users, TrendingUp,
 import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
 
 interface ReconciliationStats {
-  total_bank_inflows: number
-  total_bank_inflow_amount: number
-  matched_bank_inflows: number
-  matched_bank_amount: number
-  unmatched_bank_inflows: number
-  unmatched_bank_amount: number
-  coverage_percentage: number
+  // Invoice-Centric Coverage (PRIMARY)
   total_invoices: number
   total_invoice_amount: number
-  matched_invoices: number
-  matched_invoice_amount: number
-  unmatched_invoices: number
-  unmatched_invoice_amount: number
+  paid_invoices: number
+  paid_invoice_amount: number
+  unpaid_invoices: number
+  unpaid_invoice_amount: number
   outstanding_amount: number
-  ar_match_rate: number
-  confirmed_matches: number
+  coverage_percentage: number
+
+  // Match Status
+  pending_review: number
+  pending_review_amount: number
+  confirmed: number
   confirmed_amount: number
-  pending_matches: number
-  pending_amount: number
+
+  // Match Quality
   high_confidence_matches: number
   low_confidence_matches: number
   avg_confidence: number
+
+  // Match Types
   match_types: { type: string; count: number; amount: number }[]
+
+  // Fee Analysis
   total_fees_detected: number
   fee_amount: number
+
+  // Time-based
   matches_today: number
   matches_this_week: number
   matches_this_month: number
@@ -717,32 +721,32 @@ export default function ReconciliationCandidatesPage() {
                     style={{ width: `${Math.min(stats.coverage_percentage, 100)}%` }}
                   />
                 </div>
-                <p className="text-[10px] text-zinc-500 mt-1.5">{formatCurrency(stats.matched_bank_amount)} of {formatCurrency(stats.total_bank_inflow_amount)}</p>
+                <p className="text-[10px] text-zinc-500 mt-1.5">{stats.paid_invoices} of {stats.total_invoices} invoices paid</p>
               </div>
             </div>
 
-            {/* Matched Bank */}
+            {/* Paid Invoices */}
             <div className="bg-[#141414] border border-white/10 rounded-xl p-4 hover:border-white/20 transition-colors">
               <div className="flex items-center gap-2 mb-2">
                 <div className="h-7 w-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
                   <CheckCircle2 className="h-3.5 w-3.5 text-blue-400" />
                 </div>
-                <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Matched</p>
+                <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Paid</p>
               </div>
-              <p className="text-2xl font-bold font-mono tabular-nums text-white">{formatCurrency(stats.matched_bank_amount)}</p>
-              <p className="text-[10px] text-zinc-500 mt-1">{stats.matched_bank_inflows} bank transactions</p>
+              <p className="text-2xl font-bold font-mono tabular-nums text-white">{formatCurrency(stats.paid_invoice_amount)}</p>
+              <p className="text-[10px] text-zinc-500 mt-1">{stats.paid_invoices} invoices</p>
             </div>
 
-            {/* Unmatched Bank */}
+            {/* Unpaid Invoices */}
             <div className="bg-[#141414] border border-red-500/20 rounded-xl p-4 hover:border-red-500/30 transition-colors">
               <div className="flex items-center gap-2 mb-2">
                 <div className="h-7 w-7 rounded-lg bg-red-500/10 flex items-center justify-center">
                   <AlertCircle className="h-3.5 w-3.5 text-red-400" />
                 </div>
-                <p className="text-[10px] text-red-400 uppercase tracking-wider">Unmatched</p>
+                <p className="text-[10px] text-red-400 uppercase tracking-wider">Unpaid</p>
               </div>
-              <p className="text-2xl font-bold font-mono tabular-nums text-red-400">{formatCurrency(stats.unmatched_bank_amount)}</p>
-              <p className="text-[10px] text-zinc-500 mt-1">{stats.unmatched_bank_inflows} need action</p>
+              <p className="text-2xl font-bold font-mono tabular-nums text-red-400">{formatCurrency(stats.unpaid_invoice_amount)}</p>
+              <p className="text-[10px] text-zinc-500 mt-1">{stats.unpaid_invoices} invoices</p>
             </div>
 
             {/* Pending Review */}
@@ -753,8 +757,8 @@ export default function ReconciliationCandidatesPage() {
                 </div>
                 <p className="text-[10px] text-amber-400 uppercase tracking-wider">Pending</p>
               </div>
-              <p className="text-2xl font-bold font-mono tabular-nums text-amber-400">{formatCurrency(stats.pending_amount)}</p>
-              <p className="text-[10px] text-zinc-500 mt-1">{stats.pending_matches} awaiting review</p>
+              <p className="text-2xl font-bold font-mono tabular-nums text-amber-400">{formatCurrency(stats.pending_review_amount)}</p>
+              <p className="text-[10px] text-zinc-500 mt-1">{stats.pending_review} awaiting review</p>
             </div>
 
             {/* Confirmed */}
@@ -766,7 +770,7 @@ export default function ReconciliationCandidatesPage() {
                 <p className="text-[10px] text-emerald-400 uppercase tracking-wider">Confirmed</p>
               </div>
               <p className="text-2xl font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(stats.confirmed_amount)}</p>
-              <p className="text-[10px] text-zinc-500 mt-1">{stats.confirmed_matches} verified</p>
+              <p className="text-[10px] text-zinc-500 mt-1">{stats.confirmed} verified</p>
             </div>
           </div>
 
@@ -779,10 +783,10 @@ export default function ReconciliationCandidatesPage() {
                   <div className="h-7 w-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
                     <FileText className="h-3.5 w-3.5 text-purple-400" />
                   </div>
-                  <p className="text-[11px] text-white font-semibold">AR Invoice Coverage</p>
+                  <p className="text-[11px] text-white font-semibold">Invoice Status</p>
                 </div>
                 <Badge className="bg-purple-500/10 text-purple-400 border-purple-500/20 text-[10px]">
-                  {stats.ar_match_rate}% matched
+                  {stats.coverage_percentage}% paid
                 </Badge>
               </div>
               
@@ -791,11 +795,11 @@ export default function ReconciliationCandidatesPage() {
                 <div className="h-full flex">
                   <div 
                     className="bg-emerald-500 transition-all duration-500"
-                    style={{ width: `${(stats.matched_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
+                    style={{ width: `${(stats.paid_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
                   />
                   <div 
                     className="bg-red-500/50 transition-all duration-500"
-                    style={{ width: `${(stats.unmatched_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
+                    style={{ width: `${(stats.unpaid_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
                   />
                 </div>
               </div>
@@ -807,14 +811,14 @@ export default function ReconciliationCandidatesPage() {
                   <p className="text-[9px] text-zinc-600">{formatCurrency(stats.total_invoice_amount)}</p>
                 </div>
                 <div className="bg-[#0A0A0A] rounded-lg p-2.5">
-                  <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Matched</p>
-                  <p className="text-sm font-bold font-mono tabular-nums text-emerald-400">{stats.matched_invoices}</p>
-                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.matched_invoice_amount)}</p>
+                  <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Paid</p>
+                  <p className="text-sm font-bold font-mono tabular-nums text-emerald-400">{stats.paid_invoices}</p>
+                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.paid_invoice_amount)}</p>
                 </div>
                 <div className="bg-[#0A0A0A] rounded-lg p-2.5">
-                  <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched</p>
-                  <p className="text-sm font-bold font-mono tabular-nums text-red-400">{stats.unmatched_invoices}</p>
-                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.unmatched_invoice_amount)}</p>
+                  <p className="text-[9px] text-red-400 uppercase tracking-wider">Unpaid</p>
+                  <p className="text-sm font-bold font-mono tabular-nums text-red-400">{stats.unpaid_invoices}</p>
+                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.unpaid_invoice_amount)}</p>
                 </div>
               </div>
             </div>
@@ -853,11 +857,11 @@ export default function ReconciliationCandidatesPage() {
                 <div className="h-full flex">
                   <div 
                     className="bg-emerald-500"
-                    style={{ width: `${(stats.high_confidence_matches / Math.max(stats.matched_bank_inflows, 1)) * 100}%` }}
+                    style={{ width: `${(stats.high_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
                   />
                   <div 
                     className="bg-amber-500"
-                    style={{ width: `${(stats.low_confidence_matches / Math.max(stats.matched_bank_inflows, 1)) * 100}%` }}
+                    style={{ width: `${(stats.low_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
                   />
                   <div className="flex-1 bg-blue-500/50" />
                 </div>
