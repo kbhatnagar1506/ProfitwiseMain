@@ -287,6 +287,109 @@ async function loadCashEvents(userId: string): Promise<CashEventRow[]> {
 // Save Matches to Database
 // ─────────────────────────────────────────────────────────────────────────────
 
+interface ExistingMatchInfo {
+  cash_event_id: string
+  match_type: string
+  total_matched: number
+}
+
+async function getExistingMatchesForInvoices(userId: string): Promise<Map<string, ExistingMatchInfo>> {
+  const result = await query(
+    `SELECT 
+      cash_event_id,
+      MAX(match_type) as match_type,
+      SUM(matched_amount)::float as total_matched
+    FROM ar_reconciliation_matches
+    WHERE user_id = $1
+    GROUP BY cash_event_id`,
+    [userId]
+  )
+  
+  const map = new Map<string, ExistingMatchInfo>()
+  for (const row of result.rows) {
+    map.set(row.cash_event_id, {
+      cash_event_id: row.cash_event_id,
+      match_type: row.match_type,
+      total_matched: row.total_matched || 0
+    })
+  }
+  return map
+}
+
+function canAddMatchToInvoice(
+  invoiceId: string,
+  invoiceAmount: number,
+  existingMatches: Map<string, ExistingMatchInfo>,
+  newMatchType: string
+): { allowed: boolean; reason: string } {
+  const existing = existingMatches.get(invoiceId)
+  
+  if (!existing) {
+    return { allowed: true, reason: "No existing match" }
+  }
+  
+  // EXACT or FEE match = invoice fully matched, no more matches allowed
+  if (existing.match_type === "EXACT" || existing.match_type === "FEE") {
+    return { allowed: false, reason: `Invoice already has ${existing.match_type} match (fully paid)` }
+  }
+  
+  // AGGREGATION match = invoice was part of aggregated payment, fully consumed
+  if (existing.match_type === "AGGREGATION") {
+    return { allowed: false, reason: "Invoice already consumed in aggregated payment" }
+  }
+  
+  // PARTIAL match = check if there's remaining balance
+  if (existing.match_type === "PARTIAL") {
+    const remaining = invoiceAmount - existing.total_matched
+    if (remaining <= 0.01) {
+      return { allowed: false, reason: "Invoice fully paid via partial payments" }
+    }
+    return { allowed: true, reason: `Partial match allowed, remaining: ${remaining.toFixed(2)}` }
+  }
+  
+  return { allowed: true, reason: "Unknown match type, allowing" }
+}
+
+function determineMatchType(
+  paymentAmount: number,
+  invoiceAmount: number,
+  reasoning: string
+): string {
+  const diff = Math.abs(paymentAmount - invoiceAmount)
+  const reasoningLower = reasoning.toLowerCase()
+  
+  // Check reasoning first
+  if (reasoningLower.includes("partial") || reasoningLower.includes("fifo")) {
+    return "PARTIAL"
+  }
+  if (reasoningLower.includes("aggregat") || reasoningLower.includes("multiple invoices")) {
+    return "AGGREGATION"
+  }
+  
+  // Exact match (within $0.01)
+  if (diff <= 0.01) {
+    return "EXACT"
+  }
+  
+  // Payment less than invoice = partial payment
+  if (paymentAmount < invoiceAmount - 0.01) {
+    return "PARTIAL"
+  }
+  
+  // Payment more than invoice but close = fee adjusted
+  if (paymentAmount > invoiceAmount && diff < invoiceAmount * 0.1) {
+    return "FEE"
+  }
+  
+  // Payment significantly more than invoice = likely aggregation
+  if (paymentAmount > invoiceAmount * 1.5) {
+    return "AGGREGATION"
+  }
+  
+  // Default to FEE for small differences
+  return "FEE"
+}
+
 async function saveMatchesToDatabase(
   userId: string,
   result: AIMatcherResult,
@@ -300,7 +403,14 @@ async function saveMatchesToDatabase(
   const movementMap = new Map(movementsToMatch.map(m => [m.id, m]))
   const cashEventMap = new Map(cashEvents.map(ce => [ce.id, ce]))
   
+  // Get existing matches to check for duplicates
+  const existingMatches = await getExistingMatchesForInvoices(userId)
+  
+  // Track invoices matched in THIS run to prevent duplicates within same batch
+  const matchedInThisRun = new Set<string>()
+  
   let savedCount = 0
+  let skippedCount = 0
   let errorCount = 0
   
   for (const match of result.matches) {
@@ -318,25 +428,57 @@ async function saveMatchesToDatabase(
       continue
     }
     
+    // Determine match type based on amounts and reasoning
+    const matchType = determineMatchType(
+      movement.amount,
+      cashEvent.amount,
+      match.reasoning || ""
+    )
+    
+    // Check if we can add a match to this invoice
+    const canMatch = canAddMatchToInvoice(
+      cashEvent.id,
+      cashEvent.amount,
+      existingMatches,
+      matchType
+    )
+    
+    if (!canMatch.allowed) {
+      console.log(`[AI Matcher] Skipping match for invoice ${cashEvent.id}: ${canMatch.reason}`)
+      skippedCount++
+      continue
+    }
+    
+    // For EXACT and FEE matches, check if already matched in this run
+    // (PARTIAL and AGGREGATION can have multiple matches)
+    if ((matchType === "EXACT" || matchType === "FEE") && matchedInThisRun.has(cashEvent.id)) {
+      console.log(`[AI Matcher] Skipping duplicate ${matchType} match for invoice ${cashEvent.id} in this run`)
+      skippedCount++
+      continue
+    }
+    
     // Get invoice details from metadata
     const metadata = cashEvent.metadata as Record<string, unknown> || {}
     const invoiceId = (metadata.doc_number as string) || (metadata.invoice_number as string) || cashEvent.id
     const customerName = (metadata.customer_name as string) || (metadata.entity_name as string) || "Unknown"
     
-    // Determine match type from reasoning or classification
-    let matchType = "EXACT"
-    const reasoning = match.reasoning?.toLowerCase() || ""
-    if (reasoning.includes("fee") || reasoning.includes("processing")) {
-      matchType = "FEE"
-    } else if (reasoning.includes("partial")) {
-      matchType = "PARTIAL"
-    } else if (Math.abs(movement.amount - cashEvent.amount) > 0.01) {
-      matchType = "FEE"
-    }
+    // Calculate fee and matched amounts based on match type
+    let feeAmount = 0
+    let matchedAmount = cashEvent.amount
     
-    // Calculate fee and matched amounts
-    const feeAmount = Math.abs(movement.amount - cashEvent.amount)
-    const matchedAmount = Math.min(movement.amount, cashEvent.amount)
+    if (matchType === "FEE") {
+      feeAmount = Math.abs(movement.amount - cashEvent.amount)
+      matchedAmount = cashEvent.amount
+    } else if (matchType === "PARTIAL") {
+      // For partial, matched amount is the payment amount (less than invoice)
+      matchedAmount = Math.min(movement.amount, cashEvent.amount)
+    } else if (matchType === "AGGREGATION") {
+      // For aggregation, this invoice is fully consumed
+      matchedAmount = cashEvent.amount
+    } else {
+      // EXACT
+      matchedAmount = cashEvent.amount
+    }
     
     try {
       await query(
@@ -386,6 +528,23 @@ async function saveMatchesToDatabase(
           "pending"
         ]
       )
+      
+      // Track this invoice as matched in this run
+      matchedInThisRun.add(cashEvent.id)
+      
+      // Update our in-memory tracking for subsequent matches in this batch
+      const existing = existingMatches.get(cashEvent.id)
+      if (existing) {
+        existing.total_matched += matchedAmount
+        existing.match_type = matchType
+      } else {
+        existingMatches.set(cashEvent.id, {
+          cash_event_id: cashEvent.id,
+          match_type: matchType,
+          total_matched: matchedAmount
+        })
+      }
+      
       savedCount++
     } catch (err) {
       console.error(`[AI Matcher] Failed to save match for movement ${movement.id}:`, err)
@@ -393,5 +552,5 @@ async function saveMatchesToDatabase(
     }
   }
   
-  console.log(`[AI Matcher] Saved ${savedCount} matches to database (${errorCount} errors)`)
+  console.log(`[AI Matcher] Saved ${savedCount} matches, skipped ${skippedCount} (duplicates/fully-matched), ${errorCount} errors`)
 }

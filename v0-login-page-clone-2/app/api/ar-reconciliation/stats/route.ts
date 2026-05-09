@@ -54,31 +54,76 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     await ensureARMatchesSchema()
 
-    // 1. Invoice Stats (PRIMARY - coverage based on invoices)
-    // An invoice is "paid" if it has a match in ar_reconciliation_matches
+    // 1. Invoice Stats with CALCULATED outstanding (not QBO's)
+    // An invoice is:
+    //   - "fully paid" if SUM(matched_amount) >= invoice_amount (or has EXACT/FEE match)
+    //   - "partially paid" if has matches but SUM(matched_amount) < invoice_amount
+    //   - "unpaid" if has no matches at all
     const invoiceResult = await query(
       `SELECT 
         COUNT(*) as total_count,
-        COALESCE(SUM(amount), 0)::float as total_amount,
-        COALESCE(SUM(outstanding_amount), 0)::float as outstanding_amount,
-        COUNT(*) FILTER (WHERE id IN (SELECT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1)) as paid_count,
-        COALESCE(SUM(amount) FILTER (WHERE id IN (SELECT cash_event_id FROM ar_reconciliation_matches WHERE user_id = $1)), 0)::float as paid_amount
-      FROM cash_events
-      WHERE user_id = $1
-        AND event_type = 'ar'`,
+        COALESCE(SUM(ce.amount), 0)::float as total_amount,
+        
+        -- Fully paid: has EXACT/FEE match OR sum of matches >= invoice amount
+        COUNT(*) FILTER (
+          WHERE matched.match_type IN ('EXACT', 'FEE', 'AGGREGATION')
+          OR (matched.total_matched IS NOT NULL AND ce.amount - matched.total_matched <= 0.01)
+        ) as paid_count,
+        COALESCE(SUM(ce.amount) FILTER (
+          WHERE matched.match_type IN ('EXACT', 'FEE', 'AGGREGATION')
+          OR (matched.total_matched IS NOT NULL AND ce.amount - matched.total_matched <= 0.01)
+        ), 0)::float as paid_amount,
+        
+        -- Partially paid: has matches but not fully paid
+        COUNT(*) FILTER (
+          WHERE matched.total_matched IS NOT NULL 
+          AND matched.total_matched > 0
+          AND matched.match_type NOT IN ('EXACT', 'FEE', 'AGGREGATION')
+          AND ce.amount - matched.total_matched > 0.01
+        ) as partial_count,
+        COALESCE(SUM(ce.amount) FILTER (
+          WHERE matched.total_matched IS NOT NULL 
+          AND matched.total_matched > 0
+          AND matched.match_type NOT IN ('EXACT', 'FEE', 'AGGREGATION')
+          AND ce.amount - matched.total_matched > 0.01
+        ), 0)::float as partial_amount,
+        
+        -- Unpaid: no matches at all
+        COUNT(*) FILTER (WHERE matched.total_matched IS NULL OR matched.total_matched = 0) as unpaid_count,
+        COALESCE(SUM(ce.amount) FILTER (WHERE matched.total_matched IS NULL OR matched.total_matched = 0), 0)::float as unpaid_amount,
+        
+        -- Calculated outstanding (invoice amount - matched amount)
+        COALESCE(SUM(
+          GREATEST(ce.amount - COALESCE(matched.total_matched, 0), 0)
+        ), 0)::float as calculated_outstanding
+        
+      FROM cash_events ce
+      LEFT JOIN (
+        SELECT 
+          cash_event_id, 
+          SUM(matched_amount)::float as total_matched,
+          MAX(match_type) as match_type
+        FROM ar_reconciliation_matches
+        WHERE user_id = $1
+        GROUP BY cash_event_id
+      ) matched ON matched.cash_event_id = ce.id
+      WHERE ce.user_id = $1
+        AND ce.event_type = 'ar'`,
       [user.id]
     )
 
     const invoices = invoiceResult.rows[0]
     const totalInvoices = parseInt(invoices?.total_count || "0")
     const totalInvoiceAmount = invoices?.total_amount || 0
-    const outstandingAmount = invoices?.outstanding_amount || 0
     const paidInvoices = parseInt(invoices?.paid_count || "0")
     const paidInvoiceAmount = invoices?.paid_amount || 0
-    const unpaidInvoices = totalInvoices - paidInvoices
-    const unpaidInvoiceAmount = totalInvoiceAmount - paidInvoiceAmount
+    const partialInvoices = parseInt(invoices?.partial_count || "0")
+    const partialInvoiceAmount = invoices?.partial_amount || 0
+    const unpaidInvoices = parseInt(invoices?.unpaid_count || "0")
+    const unpaidInvoiceAmount = invoices?.unpaid_amount || 0
+    const calculatedOutstanding = invoices?.calculated_outstanding || 0
     
-    // Coverage is based on NUMBER of invoices paid (not amount)
+    // Coverage is based on NUMBER of invoices fully paid
     const coveragePercentage = totalInvoices > 0 ? (paidInvoices / totalInvoices) * 100 : 0
 
     // 2. Match Status Stats (pending vs confirmed)
@@ -151,7 +196,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       paid_invoice_amount: paidInvoiceAmount,
       unpaid_invoices: unpaidInvoices,
       unpaid_invoice_amount: unpaidInvoiceAmount,
-      outstanding_amount: outstandingAmount,
+      outstanding_amount: calculatedOutstanding,
       coverage_percentage: Math.round(coveragePercentage * 10) / 10,
 
       // Match Status
