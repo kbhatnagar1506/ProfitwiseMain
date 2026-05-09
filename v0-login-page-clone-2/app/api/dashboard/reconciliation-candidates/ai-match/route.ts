@@ -293,6 +293,11 @@ interface ExistingMatchInfo {
   total_matched: number
 }
 
+interface ExistingMovementMatchInfo {
+  movement_id: string
+  total_matched: number
+}
+
 async function getExistingMatchesForInvoices(userId: string): Promise<Map<string, ExistingMatchInfo>> {
   const result = await query(
     `SELECT 
@@ -310,6 +315,27 @@ async function getExistingMatchesForInvoices(userId: string): Promise<Map<string
     map.set(row.cash_event_id, {
       cash_event_id: row.cash_event_id,
       match_type: row.match_type,
+      total_matched: row.total_matched || 0
+    })
+  }
+  return map
+}
+
+async function getExistingMatchesForMovements(userId: string): Promise<Map<string, ExistingMovementMatchInfo>> {
+  const result = await query(
+    `SELECT 
+      movement_id,
+      SUM(matched_amount)::float as total_matched
+    FROM ar_reconciliation_matches
+    WHERE user_id = $1
+    GROUP BY movement_id`,
+    [userId]
+  )
+  
+  const map = new Map<string, ExistingMovementMatchInfo>()
+  for (const row of result.rows) {
+    map.set(row.movement_id, {
+      movement_id: row.movement_id,
       total_matched: row.total_matched || 0
     })
   }
@@ -353,8 +379,14 @@ function canAddMatchToInvoice(
 function determineMatchType(
   paymentAmount: number,
   invoiceAmount: number,
-  reasoning: string
+  reasoning: string,
+  aiMatchType?: string
 ): string {
+  // If AI explicitly provided a match type, use it
+  if (aiMatchType && ["EXACT", "FEE", "PARTIAL", "AGGREGATION"].includes(aiMatchType.toUpperCase())) {
+    return aiMatchType.toUpperCase()
+  }
+  
   const diff = Math.abs(paymentAmount - invoiceAmount)
   const reasoningLower = reasoning.toLowerCase()
   
@@ -403,11 +435,20 @@ async function saveMatchesToDatabase(
   const movementMap = new Map(movementsToMatch.map(m => [m.id, m]))
   const cashEventMap = new Map(cashEvents.map(ce => [ce.id, ce]))
   
-  // Get existing matches to check for duplicates
-  const existingMatches = await getExistingMatchesForInvoices(userId)
+  // Build a set of valid candidate IDs for each movement (for validation)
+  const validCandidatesMap = new Map<string, Set<string>>()
+  for (const m of movementsToMatch) {
+    const candidateIds = new Set(m.classification.candidates.map(c => c.id))
+    validCandidatesMap.set(m.id, candidateIds)
+  }
   
-  // Track invoices matched in THIS run to prevent duplicates within same batch
-  const matchedInThisRun = new Set<string>()
+  // Get existing matches to check for duplicates
+  const existingInvoiceMatches = await getExistingMatchesForInvoices(userId)
+  const existingMovementMatches = await getExistingMatchesForMovements(userId)
+  
+  // Track invoices and movements matched in THIS run to prevent duplicates within same batch
+  const invoicesMatchedInThisRun = new Set<string>()
+  const movementsMatchedInThisRun = new Map<string, number>() // movement_id -> total matched amount
   
   let savedCount = 0
   let skippedCount = 0
@@ -415,140 +456,205 @@ async function saveMatchesToDatabase(
   
   for (const match of result.matches) {
     // Only save actual matches (not no_match or needs_review)
-    if (match.decision !== "match" || !match.matched_candidate_id) {
+    if (match.decision !== "match") {
       continue
     }
     
     const movement = movementMap.get(match.movement_id)
-    const cashEvent = cashEventMap.get(match.matched_candidate_id)
-    
-    if (!movement || !cashEvent) {
-      console.warn(`[AI Matcher] Could not find movement or cash event for match: ${match.movement_id} -> ${match.matched_candidate_id}`)
+    if (!movement) {
+      console.warn(`[AI Matcher] Could not find movement: ${match.movement_id}`)
       errorCount++
       continue
     }
     
-    // Determine match type based on amounts and reasoning
-    const matchType = determineMatchType(
-      movement.amount,
-      cashEvent.amount,
-      match.reasoning || ""
-    )
+    // Check if this bank payment is already fully matched
+    const existingMovementMatch = existingMovementMatches.get(movement.id)
+    const movementMatchedThisRun = movementsMatchedInThisRun.get(movement.id) || 0
+    const totalMovementMatched = (existingMovementMatch?.total_matched || 0) + movementMatchedThisRun
     
-    // Check if we can add a match to this invoice
-    const canMatch = canAddMatchToInvoice(
-      cashEvent.id,
-      cashEvent.amount,
-      existingMatches,
-      matchType
-    )
-    
-    if (!canMatch.allowed) {
-      console.log(`[AI Matcher] Skipping match for invoice ${cashEvent.id}: ${canMatch.reason}`)
+    if (totalMovementMatched >= Math.abs(movement.amount) * 0.99) {
+      console.log(`[AI Matcher] Skipping - movement ${movement.id} already fully matched ($${totalMovementMatched.toFixed(2)} of $${Math.abs(movement.amount).toFixed(2)})`)
       skippedCount++
       continue
     }
     
-    // For EXACT and FEE matches, check if already matched in this run
-    // (PARTIAL and AGGREGATION can have multiple matches)
-    if ((matchType === "EXACT" || matchType === "FEE") && matchedInThisRun.has(cashEvent.id)) {
-      console.log(`[AI Matcher] Skipping duplicate ${matchType} match for invoice ${cashEvent.id} in this run`)
-      skippedCount++
+    // Collect all invoice IDs to process (handle both single and aggregation)
+    const invoiceIds: string[] = []
+    if (match.matched_candidate_id) {
+      invoiceIds.push(match.matched_candidate_id)
+    }
+    if (match.matched_candidate_ids && match.matched_candidate_ids.length > 0) {
+      // Add any IDs from matched_candidate_ids that aren't already in the list
+      for (const id of match.matched_candidate_ids) {
+        if (!invoiceIds.includes(id)) {
+          invoiceIds.push(id)
+        }
+      }
+    }
+    
+    if (invoiceIds.length === 0) {
+      console.warn(`[AI Matcher] Match decision has no invoice IDs: ${match.movement_id}`)
       continue
     }
     
-    // Get invoice details from metadata
-    const metadata = cashEvent.metadata as Record<string, unknown> || {}
-    const invoiceId = (metadata.doc_number as string) || (metadata.invoice_number as string) || cashEvent.id
-    const customerName = (metadata.customer_name as string) || (metadata.entity_name as string) || "Unknown"
+    // Determine if this is an aggregation (multiple invoices)
+    const isAggregation = invoiceIds.length > 1
     
-    // Calculate fee and matched amounts based on match type
-    let feeAmount = 0
-    let matchedAmount = cashEvent.amount
-    
-    if (matchType === "FEE") {
-      feeAmount = Math.abs(movement.amount - cashEvent.amount)
-      matchedAmount = cashEvent.amount
-    } else if (matchType === "PARTIAL") {
-      // For partial, matched amount is the payment amount (less than invoice)
-      matchedAmount = Math.min(movement.amount, cashEvent.amount)
-    } else if (matchType === "AGGREGATION") {
-      // For aggregation, this invoice is fully consumed
-      matchedAmount = cashEvent.amount
-    } else {
-      // EXACT
-      matchedAmount = cashEvent.amount
-    }
-    
-    try {
-      await query(
-        `INSERT INTO ar_reconciliation_matches (
-          user_id, movement_id, cash_event_id,
-          bank_amount, bank_date, bank_description, bank_counterparty,
-          invoice_id, invoice_amount, customer_name,
-          match_type, confidence, fee_amount, matched_amount,
-          matched_by, ai_reasoning, status
-        ) VALUES (
-          $1, $2, $3,
-          $4, $5, $6, $7,
-          $8, $9, $10,
-          $11, $12, $13, $14,
-          $15, $16, $17
-        )
-        ON CONFLICT (movement_id, cash_event_id) DO UPDATE SET
-          bank_amount = EXCLUDED.bank_amount,
-          bank_date = EXCLUDED.bank_date,
-          bank_description = EXCLUDED.bank_description,
-          bank_counterparty = EXCLUDED.bank_counterparty,
-          invoice_amount = EXCLUDED.invoice_amount,
-          customer_name = EXCLUDED.customer_name,
-          match_type = EXCLUDED.match_type,
-          confidence = EXCLUDED.confidence,
-          fee_amount = EXCLUDED.fee_amount,
-          matched_amount = EXCLUDED.matched_amount,
-          ai_reasoning = EXCLUDED.ai_reasoning,
-          updated_at = NOW()`,
-        [
-          userId,
-          movement.id,
-          cashEvent.id,
-          movement.amount,
-          movement.date,
-          movement.raw_description,
-          movement.counterparty,
-          invoiceId,
-          cashEvent.amount,
-          customerName,
-          matchType,
-          match.confidence,
-          feeAmount,
-          matchedAmount,
-          "ai",
-          match.reasoning,
-          "pending"
-        ]
-      )
-      
-      // Track this invoice as matched in this run
-      matchedInThisRun.add(cashEvent.id)
-      
-      // Update our in-memory tracking for subsequent matches in this batch
-      const existing = existingMatches.get(cashEvent.id)
-      if (existing) {
-        existing.total_matched += matchedAmount
-        existing.match_type = matchType
-      } else {
-        existingMatches.set(cashEvent.id, {
-          cash_event_id: cashEvent.id,
-          match_type: matchType,
-          total_matched: matchedAmount
-        })
+    // Process each invoice in the match
+    for (const invoiceId of invoiceIds) {
+      // VALIDATION: Check if invoice exists
+      const cashEvent = cashEventMap.get(invoiceId)
+      if (!cashEvent) {
+        console.warn(`[AI Matcher] AI returned invalid invoice ID: ${invoiceId} (not found in cash events)`)
+        errorCount++
+        continue
       }
       
-      savedCount++
-    } catch (err) {
-      console.error(`[AI Matcher] Failed to save match for movement ${movement.id}:`, err)
-      errorCount++
+      // VALIDATION: Check if invoice was in candidates (AI didn't hallucinate)
+      const validCandidates = validCandidatesMap.get(movement.id)
+      const wasCandidate = validCandidates?.has(invoiceId) || false
+      let statusOverride: "confirmed" | "pending" | null = null
+      
+      if (!wasCandidate) {
+        console.warn(`[AI Matcher] AI matched to invoice not in candidates: ${invoiceId} for movement ${movement.id}`)
+        // Still save but force status to pending for review
+        statusOverride = "pending"
+      }
+      
+      // Determine match type based on amounts and reasoning
+      const matchType = isAggregation 
+        ? "AGGREGATION" 
+        : determineMatchType(
+            Math.abs(movement.amount),
+            cashEvent.amount,
+            match.reasoning || "",
+            match.match_type
+          )
+      
+      // Check if we can add a match to this invoice
+      const canMatch = canAddMatchToInvoice(
+        cashEvent.id,
+        cashEvent.amount,
+        existingInvoiceMatches,
+        matchType
+      )
+      
+      if (!canMatch.allowed) {
+        console.log(`[AI Matcher] Skipping match for invoice ${cashEvent.id}: ${canMatch.reason}`)
+        skippedCount++
+        continue
+      }
+      
+      // For EXACT and FEE matches, check if already matched in this run
+      // (PARTIAL and AGGREGATION can have multiple matches)
+      if ((matchType === "EXACT" || matchType === "FEE") && invoicesMatchedInThisRun.has(cashEvent.id)) {
+        console.log(`[AI Matcher] Skipping duplicate ${matchType} match for invoice ${cashEvent.id} in this run`)
+        skippedCount++
+        continue
+      }
+      
+      // Get invoice details from metadata
+      const metadata = cashEvent.metadata as Record<string, unknown> || {}
+      const invoiceDocNumber = (metadata.doc_number as string) || (metadata.invoice_number as string) || cashEvent.id
+      const customerName = (metadata.customer_name as string) || (metadata.entity_name as string) || "Unknown"
+      
+      // Calculate fee and matched amounts based on match type
+      let feeAmount = 0
+      let matchedAmount = cashEvent.amount
+      
+      if (matchType === "FEE") {
+        feeAmount = Math.abs(Math.abs(movement.amount) - cashEvent.amount)
+        matchedAmount = cashEvent.amount
+      } else if (matchType === "PARTIAL") {
+        // For partial, matched amount is the payment amount (less than invoice)
+        matchedAmount = Math.min(Math.abs(movement.amount), cashEvent.amount)
+      } else if (matchType === "AGGREGATION") {
+        // For aggregation, this invoice is fully consumed
+        matchedAmount = cashEvent.amount
+      } else {
+        // EXACT
+        matchedAmount = cashEvent.amount
+      }
+      
+      // Determine status: use AI-decided status, with override for validation failures
+      const finalStatus = statusOverride || match.status || (match.confidence >= 0.85 ? "confirmed" : "pending")
+      
+      try {
+        await query(
+          `INSERT INTO ar_reconciliation_matches (
+            user_id, movement_id, cash_event_id,
+            bank_amount, bank_date, bank_description, bank_counterparty,
+            invoice_id, invoice_amount, customer_name,
+            match_type, confidence, fee_amount, matched_amount,
+            matched_by, ai_reasoning, status
+          ) VALUES (
+            $1, $2, $3,
+            $4, $5, $6, $7,
+            $8, $9, $10,
+            $11, $12, $13, $14,
+            $15, $16, $17
+          )
+          ON CONFLICT (movement_id, cash_event_id) DO UPDATE SET
+            bank_amount = EXCLUDED.bank_amount,
+            bank_date = EXCLUDED.bank_date,
+            bank_description = EXCLUDED.bank_description,
+            bank_counterparty = EXCLUDED.bank_counterparty,
+            invoice_amount = EXCLUDED.invoice_amount,
+            customer_name = EXCLUDED.customer_name,
+            match_type = EXCLUDED.match_type,
+            confidence = EXCLUDED.confidence,
+            fee_amount = EXCLUDED.fee_amount,
+            matched_amount = EXCLUDED.matched_amount,
+            ai_reasoning = EXCLUDED.ai_reasoning,
+            status = EXCLUDED.status,
+            updated_at = NOW()`,
+          [
+            userId,
+            movement.id,
+            cashEvent.id,
+            Math.abs(movement.amount),
+            movement.date,
+            movement.raw_description,
+            movement.counterparty,
+            invoiceDocNumber,
+            cashEvent.amount,
+            customerName,
+            matchType,
+            match.confidence,
+            feeAmount,
+            matchedAmount,
+            "ai",
+            match.reasoning,
+            finalStatus
+          ]
+        )
+        
+        // Track this invoice as matched in this run
+        invoicesMatchedInThisRun.add(cashEvent.id)
+        
+        // Track movement matched amount in this run
+        const currentMovementMatched = movementsMatchedInThisRun.get(movement.id) || 0
+        movementsMatchedInThisRun.set(movement.id, currentMovementMatched + matchedAmount)
+        
+        // Update our in-memory tracking for subsequent matches in this batch
+        const existing = existingInvoiceMatches.get(cashEvent.id)
+        if (existing) {
+          existing.total_matched += matchedAmount
+          existing.match_type = matchType
+        } else {
+          existingInvoiceMatches.set(cashEvent.id, {
+            cash_event_id: cashEvent.id,
+            match_type: matchType,
+            total_matched: matchedAmount
+          })
+        }
+        
+        savedCount++
+        console.log(`[AI Matcher] Saved ${matchType} match: movement ${movement.id} -> invoice ${invoiceDocNumber} ($${matchedAmount.toFixed(2)}, status: ${finalStatus})`)
+      } catch (err) {
+        console.error(`[AI Matcher] Failed to save match for movement ${movement.id} -> invoice ${invoiceId}:`, err)
+        errorCount++
+      }
     }
   }
   

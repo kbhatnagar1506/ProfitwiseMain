@@ -37,7 +37,8 @@ export interface MatchDecision {
   decision: "match" | "no_match" | "needs_review" | "create_invoice"
   matched_candidate_id: string | null
   matched_candidate_ids: string[]
-  match_type?: string  // EXACT, FEE, PARTIAL, DIRECT_LINK, etc.
+  match_type?: string  // EXACT, FEE, PARTIAL, DIRECT_LINK, AGGREGATION
+  status?: "confirmed" | "pending"  // AI-decided status based on confidence
   confidence: number
   reasoning: string
   suggested_action: string
@@ -463,13 +464,28 @@ Candidates are categorized by how they were matched:
 - 0.50-0.74: Partial payment or uncertain customer
 - Below 0.50: Weak match, needs review
 
+## STATUS DECISION (YOU MUST SET THIS)
+Based on your confidence and reasoning, decide the match status:
+- **"confirmed"**: Use when you are HIGHLY confident (0.85+) the match is correct:
+  - Direct link found
+  - Both customer AND amount match clearly
+  - Exact or fee-adjusted match with clear customer name
+- **"pending"**: Use when match needs human review:
+  - Confidence below 0.85
+  - Customer name is uncertain or partial match
+  - Partial payment (FIFO scenario)
+  - Aggregation (multiple invoices)
+  - Any doubt about the match
+
 ## OUTPUT FORMAT
 Return JSON with decisions array. Each decision:
 {
   "movement_id": "exact ID from input",
   "decision": "match" | "no_match" | "needs_review",
   "matched_candidate_id": "invoice ID or null",
-  "matched_candidate_ids": ["id1", "id2"] // for aggregation only
+  "matched_candidate_ids": ["id1", "id2"], // for aggregation only
+  "match_type": "EXACT" | "FEE" | "PARTIAL" | "AGGREGATION",
+  "status": "confirmed" | "pending",  // YOU MUST SET THIS based on confidence
   "confidence": 0.0-1.0,
   "reasoning": "Brief: [customer match] + [amount match]"
 }
@@ -655,6 +671,7 @@ function parseMatchResponse(response: string, movements: MovementToMatch[]): Mat
           matched_candidate_id: null,
           matched_candidate_ids: [],
           match_type: "EXACT",
+          status: "pending" as const,
           confidence: 0,
           reasoning: "No AI decision returned",
           suggested_action: "review",
@@ -662,12 +679,18 @@ function parseMatchResponse(response: string, movements: MovementToMatch[]): Mat
         }
       }
 
+      // Extract status from AI response, with fallback based on confidence
+      const aiStatus = decision.status === "confirmed" || decision.status === "pending" 
+        ? decision.status 
+        : (decision.confidence >= 0.85 ? "confirmed" : "pending")
+
       return {
         movement_id: m.id,
         decision: decision.decision || "needs_review",
         matched_candidate_id: decision.matched_candidate_id || null,
         matched_candidate_ids: decision.matched_candidate_ids || [],
         match_type: decision.match_type || "EXACT",
+        status: aiStatus as "confirmed" | "pending",
         confidence: decision.confidence || 0,
         reasoning: decision.reasoning || "",
         suggested_action: decision.decision === "match" ? "apply_match" : "review",
@@ -682,6 +705,7 @@ function parseMatchResponse(response: string, movements: MovementToMatch[]): Mat
       matched_candidate_id: null,
       matched_candidate_ids: [],
       match_type: "EXACT",
+      status: "pending" as const,
       confidence: 0,
       reasoning: "Failed to parse AI response",
       suggested_action: "review",
