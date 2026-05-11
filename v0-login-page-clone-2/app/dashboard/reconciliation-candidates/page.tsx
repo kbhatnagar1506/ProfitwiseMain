@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
-import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users, TrendingUp, CheckCircle2, AlertCircle, Clock, Zap, DollarSign, FileText, ArrowUpRight, ArrowDownRight } from "lucide-react"
+import { RefreshCw, Search, ChevronRight, Download, Sparkles, Users, TrendingUp, CheckCircle2, AlertCircle, Clock, Zap, DollarSign, FileText, ArrowUpRight, ArrowDownRight, PieChart, BarChart3, Activity } from "lucide-react"
 import type { ClassificationResult, CaseType, Candidate } from "@/lib/reconciliation-case-classifier"
 
 interface ReconciliationStats {
@@ -702,26 +702,47 @@ export default function ReconciliationCandidatesPage() {
       {/* Comprehensive Stats Dashboard */}
       {stats && (
         <div className="space-y-4">
-          {/* Top Row - Key Metrics */}
+          {/* Top Row - Key Metrics with Ring Chart */}
           <div className="grid grid-cols-5 gap-3">
-            {/* Coverage Card - Highlighted */}
+            {/* Coverage Card with Ring Chart */}
             <div className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border border-emerald-500/20 rounded-xl p-4 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-500/10 rounded-full blur-2xl -mr-10 -mt-10" />
               <div className="relative">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="h-8 w-8 rounded-lg bg-emerald-500/20 flex items-center justify-center">
-                    <TrendingUp className="h-4 w-4 text-emerald-400" />
+                    <PieChart className="h-4 w-4 text-emerald-400" />
                   </div>
                   <p className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">Coverage</p>
                 </div>
-                <p className="text-3xl font-bold font-mono tabular-nums text-white">{stats.coverage_percentage}%</p>
-                <div className="mt-2 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min(stats.coverage_percentage, 100)}%` }}
-                  />
+                <div className="flex items-center gap-3">
+                  {/* Ring Chart */}
+                  <div className="relative w-16 h-16">
+                    <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
+                      <circle cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="3" />
+                      <circle 
+                        cx="18" cy="18" r="14" fill="none" 
+                        stroke="url(#coverageGradient)" 
+                        strokeWidth="3" 
+                        strokeLinecap="round"
+                        strokeDasharray={`${stats.coverage_percentage * 0.88} 88`}
+                        className="transition-all duration-1000"
+                      />
+                      <defs>
+                        <linearGradient id="coverageGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="#10b981" />
+                          <stop offset="100%" stopColor="#34d399" />
+                        </linearGradient>
+                      </defs>
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-lg font-bold text-white">{stats.coverage_percentage}%</span>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-zinc-500">{stats.paid_invoices} of {stats.total_invoices}</p>
+                    <p className="text-[10px] text-zinc-500">invoices paid</p>
+                  </div>
                 </div>
-                <p className="text-[10px] text-zinc-500 mt-1.5">{stats.paid_invoices} of {stats.total_invoices} invoices paid</p>
               </div>
             </div>
 
@@ -774,9 +795,9 @@ export default function ReconciliationCandidatesPage() {
             </div>
           </div>
 
-          {/* Second Row - AR Stats & Match Quality */}
+          {/* Second Row - AR Stats & Match Quality with Charts */}
           <div className="grid grid-cols-12 gap-3">
-            {/* AR Invoice Coverage - Wider */}
+            {/* AR Invoice Coverage - Wider with Bar Chart */}
             <div className="col-span-5 bg-[#141414] border border-white/10 rounded-xl p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -790,17 +811,23 @@ export default function ReconciliationCandidatesPage() {
                 </Badge>
               </div>
               
-              {/* Progress Bar */}
-              <div className="h-3 bg-white/5 rounded-full overflow-hidden mb-3">
-                <div className="h-full flex">
-                  <div 
-                    className="bg-emerald-500 transition-all duration-500"
-                    style={{ width: `${(stats.paid_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
-                  />
-                  <div 
-                    className="bg-red-500/50 transition-all duration-500"
-                    style={{ width: `${(stats.unpaid_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
-                  />
+              {/* Stacked Bar Chart */}
+              <div className="h-8 bg-white/5 rounded-lg overflow-hidden mb-3 flex">
+                <div 
+                  className="bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-500 flex items-center justify-center"
+                  style={{ width: `${(stats.paid_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
+                >
+                  {stats.paid_invoices > 0 && (
+                    <span className="text-[9px] font-bold text-white">{stats.paid_invoices}</span>
+                  )}
+                </div>
+                <div 
+                  className="bg-gradient-to-r from-red-600/80 to-red-500/80 transition-all duration-500 flex items-center justify-center"
+                  style={{ width: `${(stats.unpaid_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
+                >
+                  {stats.unpaid_invoices > 0 && (
+                    <span className="text-[9px] font-bold text-white">{stats.unpaid_invoices}</span>
+                  )}
                 </div>
               </div>
 
@@ -810,12 +837,12 @@ export default function ReconciliationCandidatesPage() {
                   <p className="text-sm font-bold font-mono tabular-nums text-white">{stats.total_invoices}</p>
                   <p className="text-[9px] text-zinc-600">{formatCurrency(stats.total_invoice_amount)}</p>
                 </div>
-                <div className="bg-[#0A0A0A] rounded-lg p-2.5">
+                <div className="bg-[#0A0A0A] rounded-lg p-2.5 border-l-2 border-emerald-500">
                   <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Paid</p>
                   <p className="text-sm font-bold font-mono tabular-nums text-emerald-400">{stats.paid_invoices}</p>
                   <p className="text-[9px] text-zinc-600">{formatCurrency(stats.paid_invoice_amount)}</p>
                 </div>
-                <div className="bg-[#0A0A0A] rounded-lg p-2.5">
+                <div className="bg-[#0A0A0A] rounded-lg p-2.5 border-l-2 border-red-500">
                   <p className="text-[9px] text-red-400 uppercase tracking-wider">Unpaid</p>
                   <p className="text-sm font-bold font-mono tabular-nums text-red-400">{stats.unpaid_invoices}</p>
                   <p className="text-[9px] text-zinc-600">{formatCurrency(stats.unpaid_invoice_amount)}</p>
@@ -823,29 +850,47 @@ export default function ReconciliationCandidatesPage() {
               </div>
             </div>
 
-            {/* Match Quality */}
+            {/* Match Quality with Gauge */}
             <div className="col-span-4 bg-[#141414] border border-white/10 rounded-xl p-4">
               <div className="flex items-center gap-2 mb-3">
                 <div className="h-7 w-7 rounded-lg bg-cyan-500/10 flex items-center justify-center">
-                  <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+                  <Activity className="h-3.5 w-3.5 text-cyan-400" />
                 </div>
                 <p className="text-[11px] text-white font-semibold">Match Quality</p>
               </div>
 
               <div className="flex items-center gap-4 mb-3">
-                <div className="flex-1">
-                  <div className="flex items-baseline gap-1">
-                    <p className="text-2xl font-bold font-mono tabular-nums text-white">{stats.avg_confidence}%</p>
-                    <p className="text-[10px] text-zinc-500">avg confidence</p>
+                {/* Semi-circle Gauge */}
+                <div className="relative w-24 h-12 overflow-hidden">
+                  <svg className="w-24 h-24" viewBox="0 0 100 50">
+                    <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="8" strokeLinecap="round" />
+                    <path 
+                      d="M 10 50 A 40 40 0 0 1 90 50" 
+                      fill="none" 
+                      stroke="url(#qualityGradient)" 
+                      strokeWidth="8" 
+                      strokeLinecap="round"
+                      strokeDasharray={`${stats.avg_confidence * 1.26} 126`}
+                      className="transition-all duration-1000"
+                    />
+                    <defs>
+                      <linearGradient id="qualityGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" stopColor="#f59e0b" />
+                        <stop offset="50%" stopColor="#22c55e" />
+                        <stop offset="100%" stopColor="#10b981" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                  <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2">
+                    <span className="text-lg font-bold text-white">{stats.avg_confidence}%</span>
                   </div>
                 </div>
-                <div className="h-12 w-px bg-white/10" />
                 <div className="flex-1 grid grid-cols-2 gap-2">
-                  <div className="text-center">
+                  <div className="text-center bg-emerald-500/5 rounded-lg p-2">
                     <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{stats.high_confidence_matches}</p>
                     <p className="text-[9px] text-zinc-500">High (≥85%)</p>
                   </div>
-                  <div className="text-center">
+                  <div className="text-center bg-amber-500/5 rounded-lg p-2">
                     <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{stats.low_confidence_matches}</p>
                     <p className="text-[9px] text-zinc-500">Low (&lt;70%)</p>
                   </div>
@@ -853,44 +898,73 @@ export default function ReconciliationCandidatesPage() {
               </div>
 
               {/* Confidence Distribution Bar */}
-              <div className="h-2 bg-white/5 rounded-full overflow-hidden">
-                <div className="h-full flex">
+              <div className="space-y-1">
+                <div className="flex justify-between text-[9px] text-zinc-500">
+                  <span>Confidence Distribution</span>
+                  <span>{stats.high_confidence_matches + stats.low_confidence_matches + (stats.paid_invoices - stats.high_confidence_matches - stats.low_confidence_matches)} matches</span>
+                </div>
+                <div className="h-2.5 bg-white/5 rounded-full overflow-hidden flex">
                   <div 
-                    className="bg-emerald-500"
+                    className="bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-500"
                     style={{ width: `${(stats.high_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
+                    title={`High confidence: ${stats.high_confidence_matches}`}
                   />
                   <div 
-                    className="bg-amber-500"
-                    style={{ width: `${(stats.low_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
+                    className="bg-gradient-to-r from-blue-600 to-blue-500 transition-all duration-500"
+                    style={{ width: `${((stats.paid_invoices - stats.high_confidence_matches - stats.low_confidence_matches) / Math.max(stats.paid_invoices, 1)) * 100}%` }}
+                    title="Medium confidence"
                   />
-                  <div className="flex-1 bg-blue-500/50" />
+                  <div 
+                    className="bg-gradient-to-r from-amber-600 to-amber-500 transition-all duration-500"
+                    style={{ width: `${(stats.low_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
+                    title={`Low confidence: ${stats.low_confidence_matches}`}
+                  />
+                </div>
+                <div className="flex gap-3 text-[8px]">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />High</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Medium</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />Low</span>
                 </div>
               </div>
             </div>
 
-            {/* Match Types Breakdown */}
+            {/* Match Types with Horizontal Bar Chart */}
             <div className="col-span-3 bg-[#141414] border border-white/10 rounded-xl p-4">
               <div className="flex items-center gap-2 mb-3">
                 <div className="h-7 w-7 rounded-lg bg-pink-500/10 flex items-center justify-center">
-                  <DollarSign className="h-3.5 w-3.5 text-pink-400" />
+                  <BarChart3 className="h-3.5 w-3.5 text-pink-400" />
                 </div>
                 <p className="text-[11px] text-white font-semibold">Match Types</p>
               </div>
 
-              <div className="space-y-1.5 max-h-[100px] overflow-y-auto">
-                {stats.match_types.slice(0, 5).map((mt) => (
-                  <div key={mt.type} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Badge className={`text-[8px] px-1.5 py-0 ${getMatchTypeColor(mt.type)}`}>
-                        {mt.type}
-                      </Badge>
+              <div className="space-y-2 max-h-[120px] overflow-y-auto">
+                {stats.match_types.slice(0, 5).map((mt) => {
+                  const maxCount = Math.max(...stats.match_types.map(t => t.count))
+                  const barWidth = (mt.count / maxCount) * 100
+                  return (
+                    <div key={mt.type} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <Badge className={`text-[8px] px-1.5 py-0 ${getMatchTypeColor(mt.type)}`}>
+                          {mt.type}
+                        </Badge>
+                        <span className="text-[10px] font-mono text-zinc-400">{mt.count}</span>
+                      </div>
+                      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full rounded-full transition-all duration-500 ${
+                            mt.type === "EXACT" ? "bg-emerald-500" :
+                            mt.type === "FEE" ? "bg-amber-500" :
+                            mt.type === "PARTIAL" ? "bg-purple-500" :
+                            mt.type === "AGGREGATION" ? "bg-cyan-500" :
+                            "bg-blue-500"
+                          }`}
+                          style={{ width: `${barWidth}%` }}
+                        />
+                      </div>
+                      <p className="text-[9px] text-zinc-600 text-right">{formatCurrency(mt.amount)}</p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono text-zinc-400">{mt.count}</span>
-                      <span className="text-[9px] text-zinc-600">{formatCurrency(mt.amount)}</span>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
 
               {stats.total_fees_detected > 0 && (
@@ -904,30 +978,64 @@ export default function ReconciliationCandidatesPage() {
             </div>
           </div>
 
-          {/* Activity Row */}
-          <div className="flex items-center gap-4 px-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-zinc-500">Activity:</span>
-              <Badge className="bg-white/5 text-zinc-400 border-white/10 text-[9px]">
-                Today: {stats.matches_today}
-              </Badge>
-              <Badge className="bg-white/5 text-zinc-400 border-white/10 text-[9px]">
-                This Week: {stats.matches_this_week}
-              </Badge>
-              <Badge className="bg-white/5 text-zinc-400 border-white/10 text-[9px]">
-                This Month: {stats.matches_this_month}
-              </Badge>
+          {/* Activity Row with Mini Chart */}
+          <div className="bg-[#141414] border border-white/10 rounded-xl p-3">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <div className="h-6 w-6 rounded-lg bg-violet-500/10 flex items-center justify-center">
+                  <Activity className="h-3 w-3 text-violet-400" />
+                </div>
+                <span className="text-[10px] text-zinc-500 font-medium">Activity</span>
+              </div>
+              
+              {/* Activity Bars */}
+              <div className="flex items-end gap-1 h-6">
+                {[
+                  { value: stats.matches_today, label: "Today" },
+                  { value: Math.round(stats.matches_this_week / 7), label: "Avg/day" },
+                  { value: stats.matches_this_week, label: "Week" },
+                ].map((item, i) => {
+                  const maxVal = Math.max(stats.matches_today, stats.matches_this_week, stats.matches_this_month)
+                  const height = maxVal > 0 ? (item.value / maxVal) * 100 : 0
+                  return (
+                    <div key={i} className="flex flex-col items-center gap-0.5">
+                      <div 
+                        className={`w-3 rounded-t transition-all duration-500 ${
+                          i === 0 ? "bg-violet-500" : i === 1 ? "bg-violet-400" : "bg-violet-300"
+                        }`}
+                        style={{ height: `${Math.max(height, 10)}%`, minHeight: "4px" }}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 bg-violet-500/10 rounded-lg px-2.5 py-1">
+                  <span className="text-[10px] text-zinc-500">Today:</span>
+                  <span className="text-[11px] font-bold text-violet-400">{stats.matches_today}</span>
+                </div>
+                <div className="flex items-center gap-1.5 bg-white/5 rounded-lg px-2.5 py-1">
+                  <span className="text-[10px] text-zinc-500">This Week:</span>
+                  <span className="text-[11px] font-bold text-zinc-300">{stats.matches_this_week}</span>
+                </div>
+                <div className="flex items-center gap-1.5 bg-white/5 rounded-lg px-2.5 py-1">
+                  <span className="text-[10px] text-zinc-500">This Month:</span>
+                  <span className="text-[11px] font-bold text-zinc-300">{stats.matches_this_month}</span>
+                </div>
+              </div>
+              
+              <div className="flex-1" />
+              <Button
+                size="sm"
+                onClick={fetchStats}
+                disabled={statsLoading}
+                className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2"
+              >
+                <RefreshCw className={`h-3 w-3 mr-1 ${statsLoading ? "animate-spin" : ""}`} />
+                Refresh Stats
+              </Button>
             </div>
-            <div className="flex-1" />
-            <Button
-              size="sm"
-              onClick={fetchStats}
-              disabled={statsLoading}
-              className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2"
-            >
-              <RefreshCw className={`h-3 w-3 mr-1 ${statsLoading ? "animate-spin" : ""}`} />
-              Refresh Stats
-            </Button>
           </div>
         </div>
       )}
