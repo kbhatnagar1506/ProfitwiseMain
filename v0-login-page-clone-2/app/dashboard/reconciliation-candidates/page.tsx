@@ -967,65 +967,6 @@ export default function ReconciliationCandidatesPage() {
             </div>
           </div>
 
-          {/* Activity Row with Mini Chart */}
-          <div className="bg-[#141414] border border-white/10 rounded-xl p-3">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <div className="h-6 w-6 rounded-lg bg-violet-500/10 flex items-center justify-center">
-                  <Activity className="h-3 w-3 text-violet-400" />
-                </div>
-                <span className="text-[10px] text-zinc-500 font-medium">Activity</span>
-              </div>
-              
-              {/* Activity Bars - Fixed pixel heights */}
-              <div className="flex items-end gap-1 h-6">
-                {(() => {
-                  const maxVal = Math.max(stats.matches_today, stats.matches_this_week, stats.matches_this_month, 1)
-                  const bars = [
-                    { value: stats.matches_today, color: "bg-violet-500" },
-                    { value: stats.matches_this_week, color: "bg-violet-400" },
-                    { value: stats.matches_this_month, color: "bg-violet-300" },
-                  ]
-                  return bars.map((bar, i) => {
-                    const heightPx = Math.max(4, Math.round((bar.value / maxVal) * 24))
-                    return (
-                      <div 
-                        key={i}
-                        className={`w-2 rounded-sm ${bar.color}`}
-                        style={{ height: `${heightPx}px` }}
-                      />
-                    )
-                  })
-                })()}
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1.5 bg-violet-500/10 rounded-lg px-2.5 py-1">
-                  <span className="text-[10px] text-zinc-500">Today:</span>
-                  <span className="text-[11px] font-bold text-violet-400">{stats.matches_today}</span>
-                </div>
-                <div className="flex items-center gap-1.5 bg-white/5 rounded-lg px-2.5 py-1">
-                  <span className="text-[10px] text-zinc-500">This Week:</span>
-                  <span className="text-[11px] font-bold text-zinc-300">{stats.matches_this_week}</span>
-                </div>
-                <div className="flex items-center gap-1.5 bg-white/5 rounded-lg px-2.5 py-1">
-                  <span className="text-[10px] text-zinc-500">This Month:</span>
-                  <span className="text-[11px] font-bold text-zinc-300">{stats.matches_this_month}</span>
-                </div>
-              </div>
-              
-              <div className="flex-1" />
-              <Button
-                size="sm"
-                onClick={fetchStats}
-                disabled={statsLoading}
-                className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2"
-              >
-                <RefreshCw className={`h-3 w-3 mr-1 ${statsLoading ? "animate-spin" : ""}`} />
-                Refresh Stats
-              </Button>
-            </div>
-          </div>
         </div>
       )}
 
