@@ -616,25 +616,25 @@ export default function ReconciliationCandidatesPage() {
 
   if (loading) {
     return (
-      <div className="p-8 space-y-6 bg-[#0A0A0A] min-h-screen">
-        <Skeleton className="h-12 w-64" />
+      <div className="p-8 space-y-6 bg-slate-950 min-h-screen">
+        <Skeleton className="h-12 w-64 bg-slate-800" />
         <div className="grid grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-24" />
+            <Skeleton key={i} className="h-24 bg-slate-800" />
           ))}
         </div>
-        <Skeleton className="h-96" />
+        <Skeleton className="h-96 bg-slate-800" />
       </div>
     )
   }
 
   if (!data) {
     return (
-      <div className="p-8 bg-[#0A0A0A] min-h-screen">
-        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6 text-red-400">
+      <div className="p-8 bg-slate-950 min-h-screen">
+        <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-6 text-rose-400">
           <p className="font-semibold">Error loading reconciliation candidates</p>
           <p className="text-sm mt-2">{error || "Unknown error"}</p>
-          <Button onClick={() => fetchData()} className="mt-4 bg-red-600 hover:bg-red-700">
+          <Button onClick={() => fetchData()} className="mt-4 bg-rose-600 hover:bg-rose-700">
             Retry
           </Button>
         </div>
@@ -643,7 +643,7 @@ export default function ReconciliationCandidatesPage() {
   }
 
   return (
-    <div className="p-8 space-y-5 bg-[#0A0A0A] min-h-screen">
+    <div className="p-8 space-y-5 bg-slate-950 min-h-screen">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -699,268 +699,179 @@ export default function ReconciliationCandidatesPage() {
         </div>
       </div>
 
-      {/* Comprehensive Stats Dashboard */}
+      {/* Comprehensive Stats Dashboard - Enterprise Grade */}
       {stats && (
         <div className="space-y-4">
-          {/* Top Row - Key Metrics with Ring Chart */}
-          <div className="grid grid-cols-5 gap-3">
-            {/* Coverage Card with Ring Chart */}
-            <div className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border border-emerald-500/20 rounded-xl p-4 relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-500/10 rounded-full blur-2xl -mr-10 -mt-10" />
-              <div className="relative">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="h-8 w-8 rounded-lg bg-emerald-500/20 flex items-center justify-center">
-                    <PieChart className="h-4 w-4 text-emerald-400" />
-                  </div>
-                  <p className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">Coverage</p>
+          {/* Summary Banner - Unified Top Row */}
+          <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-5">
+            <div className="flex items-center divide-x divide-slate-800">
+              {/* Coverage */}
+              <div className="flex-1 pr-6">
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">Coverage</p>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-semibold tracking-tight text-white tabular-nums">{stats.coverage_percentage}%</span>
+                  <span className="text-sm text-slate-500">{stats.paid_invoices}/{stats.total_invoices}</span>
                 </div>
-                <div className="flex items-center gap-3">
-                  {/* Ring Chart */}
-                  <div className="relative w-16 h-16">
-                    <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
-                      <circle cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="3" />
-                      <circle 
-                        cx="18" cy="18" r="14" fill="none" 
-                        stroke="url(#coverageGradient)" 
-                        strokeWidth="3" 
-                        strokeLinecap="round"
-                        strokeDasharray={`${stats.coverage_percentage * 0.88} 88`}
-                        className="transition-all duration-1000"
-                      />
-                      <defs>
-                        <linearGradient id="coverageGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <stop offset="0%" stopColor="#10b981" />
-                          <stop offset="100%" stopColor="#34d399" />
-                        </linearGradient>
-                      </defs>
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-lg font-bold text-white">{stats.coverage_percentage}%</span>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-zinc-500">{stats.paid_invoices} of {stats.total_invoices}</p>
-                    <p className="text-[10px] text-zinc-500">invoices paid</p>
-                  </div>
+                <div className="mt-2 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(stats.coverage_percentage, 100)}%` }}
+                  />
                 </div>
               </div>
-            </div>
 
-            {/* Paid Invoices */}
-            <div className="bg-[#141414] border border-white/10 rounded-xl p-4 hover:border-white/20 transition-colors">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="h-7 w-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-blue-400" />
-                </div>
-                <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Paid</p>
+              {/* Paid */}
+              <div className="flex-1 px-6">
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">Paid</p>
+                <p className="text-2xl font-semibold tracking-tight text-white tabular-nums">{formatCurrency(stats.paid_invoice_amount)}</p>
+                <p className="text-sm text-slate-500 mt-0.5">{stats.paid_invoices} invoices</p>
               </div>
-              <p className="text-2xl font-bold font-mono tabular-nums text-white">{formatCurrency(stats.paid_invoice_amount)}</p>
-              <p className="text-[10px] text-zinc-500 mt-1">{stats.paid_invoices} invoices</p>
-            </div>
 
-            {/* Unpaid Invoices */}
-            <div className="bg-[#141414] border border-red-500/20 rounded-xl p-4 hover:border-red-500/30 transition-colors">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="h-7 w-7 rounded-lg bg-red-500/10 flex items-center justify-center">
-                  <AlertCircle className="h-3.5 w-3.5 text-red-400" />
-                </div>
-                <p className="text-[10px] text-red-400 uppercase tracking-wider">Unpaid</p>
+              {/* Unpaid */}
+              <div className="flex-1 px-6">
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">Unpaid</p>
+                <p className="text-2xl font-semibold tracking-tight text-rose-400 tabular-nums">{formatCurrency(stats.unpaid_invoice_amount)}</p>
+                <p className="text-sm text-slate-500 mt-0.5">{stats.unpaid_invoices} invoices</p>
               </div>
-              <p className="text-2xl font-bold font-mono tabular-nums text-red-400">{formatCurrency(stats.unpaid_invoice_amount)}</p>
-              <p className="text-[10px] text-zinc-500 mt-1">{stats.unpaid_invoices} invoices</p>
-            </div>
 
-            {/* Pending Review */}
-            <div className="bg-[#141414] border border-amber-500/20 rounded-xl p-4 hover:border-amber-500/30 transition-colors">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="h-7 w-7 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                  <Clock className="h-3.5 w-3.5 text-amber-400" />
-                </div>
-                <p className="text-[10px] text-amber-400 uppercase tracking-wider">Pending</p>
-              </div>
-              <p className="text-2xl font-bold font-mono tabular-nums text-amber-400">{formatCurrency(stats.pending_review_amount)}</p>
-              <p className="text-[10px] text-zinc-500 mt-1">{stats.pending_review} awaiting review</p>
-            </div>
+              {/* Divider - Visual separator between ledger and recon states */}
+              <div className="w-px h-12 bg-slate-700 mx-2" />
 
-            {/* Confirmed */}
-            <div className="bg-[#141414] border border-emerald-500/20 rounded-xl p-4 hover:border-emerald-500/30 transition-colors">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="h-7 w-7 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-                  <Zap className="h-3.5 w-3.5 text-emerald-400" />
-                </div>
-                <p className="text-[10px] text-emerald-400 uppercase tracking-wider">Confirmed</p>
+              {/* Pending Review */}
+              <div className="flex-1 px-6">
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">Pending Review</p>
+                <p className="text-2xl font-semibold tracking-tight text-amber-400 tabular-nums">{formatCurrency(stats.pending_review_amount)}</p>
+                <p className="text-sm text-slate-500 mt-0.5">{stats.pending_review} awaiting</p>
               </div>
-              <p className="text-2xl font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(stats.confirmed_amount)}</p>
-              <p className="text-[10px] text-zinc-500 mt-1">{stats.confirmed} verified</p>
+
+              {/* Confirmed */}
+              <div className="flex-1 pl-6">
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">Confirmed</p>
+                <p className="text-2xl font-semibold tracking-tight text-emerald-400 tabular-nums">{formatCurrency(stats.confirmed_amount)}</p>
+                <p className="text-sm text-slate-500 mt-0.5">{stats.confirmed} verified</p>
+              </div>
             </div>
           </div>
 
-          {/* Second Row - AR Stats & Match Quality with Charts */}
-          <div className="grid grid-cols-12 gap-3">
-            {/* AR Invoice Coverage - Wider with Bar Chart */}
-            <div className="col-span-5 bg-[#141414] border border-white/10 rounded-xl p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className="h-7 w-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                    <FileText className="h-3.5 w-3.5 text-purple-400" />
-                  </div>
-                  <p className="text-[11px] text-white font-semibold">Invoice Status</p>
-                </div>
-                <Badge className="bg-purple-500/10 text-purple-400 border-purple-500/20 text-[10px]">
-                  {stats.coverage_percentage}% paid
-                </Badge>
+          {/* Second Row - Invoice Status, Match Quality, Match Types */}
+          <div className="grid grid-cols-12 gap-4">
+            {/* Invoice Status */}
+            <div className="col-span-5 bg-slate-900 border border-slate-800/60 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Invoice Status</p>
+                <span className="text-xs text-slate-500">{stats.coverage_percentage}% paid</span>
               </div>
               
-              {/* Stacked Bar Chart */}
-              <div className="h-8 bg-white/5 rounded-lg overflow-hidden mb-3 flex">
+              {/* Stacked Bar */}
+              <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-4 flex">
                 <div 
-                  className="bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-500 flex items-center justify-center"
+                  className="bg-emerald-500 transition-all duration-500"
                   style={{ width: `${(stats.paid_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
-                >
-                  {stats.paid_invoices > 0 && (
-                    <span className="text-[9px] font-bold text-white">{stats.paid_invoices}</span>
-                  )}
-                </div>
+                />
                 <div 
-                  className="bg-gradient-to-r from-red-600/80 to-red-500/80 transition-all duration-500 flex items-center justify-center"
+                  className="bg-rose-500/80 transition-all duration-500"
                   style={{ width: `${(stats.unpaid_invoices / Math.max(stats.total_invoices, 1)) * 100}%` }}
-                >
-                  {stats.unpaid_invoices > 0 && (
-                    <span className="text-[9px] font-bold text-white">{stats.unpaid_invoices}</span>
-                  )}
-                </div>
+                />
               </div>
 
               <div className="grid grid-cols-3 gap-3">
-                <div className="bg-[#0A0A0A] rounded-lg p-2.5">
-                  <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total</p>
-                  <p className="text-sm font-bold font-mono tabular-nums text-white">{stats.total_invoices}</p>
-                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.total_invoice_amount)}</p>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">Total</p>
+                  <p className="text-lg font-semibold tracking-tight text-white tabular-nums">{stats.total_invoices}</p>
+                  <p className="text-xs text-slate-500">{formatCurrency(stats.total_invoice_amount)}</p>
                 </div>
-                <div className="bg-[#0A0A0A] rounded-lg p-2.5 border-l-2 border-emerald-500">
-                  <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Paid</p>
-                  <p className="text-sm font-bold font-mono tabular-nums text-emerald-400">{stats.paid_invoices}</p>
-                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.paid_invoice_amount)}</p>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">Paid</p>
+                  <p className="text-lg font-semibold tracking-tight text-emerald-400 tabular-nums">{stats.paid_invoices}</p>
+                  <p className="text-xs text-slate-500">{formatCurrency(stats.paid_invoice_amount)}</p>
                 </div>
-                <div className="bg-[#0A0A0A] rounded-lg p-2.5 border-l-2 border-red-500">
-                  <p className="text-[9px] text-red-400 uppercase tracking-wider">Unpaid</p>
-                  <p className="text-sm font-bold font-mono tabular-nums text-red-400">{stats.unpaid_invoices}</p>
-                  <p className="text-[9px] text-zinc-600">{formatCurrency(stats.unpaid_invoice_amount)}</p>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">Unpaid</p>
+                  <p className="text-lg font-semibold tracking-tight text-rose-400 tabular-nums">{stats.unpaid_invoices}</p>
+                  <p className="text-xs text-slate-500">{formatCurrency(stats.unpaid_invoice_amount)}</p>
                 </div>
               </div>
             </div>
 
-            {/* Match Quality with Gauge */}
-            <div className="col-span-4 bg-[#141414] border border-white/10 rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="h-7 w-7 rounded-lg bg-cyan-500/10 flex items-center justify-center">
-                  <Activity className="h-3.5 w-3.5 text-cyan-400" />
-                </div>
-                <p className="text-[11px] text-white font-semibold">Match Quality</p>
-              </div>
+            {/* Match Quality */}
+            <div className="col-span-4 bg-slate-900 border border-slate-800/60 rounded-xl p-4">
+              <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-4">Match Quality</p>
 
-              <div className="flex items-center gap-4 mb-3">
-                {/* Circular Progress */}
-                <div className="relative">
-                  <div className="w-20 h-20 rounded-full border-4 border-white/10 flex items-center justify-center">
-                    <div 
-                      className="absolute inset-0 rounded-full"
-                      style={{
-                        background: `conic-gradient(#10b981 ${stats.avg_confidence * 3.6}deg, transparent 0deg)`
-                      }}
-                    />
-                    <div className="w-14 h-14 rounded-full bg-[#141414] flex items-center justify-center z-10">
-                      <span className="text-lg font-bold text-white">{stats.avg_confidence}%</span>
-                    </div>
-                  </div>
+              <div className="flex items-center gap-4 mb-4">
+                <div>
+                  <p className="text-3xl font-semibold tracking-tight text-white tabular-nums">{stats.avg_confidence}%</p>
+                  <p className="text-xs text-slate-500">avg confidence</p>
                 </div>
-                <div className="flex-1 grid grid-cols-2 gap-2">
-                  <div className="text-center bg-emerald-500/5 rounded-lg p-2">
-                    <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{stats.high_confidence_matches}</p>
-                    <p className="text-[9px] text-zinc-500">High (≥85%)</p>
+                <div className="flex-1 grid grid-cols-2 gap-3">
+                  <div className="bg-slate-800/50 rounded-lg p-2.5 text-center">
+                    <p className="text-lg font-semibold tracking-tight text-emerald-400 tabular-nums">{stats.high_confidence_matches}</p>
+                    <p className="text-[10px] text-slate-500">High ≥85%</p>
                   </div>
-                  <div className="text-center bg-amber-500/5 rounded-lg p-2">
-                    <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{stats.low_confidence_matches}</p>
-                    <p className="text-[9px] text-zinc-500">Low (&lt;70%)</p>
+                  <div className="bg-slate-800/50 rounded-lg p-2.5 text-center">
+                    <p className="text-lg font-semibold tracking-tight text-amber-400 tabular-nums">{stats.low_confidence_matches}</p>
+                    <p className="text-[10px] text-slate-500">Low &lt;70%</p>
                   </div>
                 </div>
               </div>
 
-              {/* Confidence Distribution Bar */}
-              <div className="space-y-1">
-                <div className="flex justify-between text-[9px] text-zinc-500">
-                  <span>Confidence Distribution</span>
+              {/* Confidence Distribution */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-[10px] text-slate-500">
+                  <span>Distribution</span>
                   <span>{stats.paid_invoices} matches</span>
                 </div>
-                <div className="h-2.5 bg-white/5 rounded-full overflow-hidden flex">
+                <div className="h-2 bg-slate-800 rounded-full overflow-hidden flex">
                   <div 
                     className="bg-emerald-500 transition-all duration-500"
                     style={{ width: `${(stats.high_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
-                    title={`High confidence: ${stats.high_confidence_matches}`}
                   />
                   <div 
-                    className="bg-blue-500 transition-all duration-500"
+                    className="bg-slate-500 transition-all duration-500"
                     style={{ width: `${((stats.paid_invoices - stats.high_confidence_matches - stats.low_confidence_matches) / Math.max(stats.paid_invoices, 1)) * 100}%` }}
-                    title="Medium confidence"
                   />
                   <div 
                     className="bg-amber-500 transition-all duration-500"
                     style={{ width: `${(stats.low_confidence_matches / Math.max(stats.paid_invoices, 1)) * 100}%` }}
-                    title={`Low confidence: ${stats.low_confidence_matches}`}
                   />
                 </div>
-                <div className="flex gap-3 text-[8px] text-zinc-500">
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />High</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Medium</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />Low</span>
+                <div className="flex gap-4 text-[10px] text-slate-500">
+                  <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" />High</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-500" />Medium</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500" />Low</span>
                 </div>
               </div>
             </div>
 
-            {/* Match Types with Horizontal Bar Chart */}
-            <div className="col-span-3 bg-[#141414] border border-white/10 rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="h-7 w-7 rounded-lg bg-pink-500/10 flex items-center justify-center">
-                  <BarChart3 className="h-3.5 w-3.5 text-pink-400" />
-                </div>
-                <p className="text-[11px] text-white font-semibold">Match Types</p>
-              </div>
+            {/* Match Types */}
+            <div className="col-span-3 bg-slate-900 border border-slate-800/60 rounded-xl p-4">
+              <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-4">Match Types</p>
 
-              <div className="space-y-2 max-h-[120px] overflow-y-auto">
-                {stats.match_types.slice(0, 5).map((mt) => {
+              <div className="space-y-3">
+                {stats.match_types.slice(0, 4).map((mt) => {
                   const maxCount = Math.max(...stats.match_types.map(t => t.count))
                   const barWidth = (mt.count / maxCount) * 100
                   return (
                     <div key={mt.type} className="space-y-1">
                       <div className="flex items-center justify-between">
-                        <Badge className={`text-[8px] px-1.5 py-0 ${getMatchTypeColor(mt.type)}`}>
-                          {mt.type}
-                        </Badge>
-                        <span className="text-[10px] font-mono text-zinc-400">{mt.count}</span>
+                        <span className="text-xs text-slate-300">{mt.type}</span>
+                        <span className="text-xs font-medium text-white tabular-nums">{mt.count}</span>
                       </div>
-                      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                      <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
                         <div 
-                          className={`h-full rounded-full transition-all duration-500 ${
-                            mt.type === "EXACT" ? "bg-emerald-500" :
-                            mt.type === "FEE" ? "bg-amber-500" :
-                            mt.type === "PARTIAL" ? "bg-purple-500" :
-                            mt.type === "AGGREGATION" ? "bg-cyan-500" :
-                            "bg-blue-500"
-                          }`}
+                          className="h-full rounded-full bg-slate-500 transition-all duration-500"
                           style={{ width: `${barWidth}%` }}
                         />
                       </div>
-                      <p className="text-[9px] text-zinc-600 text-right">{formatCurrency(mt.amount)}</p>
                     </div>
                   )
                 })}
               </div>
 
               {stats.total_fees_detected > 0 && (
-                <div className="mt-2 pt-2 border-t border-white/5">
+                <div className="mt-3 pt-3 border-t border-slate-800">
                   <div className="flex items-center justify-between">
-                    <span className="text-[9px] text-zinc-500">Fees Detected</span>
-                    <span className="text-[10px] font-mono text-amber-400">{stats.total_fees_detected} ({formatCurrency(stats.fee_amount)})</span>
+                    <span className="text-[10px] text-slate-500">Fees Detected</span>
+                    <span className="text-xs text-amber-400 tabular-nums">{stats.total_fees_detected} ({formatCurrency(stats.fee_amount)})</span>
                   </div>
                 </div>
               )}
@@ -972,19 +883,24 @@ export default function ReconciliationCandidatesPage() {
 
       {/* Stats Loading State */}
       {statsLoading && !stats && (
-        <div className="grid grid-cols-5 gap-3">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-28 rounded-xl" />
-          ))}
+        <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-5">
+          <div className="flex items-center divide-x divide-slate-800">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="flex-1 px-6">
+                <Skeleton className="h-4 w-16 mb-2 bg-slate-800" />
+                <Skeleton className="h-8 w-24 bg-slate-800" />
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       {/* Filter Bar */}
-      <div className="bg-[#141414] border border-white/10 rounded-lg p-4 space-y-3">
+      <div className="bg-slate-900 border border-slate-800/60 rounded-xl p-4 space-y-3">
         <div className="flex items-center gap-3">
           <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "ar" | "operational" | "non_op" | "review")} className="w-full">
-            <TabsList className="bg-[#0A0A0A] border border-white/10 h-8">
-              <TabsTrigger value="ar" className="text-[11px] h-6 px-3 text-emerald-400">
+            <TabsList className="bg-slate-800/50 border border-slate-700/50 h-8">
+              <TabsTrigger value="ar" className="text-[11px] h-6 px-3 data-[state=active]:text-emerald-400">
                 AR Only ({data.summary.ar_count || 0})
               </TabsTrigger>
               <TabsTrigger value="all" className="text-[11px] h-6 px-3">
@@ -996,7 +912,7 @@ export default function ReconciliationCandidatesPage() {
               <TabsTrigger value="non_op" className="text-[11px] h-6 px-3">
                 Non-Op ({data.summary.non_operational})
               </TabsTrigger>
-              <TabsTrigger value="review" className="text-[11px] h-6 px-3 text-red-400">
+              <TabsTrigger value="review" className="text-[11px] h-6 px-3 data-[state=active]:text-rose-400">
                 Review ({data.summary.zero_candidates || 0})
               </TabsTrigger>
             </TabsList>
@@ -1005,85 +921,85 @@ export default function ReconciliationCandidatesPage() {
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
           <Input
             placeholder="Search by description, counterparty, or case type..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-[#0A0A0A] border-white/10 pl-9 h-8 text-[12px]"
+            className="bg-slate-800/50 border-slate-700/50 pl-9 h-8 text-[12px] text-slate-300 placeholder:text-slate-500"
           />
         </div>
       </div>
 
       {/* Movements Table */}
-      <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
+      <div className="bg-slate-900 border border-slate-800/60 rounded-xl overflow-hidden">
         {data.movements.length === 0 ? (
           <div className="p-12 text-center">
-            <p className="text-zinc-500 text-sm">No movements found matching your filters.</p>
+            <p className="text-slate-500 text-sm">No movements found matching your filters.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-white/10">
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Date</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Description</th>
-                  <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Amount</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Direction</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Case Type</th>
-                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Candidates</th>
-                  <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">AI Match</th>
-                  <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2"></th>
+                <tr className="border-b border-slate-800">
+                  <th className="text-left text-[10px] font-medium text-slate-500 uppercase tracking-wider px-4 py-3">Date</th>
+                  <th className="text-left text-[10px] font-medium text-slate-500 uppercase tracking-wider px-4 py-3">Description</th>
+                  <th className="text-right text-[10px] font-medium text-slate-500 uppercase tracking-wider px-4 py-3">Amount</th>
+                  <th className="text-left text-[10px] font-medium text-slate-500 uppercase tracking-wider px-4 py-3">Direction</th>
+                  <th className="text-left text-[10px] font-medium text-slate-500 uppercase tracking-wider px-4 py-3">Case Type</th>
+                  <th className="text-center text-[10px] font-medium text-slate-500 uppercase tracking-wider px-4 py-3">Candidates</th>
+                  <th className="text-left text-[10px] font-medium text-slate-500 uppercase tracking-wider px-4 py-3">AI Match</th>
+                  <th className="text-center text-[10px] font-medium text-slate-500 uppercase tracking-wider px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody>
                 {data.movements.map((movement) => {
                   const aiMatch = aiMatchResults.get(movement.id)
                   return (
-                  <tr key={movement.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
-                    <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(movement.date)}</td>
-                    <td className="px-3 py-2">
-                      <p className="text-[12px] text-white truncate max-w-[250px]">{movement.counterparty || movement.id.slice(0, 12)}</p>
+                  <tr key={movement.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors duration-100">
+                    <td className="px-4 py-3 text-[12px] text-slate-400 whitespace-nowrap">{formatDate(movement.date)}</td>
+                    <td className="px-4 py-3">
+                      <p className="text-[12px] text-slate-200 truncate max-w-[250px]">{movement.counterparty || movement.id.slice(0, 12)}</p>
                     </td>
-                    <td className="px-3 py-2 text-right">
-                      <span className={`text-[12px] font-mono tabular-nums font-semibold ${movement.direction === "inflow" ? "text-emerald-400" : "text-red-400"}`}>
+                    <td className="px-4 py-3 text-right">
+                      <span className={`text-[12px] tabular-nums font-medium ${movement.direction === "inflow" ? "text-emerald-400" : "text-rose-400"}`}>
                         {movement.direction === "inflow" ? "+" : "−"}{formatCurrency(Math.abs(movement.amount))}
                       </span>
                     </td>
-                    <td className="px-3 py-2">
-                      <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider ${movement.direction === "inflow" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                    <td className="px-4 py-3">
+                      <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${movement.direction === "inflow" ? "bg-emerald-400/10 text-emerald-400" : "bg-rose-400/10 text-rose-400"}`}>
                         {movement.direction === "inflow" ? "AR" : "AP"}
                       </span>
                     </td>
-                    <td className="px-3 py-2">
-                      <Badge className={`text-[10px] px-2 py-0.5 border ${getCaseTypeColor(movement.classification.case_type)}`}>
+                    <td className="px-4 py-3">
+                      <span className="text-[11px] text-slate-300">
                         {movement.classification.case_type.replace(/_/g, " ")}
-                      </Badge>
+                      </span>
                     </td>
-                    <td className="px-3 py-2 text-center">
-                      <span className="text-[12px] font-mono text-zinc-300">{movement.classification.candidates.length}</span>
+                    <td className="px-4 py-3 text-center">
+                      <span className="text-[12px] tabular-nums text-slate-400">{movement.classification.candidates.length}</span>
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-4 py-3">
                       {aiMatch ? (
                         <div className="flex items-center gap-1.5">
-                          <Badge className={`text-[10px] px-2 py-0.5 border ${
-                            aiMatch.decision === "match" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
-                            aiMatch.decision === "create_invoice" || aiMatch.decision === "create_bill" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
-                            aiMatch.decision === "needs_review" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
-                            "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
+                          <span className={`text-[10px] px-2 py-0.5 rounded ${
+                            aiMatch.decision === "match" ? "bg-emerald-400/10 text-emerald-400" :
+                            aiMatch.decision === "create_invoice" || aiMatch.decision === "create_bill" ? "bg-blue-400/10 text-blue-400" :
+                            aiMatch.decision === "needs_review" ? "bg-amber-400/10 text-amber-400" :
+                            "bg-slate-700 text-slate-400"
                           }`}>
                             {aiMatch.decision.replace(/_/g, " ")}
-                          </Badge>
-                          <span className="text-[10px] text-zinc-500">{Math.round(aiMatch.confidence * 100)}%</span>
+                          </span>
+                          <span className="text-[10px] text-slate-500">{Math.round(aiMatch.confidence * 100)}%</span>
                         </div>
                       ) : (
-                        <span className="text-[10px] text-zinc-600">—</span>
+                        <span className="text-[10px] text-slate-600">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="px-4 py-3 text-center">
                       <button
                         onClick={() => handleSelectMovement(movement)}
-                        className="text-zinc-500 hover:text-zinc-300 transition-colors"
+                        className="text-slate-500 hover:text-slate-300 transition-colors"
                       >
                         <ChevronRight className="h-4 w-4" />
                       </button>
@@ -1097,22 +1013,22 @@ export default function ReconciliationCandidatesPage() {
       </div>
 
       {/* AR Matches Section - Persisted matches from database */}
-      <div className="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-white/10">
+      <div className="bg-slate-900 border border-slate-800/60 rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-800">
           {/* View Toggle */}
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
-              <h2 className="text-[13px] font-semibold text-white">AR Reconciliation</h2>
-              <div className="flex items-center bg-[#0A0A0A] rounded-lg p-0.5">
+              <h2 className="text-sm font-medium text-slate-200">AR Reconciliation</h2>
+              <div className="flex items-center bg-slate-800/50 rounded-lg p-0.5">
                 <button
                   onClick={() => setActiveView("bank")}
-                  className={`px-3 py-1 text-[10px] rounded-md transition-colors ${activeView === "bank" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                  className={`px-3 py-1 text-[10px] rounded-md transition-colors ${activeView === "bank" ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
                 >
                   Bank → Invoice
                 </button>
                 <button
                   onClick={() => setActiveView("invoice")}
-                  className={`px-3 py-1 text-[10px] rounded-md transition-colors ${activeView === "invoice" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                  className={`px-3 py-1 text-[10px] rounded-md transition-colors ${activeView === "invoice" ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
                 >
                   Invoice → Bank
                 </button>
@@ -1123,19 +1039,19 @@ export default function ReconciliationCandidatesPage() {
                 <>
                   <button
                     onClick={() => setArMatchFilter("all")}
-                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "all" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "all" ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
                   >
                     All ({arMatchesSummary.total})
                   </button>
                   <button
                     onClick={() => setArMatchFilter("pending")}
-                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "pending" ? "bg-amber-500/20 text-amber-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "pending" ? "bg-amber-400/10 text-amber-400" : "text-slate-500 hover:text-slate-300"}`}
                   >
                     Pending ({arMatchesSummary.pending})
                   </button>
                   <button
                     onClick={() => setArMatchFilter("confirmed")}
-                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "confirmed" ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                    className={`px-2 py-1 text-[10px] rounded ${arMatchFilter === "confirmed" ? "bg-emerald-400/10 text-emerald-400" : "text-slate-500 hover:text-slate-300"}`}
                   >
                     Confirmed ({arMatchesSummary.confirmed})
                   </button>
@@ -1143,7 +1059,7 @@ export default function ReconciliationCandidatesPage() {
                     size="sm"
                     onClick={fetchArMatches}
                     disabled={arMatchesLoading}
-                    className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2 ml-2"
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] h-6 px-2 ml-2"
                   >
                     <RefreshCw className={`h-3 w-3 ${arMatchesLoading ? "animate-spin" : ""}`} />
                   </Button>
@@ -1152,19 +1068,19 @@ export default function ReconciliationCandidatesPage() {
                 <>
                   <button
                     onClick={() => setInvoiceFilter("all")}
-                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "all" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "all" ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
                   >
                     All ({invoiceSummary.total_invoices})
                   </button>
                   <button
                     onClick={() => setInvoiceFilter("matched")}
-                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "matched" ? "bg-emerald-500/20 text-emerald-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "matched" ? "bg-emerald-400/10 text-emerald-400" : "text-slate-500 hover:text-slate-300"}`}
                   >
                     Matched ({invoiceSummary.matched_count})
                   </button>
                   <button
                     onClick={() => setInvoiceFilter("unmatched")}
-                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "unmatched" ? "bg-red-500/20 text-red-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                    className={`px-2 py-1 text-[10px] rounded ${invoiceFilter === "unmatched" ? "bg-rose-400/10 text-rose-400" : "text-slate-500 hover:text-slate-300"}`}
                   >
                     Unmatched ({invoiceSummary.unmatched_count})
                   </button>
@@ -1172,7 +1088,7 @@ export default function ReconciliationCandidatesPage() {
                     size="sm"
                     onClick={fetchInvoices}
                     disabled={invoicesLoading}
-                    className="bg-white/5 hover:bg-white/10 text-white text-[10px] h-6 px-2 ml-2"
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] h-6 px-2 ml-2"
                   >
                     <RefreshCw className={`h-3 w-3 ${invoicesLoading ? "animate-spin" : ""}`} />
                   </Button>
@@ -1184,25 +1100,25 @@ export default function ReconciliationCandidatesPage() {
           {/* Summary Stats - Bank View */}
           {activeView === "bank" && (
             <div className="grid grid-cols-4 gap-3">
-              <div className="bg-[#0A0A0A] border border-white/5 rounded px-3 py-2">
-                <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total Matched</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-white">{formatCurrency(arMatchesSummary.total_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{arMatchesSummary.total} transactions</p>
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Total Matched</p>
+                <p className="text-lg font-semibold tracking-tight text-white tabular-nums">{formatCurrency(arMatchesSummary.total_amount)}</p>
+                <p className="text-[10px] text-slate-500">{arMatchesSummary.total} transactions</p>
               </div>
-              <div className="bg-[#0A0A0A] border border-emerald-500/20 rounded px-3 py-2">
-                <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Confirmed</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(arMatchesSummary.confirmed_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{arMatchesSummary.confirmed} transactions</p>
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Confirmed</p>
+                <p className="text-lg font-semibold tracking-tight text-emerald-400 tabular-nums">{formatCurrency(arMatchesSummary.confirmed_amount)}</p>
+                <p className="text-[10px] text-slate-500">{arMatchesSummary.confirmed} transactions</p>
               </div>
-              <div className="bg-[#0A0A0A] border border-amber-500/20 rounded px-3 py-2">
-                <p className="text-[9px] text-amber-400 uppercase tracking-wider">Pending Review</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(arMatchesSummary.pending_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{arMatchesSummary.pending} transactions</p>
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Pending Review</p>
+                <p className="text-lg font-semibold tracking-tight text-amber-400 tabular-nums">{formatCurrency(arMatchesSummary.pending_amount)}</p>
+                <p className="text-[10px] text-slate-500">{arMatchesSummary.pending} transactions</p>
               </div>
-              <div className="bg-[#0A0A0A] border border-red-500/20 rounded px-3 py-2">
-                <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched Bank</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-red-400">{formatCurrency(arMatchesSummary.unmatched_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{arMatchesSummary.unmatched_count} transactions</p>
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Unmatched Bank</p>
+                <p className="text-lg font-semibold tracking-tight text-rose-400 tabular-nums">{formatCurrency(arMatchesSummary.unmatched_amount)}</p>
+                <p className="text-[10px] text-slate-500">{arMatchesSummary.unmatched_count} transactions</p>
               </div>
             </div>
           )}
@@ -1210,25 +1126,25 @@ export default function ReconciliationCandidatesPage() {
           {/* Summary Stats - Invoice View */}
           {activeView === "invoice" && (
             <div className="grid grid-cols-4 gap-3">
-              <div className="bg-[#0A0A0A] border border-white/5 rounded px-3 py-2">
-                <p className="text-[9px] text-zinc-500 uppercase tracking-wider">Total Invoices</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-white">{formatCurrency(invoiceSummary.total_invoice_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{invoiceSummary.total_invoices} invoices</p>
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Total Invoices</p>
+                <p className="text-lg font-semibold tracking-tight text-white tabular-nums">{formatCurrency(invoiceSummary.total_invoice_amount)}</p>
+                <p className="text-[10px] text-slate-500">{invoiceSummary.total_invoices} invoices</p>
               </div>
-              <div className="bg-[#0A0A0A] border border-emerald-500/20 rounded px-3 py-2">
-                <p className="text-[9px] text-emerald-400 uppercase tracking-wider">Matched</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-emerald-400">{formatCurrency(invoiceSummary.matched_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{invoiceSummary.matched_count} invoices</p>
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Matched</p>
+                <p className="text-lg font-semibold tracking-tight text-emerald-400 tabular-nums">{formatCurrency(invoiceSummary.matched_amount)}</p>
+                <p className="text-[10px] text-slate-500">{invoiceSummary.matched_count} invoices</p>
               </div>
-              <div className="bg-[#0A0A0A] border border-red-500/20 rounded px-3 py-2">
-                <p className="text-[9px] text-red-400 uppercase tracking-wider">Unmatched</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-red-400">{formatCurrency(invoiceSummary.unmatched_amount)}</p>
-                <p className="text-[10px] text-zinc-500">{invoiceSummary.unmatched_count} invoices</p>
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Unmatched</p>
+                <p className="text-lg font-semibold tracking-tight text-rose-400 tabular-nums">{formatCurrency(invoiceSummary.unmatched_amount)}</p>
+                <p className="text-[10px] text-slate-500">{invoiceSummary.unmatched_count} invoices</p>
               </div>
-              <div className="bg-[#0A0A0A] border border-amber-500/20 rounded px-3 py-2">
-                <p className="text-[9px] text-amber-400 uppercase tracking-wider">Outstanding</p>
-                <p className="text-lg font-bold font-mono tabular-nums text-amber-400">{formatCurrency(invoiceSummary.outstanding_amount)}</p>
-                <p className="text-[10px] text-zinc-500">remaining balance</p>
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Outstanding</p>
+                <p className="text-lg font-semibold tracking-tight text-amber-400 tabular-nums">{formatCurrency(invoiceSummary.outstanding_amount)}</p>
+                <p className="text-[10px] text-slate-500">remaining balance</p>
               </div>
             </div>
           )}
