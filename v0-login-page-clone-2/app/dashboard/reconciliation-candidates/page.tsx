@@ -647,8 +647,8 @@ export default function ReconciliationCandidatesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-white tracking-tight">AR Reconciliation</h1>
-          <p className="text-[12px] text-zinc-500 mt-0.5">Match customer payments to invoices · AR-focused classification</p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight">AR Reconciliation</h1>
+          <p className="text-sm text-zinc-500 mt-1">Match customer payments to invoices · AR-focused classification</p>
         </div>
         <div className="flex items-center gap-2">
           <Button
