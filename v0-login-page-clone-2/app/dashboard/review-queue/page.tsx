@@ -254,7 +254,7 @@ export default function ReviewQueuePage() {
 
   if (loading) {
     return (
-      <div className="p-8 space-y-4 bg-slate-950 min-h-screen">
+      <div className="p-8 space-y-4 bg-slate-900 min-h-screen">
         <div className="h-8 w-48 bg-slate-800 rounded animate-pulse" />
         <div className="h-96 bg-slate-800 rounded animate-pulse" />
       </div>
@@ -263,7 +263,7 @@ export default function ReviewQueuePage() {
 
   if (error) {
     return (
-      <div className="p-8 bg-slate-950 min-h-screen">
+      <div className="p-8 bg-slate-900 min-h-screen">
         <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-6 text-rose-300">
           <p className="font-semibold">Error loading review queue</p>
           <p className="text-sm mt-2">{error}</p>
@@ -278,7 +278,7 @@ export default function ReviewQueuePage() {
   const selectedCandidate = candidates?.candidates[selectedCandidateIdx]
 
   return (
-    <div className="p-8 space-y-5 bg-slate-950 min-h-screen">
+    <div className="p-8 space-y-5 bg-slate-900 min-h-screen">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -396,11 +396,11 @@ export default function ReviewQueuePage() {
 
       {/* Triage Drawer */}
       <Sheet open={triageOpen} onOpenChange={setTriageOpen}>
-        <SheetContent className="bg-slate-950 border-l border-slate-800 w-full sm:max-w-3xl overflow-y-auto p-0">
+        <SheetContent className="bg-slate-900 border-l border-slate-800 w-full sm:max-w-3xl overflow-y-auto p-0">
           {selectedMatch && candidates && (
             <>
               {/* Header - Bank Movement (Pinned) */}
-              <div className="sticky top-0 bg-slate-950 border-b border-slate-800 p-6 space-y-4">
+              <div className="sticky top-0 bg-slate-900 border-b border-slate-800 p-6 space-y-4">
                 <SheetHeader>
                   <SheetTitle className="text-slate-100 text-lg">Triage: Match Review</SheetTitle>
                 </SheetHeader>
@@ -523,7 +523,7 @@ export default function ReviewQueuePage() {
 
               {/* Action Bar */}
               {selectedCandidate && (
-                <div className="sticky bottom-0 bg-slate-950 border-t border-slate-800 p-6">
+                <div className="sticky bottom-0 bg-slate-900 border-t border-slate-800 p-6">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex gap-3 flex-1">
                       <Button
