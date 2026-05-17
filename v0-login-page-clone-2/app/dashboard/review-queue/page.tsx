@@ -296,7 +296,7 @@ export default function ReviewQueuePage() {
       </div>
 
       {/* Stats */}
-      <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+      <div className="bg-black border border-slate-800 rounded-lg p-4">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Pending Review</p>
@@ -324,7 +324,7 @@ export default function ReviewQueuePage() {
 
       {/* Matches Table */}
       {filteredMatches.length === 0 ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-lg p-16 text-center">
+        <div className="bg-black border border-slate-800 rounded-lg p-16 text-center">
           <div className="w-12 h-12 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center mx-auto mb-4">
             <CheckCircle2 className="h-6 w-6 text-emerald-300" />
           </div>
@@ -332,10 +332,10 @@ export default function ReviewQueuePage() {
           <p className="text-slate-400 text-sm mt-1">No pending matches. All reconciliation is complete.</p>
         </div>
       ) : (
-        <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
+        <div className="bg-black border border-slate-800 rounded-lg overflow-hidden">
           <div className="max-h-[600px] overflow-y-auto">
             <table className="w-full">
-              <thead className="sticky top-0 bg-slate-900">
+              <thead className="sticky top-0 bg-black">
                 <tr className="border-b border-slate-800">
                   <th className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Bank Payment</th>
                   <th className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Invoice</th>
@@ -406,7 +406,7 @@ export default function ReviewQueuePage() {
                 </SheetHeader>
 
                 {/* Bank Movement Card */}
-                <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+                <div className="bg-black border border-slate-800 rounded-lg p-4">
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Bank Movement</p>
@@ -439,7 +439,7 @@ export default function ReviewQueuePage() {
                     ))}
                   </div>
                 ) : candidates.candidates.length === 0 ? (
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-8 text-center">
+                  <div className="bg-black border border-slate-800 rounded-lg p-8 text-center">
                     <AlertCircle className="h-8 w-8 text-amber-300 mx-auto mb-2" />
                     <p className="text-sm text-slate-300">No candidates found for this payment</p>
                   </div>
@@ -457,8 +457,8 @@ export default function ReviewQueuePage() {
                         onClick={() => setSelectedCandidateIdx(idx)}
                         className={`w-full text-left p-4 rounded-lg border transition-all ${
                           isSelected
-                            ? "bg-slate-800 border-slate-700"
-                            : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
+                            ? "bg-black border-slate-700"
+                            : "bg-black border-slate-800 hover:border-slate-700"
                         }`}
                       >
                         <div className="flex items-start justify-between mb-2">
