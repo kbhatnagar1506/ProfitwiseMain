@@ -1144,8 +1144,8 @@ export default function ReconciliationCandidatesPage() {
       </div>
 
       {/* AR Matches Section - Persisted matches from database */}
-      <div className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800">
+      <div className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl overflow-hidden flex flex-col max-h-[600px]">
+        <div className="px-4 py-3 border-b border-zinc-800 flex-shrink-0">
           {/* View Toggle */}
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
@@ -1293,7 +1293,7 @@ export default function ReconciliationCandidatesPage() {
                 <p className="text-zinc-500 text-sm">No AR matches found. Run AI Match to create matches.</p>
               </div>
             ) : (
-              <div className="max-h-[400px] overflow-y-auto">
+              <div className="overflow-y-auto flex-1">
                 <table className="w-full">
                   <thead className="sticky top-0 bg-[#141414]">
                     <tr className="border-b border-white/10">
@@ -1367,7 +1367,7 @@ export default function ReconciliationCandidatesPage() {
                 <p className="text-zinc-500 text-sm">No invoices found.</p>
               </div>
             ) : (
-              <div className="max-h-[400px] overflow-y-auto">
+              <div className="overflow-y-auto flex-1">
                 <table className="w-full">
                   <thead className="sticky top-0 bg-[#141414]">
                     <tr className="border-b border-white/10">
