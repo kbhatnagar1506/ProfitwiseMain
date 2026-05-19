@@ -126,12 +126,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Coverage is based on NUMBER of invoices fully paid
     const coveragePercentage = totalInvoices > 0 ? (paidInvoices / totalInvoices) * 100 : 0
 
-    // 2. Match Status Stats (pending vs confirmed)
+    // 2. Match Status Stats (pending vs confirmed) - COUNT UNIQUE INVOICES, not matches
     const matchStatusResult = await query(
       `SELECT 
-        COUNT(*) FILTER (WHERE status = 'confirmed') as confirmed_count,
+        COUNT(DISTINCT cash_event_id) FILTER (WHERE status = 'confirmed') as confirmed_count,
         COALESCE(SUM(invoice_amount) FILTER (WHERE status = 'confirmed'), 0)::float as confirmed_amount,
-        COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
+        COUNT(DISTINCT cash_event_id) FILTER (WHERE status = 'pending') as pending_count,
         COALESCE(SUM(invoice_amount) FILTER (WHERE status = 'pending'), 0)::float as pending_amount,
         COUNT(*) FILTER (WHERE confidence >= 0.85) as high_confidence,
         COUNT(*) FILTER (WHERE confidence < 0.70) as low_confidence,
