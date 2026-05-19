@@ -1293,63 +1293,81 @@ export default function ReconciliationCandidatesPage() {
                 <p className="text-zinc-500 text-sm">No AR matches found. Run AI Match to create matches.</p>
               </div>
             ) : (
-              <div className="overflow-y-auto flex-1 min-h-0">
-                <table className="w-full">
-                  <thead className="sticky top-0 bg-[#141414]">
-                    <tr className="border-b border-white/10">
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Transaction</th>
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Date</th>
-                      <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Amount</th>
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice</th>
-                      <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice Amount</th>
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Match Type</th>
-                      <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Confidence</th>
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {arMatches.map((match) => (
-                      <tr key={match.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
-                        <td className="px-3 py-2">
-                          <p className="text-[12px] text-white truncate max-w-[200px]">{match.bank_counterparty || "Unknown"}</p>
-                          <p className="text-[10px] text-zinc-600 truncate max-w-[200px]">{match.bank_description || ""}</p>
-                        </td>
-                        <td className="px-3 py-2 text-[12px] text-zinc-400 whitespace-nowrap">{formatDate(match.bank_date)}</td>
-                        <td className="px-3 py-2 text-right">
-                          <span className="text-[12px] font-mono tabular-nums font-semibold text-emerald-400">
-                            +{formatCurrency(match.bank_amount)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <p className="text-[12px] text-white">#{match.invoice_id}</p>
-                          <p className="text-[10px] text-zinc-500">{match.customer_name}</p>
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <span className="text-[12px] font-mono tabular-nums text-zinc-300">
-                            {formatCurrency(match.invoice_amount)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <Badge className={`text-[9px] px-1.5 py-0 ${getMatchTypeColor(match.match_type)}`}>
-                            {match.match_type}
-                          </Badge>
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          <span className="text-[11px] font-mono text-zinc-400">{Math.round(match.confidence * 100)}%</span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <Badge className={`text-[9px] px-1.5 py-0 ${
-                            match.status === "confirmed" ? "bg-emerald-500/10 text-emerald-400" :
-                            match.status === "pending" ? "bg-amber-500/10 text-amber-400" :
-                            "bg-zinc-500/10 text-zinc-400"
+              <div className="overflow-y-auto flex-1 min-h-0 p-4 space-y-3">
+                {arMatches.map((match) => {
+                  const amountDiff = Math.abs(match.bank_amount - match.invoice_amount)
+                  const diffPct = ((amountDiff / match.invoice_amount) * 100).toFixed(1)
+                  const isConfirmed = match.status === "confirmed"
+                  
+                  return (
+                    <div
+                      key={match.id}
+                      className="bg-slate-900 border border-slate-800 rounded-lg p-4 hover:border-slate-700 transition-all duration-200"
+                    >
+                      {/* Header: Bank Details + Status */}
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-white">{match.bank_counterparty || "Unknown"}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">{match.bank_description || ""}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge className={`text-[9px] px-2 py-1 ${
+                            isConfirmed
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
                           }`}>
                             {match.status}
                           </Badge>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          <span className="text-xs font-mono text-slate-400">{Math.round(match.confidence * 100)}%</span>
+                        </div>
+                      </div>
+
+                      {/* Main Content: Bank Amount + Invoice Details */}
+                      <div className="grid grid-cols-3 gap-4 mb-3">
+                        {/* Bank Amount */}
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Bank Amount</p>
+                          <p className="text-lg font-semibold text-emerald-400 tabular-nums">+{formatCurrency(match.bank_amount)}</p>
+                          <p className="text-[10px] text-slate-500 mt-1">{formatDate(match.bank_date)}</p>
+                        </div>
+
+                        {/* Invoice Details */}
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Invoice</p>
+                          <p className="text-sm font-semibold text-white">#{match.invoice_id}</p>
+                          <p className="text-[10px] text-slate-400 mt-1">{match.customer_name}</p>
+                        </div>
+
+                        {/* Invoice Amount */}
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Invoice Amount</p>
+                          <p className="text-lg font-semibold text-slate-200 tabular-nums">{formatCurrency(match.invoice_amount)}</p>
+                          <p className={`text-[10px] mt-1 ${amountDiff <= 0.01 ? "text-emerald-400" : "text-amber-400"}`}>
+                            Diff: {formatCurrency(amountDiff)} ({diffPct}%)
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Footer: Match Type + Confidence Bar */}
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                        <Badge className={`text-[9px] px-2 py-1 ${getMatchTypeColor(match.match_type)}`}>
+                          {match.match_type}
+                        </Badge>
+                        <div className="flex-1 mx-4">
+                          <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                match.confidence >= 0.85 ? "bg-emerald-500" : "bg-amber-500"
+                              }`}
+                              style={{ width: `${match.confidence * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                        <span className="text-xs text-slate-500 font-mono">{Math.round(match.confidence * 100)}%</span>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </>
@@ -1367,96 +1385,114 @@ export default function ReconciliationCandidatesPage() {
                 <p className="text-zinc-500 text-sm">No invoices found.</p>
               </div>
             ) : (
-              <div className="overflow-y-auto flex-1 min-h-0">
-                <table className="w-full">
-                  <thead className="sticky top-0 bg-[#141414]">
-                    <tr className="border-b border-white/10">
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice</th>
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Customer</th>
-                      <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Invoice Amount</th>
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Payment</th>
-                      <th className="text-right text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Bank Amount</th>
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Match Type</th>
-                      <th className="text-center text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Confidence</th>
-                      <th className="text-left text-[10px] text-zinc-500 uppercase tracking-wider px-3 py-2">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoices.map((invoice) => (
-                      <tr key={invoice.cash_event_id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors duration-100">
-                        <td className="px-3 py-2">
-                          <p className="text-[12px] text-white">#{invoice.invoice_number || invoice.cash_event_id.slice(0, 8)}</p>
-                          <p className="text-[10px] text-zinc-600">{invoice.due_date ? formatDate(invoice.due_date) : "No due date"}</p>
-                        </td>
-                        <td className="px-3 py-2">
-                          <p className="text-[12px] text-white truncate max-w-[180px]">{invoice.customer_name}</p>
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <span className="text-[12px] font-mono tabular-nums text-zinc-300">
-                            {formatCurrency(invoice.invoice_amount)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          {invoice.is_matched ? (
+              <div className="overflow-y-auto flex-1 min-h-0 p-4 space-y-3">
+                {invoices.map((invoice) => {
+                  const isMatched = invoice.is_matched
+                  const isConfirmed = invoice.match_status === "confirmed"
+                  const amountDiff = isMatched && invoice.bank_amount 
+                    ? Math.abs(invoice.bank_amount - invoice.invoice_amount)
+                    : 0
+                  const diffPct = isMatched && invoice.invoice_amount > 0
+                    ? ((amountDiff / invoice.invoice_amount) * 100).toFixed(1)
+                    : "0"
+                  
+                  return (
+                    <div
+                      key={invoice.cash_event_id}
+                      className={`border rounded-lg p-4 transition-all duration-200 ${
+                        isMatched
+                          ? "bg-slate-900 border-slate-800 hover:border-slate-700"
+                          : "bg-slate-900/50 border-slate-800/50 hover:border-slate-700/50"
+                      }`}
+                    >
+                      {/* Header: Invoice + Status */}
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-white">#{invoice.invoice_number || invoice.cash_event_id.slice(0, 8)}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">{invoice.customer_name}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isMatched ? (
                             <>
-                              <p className="text-[12px] text-white truncate max-w-[180px]">{invoice.bank_counterparty || "Bank deposit"}</p>
-                              <p className="text-[10px] text-zinc-600">{invoice.bank_date ? formatDate(invoice.bank_date) : ""}</p>
-                            </>
-                          ) : (
-                            <span className="text-[11px] text-zinc-600 italic">No payment matched</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          {invoice.is_matched && invoice.bank_amount ? (
-                            <span className="text-[12px] font-mono tabular-nums font-semibold text-emerald-400">
-                              +{formatCurrency(invoice.bank_amount)}
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-zinc-600">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {invoice.is_matched && invoice.match_type ? (
-                            <Badge className={`text-[9px] px-1.5 py-0 ${getMatchTypeColor(invoice.match_type)}`}>
-                              {invoice.match_type}
-                            </Badge>
-                          ) : (
-                            <span className="text-[11px] text-zinc-600">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          {invoice.is_matched && invoice.confidence ? (
-                            <span className="text-[11px] font-mono text-zinc-400">{Math.round(invoice.confidence * 100)}%</span>
-                          ) : (
-                            <span className="text-[11px] text-zinc-600">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {invoice.is_matched ? (
-                            <div className="flex items-center gap-1">
-                              <Badge className={`text-[9px] px-1.5 py-0 ${
-                                invoice.match_status === "confirmed" ? "bg-emerald-500/10 text-emerald-400" :
-                                invoice.match_status === "pending" ? "bg-amber-500/10 text-amber-400" :
-                                "bg-zinc-500/10 text-zinc-400"
+                              <Badge className={`text-[9px] px-2 py-1 ${
+                                isConfirmed
+                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                  : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
                               }`}>
                                 {invoice.match_status || "matched"}
                               </Badge>
                               {invoice.match_count > 1 && (
-                                <span className="text-[9px] text-cyan-400" title={`${invoice.match_count} potential matches - showing best`}>
-                                  +{invoice.match_count - 1}
-                                </span>
+                                <span className="text-[9px] text-cyan-400 font-medium">+{invoice.match_count - 1}</span>
                               )}
-                            </div>
+                            </>
                           ) : (
-                            <Badge className="text-[9px] px-1.5 py-0 bg-red-500/10 text-red-400">
+                            <Badge className="text-[9px] px-2 py-1 bg-red-500/20 text-red-300 border border-red-500/30">
                               unmatched
                             </Badge>
                           )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </div>
+                      </div>
+
+                      {/* Main Content: Invoice Amount + Payment Details */}
+                      <div className="grid grid-cols-3 gap-4 mb-3">
+                        {/* Invoice Amount */}
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Invoice Amount</p>
+                          <p className="text-lg font-semibold text-slate-200 tabular-nums">{formatCurrency(invoice.invoice_amount)}</p>
+                          <p className="text-[10px] text-slate-500 mt-1">Due: {invoice.due_date ? formatDate(invoice.due_date) : "—"}</p>
+                        </div>
+
+                        {/* Bank Payment */}
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Bank Payment</p>
+                          {isMatched && invoice.bank_amount ? (
+                            <>
+                              <p className="text-lg font-semibold text-emerald-400 tabular-nums">+{formatCurrency(invoice.bank_amount)}</p>
+                              <p className="text-[10px] text-slate-400 mt-1">{invoice.bank_date ? formatDate(invoice.bank_date) : "—"}</p>
+                            </>
+                          ) : (
+                            <p className="text-sm text-slate-500 italic">No payment</p>
+                          )}
+                        </div>
+
+                        {/* Match Details */}
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Match Info</p>
+                          {isMatched ? (
+                            <>
+                              <p className="text-sm font-semibold text-slate-200">{invoice.match_type}</p>
+                              <p className={`text-[10px] mt-1 ${amountDiff <= 0.01 ? "text-emerald-400" : "text-amber-400"}`}>
+                                Diff: {formatCurrency(amountDiff)} ({diffPct}%)
+                              </p>
+                            </>
+                          ) : (
+                            <p className="text-sm text-slate-500">—</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Footer: Match Type + Confidence */}
+                      {isMatched && (
+                        <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                          <Badge className={`text-[9px] px-2 py-1 ${getMatchTypeColor(invoice.match_type)}`}>
+                            {invoice.match_type}
+                          </Badge>
+                          <div className="flex-1 mx-4">
+                            <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${
+                                  invoice.confidence >= 0.85 ? "bg-emerald-500" : "bg-amber-500"
+                                }`}
+                                style={{ width: `${(invoice.confidence || 0) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+                          <span className="text-xs text-slate-500 font-mono">{Math.round((invoice.confidence || 0) * 100)}%</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </>
