@@ -13,6 +13,64 @@ import { classifyMovement, type CashEventRow } from "@/lib/reconciliation-case-c
 import { runAIReconciliationMatcher, type MovementToMatch, type AIMatcherResult } from "@/lib/reconciliation-ai-matcher"
 import { syncCashEventsForUser } from "@/lib/cash-events-build"
 import { fetchInvoicesForReconciliation } from "@/lib/invoices-fetch"
+import { normalizeForMatch } from "@/lib/alias-normalize"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Customer Name Similarity (duplicated from classifier for validation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function calculateNameSimilarity(name1: string | null, name2: string | null): number {
+  if (!name1 || !name2) return 0
+  
+  const n1 = normalizeForMatch(name1)
+  const n2 = normalizeForMatch(name2)
+  
+  if (n1 === n2) return 1.0
+  
+  if (n1.includes(n2) || n2.includes(n1)) {
+    const shorter = n1.length < n2.length ? n1 : n2
+    const longer = n1.length < n2.length ? n2 : n1
+    return shorter.length / longer.length * 0.9
+  }
+  
+  const words1 = n1.split(/\s+/).filter(w => w.length > 1)
+  const words2 = n2.split(/\s+/).filter(w => w.length > 1)
+  const commonWords = words1.filter(w => words2.includes(w))
+  if (commonWords.length > 0) {
+    const maxWords = Math.max(words1.length, words2.length)
+    return commonWords.length / maxWords * 0.85
+  }
+  
+  const distance = levenshteinDistance(n1, n2)
+  const maxLen = Math.max(n1.length, n2.length)
+  return 1 - (distance / maxLen)
+}
+
+function levenshteinDistance(s1: string, s2: string): number {
+  const m = s1.length
+  const n = s2.length
+  
+  if (m === 0) return n
+  if (n === 0) return m
+  
+  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0))
+  
+  for (let i = 0; i <= m; i++) dp[i][0] = i
+  for (let j = 0; j <= n; j++) dp[0][j] = j
+  
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      )
+    }
+  }
+  
+  return dp[m][n]
+}
 
 // In-memory job store (in production, use Redis or database)
 const jobStore = new Map<string, {
@@ -529,6 +587,38 @@ async function saveMatchesToDatabase(
         statusOverride = "pending"
       }
       
+      // Get invoice details from metadata
+      const metadata = cashEvent.metadata as Record<string, unknown> || {}
+      const invoiceDocNumber = (metadata.doc_number as string) || (metadata.invoice_number as string) || cashEvent.id
+      const customerName = (metadata.customer_name as string) || (metadata.entity_name as string) || "Unknown"
+      
+      // VALIDATION: Check customer name similarity
+      const bankCounterparty = movement.counterparty || ""
+      const nameSimilarity = calculateNameSimilarity(bankCounterparty, customerName)
+      
+      // If names are clearly different (similarity < 0.4), reject the match
+      if (nameSimilarity < 0.4 && !match.matched_candidate_id?.startsWith("DIRECT_LINK")) {
+        console.warn(`[AI Matcher] Rejecting match due to name mismatch: "${bankCounterparty}" vs "${customerName}" (similarity: ${nameSimilarity.toFixed(2)})`)
+        skippedCount++
+        continue
+      }
+      
+      // If names are uncertain (similarity 0.4-0.6), force to pending
+      if (nameSimilarity < 0.6) {
+        console.log(`[AI Matcher] Forcing pending due to uncertain name match: "${bankCounterparty}" vs "${customerName}" (similarity: ${nameSimilarity.toFixed(2)})`)
+        statusOverride = "pending"
+      }
+      
+      // Cap confidence based on name similarity
+      let adjustedConfidence = match.confidence
+      if (nameSimilarity < 0.5) {
+        adjustedConfidence = Math.min(adjustedConfidence, 0.50)
+      } else if (nameSimilarity < 0.6) {
+        adjustedConfidence = Math.min(adjustedConfidence, 0.65)
+      } else if (nameSimilarity < 0.8) {
+        adjustedConfidence = Math.min(adjustedConfidence, 0.80)
+      }
+      
       // Determine match type based on amounts and reasoning
       const matchType = isAggregation 
         ? "AGGREGATION" 
@@ -561,11 +651,6 @@ async function saveMatchesToDatabase(
         continue
       }
       
-      // Get invoice details from metadata
-      const metadata = cashEvent.metadata as Record<string, unknown> || {}
-      const invoiceDocNumber = (metadata.doc_number as string) || (metadata.invoice_number as string) || cashEvent.id
-      const customerName = (metadata.customer_name as string) || (metadata.entity_name as string) || "Unknown"
-      
       // Calculate fee and matched amounts based on match type
       let feeAmount = 0
       let matchedAmount = cashEvent.amount
@@ -585,13 +670,14 @@ async function saveMatchesToDatabase(
       }
       
       // Determine status: use static confidence threshold (not AI decision)
-      // Confirmed if: confidence >= 85% AND match type is EXACT or FEE
+      // Confirmed if: confidence >= 85% AND match type is EXACT or FEE AND name similarity >= 0.7
       // Otherwise: pending for review
       let finalStatus: "confirmed" | "pending" = "pending"
       if (!statusOverride) {
-        const isHighConfidence = match.confidence >= 0.85
+        const isHighConfidence = adjustedConfidence >= 0.85
         const isReliableType = matchType === "EXACT" || matchType === "FEE"
-        finalStatus = (isHighConfidence && isReliableType) ? "confirmed" : "pending"
+        const hasGoodNameMatch = nameSimilarity >= 0.7
+        finalStatus = (isHighConfidence && isReliableType && hasGoodNameMatch) ? "confirmed" : "pending"
       } else {
         finalStatus = statusOverride
       }
@@ -637,11 +723,11 @@ async function saveMatchesToDatabase(
             cashEvent.amount,
             customerName,
             matchType,
-            match.confidence,
+            adjustedConfidence,  // Use adjusted confidence (capped by name similarity)
             feeAmount,
             matchedAmount,
             "ai",
-            match.reasoning,
+            `${match.reasoning} [name_sim=${nameSimilarity.toFixed(2)}]`,  // Include name similarity in reasoning
             finalStatus
           ]
         )
