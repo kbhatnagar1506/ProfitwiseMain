@@ -584,8 +584,17 @@ async function saveMatchesToDatabase(
         matchedAmount = cashEvent.amount
       }
       
-      // Determine status: use AI-decided status, with override for validation failures
-      const finalStatus = statusOverride || match.status || (match.confidence >= 0.85 ? "confirmed" : "pending")
+      // Determine status: use static confidence threshold (not AI decision)
+      // Confirmed if: confidence >= 85% AND match type is EXACT or FEE
+      // Otherwise: pending for review
+      let finalStatus: "confirmed" | "pending" = "pending"
+      if (!statusOverride) {
+        const isHighConfidence = match.confidence >= 0.85
+        const isReliableType = matchType === "EXACT" || matchType === "FEE"
+        finalStatus = (isHighConfidence && isReliableType) ? "confirmed" : "pending"
+      } else {
+        finalStatus = statusOverride
+      }
       
       try {
         await query(
