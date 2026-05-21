@@ -65,6 +65,10 @@ async function runTransactionsSync(itemId: string, userId: string): Promise<void
   const client = getPlaidClient()
   try {
     let hasMore = true
+    let totalAdded = 0
+    let totalModified = 0
+    let totalRemoved = 0
+    
     while (hasMore) {
       const item = await getPlaidItem(itemId)
       if (!item) {
@@ -83,6 +87,11 @@ async function runTransactionsSync(itemId: string, userId: string): Promise<void
       const removed = response.data.removed ?? []
       await mapAndUpsert(itemId, added, modified)
       await mapAndDelete(itemId, removed)
+      
+      totalAdded += added.length
+      totalModified += modified.length
+      totalRemoved += removed.length
+      
       log("webhook.sync.page", { itemId, added: added.length, modified: modified.length, removed: removed.length, hasMore: response.data.has_more }, "plaid")
       hasMore = response.data.has_more ?? false
     }
@@ -101,14 +110,13 @@ async function runTransactionsSync(itemId: string, userId: string): Promise<void
     // Queue process-webhook job instead of calling classifyMovements directly
     if (userId) {
       try {
-        const { queues } = await import("@/lib/queue/bull-config")
-        const { ProcessWebhookJob } = await import("@/lib/queue/job-types")
+        const { queues } = await import("@/lib/queue/bull-client")
         
         const job = await queues.processWebhook.add(
           {
             userId,
             source: 'plaid',
-            webhookData: { itemId, added: added.length, modified: modified.length, removed: removed.length }
+            webhookData: { itemId, added: totalAdded, modified: totalModified, removed: totalRemoved }
           },
           {
             attempts: 3,
@@ -176,9 +184,11 @@ export async function POST(request: NextRequest) {
     // ignore if DB unavailable (e.g. dev)
   }
 
+  // Handle transaction webhooks - both SYNC_UPDATES_AVAILABLE and DEFAULT_UPDATE
+  // indicate new transactions are available
   if (
     webhookType === "TRANSACTIONS" &&
-    webhookCode === "SYNC_UPDATES_AVAILABLE" &&
+    (webhookCode === "SYNC_UPDATES_AVAILABLE" || webhookCode === "DEFAULT_UPDATE") &&
     typeof itemId === "string"
   ) {
     const userId = await getPlaidItemUserId(itemId)
