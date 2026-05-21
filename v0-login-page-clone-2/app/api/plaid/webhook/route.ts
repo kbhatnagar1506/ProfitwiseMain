@@ -107,27 +107,13 @@ async function runTransactionsSync(itemId: string, userId: string): Promise<void
       }
     }
     
-    // Queue process-webhook job instead of calling classifyMovements directly
+    // Classify movements after sync completes
     if (userId) {
       try {
-        const { queues } = await import("@/lib/queue/bull-client")
-        
-        const job = await queues.processWebhook.add(
-          {
-            userId,
-            source: 'plaid',
-            webhookData: { itemId, added: totalAdded, modified: totalModified, removed: totalRemoved }
-          },
-          {
-            attempts: 3,
-            backoff: { type: 'exponential', delay: 2000 },
-            removeOnComplete: true,
-          }
-        )
-        
-        log("webhook.job_queued", { itemId, userId, jobId: job.id }, "plaid")
+        await classifyMovements(userId)
+        log("webhook.classify.succeeded", { itemId, userId, added: totalAdded, modified: totalModified, removed: totalRemoved }, "plaid")
       } catch (err) {
-        log("webhook.job_queue_failed", { itemId, userId, error: err instanceof Error ? err.message : String(err) }, "plaid")
+        log("webhook.classify.failed", { itemId, userId, error: err instanceof Error ? err.message : String(err) }, "plaid")
       }
     }
   } catch (err) {
