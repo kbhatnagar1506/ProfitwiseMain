@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
-import { ensureARMatchesSchema, query } from "@/lib/db"
-import { getARMatch, updateARMatchStatus } from "@/lib/ar-reconciliation-queries"
+import { ensureARMatchesSchema, query, withTransaction } from "@/lib/db"
+import { getARMatch, updateARMatchStatus, syncInvoiceStatusFromMatch } from "@/lib/ar-reconciliation-queries"
 
 export async function PATCH(
   request: NextRequest,
@@ -38,8 +38,27 @@ export async function PATCH(
       return NextResponse.json({ error: "Match not found" }, { status: 404 })
     }
 
-    // Update status
-    await updateARMatchStatus(matchId, status, confirmed_by || user.id)
+    // Use transaction to update match status and sync invoice status atomically
+    await withTransaction(async (client) => {
+      // Update match status and get match details
+      const matchDetails = await updateARMatchStatus(
+        client,
+        matchId,
+        status,
+        confirmed_by || user.id
+      )
+
+      // If confirming, mark the invoice as paid
+      if (status === "confirmed") {
+        await syncInvoiceStatusFromMatch(
+          client,
+          matchDetails.userId,
+          matchDetails.cashEventId,
+          matchDetails.matchedAmount,
+          "ar_match_confirm"
+        )
+      }
+    })
 
     return NextResponse.json({ success: true })
   } catch (error) {
@@ -75,11 +94,25 @@ export async function DELETE(
       return NextResponse.json({ error: "Match not found" }, { status: 404 })
     }
 
-    // Delete the match
-    await query(
-      `DELETE FROM ar_reconciliation_matches WHERE id = $1 AND user_id = $2`,
-      [matchId, user.id]
-    )
+    // Use transaction to delete match and restore invoice status if needed
+    await withTransaction(async (client) => {
+      // If the match was confirmed, restore the invoice outstanding amount
+      if (match.status === "confirmed") {
+        await syncInvoiceStatusFromMatch(
+          client,
+          user.id,
+          match.cash_event_id,
+          -match.matched_amount, // Negative to restore outstanding
+          "ar_match_reject"
+        )
+      }
+
+      // Delete the match
+      await client.query(
+        `DELETE FROM ar_reconciliation_matches WHERE id = $1 AND user_id = $2`,
+        [matchId, user.id]
+      )
+    })
 
     return NextResponse.json({ success: true })
   } catch (error) {

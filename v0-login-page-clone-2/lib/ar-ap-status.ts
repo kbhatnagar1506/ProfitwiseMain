@@ -32,6 +32,8 @@ export type StatusChangeTrigger =
   | "apply_match"
   | "split_match"
   | "unmatch"
+  | "ar_match_confirm"
+  | "ar_match_reject"
 
 /**
  * Derive the canonical status string from outstanding amount and original amount.
