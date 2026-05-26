@@ -592,12 +592,48 @@ async function saveMatchesToDatabase(
       const invoiceDocNumber = (metadata.doc_number as string) || (metadata.invoice_number as string) || cashEvent.id
       const customerName = (metadata.customer_name as string) || (metadata.entity_name as string) || "Unknown"
       
-      // Calculate name similarity for logging purposes only
+      // Calculate name similarity for guardrail checks
       const bankCounterparty = movement.counterparty || ""
       const nameSimilarity = calculateNameSimilarity(bankCounterparty, customerName)
       
-      // Use AI's confidence directly (no adjustment)
-      const adjustedConfidence = match.confidence
+      // Calculate amount difference ratio for guardrail checks
+      const paymentAmount = Math.abs(movement.amount)
+      const invoiceAmount = cashEvent.amount
+      const amountDiffRatio = invoiceAmount > 0 
+        ? Math.abs(paymentAmount - invoiceAmount) / invoiceAmount 
+        : 1
+      const isOverpayment = paymentAmount > invoiceAmount
+      const isUnderpayment = paymentAmount < invoiceAmount
+      
+      // ─────────────────────────────────────────────────────────────────────────
+      // CONFIDENCE PENALTIES - Cap confidence based on match quality signals
+      // ─────────────────────────────────────────────────────────────────────────
+      let adjustedConfidence = match.confidence
+      let confidencePenaltyReason = ""
+      
+      // Penalty 1: Low name similarity → cap at 50%
+      if (nameSimilarity < 0.5) {
+        if (adjustedConfidence > 0.5) {
+          adjustedConfidence = 0.5
+          confidencePenaltyReason += `[name_sim=${nameSimilarity.toFixed(2)}<0.5→capped@50%] `
+        }
+      }
+      
+      // Penalty 2: Large amount difference (>50%) → cap at 70%
+      if (amountDiffRatio > 0.5) {
+        if (adjustedConfidence > 0.7) {
+          adjustedConfidence = Math.min(adjustedConfidence, 0.7)
+          confidencePenaltyReason += `[amt_diff=${(amountDiffRatio*100).toFixed(0)}%>50%→capped@70%] `
+        }
+      }
+      
+      // Penalty 3: Cross-customer match (very low similarity) → cap at 30%
+      if (nameSimilarity < 0.3) {
+        if (adjustedConfidence > 0.3) {
+          adjustedConfidence = 0.3
+          confidencePenaltyReason += `[cross_customer→capped@30%] `
+        }
+      }
       
       // Determine match type based on amounts and reasoning
       const matchType = isAggregation 
@@ -649,11 +685,45 @@ async function saveMatchesToDatabase(
         matchedAmount = cashEvent.amount
       }
       
+      // ─────────────────────────────────────────────────────────────────────────
+      // API-SIDE GUARDRAILS - Force pending for obvious errors
+      // These override AI's decision when there are clear red flags
+      // ─────────────────────────────────────────────────────────────────────────
+      let guardrailOverride: "pending" | null = null
+      let guardrailReason = ""
+      
+      // Guardrail 1: Low name similarity (< 0.5) = likely different customers
+      if (nameSimilarity < 0.5) {
+        guardrailOverride = "pending"
+        guardrailReason = `LOW_NAME_SIMILARITY: "${bankCounterparty}" vs "${customerName}" (${(nameSimilarity*100).toFixed(0)}% < 50%)`
+      }
+      
+      // Guardrail 2: Overpayment > 50% of invoice amount
+      if (isOverpayment && amountDiffRatio > 0.5) {
+        guardrailOverride = "pending"
+        guardrailReason = `LARGE_OVERPAYMENT: $${paymentAmount.toFixed(2)} paid for $${invoiceAmount.toFixed(2)} invoice (${(amountDiffRatio*100).toFixed(0)}% over)`
+      }
+      
+      // Guardrail 3: Underpayment > 50% of invoice amount
+      if (isUnderpayment && amountDiffRatio > 0.5) {
+        guardrailOverride = "pending"
+        guardrailReason = `LARGE_UNDERPAYMENT: $${paymentAmount.toFixed(2)} paid for $${invoiceAmount.toFixed(2)} invoice (${(amountDiffRatio*100).toFixed(0)}% under)`
+      }
+      
+      // Guardrail 4: Cross-customer match (very low similarity < 0.3)
+      if (nameSimilarity < 0.3 && bankCounterparty.length > 2 && customerName.length > 2) {
+        guardrailOverride = "pending"
+        guardrailReason = `CROSS_CUSTOMER: "${bankCounterparty}" ≠ "${customerName}" (${(nameSimilarity*100).toFixed(0)}% similarity)`
+      }
+
       // Use AI's status decision directly - AI has full discretion
       // Only exception: if AI hallucinated an invoice not in candidates, force pending
       let finalStatus: "confirmed" | "pending" = "pending"
       if (statusOverride) {
         finalStatus = statusOverride  // AI hallucinated - force pending
+      } else if (guardrailOverride) {
+        finalStatus = guardrailOverride  // Guardrail triggered - force pending
+        console.log(`[AI Matcher] GUARDRAIL: ${guardrailReason}`)
       } else if (match.status === "confirmed" || match.status === "pending") {
         finalStatus = match.status  // Trust AI's decision
       }
@@ -701,11 +771,11 @@ async function saveMatchesToDatabase(
             cashEvent.amount,
             customerName,
             matchType,
-            adjustedConfidence,  // Use adjusted confidence (capped by name similarity)
+            adjustedConfidence,  // Use adjusted confidence (capped by guardrails)
             feeAmount,
             matchedAmount,
             "ai",
-            `${match.reasoning} [name_sim=${nameSimilarity.toFixed(2)}]`,  // Include name similarity in reasoning
+            `${match.reasoning} [name_sim=${nameSimilarity.toFixed(2)}]${confidencePenaltyReason ? ` ${confidencePenaltyReason}` : ""}${guardrailReason ? ` [GUARDRAIL: ${guardrailReason}]` : ""}`,
             finalStatus
           ]
         )

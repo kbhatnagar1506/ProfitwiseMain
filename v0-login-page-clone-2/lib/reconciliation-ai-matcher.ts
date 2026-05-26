@@ -399,12 +399,30 @@ async function matchMovementsWithCandidates(
 ## YOUR TASK
 For each bank INFLOW (customer payment), find the matching INVOICE(s) and decide if the match should be auto-confirmed or needs human review.
 
-## CRITICAL RULE: CUSTOMER NAME MUST MATCH
-You MUST NOT match a payment to an invoice if the customer names are clearly different.
-- "Leann Brenneke" payment CANNOT match "Lacey Carpovich" invoice (different people!)
-- "Kenzie Masters" payment CANNOT match "Allison Keim" invoice (different people!)
+## ⚠️ CRITICAL RULE: CUSTOMER NAME MUST MATCH ⚠️
+You MUST NOT match a payment to an invoice if the customer names are clearly different people.
 
-Use the name_similarity score as a guide, but use your judgment.
+### EXAMPLES OF WRONG MATCHES (NEVER DO THIS):
+❌ "Josh Bennett" payment → "Molly DeJongh" invoice (DIFFERENT PEOPLE!)
+❌ "Kenzie Masters" payment → "Katie O'Connor" invoice (DIFFERENT PEOPLE!)
+❌ "Sarah Katz" payment → "David Vaughn" invoice (DIFFERENT PEOPLE!)
+❌ "Leann Brenneke" payment → "Lacey Carpovich" invoice (DIFFERENT PEOPLE!)
+
+### EXAMPLES OF CORRECT MATCHES:
+✅ "Sarah Katz (Marlins)" payment → "Sarah Katz" invoice (SAME PERSON, parenthetical is context)
+✅ "JOHN SMITH" payment → "John Smith" invoice (SAME PERSON, case doesn't matter)
+✅ "J. Smith" payment → "John Smith" invoice (SAME PERSON, abbreviation)
+
+### ORGANIZATION CONTEXT IS NOT ENOUGH:
+❌ "Kenzie Masters (Tennessee Football)" → "Katie O'Connor (Tennessee Football)" 
+   WRONG! Same organization but DIFFERENT PEOPLE!
+✅ "Kenzie Masters (Tennessee Football)" → "Kenzie Masters" 
+   CORRECT! Same person, organization is just context.
+
+Use the name_similarity score as a guide:
+- name_similarity >= 0.7: Names likely match
+- name_similarity 0.5-0.7: Names might match, verify carefully
+- name_similarity < 0.5: Names likely DON'T match - DO NOT CONFIRM
 
 ## CRITICAL RULE: ONE INVOICE = ONE PAYMENT
 Each invoice ID can only be matched to ONE payment. If the same invoice appears as a candidate for multiple payments, you must choose the BEST match and leave others unmatched.
@@ -432,25 +450,36 @@ Each invoice ID can only be matched to ONE payment. If the same invoice appears 
 5. **PARTIAL PAYMENT**: Payment < Invoice AND same customer
 6. **AGGREGATION**: Multiple invoices paid together
 
-## STATUS DECISION - USE YOUR JUDGMENT
-You decide whether each match should be "confirmed" or "pending":
+## 🔒 SANITY CHECK BEFORE CONFIRMING
+Before setting status="confirmed", you MUST verify ALL of these:
+1. ✅ Customer names match (name_similarity >= 0.5)
+2. ✅ Amount makes sense (exact, fee-adjusted, or clearly partial)
+3. ✅ No ambiguity about which invoice this payment is for
+4. ✅ NOT an unexplained overpayment (payment >> invoice)
+5. ✅ NOT an unexplained underpayment (payment << invoice)
 
+If ANY check fails → use status="pending"
+
+## STATUS DECISION RULES
 **"confirmed"** = You are CERTAIN this is the correct match. Auto-apply without human review.
-- The customer names clearly match (same person/company)
-- The amounts make sense (exact, or fee-adjusted, or clearly a partial payment)
+- The customer names clearly match (name_similarity >= 0.7)
+- The amounts make sense (exact, or fee-adjusted within 5%, or clearly a partial payment)
 - There's no ambiguity about which invoice this payment is for
+- Payment is NOT more than 50% over invoice amount
+- Payment is NOT more than 50% under invoice amount (unless clearly partial)
 
 **"pending"** = You think this is likely correct but want human verification.
-- Customer names are similar but not identical
+- Customer names are similar but not identical (name_similarity 0.5-0.7)
 - Amount difference is unusual or unexplained
 - Multiple invoices could potentially match
-- Overpayment or underpayment that needs explanation
+- Overpayment more than 50% of invoice amount
+- Underpayment more than 50% of invoice amount
 - Any uncertainty at all
 
 When in doubt, use "pending". It's better to have a human verify than to auto-apply a wrong match.
 
 ## OUTPUT FORMAT
-Return JSON with decisions array. Each decision:
+Return JSON with decisions array. Each decision MUST include name_similarity_check:
 {
   "movement_id": "exact ID from input",
   "decision": "match" | "no_match" | "needs_review",
@@ -459,7 +488,8 @@ Return JSON with decisions array. Each decision:
   "match_type": "EXACT" | "FEE" | "PARTIAL" | "AGGREGATION",
   "status": "confirmed" | "pending",
   "confidence": 0.0-1.0,
-  "reasoning": "Brief explanation of your decision"
+  "name_similarity_check": true | false,  // Did customer names pass the check?
+  "reasoning": "Brief explanation including WHY names match or don't match"
 }
 
 ${entityContext ? `\n## KNOWN CUSTOMERS (from memory)\n${entityContext}` : ""}`
@@ -651,10 +681,26 @@ function parseMatchResponse(response: string, movements: MovementToMatch[]): Mat
         }
       }
 
-      // Extract status from AI response, with fallback based on confidence
-      const aiStatus = decision.status === "confirmed" || decision.status === "pending" 
-        ? decision.status 
-        : (decision.confidence >= 0.85 ? "confirmed" : "pending")
+      // Extract status from AI response
+      // If AI failed name_similarity_check, force pending regardless of what AI said
+      const nameSimilarityCheckPassed = decision.name_similarity_check !== false
+      let aiStatus: "confirmed" | "pending"
+      
+      if (!nameSimilarityCheckPassed) {
+        // AI explicitly said names don't match - force pending
+        aiStatus = "pending"
+      } else if (decision.status === "confirmed" || decision.status === "pending") {
+        aiStatus = decision.status
+      } else {
+        // Fallback based on confidence
+        aiStatus = decision.confidence >= 0.85 ? "confirmed" : "pending"
+      }
+
+      // Include name_similarity_check in reasoning if AI provided it
+      let reasoning = decision.reasoning || ""
+      if (decision.name_similarity_check === false) {
+        reasoning = `[NAME_CHECK_FAILED] ${reasoning}`
+      }
 
       return {
         movement_id: m.id,
@@ -662,9 +708,9 @@ function parseMatchResponse(response: string, movements: MovementToMatch[]): Mat
         matched_candidate_id: decision.matched_candidate_id || null,
         matched_candidate_ids: decision.matched_candidate_ids || [],
         match_type: decision.match_type || "EXACT",
-        status: aiStatus as "confirmed" | "pending",
+        status: aiStatus,
         confidence: decision.confidence || 0,
-        reasoning: decision.reasoning || "",
+        reasoning,
         suggested_action: decision.decision === "match" ? "apply_match" : "review",
         entity_context: null
       }
