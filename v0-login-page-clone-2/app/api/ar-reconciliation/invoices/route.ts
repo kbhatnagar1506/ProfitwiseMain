@@ -50,8 +50,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const filter = url.searchParams.get("filter") || "all" // all, matched, unmatched, partial
     const limit = parseInt(url.searchParams.get("limit") || "1000")
 
-    // Query all AR invoices with their BEST match (highest confidence)
-    // Also calculates total_matched from ALL matches (for FIFO/partial payment tracking)
+    // Query all AR invoices with their BEST CONFIRMED match (highest confidence)
+    // Also calculates total_matched from ALL CONFIRMED matches (for FIFO/partial payment tracking)
+    // RECONCILIATION-BASED: Only confirmed matches count as "paid"
     const invoicesResult = await query(
       `SELECT * FROM (
         SELECT DISTINCT ON (ce.id)
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           ce.metadata,
           ce.created_at as invoice_created_at,
           
-          -- Match details (will be null if no match)
+          -- Match details (will be null if no CONFIRMED match)
           arm.id as match_id,
           arm.bank_amount::float as bank_amount,
           arm.bank_date,
@@ -74,13 +75,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           arm.invoice_id as matched_invoice_id,
           arm.customer_name as matched_customer_name,
           
-          -- Aggregated match info for this invoice
+          -- Aggregated match info for this invoice (CONFIRMED only)
           match_agg.match_count,
           match_agg.total_matched,
           match_agg.best_match_type
           
         FROM cash_events ce
-        LEFT JOIN ar_reconciliation_matches arm ON arm.cash_event_id = ce.id AND arm.user_id = $1
+        LEFT JOIN ar_reconciliation_matches arm ON arm.cash_event_id = ce.id AND arm.user_id = $1 AND arm.status = 'confirmed'
         LEFT JOIN (
           SELECT 
             cash_event_id,
@@ -88,7 +89,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             COALESCE(SUM(matched_amount), 0)::float as total_matched,
             MAX(match_type) as best_match_type
           FROM ar_reconciliation_matches
-          WHERE user_id = $1
+          WHERE user_id = $1 AND status = 'confirmed'
           GROUP BY cash_event_id
         ) match_agg ON match_agg.cash_event_id = ce.id
         WHERE ce.user_id = $1
