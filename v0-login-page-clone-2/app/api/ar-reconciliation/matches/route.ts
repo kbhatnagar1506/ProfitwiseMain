@@ -26,7 +26,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Get matches
     const { matches, total } = await getARMatches(user.id, status, limit, offset)
 
-    // Get summary counts for all statuses - USE SAME METHOD AS STATS API
+    // Get summary counts for all statuses
     // Count unique invoices (not matches) and use invoice_amount for consistency
     const summaryResult = await query(
       `SELECT
@@ -46,6 +46,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     )
     
     // Get unmatched inflow movements count
+    // RECONCILIATION-BASED: Only movements with CONFIRMED matches are considered "matched"
+    // Movements with only pending matches are still "unmatched" for reconciliation purposes
     const unmatchedResult = await query(
       `SELECT 
         COUNT(*) as unmatched_count,
@@ -55,7 +57,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         AND m.direction = 'inflow'
         AND m.pnl_eligible = true
         AND m.id NOT IN (
-          SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1
+          SELECT movement_id FROM ar_reconciliation_matches WHERE user_id = $1 AND status = 'confirmed'
         )`,
       [user.id]
     )
