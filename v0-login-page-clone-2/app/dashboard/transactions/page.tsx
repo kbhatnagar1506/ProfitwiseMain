@@ -103,15 +103,7 @@ function formatDate(dateStr: string): string {
 function ConfidenceBar({ confidence }: { confidence: number }) {
   const percentage = Math.round(confidence * 100)
   return (
-    <div className="flex items-center gap-2">
-      <div className="h-1 w-12 bg-zinc-700 rounded-full overflow-hidden">
-        <div
-          className="h-full bg-zinc-400 transition-all"
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
-      <span className="text-[11px] text-neutral-600 w-6 text-right">{percentage}%</span>
-    </div>
+    <span className="font-mono text-zinc-500 text-xs tracking-tight">[{percentage}%]</span>
   )
 }
 
@@ -134,14 +126,14 @@ function FlagsCell({ transaction }: { transaction: Transaction }) {
           <Badge
             key={flag}
             variant="secondary"
-            className="text-[10px] h-5 px-1.5 bg-amber-500/10 text-amber-400 border-amber-500/20"
+            className="text-[10px] h-5 px-1.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 uppercase font-medium"
           >
             review
           </Badge>
         ) : (
           <span
             key={flag}
-            className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium"
+            className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono"
           >
             {flag}
           </span>
@@ -159,7 +151,7 @@ function ExpandableRow({ transaction, showAccount }: { transaction: Transaction;
     <>
       <TableRow
         className={`hover:bg-white/[0.03] transition-colors ${
-          transaction.review_needed ? "border-l-2 border-l-amber-500/50" : ""
+          transaction.review_needed ? "border-l-2 border-l-amber-500 bg-amber-500/[0.02]" : "border-b border-zinc-800/80"
         }`}
       >
         <TableCell className="w-8 py-1.5 px-2">
@@ -170,14 +162,14 @@ function ExpandableRow({ transaction, showAccount }: { transaction: Transaction;
             {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </button>
         </TableCell>
-        <TableCell className="text-[12px] text-neutral-500 font-medium">
+        <TableCell className="text-[12px] text-neutral-500 font-mono tracking-tight tabular-nums">
           {formatDate(transaction.date)}
         </TableCell>
         <TableCell className="text-[12px] text-neutral-300 max-w-xs truncate">
           {transaction.display_name}
         </TableCell>
         {showAccount && (
-          <TableCell className="text-[11px] text-zinc-500">
+          <TableCell className="text-[11px] text-zinc-500 font-mono tracking-tight">
             {transaction.account_mask
               ? `⌂ ...${transaction.account_mask}`
               : transaction.account_name
@@ -186,27 +178,21 @@ function ExpandableRow({ transaction, showAccount }: { transaction: Transaction;
           </TableCell>
         )}
         <TableCell
-          className={`text-[12px] font-medium tabular-nums text-right ${
-            transaction.direction === "inflow" ? "text-emerald-400/90" : "text-zinc-400"
+          className={`text-[12px] font-mono tabular-nums tracking-tight text-right ${
+            transaction.direction === "inflow" ? "text-emerald-400" : "text-zinc-300"
           }`}
         >
           {transaction.direction === "inflow" ? "+" : "−"}{formatCurrency(transaction.amount)}
         </TableCell>
         <TableCell className="text-[11px]">
-          <Badge
-            variant="secondary"
-            className="bg-white/5 text-zinc-300 border-white/10"
-          >
+          <span className="border border-zinc-800 bg-zinc-900/40 text-zinc-400 text-[10px] uppercase font-medium px-1.5 py-0.5 rounded-md inline-block">
             {transaction.classification.economic_class || "unclassified"}
-          </Badge>
+          </span>
         </TableCell>
         <TableCell className="text-[11px]">
-          <Badge
-            variant="secondary"
-            className="bg-white/5 text-zinc-300 border-white/10"
-          >
+          <span className="border border-zinc-800 bg-zinc-900/40 text-zinc-400 text-[10px] uppercase font-medium px-1.5 py-0.5 rounded-md inline-block">
             {transaction.classification.cashflow_bucket || "—"}
-          </Badge>
+          </span>
         </TableCell>
         <TableCell className="text-[11px]">
           <ConfidenceBar confidence={transaction.classification.classification_confidence} />
@@ -247,13 +233,13 @@ function ExpandableRow({ transaction, showAccount }: { transaction: Transaction;
                 <div className="space-y-2 text-neutral-400">
                   <div>
                     <span className="text-neutral-600">Classification Confidence:</span>{" "}
-                    <span className="text-neutral-300">
+                    <span className="text-neutral-300 font-mono">
                       {Math.round(transaction.classification.classification_confidence * 100)}%
                     </span>
                   </div>
                   <div>
                     <span className="text-neutral-600">Evidence Strength:</span>{" "}
-                    <span className="text-neutral-300">
+                    <span className="text-neutral-300 font-mono">
                       {Math.round(transaction.classification.evidence_strength * 100)}%
                     </span>
                   </div>
@@ -386,22 +372,22 @@ export default function TransactionsPage() {
       <div>
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">Transactions</h1>
         {summary && (
-          <div className="flex gap-6 mt-3 text-[13px]">
+          <div className="flex gap-6 mt-3 text-[13px] font-mono tracking-tight">
             <div>
               <span className="text-neutral-600">Inflows:</span>{" "}
-              <span className="text-emerald-400/90 font-medium tabular-nums">
+              <span className="text-emerald-400 font-medium tabular-nums">
                 {formatCurrency(summary.total_inflow)}
               </span>
             </div>
             <div>
               <span className="text-neutral-600">Outflows:</span>{" "}
-              <span className="text-zinc-400 font-medium tabular-nums">
+              <span className="text-zinc-100 font-medium tabular-nums">
                 {formatCurrency(summary.total_outflow)}
               </span>
             </div>
             <div>
               <span className="text-neutral-600">Net:</span>{" "}
-              <span className="text-neutral-300 font-medium tabular-nums">
+              <span className="text-zinc-100 font-medium tabular-nums">
                 {formatCurrency(summary.net)}
               </span>
             </div>
@@ -415,10 +401,10 @@ export default function TransactionsPage() {
         )}
       </div>
 
-      <div className="bg-[#141414] border border-white/[0.06] rounded-xl p-4 space-y-3">
+      <div className="space-y-3 border-b border-zinc-800/80 pb-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           <Select value={accountId || "__all__"} onValueChange={(v) => { setAccountId(v === "__all__" ? "" : v); handleFilterChange() }}>
-            <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
+            <SelectTrigger className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-md hover:bg-zinc-900">
               <SelectValue placeholder="All accounts" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
@@ -432,7 +418,7 @@ export default function TransactionsPage() {
           </Select>
 
           <Select value={direction || "__all__"} onValueChange={(v) => { setDirection(v === "__all__" ? "" : v); handleFilterChange() }}>
-            <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
+            <SelectTrigger className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-md hover:bg-zinc-900">
               <SelectValue placeholder="All directions" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
@@ -443,7 +429,7 @@ export default function TransactionsPage() {
           </Select>
 
           <Select value={economicClass || "__all__"} onValueChange={(v) => { setEconomicClass(v === "__all__" ? "" : v); handleFilterChange() }}>
-            <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
+            <SelectTrigger className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-md hover:bg-zinc-900">
               <SelectValue placeholder="All classes" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
@@ -457,7 +443,7 @@ export default function TransactionsPage() {
           </Select>
 
           <Select value={cashflowBucket || "__all__"} onValueChange={(v) => { setCashflowBucket(v === "__all__" ? "" : v); handleFilterChange() }}>
-            <SelectTrigger className="bg-white/5 border-white/10 text-neutral-300">
+            <SelectTrigger className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-md hover:bg-zinc-900">
               <SelectValue placeholder="All buckets" />
             </SelectTrigger>
             <SelectContent className="bg-[#1a1a1a] border-white/10">
@@ -476,12 +462,12 @@ export default function TransactionsPage() {
             placeholder="Search description or counterparty..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); handleFilterChange() }}
-            className="bg-white/5 border-white/10 text-neutral-300 placeholder:text-neutral-700"
+            className="bg-zinc-950 border border-zinc-800 text-zinc-300 placeholder:text-zinc-700 rounded-md"
           />
           <Button
             variant={reviewNeeded ? "default" : "outline"}
             onClick={() => { setReviewNeeded(!reviewNeeded); handleFilterChange() }}
-            className={reviewNeeded ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-white/5 border-white/10 text-neutral-400"}
+            className={reviewNeeded ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-zinc-950 border border-zinc-800 text-zinc-400 hover:bg-zinc-900"}
           >
             <Flag className="h-4 w-4 mr-2" />
             Review
@@ -490,7 +476,7 @@ export default function TransactionsPage() {
       </div>
 
       {loading ? (
-        <div className="bg-[#141414] border border-white/[0.06] rounded-xl p-12 text-center">
+        <div className="border border-zinc-800/80 p-12 text-center">
           <div className="inline-flex items-center justify-center">
             <div className="h-5 w-5 border-2 border-neutral-600 border-t-neutral-300 rounded-full animate-spin" />
             <span className="ml-3 text-neutral-400">Loading transactions...</span>
@@ -498,10 +484,10 @@ export default function TransactionsPage() {
         </div>
       ) : data && data.transactions.length > 0 ? (
         <>
-          <div className="bg-[#141414] border border-white/[0.06] rounded-xl overflow-hidden">
+          <div className="border border-zinc-800/80 overflow-hidden">
             <Table>
               <TableHeader>
-                <TableRow className="border-b border-white/[0.06] hover:bg-transparent">
+                <TableRow className="border-b border-zinc-800/80 hover:bg-transparent">
                   <TableHead className="w-8 py-1.5 px-2 text-[11px] text-neutral-600 font-medium" />
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Date</TableHead>
                   <TableHead className="text-[11px] text-neutral-600 font-medium">Description</TableHead>
@@ -534,7 +520,7 @@ export default function TransactionsPage() {
                   size="sm"
                   onClick={() => setPage(Math.max(1, page - 1))}
                   disabled={page === 1}
-                  className="bg-white/5 border-white/10 text-neutral-400 disabled:opacity-50"
+                  className="bg-zinc-950 border border-zinc-800 text-zinc-400 disabled:opacity-50 hover:bg-zinc-900"
                 >
                   Previous
                 </Button>
@@ -543,7 +529,7 @@ export default function TransactionsPage() {
                   size="sm"
                   onClick={() => setPage(Math.min(data.pagination.total_pages, page + 1))}
                   disabled={page === data.pagination.total_pages}
-                  className="bg-white/5 border-white/10 text-neutral-400 disabled:opacity-50"
+                  className="bg-zinc-950 border border-zinc-800 text-zinc-400 disabled:opacity-50 hover:bg-zinc-900"
                 >
                   Next
                 </Button>
@@ -552,7 +538,7 @@ export default function TransactionsPage() {
           )}
         </>
       ) : (
-        <div className="bg-[#141414] border border-white/[0.06] rounded-xl p-8 text-center">
+        <div className="border border-zinc-800/80 p-8 text-center">
           <p className="text-neutral-400">No transactions found</p>
           <p className="text-sm text-neutral-600 mt-2">Try adjusting your filters</p>
         </div>
