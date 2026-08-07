@@ -1,0 +1,95 @@
+import { NextRequest, NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
+import { ensureMovementsSchema, query } from "@/lib/db"
+import { tagMovements } from "@/lib/movement-tag-enrich"
+import { validateEnumValue, validateString, validateRequiredFields, createErrorResponse } from "@/lib/api-utils"
+import { log } from "@/lib/logger"
+
+type Body = {
+  movement_id?: string
+  override?: "include" | "exclude" | "clear"
+  reason?: string
+}
+
+const ALLOWED_OVERRIDES = ["include", "exclude", "clear"] as const
+
+export async function POST(req: NextRequest) {
+  const cookieStore = await cookies()
+  const sessionToken = cookieStore.get(getSessionCookieName())?.value
+  const user = await getUserBySessionToken(sessionToken ?? "")
+  if (!user) return NextResponse.json(createErrorResponse("Unauthorized"), { status: 401 })
+
+  let body: Body
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json(createErrorResponse("Invalid JSON body"), { status: 400 })
+  }
+
+  // Validate required fields
+  const validation = validateRequiredFields(body, ["movement_id"])
+  if (!validation.valid) {
+    log("movements.override_policy.missing_fields", { userId: user.id, missingFields: validation.missingFields })
+    return NextResponse.json(createErrorResponse(`Missing required fields: ${validation.missingFields.join(", ")}`), { status: 400 })
+  }
+
+  const movementId = validateString(body.movement_id, 1, 100)
+  const override = validateEnumValue(body.override, ALLOWED_OVERRIDES, "include")
+  const reason = validateString(body.reason, 1, 500) || "manual_override"
+  if (!movementId) return NextResponse.json(createErrorResponse("movement_id is required and must be non-empty"), { status: 400 })
+
+  await ensureMovementsSchema()
+
+  // Ensure a tag row exists first; preserves deterministic fields.
+  await tagMovements(user.id)
+
+  const { rows } = await query<{ tag_data: Record<string, unknown> }>(
+    `SELECT mt.tag_data
+     FROM movement_tags mt
+     JOIN movements m ON m.id = mt.movement_id
+     WHERE m.id = $1 AND m.user_id = $2`,
+    [movementId, user.id]
+  )
+  if (rows.length === 0) return NextResponse.json(createErrorResponse("Movement tag not found"), { status: 404 })
+
+  const prev = (rows[0].tag_data ?? {}) as Record<string, unknown>
+  let next = { ...prev }
+  if (override === "clear") {
+    next = {
+      ...next,
+      is_user_overridden: false,
+      user_override_policy_status: null,
+      user_override_state_inclusion_policy: null,
+      user_override_reason: reason,
+      user_override_at: new Date().toISOString(),
+    }
+  } else {
+    const policyStatus = override === "include" ? "included" : "excluded_for_review"
+    const stateInclusionPolicy = override === "include" ? "include" : "exclude_and_review"
+    next = {
+      ...next,
+      policy_status: policyStatus,
+      state_inclusion_policy: stateInclusionPolicy,
+      is_user_overridden: true,
+      user_override_policy_status: policyStatus,
+      user_override_state_inclusion_policy: stateInclusionPolicy,
+      user_override_reason: reason,
+      user_override_at: new Date().toISOString(),
+    }
+  }
+
+  await query(
+    `UPDATE movement_tags
+     SET tag_data = $1::jsonb, updated_at = NOW()
+     WHERE movement_id = $2`,
+    [JSON.stringify(next), movementId]
+  )
+
+  // Re-tag to refresh aggregates; engine now preserves overrides when lock is set.
+  await tagMovements(user.id)
+
+  log("movements.override_policy.success", { userId: user.id, override, reason: reason.slice(0, 50) })
+
+  return NextResponse.json({ ok: true, movement_id: movementId, override })
+}
