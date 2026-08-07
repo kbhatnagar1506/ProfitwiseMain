@@ -1,0 +1,1078 @@
+import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { getSessionCookieName, getUserBySessionToken } from "@/lib/auth"
+import { ensureMovementsSchema } from "@/lib/db"
+import { fetchInvoicesForReconciliation, enrichInvoicesWithReconciliationStatus } from "@/lib/invoices-fetch"
+import { fetchBillsForReconciliation, enrichBillsWithReconciliationStatus } from "@/lib/bills-fetch"
+import { computeARState, computeAPStateFromBills } from "@/lib/state/ar-ap"
+import { query } from "@/lib/db"
+import { runFinancialBrain } from "@/lib/financial-brain"
+import { runFullReconciliation } from "@/lib/full-reconciliation"
+import {
+  fetchReconciliationMovementRows,
+  type ReconMovementRow,
+} from "@/lib/reconciliation-movement-rows"
+import { getMovementsPendingWaterfallReview } from "@/lib/reconciliation-waterfall"
+import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
+import { refreshMovementEntityIds } from "@/lib/movement-classify"
+import { tagMovements } from "@/lib/movement-tag-enrich"
+import { runLLMStage4, getAllUnreconciledMovements, type InvoiceForMatch, type BillForMatch } from "@/lib/reconciliation-llm-match"
+import type { OutstandingInvoice, OutstandingBill } from "@/lib/state/types"
+import { buildEntityProfiles } from "@/lib/entity-profiles"
+import { refreshEntityNarratives } from "@/lib/entity-profile-ai"
+
+const WATERFALL_REVIEW_PREVIEW = 15
+const LOCK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - consider stale locks as failed
+
+type ReconTotals = {
+  total_matched_inflows: number
+  total_matched_outflows: number
+  total_unmatched_inflows: number
+  total_unmatched_outflows: number
+  total_excluded_inflows: number
+  total_excluded_outflows: number
+  total_fees_paid: number
+  matched_inflows: ReconMovementRow[]
+  matched_outflows: ReconMovementRow[]
+  unmatched_inflows: ReconMovementRow[]
+  unmatched_outflows: ReconMovementRow[]
+  excluded_inflows: ReconMovementRow[]
+  excluded_outflows: ReconMovementRow[]
+}
+
+type ReconciliationLockStatus = {
+  is_running: boolean
+  last_run_at: string | null
+  last_status: "completed" | "failed" | "completed_with_warnings" | null
+  last_error: string | null
+  warnings?: string[]
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100
+
+/**
+ * Attempt to acquire a reconciliation lock for the user.
+ * Returns true if lock acquired, false if already running.
+ * Uses a single atomic query to clean up stale locks and acquire in one operation.
+ */
+async function acquireReconciliationLock(userId: string): Promise<boolean> {
+  // Atomic lock acquisition: clean up stale locks and try to acquire in one query
+  // This prevents TOCTOU race conditions between cleanup and acquisition
+  const { rows } = await query<{ acquired: boolean }>(
+    `WITH cleanup AS (
+       UPDATE reconciliation_locks 
+       SET status = 'failed', 
+           error_message = 'Lock timed out (stale)',
+           completed_at = NOW()
+       WHERE user_id = $1::uuid 
+         AND status = 'running' 
+         AND started_at < NOW() - INTERVAL '${LOCK_TIMEOUT_MS} milliseconds'
+       RETURNING user_id
+     )
+     INSERT INTO reconciliation_locks (user_id, started_at, status)
+     VALUES ($1::uuid, NOW(), 'running')
+     ON CONFLICT (user_id) DO UPDATE
+       SET started_at = NOW(),
+           status = 'running',
+           error_message = NULL,
+           completed_at = NULL
+       WHERE reconciliation_locks.status != 'running'
+     RETURNING true AS acquired`,
+    [userId]
+  )
+  return rows.length > 0 && rows[0].acquired === true
+}
+
+/**
+ * Release the reconciliation lock with final status.
+ */
+async function releaseReconciliationLock(
+  userId: string, 
+  status: "completed" | "failed" | "completed_with_warnings", 
+  errorMessage?: string,
+  warnings?: string[]
+): Promise<void> {
+  console.log("[ar-ap-step] Releasing reconciliation lock with status:", status)
+  // Store warnings in error_message field as JSON if present
+  const messageToStore = warnings && warnings.length > 0
+    ? JSON.stringify({ error: errorMessage, warnings })
+    : errorMessage ?? null
+  await query(
+    `UPDATE reconciliation_locks 
+     SET status = $2, 
+         error_message = $3,
+         completed_at = NOW()
+     WHERE user_id = $1::uuid`,
+    [userId, status, messageToStore]
+  )
+  console.log("[ar-ap-step] Reconciliation lock released with status:", status)
+}
+
+/**
+ * Check if reconciliation is currently running for the user.
+ */
+async function isReconciliationRunning(userId: string): Promise<boolean> {
+  const { rows } = await query<{ status: string; started_at: Date }>(
+    `SELECT status, started_at FROM reconciliation_locks WHERE user_id = $1::uuid`,
+    [userId]
+  )
+  if (rows.length === 0) return false
+  const lock = rows[0]
+  if (lock.status !== "running") return false
+  // Check if lock is stale
+  const elapsed = Date.now() - new Date(lock.started_at).getTime()
+  return elapsed < LOCK_TIMEOUT_MS
+}
+
+/**
+ * Get the full reconciliation lock status for API response.
+ */
+async function getReconciliationLockStatus(userId: string): Promise<ReconciliationLockStatus> {
+  const { rows } = await query<{ 
+    status: string
+    started_at: Date
+    completed_at: Date | null
+    error_message: string | null 
+  }>(
+    `SELECT status, started_at, completed_at, error_message 
+     FROM reconciliation_locks 
+     WHERE user_id = $1::uuid`,
+    [userId]
+  )
+  
+  if (rows.length === 0) {
+    return { is_running: false, last_run_at: null, last_status: null, last_error: null }
+  }
+  
+  const lock = rows[0]
+  const elapsed = Date.now() - new Date(lock.started_at).getTime()
+  const isRunning = lock.status === "running" && elapsed < LOCK_TIMEOUT_MS
+  
+  console.log("[ar-ap-step] getReconciliationLockStatus:", {
+    status: lock.status,
+    isRunning,
+    elapsed,
+    completed_at: lock.completed_at,
+  })
+  
+  return {
+    is_running: isRunning,
+    last_run_at: lock.completed_at?.toISOString() ?? lock.started_at.toISOString(),
+    last_status: lock.status === "running" 
+      ? (isRunning ? null : "failed") 
+      : (lock.status as "completed" | "failed"),
+    last_error: lock.status === "running" && !isRunning 
+      ? "Lock timed out (stale)" 
+      : lock.error_message,
+  }
+}
+
+async function runReconciliationInBackground(userId: string) {
+  console.log("[ar-ap-step] Starting background reconciliation for user:", userId)
+  const warnings: string[] = []
+  const startTime = Date.now()
+  const MAX_DURATION_MS = 5 * 60 * 1000 // 5 minute timeout
+  
+  try {
+    console.log("[ar-ap-step] Step 1: Fetching invoices...")
+    const invoices = await fetchInvoicesForReconciliation(userId)
+    console.log("[ar-ap-step] Step 1 complete: fetched", invoices.length, "invoices in", Date.now() - startTime, "ms")
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
+    console.log("[ar-ap-step] Step 2: Fetching bills...")
+    const bills = await fetchBillsForReconciliation(userId)
+    console.log("[ar-ap-step] Step 2 complete: fetched", bills.length, "bills in", Date.now() - startTime, "ms")
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
+    const obligations = computeAPStateFromBills(bills.filter(b => b.status !== "paid"))
+    
+    console.log("[ar-ap-step] Step 3: Refreshing entity aliases...")
+    await refreshEntityAliasesFromAccounting(userId)
+    console.log("[ar-ap-step] Step 3 complete in", Date.now() - startTime, "ms")
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
+    console.log("[ar-ap-step] Step 4: Refreshing movement entity IDs...")
+    await refreshMovementEntityIds(userId)
+    console.log("[ar-ap-step] Step 4 complete in", Date.now() - startTime, "ms")
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
+    // Ensure movement tags are up-to-date before reconciliation
+    console.log("[ar-ap-step] Step 5: Running tagMovements...")
+    await tagMovements(userId)
+    console.log("[ar-ap-step] Step 5 complete in", Date.now() - startTime, "ms")
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
+    // Run unified reconciliation (Stages 0-4)
+    console.log("[ar-ap-step] Step 6: Running unified reconciliation (Stages 0-4)...")
+    const reconResult = await runFullReconciliation(userId)
+    console.log("[ar-ap-step] Step 6 complete in", reconResult.executionTimeMs, "ms")
+    console.log("[ar-ap-step] Reconciliation result:", {
+      totalAttributions: reconResult.totalAttributions,
+      remainingUnmatched: reconResult.remainingUnmatched,
+      warnings: reconResult.warnings.length,
+    })
+    
+    if (reconResult.warnings.length > 0) {
+      warnings.push(...reconResult.warnings)
+    }
+    
+    if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+    
+    // Build entity profiles after reconciliation completes
+    console.log("[ar-ap-step] Step 7: Building entity profiles...")
+    let profilesBuilt = 0
+    let narrativesRefreshed = 0
+    try {
+      profilesBuilt = await buildEntityProfiles(userId)
+      console.log("[ar-ap-step] Step 7 complete: Entity profiles built:", profilesBuilt, "in", Date.now() - startTime, "ms")
+      
+      if (Date.now() - startTime > MAX_DURATION_MS) throw new Error("Timeout: exceeded max duration")
+      
+      // Generate AI narratives for top entities - await to ensure completion before lock release
+      console.log("[ar-ap-step] Step 8: Refreshing entity narratives...")
+      try {
+        narrativesRefreshed = await refreshEntityNarratives(userId, { maxEntities: 25 })
+        console.log("[ar-ap-step] Step 8 complete: Entity narratives refreshed:", narrativesRefreshed, "in", Date.now() - startTime, "ms")
+      } catch (narrativeErr) {
+        console.warn("[ar-ap-step] Step 8 failed:", narrativeErr)
+        warnings.push("Failed to refresh entity narratives")
+      }
+    } catch (e) {
+      console.warn("[ar-ap-step] Step 7 failed:", e)
+      warnings.push("Failed to build entity profiles")
+    }
+    
+    console.log("[ar-ap-step] Background reconciliation completed for user:", userId, "in", Date.now() - startTime, "ms")
+    const finalStatus = warnings.length > 0 ? "completed_with_warnings" : "completed"
+    await releaseReconciliationLock(userId, finalStatus, undefined, warnings.length > 0 ? warnings : undefined)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error("[ar-ap-step] Background reconciliation failed after", Date.now() - startTime, "ms:", msg)
+    console.error("[ar-ap-step] Full error:", e)
+    await releaseReconciliationLock(userId, "failed", msg)
+  }
+}
+
+export async function GET(request: Request) {
+  const cookieStore = await cookies()
+  const sessionToken = cookieStore.get(getSessionCookieName())?.value
+  const user = await getUserBySessionToken(sessionToken ?? "")
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  await ensureMovementsSchema()
+
+  const url = new URL(request.url)
+  const runRecon = url.searchParams.get("run") === "true"
+
+  if (runRecon) {
+    // Try to acquire database lock - this works across multiple dynos
+    const lockAcquired = await acquireReconciliationLock(user.id)
+    if (lockAcquired) {
+      // Start background task - lock will be released when it completes
+      runReconciliationInBackground(user.id).catch(async (e) => {
+        console.error("[ar-ap-step] Background task error:", e)
+        try {
+          await releaseReconciliationLock(user.id, "failed", e instanceof Error ? e.message : String(e))
+        } catch (releaseErr) {
+          console.error("[ar-ap-step] Failed to release lock after error:", releaseErr)
+        }
+      })
+      
+      // Return immediately with is_reconciling=true so frontend knows to poll
+      // Don't read database state while reconciliation is actively mutating it
+      const reconciliationStatus = await getReconciliationLockStatus(user.id)
+      return NextResponse.json({
+        is_reconciling: true,
+        reconciliation_status: reconciliationStatus,
+        message: "Reconciliation started, poll for updates",
+      })
+    } else {
+      console.log("[ar-ap-step] Reconciliation already running for user:", user.id)
+    }
+  }
+
+  // Check if reconciliation is currently running - if so, return minimal response
+  // to avoid reading mid-mutation database state
+  const reconciliationStatus = await getReconciliationLockStatus(user.id)
+  if (reconciliationStatus.is_running) {
+    return NextResponse.json({
+      is_reconciling: true,
+      reconciliation_status: reconciliationStatus,
+      message: "Reconciliation in progress, poll for updates",
+    })
+  }
+
+  const invoices = await fetchInvoicesForReconciliation(user.id)
+  const bills = await fetchBillsForReconciliation(user.id)
+  const obligations = computeAPStateFromBills(bills.filter(b => b.status !== "paid"))
+
+  const enrichedInvoices = await enrichInvoicesWithReconciliationStatus(user.id, invoices)
+  const enrichedBills = await enrichBillsWithReconciliationStatus(user.id, bills)
+
+  const openInvoices = enrichedInvoices.filter((i) => i.status !== "paid")
+  const paidInvoices = enrichedInvoices.filter((i) => i.status === "paid")
+
+  const openBills = enrichedBills.filter((b) => b.status !== "paid")
+  const paidBills = enrichedBills.filter((b) => b.status === "paid")
+
+  const ar = computeARState(openInvoices)
+
+  const arReconciliationSummary = computeReconciliationSummary(enrichedInvoices)
+  const apReconciliationSummary = computeApReconciliationSummary(enrichedBills)
+
+  const ap = {
+    total_expected_30d: r2(obligations.reduce((s, o) => s + o.expected_amount, 0)),
+    obligation_count: obligations.length,
+    obligations: obligations.sort((a, b) => a.days_until_due - b.days_until_due),
+    bills: openBills,
+    paid_bills: paidBills,
+    reconciliation_summary: apReconciliationSummary,
+  }
+
+  const recon = await fetchReconTotals(user.id)
+  const excludedCategories = await fetchExcludedCategories(user.id)
+  const transferPairs = await fetchTransferPairs(user.id)
+
+  const pendingReview = await getMovementsPendingWaterfallReview(user.id)
+  const waterfall_review = {
+    count: pendingReview.length,
+    movements: pendingReview.slice(0, WATERFALL_REVIEW_PREVIEW),
+  }
+
+  // reconciliationStatus already fetched above and we know is_running is false here
+
+  const lifetimeArTotal = enrichedInvoices.reduce((s, i) => s + i.amount, 0)
+  const lifetimeArReconciled = enrichedInvoices
+    .filter(i => i.reconciliation_status === "matched" || i.reconciliation_status === "partial")
+    .reduce((s, i) => s + i.amount, 0)
+  const lifetimeArPaid = paidInvoices.reduce((s, i) => s + i.amount, 0)
+
+  const lifetimeApTotal = enrichedBills.reduce((s, b) => s + b.amount, 0)
+  const lifetimeApReconciled = enrichedBills
+    .filter(b => b.reconciliation_status === "matched" || b.reconciliation_status === "partial")
+    .reduce((s, b) => s + b.amount, 0)
+  const lifetimeApPaid = paidBills.reduce((s, b) => s + b.amount, 0)
+
+  const lifetime = {
+    ar: {
+      total: r2(lifetimeArTotal),
+      reconciled: r2(lifetimeArReconciled),
+      reconciled_pct: lifetimeArTotal > 0 ? r2((lifetimeArReconciled / lifetimeArTotal) * 100) : 0,
+      paid: r2(lifetimeArPaid),
+      paid_pct: lifetimeArTotal > 0 ? r2((lifetimeArPaid / lifetimeArTotal) * 100) : 0,
+      outstanding: r2(lifetimeArTotal - lifetimeArPaid),
+      invoice_count: enrichedInvoices.length,
+      paid_count: paidInvoices.length,
+      open_count: openInvoices.length,
+    },
+    ap: {
+      total: r2(lifetimeApTotal),
+      reconciled: r2(lifetimeApReconciled),
+      reconciled_pct: lifetimeApTotal > 0 ? r2((lifetimeApReconciled / lifetimeApTotal) * 100) : 0,
+      paid: r2(lifetimeApPaid),
+      paid_pct: lifetimeApTotal > 0 ? r2((lifetimeApPaid / lifetimeApTotal) * 100) : 0,
+      outstanding: r2(lifetimeApTotal - lifetimeApPaid),
+      bill_count: enrichedBills.length,
+      paid_count: paidBills.length,
+      open_count: openBills.length,
+    },
+  }
+
+  // Build suggested matches from movement_attributions
+  const suggestedMatches = await buildSuggestedMatches(user.id, enrichedInvoices, enrichedBills)
+  
+  // Build reconciled movements list
+  const reconciledMovements = await buildReconciledMovements(user.id, enrichedInvoices, enrichedBills)
+  
+  // Build excluded movements list
+  const excludedMovements = await buildExcludedMovements(user.id)
+
+  return NextResponse.json({
+    ar: {
+      ...ar,
+      invoices: openInvoices,
+      paid_invoices: paidInvoices,
+      reconciliation_summary: arReconciliationSummary,
+    },
+    ap,
+    recon,
+    lifetime,
+    excluded_categories: excludedCategories,
+    transfer_pairs: transferPairs,
+    waterfall_review,
+    is_reconciling: reconciliationStatus.is_running,
+    reconciliation_status: reconciliationStatus,
+    // NEW: Clearing House data
+    suggested_matches: suggestedMatches,
+    movements: {
+      unmatched_inflows: recon.unmatched_inflows.map(m => ({
+        id: m.movement_id,
+        date: m.date,
+        amount: m.amount,
+        description: m.display_name || m.counterparty || "Unknown",
+        raw_description: m.counterparty,
+        counterparty: m.counterparty,
+        economic_class: m.economic_class,
+        suggested_match: suggestedMatches.ar.find(s => s.movement_id === m.movement_id) || 
+                        suggestedMatches.ap.find(s => s.movement_id === m.movement_id),
+      })),
+      unmatched_outflows: recon.unmatched_outflows.map(m => ({
+        id: m.movement_id,
+        date: m.date,
+        amount: m.amount,
+        description: m.display_name || m.counterparty || "Unknown",
+        raw_description: m.counterparty,
+        counterparty: m.counterparty,
+        economic_class: m.economic_class,
+        suggested_match: suggestedMatches.ap.find(s => s.movement_id === m.movement_id),
+      })),
+    },
+    reconciled_movements: reconciledMovements,
+    excluded_movements: excludedMovements,
+  })
+}
+
+function computeReconciliationSummary(invoices: OutstandingInvoice[]) {
+  const total = invoices.length
+  const matched = invoices.filter((i) => i.reconciliation_status === "matched").length
+  const partial = invoices.filter((i) => i.reconciliation_status === "partial").length
+  const unmatched = invoices.filter((i) => i.reconciliation_status === "unmatched" || !i.reconciliation_status).length
+
+  const matchedAmount = invoices
+    .filter((i) => i.reconciliation_status === "matched")
+    .reduce((sum, i) => sum + i.amount, 0)
+  const partialMatchedAmount = invoices
+    .filter((i) => i.reconciliation_status === "partial")
+    .reduce((sum, i) => sum + (i.matched_amount ?? 0), 0)
+  const partialUnmatchedAmount = invoices
+    .filter((i) => i.reconciliation_status === "partial")
+    .reduce((sum, i) => sum + Math.max(0, i.amount - (i.matched_amount ?? 0)), 0)
+  const unmatchedAmount = invoices
+    .filter((i) => i.reconciliation_status === "unmatched" || !i.reconciliation_status)
+    .reduce((sum, i) => sum + i.amount, 0)
+  const partialAmount = partialMatchedAmount
+
+  // Bank-verified outstanding calculation
+  // Accounting outstanding = sum of amount_due for open/partially_paid invoices
+  const accountingOutstanding = invoices
+    .filter((i) => i.status !== "paid")
+    .reduce((sum, i) => sum + i.amount_due, 0)
+
+  // For open invoices that are matched/partial, calculate how much has been verified by bank
+  // Cap matched_amount at the invoice amount to avoid over-counting from entity-level matching
+  const openInvoicesMatched = invoices
+    .filter((i) => i.status !== "paid" && (i.reconciliation_status === "matched" || i.reconciliation_status === "partial"))
+    .reduce((sum, i) => {
+      const matchedAmt = i.matched_amount ?? 0
+      // Cap at invoice amount to prevent over-counting
+      return sum + Math.min(matchedAmt, i.amount_due)
+    }, 0)
+
+  // Bank-verified outstanding = what accounting says is outstanding minus what bank has verified
+  const bankVerifiedOutstanding = Math.max(0, accountingOutstanding - openInvoicesMatched)
+
+  // Total bank-verified matched across all invoices (for display purposes)
+  const bankVerifiedMatched = invoices
+    .filter((i) => i.reconciliation_status === "matched" || i.reconciliation_status === "partial")
+    .reduce((sum, i) => sum + Math.min(i.matched_amount ?? 0, i.amount), 0)
+
+  // Suspicious: paid in accounting but no bank match
+  const suspicious = invoices.filter(
+    (i) => i.status === "paid" && (i.reconciliation_status === "unmatched" || !i.reconciliation_status)
+  )
+  const suspiciousAmount = suspicious.reduce((sum, i) => sum + i.amount, 0)
+
+  // Discrepancy: difference between accounting outstanding and bank-verified outstanding
+  const discrepancy = accountingOutstanding - bankVerifiedOutstanding
+
+  return {
+    total_invoices: total,
+    matched_count: matched,
+    partial_count: partial,
+    unmatched_count: unmatched,
+    matched_amount: r2(matchedAmount),
+    partial_matched_amount: r2(partialAmount),
+    unmatched_amount: r2(unmatchedAmount),
+    // Fix: Weight match_rate by dollar amount, not just count
+    match_rate: (matchedAmount + partialAmount + unmatchedAmount + partialUnmatchedAmount) > 0 
+      ? r2((matchedAmount + partialAmount) / (matchedAmount + partialAmount + unmatchedAmount + partialUnmatchedAmount) * 100) 
+      : 0,
+    // New bank-verified fields
+    accounting_outstanding: r2(accountingOutstanding),
+    bank_verified_outstanding: r2(bankVerifiedOutstanding),
+    bank_verified_matched: r2(bankVerifiedMatched),
+    discrepancy: r2(discrepancy),
+    suspicious_count: suspicious.length,
+    suspicious_amount: r2(suspiciousAmount),
+  }
+}
+
+function computeApReconciliationSummary(bills: OutstandingBill[]) {
+  const total = bills.length
+  const matched = bills.filter((b) => b.reconciliation_status === "matched").length
+  const partial = bills.filter((b) => b.reconciliation_status === "partial").length
+  const unmatched = bills.filter((b) => b.reconciliation_status === "unmatched" || !b.reconciliation_status).length
+
+  const matchedAmount = bills
+    .filter((b) => b.reconciliation_status === "matched")
+    .reduce((sum, b) => sum + b.amount, 0)
+  const partialMatchedAmount = bills
+    .filter((b) => b.reconciliation_status === "partial")
+    .reduce((sum, b) => sum + (b.matched_amount ?? 0), 0)
+  const partialUnmatchedAmount = bills
+    .filter((b) => b.reconciliation_status === "partial")
+    .reduce((sum, b) => sum + Math.max(0, b.amount - (b.matched_amount ?? 0)), 0)
+  const unmatchedAmount = bills
+    .filter((b) => b.reconciliation_status === "unmatched" || !b.reconciliation_status)
+    .reduce((sum, b) => sum + b.amount, 0)
+  const partialAmount = partialMatchedAmount
+
+  // Bank-verified outstanding calculation for AP
+  // accountingOutstanding = sum of amount_due for open bills
+  const accountingOutstanding = bills
+    .filter((b) => b.status !== "paid")
+    .reduce((sum, b) => sum + b.amount_due, 0)
+
+  // For open bills that are matched/partial, calculate how much has been verified by bank
+  // Cap matched_amount at the bill amount to avoid over-counting from entity-level matching
+  const openBillsMatched = bills
+    .filter((b) => b.status !== "paid" && (b.reconciliation_status === "matched" || b.reconciliation_status === "partial"))
+    .reduce((sum, b) => {
+      const matchedAmt = b.matched_amount ?? 0
+      // Cap at bill amount to prevent over-counting
+      return sum + Math.min(matchedAmt, b.amount_due)
+    }, 0)
+
+  // Bank-verified outstanding = what accounting says is outstanding minus what bank has verified
+  const bankVerifiedOutstanding = Math.max(0, accountingOutstanding - openBillsMatched)
+
+  // Total bank-verified matched across all bills (for display purposes)
+  const bankVerifiedMatched = bills
+    .filter((b) => b.reconciliation_status === "matched" || b.reconciliation_status === "partial")
+    .reduce((sum, b) => sum + Math.min(b.matched_amount ?? 0, b.amount), 0)
+
+  // Suspicious: paid in accounting but no bank match
+  const suspicious = bills.filter(
+    (b) => b.status === "paid" && (b.reconciliation_status === "unmatched" || !b.reconciliation_status)
+  )
+  const suspiciousAmount = suspicious.reduce((sum, b) => sum + b.amount, 0)
+
+  // Discrepancy: difference between accounting outstanding and bank-verified outstanding
+  const discrepancy = accountingOutstanding - bankVerifiedOutstanding
+
+  return {
+    total_bills: total,
+    matched_count: matched,
+    partial_count: partial,
+    unmatched_count: unmatched,
+    matched_amount: r2(matchedAmount),
+    partial_matched_amount: r2(partialAmount),
+    unmatched_amount: r2(unmatchedAmount),
+    // Fix: Weight match_rate by dollar amount, not just count
+    match_rate: (matchedAmount + partialAmount + unmatchedAmount + partialUnmatchedAmount) > 0 
+      ? r2((matchedAmount + partialAmount) / (matchedAmount + partialAmount + unmatchedAmount + partialUnmatchedAmount) * 100) 
+      : 0,
+    // New bank-verified fields
+    accounting_outstanding: r2(accountingOutstanding),
+    bank_verified_outstanding: r2(bankVerifiedOutstanding),
+    bank_verified_matched: r2(bankVerifiedMatched),
+    discrepancy: r2(discrepancy),
+    suspicious_count: suspicious.length,
+    suspicious_amount: r2(suspiciousAmount),
+  }
+}
+
+/**
+ * Build suggested matches from movement_attributions
+ */
+async function buildSuggestedMatches(
+  userId: string,
+  invoices: OutstandingInvoice[],
+  bills: OutstandingBill[]
+) {
+  const { rows: attributions } = await query<{
+    movement_id: string
+    reference_id: string | null
+    component_type: string
+    confidence: string
+    source: string
+    metadata: any
+    confidence_detail: any
+  }>(
+    `SELECT DISTINCT ON (movement_id, component_type, reference_id)
+       a.movement_id, a.reference_id, a.component_type, 
+       a.confidence::text, a.source, a.metadata, a.confidence_detail
+     FROM movement_attributions a
+     WHERE a.user_id = $1 
+       AND a.source IN ('rule', 'llm', 'model')
+       AND a.confidence >= 0.6
+       AND a.reference_id IS NOT NULL
+     ORDER BY movement_id, component_type, reference_id, a.confidence DESC`,
+    [userId]
+  )
+
+  const arMatches = attributions
+    .filter(a => a.component_type === 'ar')
+    .map(a => {
+      const confidence = parseFloat(a.confidence)
+      const invoice = invoices.find(i => i.invoice_id === a.reference_id)
+      return {
+        movement_id: a.movement_id,
+        invoice_id: a.reference_id,
+        confidence,
+        confidence_detail: a.confidence_detail ?? null,
+        reason: getMatchReason(a.source, a.metadata, confidence),
+        matched_amount: invoice?.amount || 0,
+        entity_name: invoice?.customer_name || null,
+        waterfall_stage: a.metadata?.waterfall_stage,
+        auto_accepted: confidence >= 0.95,
+      }
+    })
+
+  const apMatches = attributions
+    .filter(a => a.component_type === 'ap')
+    .map(a => {
+      const confidence = parseFloat(a.confidence)
+      const bill = bills.find(b => b.bill_id === a.reference_id)
+      return {
+        movement_id: a.movement_id,
+        bill_id: a.reference_id,
+        confidence,
+        confidence_detail: a.confidence_detail ?? null,
+        reason: getMatchReason(a.source, a.metadata, confidence),
+        matched_amount: bill?.amount || 0,
+        entity_name: bill?.vendor_name || null,
+        waterfall_stage: a.metadata?.waterfall_stage,
+        auto_accepted: confidence >= 0.95,
+      }
+    })
+
+  return { ar: arMatches, ap: apMatches }
+}
+
+/**
+ * Get human-readable reason for a match
+ */
+function getMatchReason(source: string, metadata: any, confidence: number): string {
+  if (source === 'rule') {
+    const stage = metadata?.waterfall_stage
+    if (stage === 0) return "Direct link (Stage 0)"
+    if (stage === 1) return "Exact match (Stage 1)"
+    if (stage === 2) return "Processor fee band (Stage 2)"
+    if (stage === 3) return "FIFO match (Stage 3)"
+    return "Rule-based match"
+  }
+  if (source === 'llm') {
+    if (confidence >= 0.88) return "LLM high confidence"
+    if (confidence >= 0.75) return "LLM medium confidence"
+    return "LLM low confidence"
+  }
+  if (source === 'model') return "Model-based match"
+  return "Suggested match"
+}
+
+/**
+ * Build list of reconciled movements
+ */
+async function buildReconciledMovements(
+  userId: string,
+  invoices: OutstandingInvoice[],
+  bills: OutstandingBill[]
+) {
+  const { rows } = await query<{
+    movement_id: string
+    reference_id: string
+    component_type: string
+    source: string
+    confidence: string
+    matched_at: string
+    net_amount: string
+    fee_amount: string
+    movement_description: string
+    movement_amount: string
+    movement_date: string
+    direction: string
+  }>(
+    `SELECT DISTINCT ON (a.movement_id, a.component_type, a.reference_id)
+       a.movement_id, a.reference_id, a.component_type,
+       a.source, a.confidence::text, a.created_at::text AS matched_at,
+       COALESCE(a.net_amount::float, 0)::text AS net_amount,
+       COALESCE((
+         SELECT f.net_amount::float::text
+         FROM movement_attributions f
+         WHERE f.movement_id = a.movement_id AND f.user_id = a.user_id
+           AND f.component_type = 'fee'
+         LIMIT 1
+       ), '0') AS fee_amount,
+       COALESCE(m.raw_description, m.counterparty, 'Unknown') AS movement_description,
+       COALESCE(m.amount::text, '0') AS movement_amount,
+       m.date::text AS movement_date,
+       m.direction
+     FROM movement_attributions a
+     JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
+     WHERE a.user_id = $1
+       AND a.reference_id IS NOT NULL
+       AND a.component_type IN ('ar', 'ap')
+     ORDER BY a.movement_id, a.component_type, a.reference_id, a.created_at DESC
+     LIMIT 500`,
+    [userId]
+  )
+
+  // Build lookup maps from in-memory invoice/bill arrays
+  const invoiceMap = new Map(invoices.map(i => [i.invoice_id, i]))
+  const billMap = new Map(bills.map(b => [b.bill_id, b]))
+
+  return {
+    matched: rows.map(r => {
+      const isAR = r.component_type === 'ar'
+      const isInflow = r.direction === 'inflow'
+      const invoice = isAR ? invoiceMap.get(r.reference_id) : undefined
+      const bill = !isAR ? billMap.get(r.reference_id) : undefined
+      // Build signed amount: inflow = positive, outflow = negative
+      const rawAmount = parseFloat(r.movement_amount) || 0
+      const signedAmount = isInflow ? rawAmount : -rawAmount
+      return {
+        movement_id: r.movement_id,
+        matched_to: r.reference_id,
+        matched_at: r.matched_at,
+        matched_by: r.source === 'user' ? 'user' : 'ai' as 'user' | 'ai',
+        confidence: parseFloat(r.confidence),
+        amount_matched: parseFloat(r.net_amount) || 0,
+        movement_description: r.movement_description,
+        movement_amount: signedAmount,
+        movement_date: r.movement_date,
+        entity_name: invoice?.customer_name || bill?.vendor_name || null,
+        ref_number: null as string | null, // invoice_id/bill_id used as reference_id
+        fee_amount: parseFloat(r.fee_amount) || 0,
+        component_type: r.component_type,
+      }
+    }),
+  }
+}
+
+/**
+ * Build list of excluded movements
+ */
+async function buildExcludedMovements(userId: string) {
+  const { rows } = await query<{
+    id: string
+    date: string
+    amount: string
+    description: string
+    economic_class: string
+  }>(
+    `SELECT m.id, m.date::text, m.amount::float::text AS amount, 
+            COALESCE(m.raw_description, m.counterparty, 'Unknown') AS description,
+            mt.economic_class
+     FROM movements m
+     LEFT JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
+     WHERE m.user_id = $1
+       AND m.duplicate_of IS NULL
+       AND mt.economic_class IN (
+         'transfer', 'owner_draw', 'owner_contribution', 
+         'bank_fee', 'bank_fee_refund', 'interest', 
+         'processor_fee', 'processor_payout',
+         'opening_balance', 'account_verification', 'system_adjustment', 
+         'settlement_in', 'settlement_adjustment'
+       )
+     ORDER BY m.date DESC
+     LIMIT 100`,
+    [userId]
+  )
+
+  const total_amount = rows.reduce((sum, r) => sum + parseFloat(r.amount), 0)
+
+  return {
+    count: rows.length,
+    total_amount: r2(total_amount),
+    movements: rows.map(r => ({
+      id: r.id,
+      date: r.date,
+      amount: parseFloat(r.amount),
+      description: r.description,
+      economic_class: r.economic_class,
+      reason: r.economic_class, // The economic_class is the reason it's excluded
+    })),
+  }
+}
+
+async function fetchReconTotals(userId: string): Promise<ReconTotals> {
+  const totals: any = {
+    total_matched_inflows: 0,
+    total_matched_outflows: 0,
+    total_unmatched_inflows: 0,
+    total_unmatched_outflows: 0,
+    total_excluded_inflows: 0,
+    total_excluded_outflows: 0,
+    total_fees_paid: 0,
+    count_matched_inflows: 0,
+    count_matched_outflows: 0,
+    count_unmatched_inflows: 0,
+    count_unmatched_outflows: 0,
+    count_excluded_inflows: 0,
+    count_excluded_outflows: 0,
+  }
+
+  const { rows: matchedRows } = await query<{
+    inflow: string
+    outflow: string
+    fees: string
+  }>(
+    `SELECT
+       COALESCE(SUM(CASE WHEN m.direction = 'inflow'  AND a.component_type IN ('ar', 'settlement') THEN a.net_amount::float ELSE 0 END), 0)::text AS inflow,
+       COALESCE(SUM(CASE WHEN m.direction = 'outflow' AND a.component_type IN ('ap', 'settlement') THEN a.net_amount::float ELSE 0 END), 0)::text AS outflow,
+       COALESCE(SUM(CASE WHEN a.component_type = 'fee' THEN a.net_amount::float ELSE 0 END), 0)::text AS fees
+     FROM movement_attributions a
+     JOIN movements m ON m.id = a.movement_id AND m.user_id = a.user_id
+     WHERE a.user_id = $1 AND m.duplicate_of IS NULL`,
+    [userId],
+  )
+  if (matchedRows[0]) {
+    totals.total_matched_inflows = r2(parseFloat(matchedRows[0].inflow) || 0)
+    totals.total_matched_outflows = r2(parseFloat(matchedRows[0].outflow) || 0)
+    totals.total_fees_paid = r2(parseFloat(matchedRows[0].fees) || 0)
+  }
+
+  const lists = await fetchReconciliationMovementRows(userId)
+  // Fix: Use dollar amounts instead of counts for unmatched totals
+  totals.total_unmatched_inflows = r2(lists.unmatched_inflows.reduce((s, r) => s + r.amount, 0))
+  totals.total_unmatched_outflows = r2(lists.unmatched_outflows.reduce((s, r) => s + r.amount, 0))
+  totals.total_excluded_inflows = r2(lists.excluded_inflows.reduce((s, r) => s + r.amount, 0))
+  totals.total_excluded_outflows = r2(lists.excluded_outflows.reduce((s, r) => s + r.amount, 0))
+  // Keep counts as separate fields for reference
+  totals.count_matched_inflows = lists.matched_inflows.length
+  totals.count_matched_outflows = lists.matched_outflows.length
+  totals.count_unmatched_inflows = lists.unmatched_inflows.length
+  totals.count_unmatched_outflows = lists.unmatched_outflows.length
+  totals.count_excluded_inflows = lists.excluded_inflows.length
+  totals.count_excluded_outflows = lists.excluded_outflows.length
+
+  // Limit lists to prevent huge responses - return first 500 of each category
+  const MAX_MOVEMENT_ROWS = 500
+  return {
+    ...totals,
+    matched_inflows: lists.matched_inflows.slice(0, MAX_MOVEMENT_ROWS),
+    matched_outflows: lists.matched_outflows.slice(0, MAX_MOVEMENT_ROWS),
+    unmatched_inflows: lists.unmatched_inflows.slice(0, MAX_MOVEMENT_ROWS),
+    unmatched_outflows: lists.unmatched_outflows.slice(0, MAX_MOVEMENT_ROWS),
+    excluded_inflows: lists.excluded_inflows.slice(0, MAX_MOVEMENT_ROWS),
+    excluded_outflows: lists.excluded_outflows.slice(0, MAX_MOVEMENT_ROWS),
+  }
+}
+
+type ExcludedMovement = {
+  id: string
+  amount: number
+  date: string
+  counterparty: string | null
+  direction: "inflow" | "outflow"
+  economic_class: string
+  cashflow_bucket: string | null
+}
+
+type ExcludedCategories = {
+  transfers: ExcludedMovement[]
+  owner_activity: ExcludedMovement[]
+  fees_and_interest: ExcludedMovement[]
+  processor_settlements: ExcludedMovement[]
+  totals: {
+    transfers_count: number
+    transfers_amount: number
+    owner_activity_count: number
+    owner_activity_amount: number
+    fees_and_interest_count: number
+    fees_and_interest_amount: number
+    processor_settlements_count: number
+    processor_settlements_amount: number
+  }
+}
+
+async function fetchExcludedCategories(userId: string): Promise<ExcludedCategories> {
+  const { rows } = await query<{
+    id: string
+    amount: string
+    date: string
+    counterparty: string | null
+    direction: string
+    economic_class: string
+    cashflow_bucket: string | null
+  }>(
+    `SELECT m.id, m.amount::float::text AS amount, m.date::text, m.counterparty, m.direction,
+            mt.economic_class, mt.cashflow_bucket
+     FROM movements m
+     JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
+     WHERE m.user_id = $1
+       AND m.duplicate_of IS NULL
+       AND mt.economic_class IN (
+         'transfer', 'owner_draw', 'owner_contribution', 
+         'bank_fee', 'bank_fee_refund', 'interest', 
+         'processor_fee', 'processor_payout',
+         'opening_balance', 'account_verification', 'system_adjustment', 'settlement_in', 'settlement_adjustment'
+       )
+     ORDER BY m.date DESC
+     LIMIT 200`,
+    [userId],
+  )
+
+  const movements: ExcludedMovement[] = rows.map((r) => ({
+    id: r.id,
+    amount: parseFloat(r.amount),
+    date: r.date,
+    counterparty: r.counterparty,
+    direction: r.direction as "inflow" | "outflow",
+    economic_class: r.economic_class,
+    cashflow_bucket: r.cashflow_bucket,
+  }))
+
+  const transfers = movements.filter((m) => m.economic_class === "transfer")
+  const ownerActivity = movements.filter((m) => 
+    m.economic_class === "owner_draw" || m.economic_class === "owner_contribution"
+  )
+  const feesAndInterest = movements.filter((m) => 
+    m.economic_class === "bank_fee" || 
+    m.economic_class === "bank_fee_refund" || 
+    m.economic_class === "interest"
+  )
+  const processorSettlements = movements.filter((m) => 
+    m.economic_class === "processor_fee" || m.economic_class === "processor_payout"
+  )
+
+  return {
+    transfers: transfers.slice(0, 50),
+    owner_activity: ownerActivity.slice(0, 50),
+    fees_and_interest: feesAndInterest.slice(0, 50),
+    processor_settlements: processorSettlements.slice(0, 50),
+    totals: {
+      transfers_count: transfers.length,
+      transfers_amount: r2(transfers.reduce((sum, m) => sum + m.amount, 0)),
+      owner_activity_count: ownerActivity.length,
+      owner_activity_amount: r2(ownerActivity.reduce((sum, m) => sum + m.amount, 0)),
+      fees_and_interest_count: feesAndInterest.length,
+      fees_and_interest_amount: r2(feesAndInterest.reduce((sum, m) => sum + m.amount, 0)),
+      processor_settlements_count: processorSettlements.length,
+      processor_settlements_amount: r2(processorSettlements.reduce((sum, m) => sum + m.amount, 0)),
+    },
+  }
+}
+
+type TransferPair = {
+  outflow_id: string
+  inflow_id: string
+  amount: number
+  date: string
+  counterparty: string | null
+  days_apart: number
+}
+
+type TransferPairsResult = {
+  pairs: TransferPair[]
+  unpaired_transfers: ExcludedMovement[]
+  total_paired_amount: number
+  total_unpaired_amount: number
+}
+
+async function fetchTransferPairs(userId: string): Promise<TransferPairsResult> {
+  // Find transfer pairs: same amount, opposite direction, within 3 days
+  const { rows: pairRows } = await query<{
+    outflow_id: string
+    inflow_id: string
+    amount: string
+    outflow_date: string
+    inflow_date: string
+    counterparty: string | null
+    days_apart: string
+  }>(
+    `WITH transfer_movements AS (
+      SELECT m.id, m.amount, m.date, m.counterparty, m.direction
+      FROM movements m
+      JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
+      WHERE m.user_id = $1
+        AND m.duplicate_of IS NULL
+        AND mt.economic_class = 'transfer'
+    )
+    SELECT 
+      m1.id as outflow_id, 
+      m2.id as inflow_id,
+      m1.amount::float::text AS amount, 
+      m1.date::text as outflow_date,
+      m2.date::text as inflow_date,
+      COALESCE(m1.counterparty, m2.counterparty) as counterparty,
+      ABS(m2.date - m1.date)::text as days_apart
+    FROM transfer_movements m1
+    JOIN transfer_movements m2 ON 
+      ABS(m1.amount::float - m2.amount::float) < 0.01
+      AND m1.direction = 'outflow' 
+      AND m2.direction = 'inflow'
+      AND ABS(m2.date - m1.date) <= 3
+      AND m1.id < m2.id
+    ORDER BY m1.date DESC
+    LIMIT 50`,
+    [userId],
+  )
+
+  const pairs: TransferPair[] = pairRows.map((r) => ({
+    outflow_id: r.outflow_id,
+    inflow_id: r.inflow_id,
+    amount: parseFloat(r.amount),
+    date: r.outflow_date,
+    counterparty: r.counterparty,
+    days_apart: parseInt(r.days_apart, 10),
+  }))
+
+  // Find paired movement IDs
+  const pairedIds = new Set<string>()
+  for (const p of pairs) {
+    pairedIds.add(p.outflow_id)
+    pairedIds.add(p.inflow_id)
+  }
+
+  // Get unpaired transfers
+  const { rows: unpairedRows } = await query<{
+    id: string
+    amount: string
+    date: string
+    counterparty: string | null
+    direction: string
+    economic_class: string
+    cashflow_bucket: string | null
+  }>(
+    `SELECT m.id, m.amount::float::text AS amount, m.date::text, m.counterparty, m.direction,
+            mt.economic_class, mt.cashflow_bucket
+     FROM movements m
+     JOIN movement_tags mt ON mt.movement_id = m.id AND mt.user_id = m.user_id
+     WHERE m.user_id = $1
+       AND m.duplicate_of IS NULL
+       AND mt.economic_class = 'transfer'
+     ORDER BY m.date DESC
+     LIMIT 100`,
+    [userId],
+  )
+
+  const unpairedTransfers: ExcludedMovement[] = unpairedRows
+    .filter((r) => !pairedIds.has(r.id))
+    .map((r) => ({
+      id: r.id,
+      amount: parseFloat(r.amount),
+      date: r.date,
+      counterparty: r.counterparty,
+      direction: r.direction as "inflow" | "outflow",
+      economic_class: r.economic_class,
+      cashflow_bucket: r.cashflow_bucket,
+    }))
+    .slice(0, 50)
+
+  const totalPairedAmount = pairs.reduce((sum, p) => sum + p.amount, 0)
+  const totalUnpairedAmount = unpairedTransfers.reduce((sum, t) => sum + t.amount, 0)
+
+  return {
+    pairs,
+    unpaired_transfers: unpairedTransfers,
+    total_paired_amount: r2(totalPairedAmount),
+    total_unpaired_amount: r2(totalUnpairedAmount),
+  }
+}
