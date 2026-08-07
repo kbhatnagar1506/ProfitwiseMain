@@ -1,0 +1,12 @@
+{
+  "name": "profitwise",
+  "private": true,
+  "scripts": {
+    "build": "cd v0-login-page-clone-2 && npm install && npm run build",
+    "start": "cd v0-login-page-clone-2 && npm start",
+    "postinstall": "cd v0-login-page-clone-2 && npm install"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
