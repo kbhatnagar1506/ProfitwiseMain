@@ -1,0 +1,234 @@
+import { NextRequest, NextResponse } from "next/server"
+import { createHmac, timingSafeEqual } from "crypto"
+import { log } from "@/lib/logger"
+import { getEntityById, getAllForEntity, type QBOEntityType } from "@/lib/quickbooks"
+import { upsertEntities, deleteEntity, getUserIdByRealmId } from "@/lib/qbo-entity-store"
+import { refreshMovementEntityIds } from "@/lib/movement-classify"
+import { refreshEntityAliasesFromAccounting } from "@/lib/identity-seed"
+
+export async function GET(request: NextRequest) {
+  log("webhook.verify.challenge.received")
+  const verifier = process.env.QUICKBOOKS_WEBHOOK_VERIFIER
+  if (!verifier) {
+    log("webhook.verify.challenge.failed", { reason: "missing_verifier" })
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 500 })
+  }
+  log("webhook.verify.challenge.responded")
+  return new NextResponse(verifier, {
+    status: 200,
+    headers: { "Content-Type": "text/plain" },
+  })
+}
+
+export async function POST(request: NextRequest) {
+  const verifier = process.env.QUICKBOOKS_WEBHOOK_VERIFIER
+  if (!verifier) {
+    log("webhook.verify.rejected", { reason: "missing_verifier" })
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 500 })
+  }
+
+  let body: string
+  try {
+    body = await request.text()
+  } catch {
+    return NextResponse.json({ error: "Invalid body" }, { status: 400 })
+  }
+
+  const payloadSize = body?.length ?? 0
+  let eventCount = 0
+  try {
+    const parsed = body ? JSON.parse(body) : null
+    if (Array.isArray(parsed)) {
+      eventCount = parsed.length
+    } else if (parsed && typeof parsed === "object" && Array.isArray(parsed.eventNotifications)) {
+      eventCount = parsed.eventNotifications.length
+    }
+  } catch {
+    // ignore parse errors for count
+  }
+
+  log("webhook.received", { payloadSize, eventCount })
+
+  const signatureHeader = request.headers.get("intuit-signature") ?? request.headers.get("Intuit-Signature")
+  if (!signatureHeader) {
+    log("webhook.verify.failed", { reason: "missing_signature" })
+    return NextResponse.json({ error: "Missing signature" }, { status: 401 })
+  }
+
+  {
+    const clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET
+    const verifierToken = process.env.QUICKBOOKS_WEBHOOK_VERIFIER
+    const signature = signatureHeader.replace(/^sha256=/i, "").trim()
+
+    const payloadsToTry: string[] = [body]
+    try {
+      const parsed = JSON.parse(body)
+      payloadsToTry.push(JSON.stringify(parsed))
+    } catch {
+      // keep only raw body
+    }
+
+    const verify = (key: string): boolean => {
+      for (const payload of payloadsToTry) {
+        const base64 = createHmac("sha256", key).update(payload, "utf8").digest("base64")
+        const hex = createHmac("sha256", key).update(payload, "utf8").digest("hex")
+        try {
+          if (timingSafeEqual(Buffer.from(base64), Buffer.from(signature))) return true
+        } catch { /* length mismatch */ }
+        try {
+          if (timingSafeEqual(Buffer.from(hex), Buffer.from(signature))) return true
+        } catch { /* length mismatch */ }
+      }
+      return false
+    }
+
+    const withClientSecret = clientSecret && verify(clientSecret)
+    const withVerifier = verifierToken && verify(verifierToken)
+    if (!withClientSecret && !withVerifier) {
+      log("webhook.verify.failed", { reason: "signature_mismatch" })
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 })
+    }
+  }
+
+  log("webhook.verify.succeeded")
+
+  type EntityChange = { realmId: string; name: string; id: string; operation: string }
+  const changes: EntityChange[] = []
+  const realmsTouched = new Set<string>()
+
+  try {
+    const parsed = body ? JSON.parse(body) : null
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      for (const item of parsed as Array<{
+        intuitaccountid?: string
+        eventNotifications?: Array<{
+          realmId?: string
+          dataChangeEvent?: { entities?: Array<{ name?: string; id?: string; operation?: string }> }
+        }>
+        // CloudEvents-style payload
+        specversion?: string
+        id?: string
+        source?: string
+        type?: string
+        time?: string
+        intuitentityid?: string
+      }>) {
+        // Legacy/QBO v3 style with eventNotifications
+        const legacyRealmId = item?.intuitaccountid
+        const notifications = item?.eventNotifications
+        if (legacyRealmId && Array.isArray(notifications)) {
+          realmsTouched.add(legacyRealmId)
+          for (const n of notifications) {
+            const entities = n?.dataChangeEvent?.entities ?? []
+            for (const e of entities) {
+              if (e?.name && e?.id && e?.operation) {
+                changes.push({ realmId: legacyRealmId, name: e.name, id: String(e.id), operation: e.operation })
+              }
+            }
+          }
+          continue
+        }
+
+        // New CloudEvents-style: array of events with intuitaccountid + intuitentityid + type "qbo.invoice.*.v1"
+        if (item.specversion && item.intuitaccountid && item.intuitentityid) {
+          const realmId = item.intuitaccountid
+          const entityId = String(item.intuitentityid)
+          const eventType = item.type ?? ""
+          realmsTouched.add(realmId)
+          // Treat all qbo.invoice.* events as an upsert for that Invoice id.
+          if (eventType.startsWith("qbo.invoice.")) {
+            changes.push({ realmId, name: "Invoice", id: entityId, operation: "Update" })
+          }
+        }
+      }
+    } else if (parsed && typeof parsed === "object" && Array.isArray(parsed.eventNotifications)) {
+      const notifications = parsed.eventNotifications as Array<{
+        realmId?: string
+        dataChangeEvent?: { entities?: Array<{ name?: string; id?: string; operation?: string }> }
+      }>
+      for (const n of notifications) {
+        const realmId = n?.realmId
+        const entities = n?.dataChangeEvent?.entities ?? []
+        if (realmId) {
+          realmsTouched.add(realmId)
+          for (const e of entities) {
+            if (e?.name && e?.id && e?.operation) {
+              changes.push({ realmId, name: e.name, id: String(e.id), operation: e.operation })
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore parse for changes
+  }
+
+  // Debug logging to understand what QBO is sending and what we parsed.
+  log(
+    "webhook.parsed_debug",
+    {
+      payloadSize,
+      eventCount,
+      realmsTouched: [...realmsTouched],
+      changeCount: changes.length,
+      bodyPreview: body.slice(0, 800),
+    },
+    "qbo"
+  )
+
+  if (changes.length > 0) {
+    log("webhook.entity_changes", { count: changes.length, realmIds: [...new Set(changes.map((c) => c.realmId))] }, "qbo")
+    void (async () => {
+      for (const { realmId, name, id, operation } of changes) {
+        try {
+          const op = String(operation).toLowerCase()
+          if (op === "delete") {
+            await deleteEntity(realmId, name, id)
+          } else {
+            const entity = await getEntityById(realmId, name, id)
+            if (entity) {
+              await upsertEntities(realmId, name, [entity])
+            }
+          }
+        } catch (err) {
+          log("webhook.entity_update.failed", { realmId, name, id, operation, error: String(err) }, "qbo")
+        }
+      }
+    })()
+  }
+
+  if (realmsTouched.size > 0) {
+    // Always resync invoices for any realm touched by this webhook so GCP bucket stays fresh.
+    const invoiceType = "Invoice" as QBOEntityType
+    log("webhook.invoice_resync.start", { realms: [...realmsTouched] }, "qbo")
+    void (async () => {
+      for (const realmId of realmsTouched) {
+        try {
+          const items = await getAllForEntity(realmId, invoiceType)
+          const count = await upsertEntities(realmId, invoiceType, items)
+          log("webhook.invoice_resync.succeeded", { realmId, count }, "qbo")
+
+          // G2: Refresh entity aliases and movement entity IDs for this user
+          const userId = await getUserIdByRealmId(realmId)
+          if (userId) {
+            try {
+              await refreshEntityAliasesFromAccounting(userId)
+              const updated = await refreshMovementEntityIds(userId)
+              log("webhook.refresh.succeeded", { realmId, userId, movementsUpdated: updated }, "qbo")
+            } catch (refreshErr) {
+              log("webhook.refresh.failed", { realmId, userId, error: String(refreshErr) }, "qbo")
+            }
+          }
+        } catch (err) {
+          log(
+            "webhook.invoice_resync.failed",
+            { realmId, error: err instanceof Error ? err.message : String(err) },
+            "qbo"
+          )
+        }
+      }
+    })()
+  }
+
+  return NextResponse.json({ received: true }, { status: 200 })
+}
