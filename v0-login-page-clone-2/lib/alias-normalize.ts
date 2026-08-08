@@ -108,12 +108,18 @@ const PLAID_DELETED_SUFFIX = /\s*\(deleted\)\s*$/i
 function cleanDisplay(s: string): string {
   let out = s.replace(PLAID_DELETED_SUFFIX, "").trim()
   out = splitCamelCase(out)
-  for (const [re, repl] of CANONICAL_SPACING) out = out.replace(re, repl)
-  return out
+  out = out
     .replace(/\s+/g, " ")
     .replace(/\b([a-z])([A-Z][a-z])/g, "$1 $2")
     .replace(/\b([A-Z][a-z]+)([A-Z][a-z])/g, "$1 $2")
     .trim()
+
+  // Canonical brand spacing has to run LAST. It used to run before the
+  // PascalCase splitters above, which re-split every name it had just joined —
+  // "QuickBooks" rendered as "Quick Books", "DocuSign" as "Docu Sign" — making
+  // the whole table dead code.
+  for (const [re, repl] of CANONICAL_SPACING) out = out.replace(re, repl)
+  return out
 }
 
 function isTestLabel(s: string): boolean {
