@@ -6,6 +6,7 @@ import type { PoolClient } from "pg"
 import { query, ensureMovementsSchema } from "./db"
 import type { AllocationTargetType, MatchMethod, MovementAllocation } from "./cash-allocation-types"
 import { confidenceFromScore, serializeConfidenceEnvelope, type ConfidenceEnvelope } from "./confidence"
+import { log } from "./logger"
 
 export type AttributionSource = "rule" | "model" | "llm" | "user"
 
@@ -271,32 +272,6 @@ export async function insertAttributionWithClient(
     return normalizeAttributionRow(row as MovementAttributionRow)
   }
 
-  // #region agent log - hypothesis A: constraint violation on category/cost_type/vendor_id
-  const logPayload = {
-    sessionId: 'fee5c4',
-    location: 'attribution-persist.ts:270',
-    message: 'insertAttributionWithClient: about to insert',
-    data: {
-      movementId: opts.movementId,
-      componentType: opts.component_type,
-      category: opts.category ?? null,
-      costType: opts.cost_type ?? null,
-      vendorId: opts.vendor_id ?? null,
-    },
-    timestamp: Date.now(),
-    runId: 'debug-run-1',
-    hypothesisId: 'A',
-  };
-  try {
-    await fetch('http://127.0.0.1:7742/ingest/b0bb6c9e-7e1d-4674-9db3-ac21c3d4fa72', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'fee5c4' },
-      body: JSON.stringify(logPayload),
-    }).catch(() => {});
-  } catch {}
-  // #endregion
-
-  // #region agent log - hypothesis C: catch insert errors
   try {
     const result = await client.query<
       MovementAttributionRow & { gross_amount: string; net_amount: string }
@@ -330,30 +305,18 @@ export async function insertAttributionWithClient(
     if (!row) throw new Error("Failed to create attribution")
     return normalizeAttributionRow(row as MovementAttributionRow)
   } catch (err) {
-    console.error("[insertAttributionWithClient] Insert failed:", err instanceof Error ? err.message : String(err));
-    try {
-      await fetch('http://127.0.0.1:7742/ingest/b0bb6c9e-7e1d-4674-9db3-ac21c3d4fa72', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'fee5c4' },
-        body: JSON.stringify({
-          sessionId: 'fee5c4',
-          location: 'attribution-persist.ts:insertAttributionWithClient',
-          message: 'insert_error',
-          data: { 
-            error: err instanceof Error ? err.message : String(err),
-            code: (err as any)?.code,
-            movementId: opts.movementId,
-            componentType: opts.component_type,
-          },
-          timestamp: Date.now(),
-          runId: 'debug-run-2',
-          hypothesisId: 'C',
-        }),
-      }).catch(() => {});
-    } catch {}
-    throw err;
+    log(
+      "attribution.insert.failed",
+      {
+        error: err instanceof Error ? err.message : String(err),
+        code: (err as { code?: string })?.code,
+        movementId: opts.movementId,
+        componentType: opts.component_type,
+      },
+      "db",
+    )
+    throw err
   }
-  // #endregion
 }
 
 export async function getAttributionsByMovement(movementId: string): Promise<MovementAttributionRow[]> {

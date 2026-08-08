@@ -1590,11 +1590,15 @@ export async function ensureMovementsSchema(): Promise<void> {
 export async function query<T = unknown>(
   text: string,
   params?: unknown[]
-): Promise<{ rows: T[] }> {
+): Promise<{ rows: T[]; rowCount: number }> {
   const p = await getPoolAsync()
   if (!p) throw new Error("Database is only available in production")
   const result = await p.query(text, params)
-  return { rows: (result.rows ?? []) as T[] }
+  // pg reports the number of rows affected by INSERT/UPDATE/DELETE here. It used
+  // to be dropped, so callers destructuring `rowCount` silently read `undefined`
+  // and reported 0 rows affected — see lib/cash-events-build.ts,
+  // lib/shopify-movements.ts and lib/vendor-credit-match.ts.
+  return { rows: (result.rows ?? []) as T[], rowCount: result.rowCount ?? 0 }
 }
 
 /**
@@ -1610,25 +1614,11 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
     await client.query("COMMIT")
     return result
   } catch (e) {
-    // #region agent log - hypothesis B: capture transaction error details
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    console.error("[withTransaction] Transaction error:", errorMsg);
-    try {
-      await fetch('http://127.0.0.1:7742/ingest/b0bb6c9e-7e1d-4674-9db3-ac21c3d4fa72', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'fee5c4' },
-        body: JSON.stringify({
-          sessionId: 'fee5c4',
-          location: 'db.ts:withTransaction',
-          message: 'transaction_error',
-          data: { error: errorMsg, code: (e as any)?.code },
-          timestamp: Date.now(),
-          runId: 'debug-run-2',
-          hypothesisId: 'B',
-        }),
-      }).catch(() => {});
-    } catch {}
-    // #endregion
+    log(
+      "db.transaction.failed",
+      { error: e instanceof Error ? e.message : String(e), code: (e as { code?: string })?.code },
+      "db",
+    )
     try {
       await client.query("ROLLBACK")
     } catch (rollbackErr) {

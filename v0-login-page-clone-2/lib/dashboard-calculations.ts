@@ -175,10 +175,15 @@ export function calculateTrendVelocity(
   currentTrend: "increasing" | "decreasing" | "stable",
   previousTrend: "increasing" | "decreasing" | "stable"
 ): "accelerating" | "decelerating" | "stable" {
-  if (currentTrend === previousTrend) return "stable"
-  if (currentTrend === "increasing" && previousTrend !== "increasing") return "accelerating"
-  if (currentTrend === "decreasing" && previousTrend !== "decreasing") return "accelerating"
-  return "decelerating"
+  // Rank the trends on a single axis so the comparison has a direction.
+  // Previously both the "moved to increasing" and "moved to decreasing"
+  // branches returned "accelerating", so a swing from increasing to decreasing
+  // was reported as acceleration.
+  const rank = { decreasing: -1, stable: 0, increasing: 1 } as const
+
+  const delta = rank[currentTrend] - rank[previousTrend]
+  if (delta === 0) return "stable"
+  return delta > 0 ? "accelerating" : "decelerating"
 }
 
 /**

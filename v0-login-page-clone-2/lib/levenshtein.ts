@@ -51,9 +51,15 @@ export function levenshteinSimilarity(a: string, b: string): number {
   if (!a && !b) return 1.0
   if (!a || !b) return 0.0
 
-  const dist = levenshteinDistance(a.toLowerCase().trim(), b.toLowerCase().trim())
-  const maxLen = Math.max(a.length, b.length)
-  return 1 - dist / maxLen
+  // Distance and the length denominator must be derived from the SAME
+  // normalized strings. Measuring distance on trimmed input while dividing by
+  // the raw length let trailing whitespace inflate the similarity score.
+  const na = a.toLowerCase().trim()
+  const nb = b.toLowerCase().trim()
+  const maxLen = Math.max(na.length, nb.length)
+  if (maxLen === 0) return 1.0
+
+  return 1 - levenshteinDistance(na, nb) / maxLen
 }
 
 /**
