@@ -31,3 +31,6 @@ scripts/gmail-tokens.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# test coverage
+/coverage

@@ -10,6 +10,10 @@
     "dev": "next dev",
     "lint": "eslint .",
     "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
     "worker": "tsx lib/queue/worker.ts",
     "seed:classification-signatures": "tsx scripts/seed-user-classification-signatures.ts",
     "test:reconciliation": "tsx scripts/test-reconciliation.ts",
@@ -70,7 +74,6 @@
     "next": "^16.1.6",
     "next-themes": "^0.4.6",
     "pg": "^8.19.0",
-    "redis": "^4.7.0",
     "plaid": "^41.3.0",
     "postcss": "^8.5",
     "react": "19.2.0",
@@ -81,6 +84,7 @@
     "react-plaid-link": "^4.1.1",
     "react-resizable-panels": "^2.1.7",
     "recharts": "2.15.4",
+    "redis": "^4.7.0",
     "sonner": "^1.7.4",
     "supermemory": "^4.15.0",
     "tailwind-merge": "^3.3.1",
@@ -97,6 +101,8 @@
     "@types/pg": "^8.16.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "tsx": "^4.19.0"
+    "@vitest/coverage-v8": "^4.1.10",
+    "tsx": "^4.19.0",
+    "vitest": "^4.1.10"
   }
 }

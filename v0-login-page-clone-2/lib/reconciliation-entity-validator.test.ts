@@ -88,13 +88,19 @@ describe("validateEntitiesForBankDescription — fast path", () => {
     expect(r.isValid).toBe(true)
   })
 
-  it("abbreviation: 'RTZN Brand Strat' matches 'RTZN Brand Strategy'", async () => {
+  // NOTE: "Rtzn Brand Strat Invoices" vs "RTZN Brand Strategy" scores only ~50%
+  // on the string fast-path, so it falls through to the LLM tier. Without an API
+  // key the validator applies the strict deterministic fallback and rejects.
+  // The LLM-backed behaviour is covered hermetically in
+  // reconciliation-entity-validator.llm.test.ts; here we pin the no-LLM contract.
+  it("abbreviation below fast-path threshold defers, then rejects when LLM is unavailable", async () => {
     const results = await validateEntitiesForBankDescription(
       "Rtzn Brand Strat Invoices",
       [makeCandidate("e1", "RTZN Brand Strategy")]
     )
     const r = results.get("e1")!
-    expect(r.isValid).toBe(true)
+    expect(r.method).toBe("deterministic_reject_llm_skipped")
+    expect(r.isValid).toBe(false)
   })
 
   it("multi-candidate: returns result per entity_id", async () => {
@@ -122,13 +128,18 @@ describe("validateEntitiesForBankDescription — fast path", () => {
     expect(r.isValid).toBe(true)
   })
 
-  it("empty bank description → all candidates pass through", async () => {
+  it("empty bank description → every candidate gets a fast_reject result", async () => {
     const results = await validateEntitiesForBankDescription(
       "",
       [makeCandidate("e1", "Sanzo"), makeCandidate("e2", "Bobos")]
     )
-    // With empty bank desc, the function short-circuits and accepts all
-    expect(results.size).toBe(0) // Empty: handled in filterCandidatesByEntityName
+    // An empty descriptor has 0% similarity to everything, so the fast path
+    // rejects each candidate rather than short-circuiting the map.
+    expect(results.size).toBe(2)
+    for (const id of ["e1", "e2"]) {
+      expect(results.get(id)!.isValid).toBe(false)
+      expect(results.get(id)!.method).toBe("fast_reject")
+    }
   })
 
   it("partial name typo: 'YumEarth' vs 'YumEarth Wholesale' → accept", async () => {
