@@ -6,8 +6,8 @@ import Image from "next/image"
 import { Loader2, Copy, Check, Plus, Trash2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import whatsappQr from "../../../Screenshot 2026-03-08 at 03.57.15.png"
-import shopifyLogo from "../../../Screenshot 2026-03-24 at 09.43.29.png"
+import whatsappQr from "@/assets/whatsapp-qr.png"
+import shopifyLogo from "@/assets/shopify-logo.png"
 
 type ShopifyConnectionRow = {
   shopDomain: string
