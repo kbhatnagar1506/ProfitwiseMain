@@ -15,7 +15,7 @@ if [ -z "$DATABASE_URL" ]; then
 fi
 
 # Run migrations using psql
-MIGRATIONS_DIR="v0-login-page-clone-2/migrations"
+MIGRATIONS_DIR="web/migrations"
 
 if [ ! -d "$MIGRATIONS_DIR" ]; then
   echo "Migrations directory not found: $MIGRATIONS_DIR"
