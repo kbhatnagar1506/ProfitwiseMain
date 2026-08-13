@@ -77,7 +77,7 @@ Use the script `scripts/bucket-by-user-and-extract-invoices.mjs` to:
 **Without DB (group by scope only):**
 
 ```bash
-cd v0-login-page-clone-2
+cd web
 GCP_ENTITY_BUCKET=profitwise-storage2026 node scripts/bucket-by-user-and-extract-invoices.mjs ../path/to/key.json [--out=./invoices]
 ```
 

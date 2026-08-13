@@ -4,11 +4,11 @@ The Next.js application: API routes, domain logic, background workers and UI.
 For product context, architecture and the reconciliation model, start with the
 [repository README](../README.md).
 
-> **On the directory name.** `v0-login-page-clone-2` is a leftover from the
-> project's first scaffold in v0.app. It now holds the entire application. The
-> name is load-bearing in deploy configuration (`Procfile`, the root
-> `package.json` scripts and `run-migrations.sh` all reference it), so renaming
-> it is a coordinated change rather than a `git mv`.
+> **Deploy note.** This directory was previously named `v0-login-page-clone-2`,
+> after the project's first scaffold in v0.app. The path is referenced by the
+> `Procfile`, the root `package.json` scripts, `run-migrations.sh` and CI — all
+> updated — but any **Root Directory** setting configured in Vercel or Heroku
+> lives outside the repository and must be repointed to `web` separately.
 
 ---
 

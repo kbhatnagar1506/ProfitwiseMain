@@ -22,7 +22,7 @@ Successful precedence rows include `metadata.classification_precedence` with a s
 ## Extending aliases (per tenant)
 
 - **Insert** rows into `user_classification_signatures` (`signature` stored uppercase; `alias_role`, `canonical_key`). Unique on `(user_id, signature)`.
-- **Seed script:** from `v0-login-page-clone-2`, with DB env configured:  
+- **Seed script:** from `web`, with DB env configured:  
   `USER_ID=<users.id uuid> npm run seed:classification-signatures`  
   Seeds the former default signatures for that user (idempotent `ON CONFLICT DO NOTHING`).
 - Empty set for a user → step 4 is a no-op (same as an empty map).

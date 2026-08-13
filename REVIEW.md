@@ -1,6 +1,6 @@
 # Codebase review — Profitwise
 
-Reviewed against `claude/github-holiday-contributions-xqax23`. Scope of the
+Reviewed against `cursor-branch`. Scope of the
 codebase: ~104k lines of TypeScript (51k `lib/`, 31k `app/`, 21k `components/`),
 169 API route handlers, ~140 `lib/` modules.
 
