@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: web/coverage
+          retention-days: 14
+
+  typecheck:
+    name: Typecheck (non-blocking)
+    runs-on: ubuntu-latest
+    # The app currently builds with `typescript.ignoreBuildErrors: true` and has
+    # a backlog of pre-existing type errors (see REVIEW.md). This job reports the
+    # current count so the number can be driven down, but does not gate merges
+    # yet. Flip `continue-on-error` to false once the backlog reaches zero.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Report type errors
+        run: |
+          npx tsc --noEmit 2>&1 | tee tsc.log || true
+          COUNT=$(grep -cE 'error TS' tsc.log || true)
+          echo "### TypeScript errors: ${COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Baseline recorded in REVIEW.md was 411; current target is 352." >> "$GITHUB_STEP_SUMMARY"
