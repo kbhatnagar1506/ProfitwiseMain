@@ -238,3 +238,15 @@ what is knowingly still broken, and what to do next. Current highlights:
 | [Queue](web/docs/BULL_QUEUE_IMPLEMENTATION.md) | Background job processing |
 | [Quick start](docs/QUICK_START_GUIDE.md) | Fast local setup |
 | [Review](REVIEW.md) | Findings, known gaps, testing roadmap |
+
+Each significant directory also carries its own README, covering the conventions
+that apply there — these sit next to the code and are the most likely to stay
+accurate:
+
+[`web/lib/`](web/lib/README.md) — the domain layer and its module families ·
+[`web/lib/state/`](web/lib/state/README.md) — forecasting and derived state ·
+[`web/lib/queue/`](web/lib/queue/README.md) — background jobs ·
+[`web/app/api/`](web/app/api/README.md) — **the five authentication tiers** ·
+[`web/components/`](web/components/README.md) ·
+[`web/migrations/`](web/migrations/README.md) — the two schema paths ·
+[`web/scripts/`](web/scripts/README.md)
