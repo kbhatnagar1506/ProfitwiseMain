@@ -127,7 +127,7 @@ The `refresh_jobs` table is created automatically on first use via `initializeRe
 Alternatively, run the migration manually:
 
 ```bash
-psql $DATABASE_URL -f v0-login-page-clone-2/migrations/001_create_refresh_jobs.sql
+psql $DATABASE_URL -f web/migrations/001_create_refresh_jobs.sql
 ```
 
 ### Environment Variables

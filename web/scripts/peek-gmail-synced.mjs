@@ -4,7 +4,7 @@
  * Uses DATABASE_URL (direct URL to your GCP Postgres).
  *
  * Run on Heroku:
- *   heroku run "cd v0-login-page-clone-2 && node scripts/peek-gmail-synced.mjs" --app profitwise-login-page
+ *   heroku run "cd web && node scripts/peek-gmail-synced.mjs" --app profitwise-login-page
  */
 
 import pg from "pg"

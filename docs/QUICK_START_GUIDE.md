@@ -304,7 +304,7 @@ ORDER BY count DESC;
 The table is created automatically on first use. If it fails:
 
 ```bash
-psql $DATABASE_URL -f v0-login-page-clone-2/migrations/001_create_refresh_jobs.sql
+psql $DATABASE_URL -f web/migrations/001_create_refresh_jobs.sql
 ```
 
 ## Next Steps

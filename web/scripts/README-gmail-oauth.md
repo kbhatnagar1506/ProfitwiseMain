@@ -40,10 +40,10 @@ Messages are synced into the `gmail_synced_messages` table. To run sync every ho
 
 ## 2. Run the script
 
-From the repo root (or from `v0-login-page-clone-2`):
+From the repo root (or from `web`):
 
 ```bash
-cd v0-login-page-clone-2
+cd web
 
 GMAIL_OAUTH_CLIENT_ID="252652300630-j91n5kui0pdgnilvgt3t22bhtkeg6tns.apps.googleusercontent.com" \
 GMAIL_OAUTH_CLIENT_SECRET="your-client-secret-from-console" \

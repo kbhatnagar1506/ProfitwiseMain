@@ -1,7 +1,7 @@
 /**
  * One-off: insert per-tenant classification signatures (former CANONICAL_ALIAS_MAP).
  *
- * Usage (from v0-login-page-clone-2, with DATABASE_URL or Cloud SQL env set):
+ * Usage (from web, with DATABASE_URL or Cloud SQL env set):
  *   USER_ID=<uuid> npx tsx scripts/seed-user-classification-signatures.ts
  */
 

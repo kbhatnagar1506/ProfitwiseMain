@@ -67,7 +67,7 @@ Gmail       ─┘      └─────────────────�
 state, with exactly six permitted write paths, all routed through
 `lib/ar-ap-status.ts`. `display_status` is a stored generated column; `overdue`
 is computed at query time and never persisted. See
-[`ar-ap-architecture.md`](v0-login-page-clone-2/docs/ar-ap-architecture.md).
+[`ar-ap-architecture.md`](web/docs/ar-ap-architecture.md).
 
 **Entity resolution** is its own layer — bank descriptors, ledger contacts and
 processor payouts rarely agree on a name. Alias normalization, camelCase
@@ -105,7 +105,7 @@ Slack · Twilio (WhatsApp) · Supermemory
 ├── REVIEW.md                    engineering review: findings, known gaps, roadmap
 ├── Procfile                     web + worker dynos
 ├── docs/                        cross-cutting operational docs
-└── v0-login-page-clone-2/       the application
+└── web/                         the application
     ├── app/
     │   ├── api/                 169 route handlers across 37 groups
     │   ├── dashboard/           34 dashboard surfaces
@@ -129,7 +129,7 @@ Slack · Twilio (WhatsApp) · Supermemory
 **Prerequisites:** Node 20+, PostgreSQL, Redis.
 
 ```bash
-cd v0-login-page-clone-2
+cd web
 npm install
 cp .env.example .env.local     # then fill in the values below
 npm run dev
@@ -166,14 +166,14 @@ independently optional — the app degrades gracefully when one is unconfigured.
 | `CRON_SECRET` / `CLEAN_DB_SECRET` | Scheduled and admin endpoint auth |
 
 Per-integration setup lives in
-[`v0-login-page-clone-2/docs/`](v0-login-page-clone-2/docs/) —
-[Plaid](v0-login-page-clone-2/docs/PLAID_SETUP.md),
-[QuickBooks](v0-login-page-clone-2/docs/QBO_HEROKU_AND_INTUIT_SETUP.md),
-[Xero](v0-login-page-clone-2/docs/XERO_SETUP.md),
-[Slack](v0-login-page-clone-2/docs/SLACK_SETUP.md),
-[Twilio/WhatsApp](v0-login-page-clone-2/docs/TWILIO_WHATSAPP_SETUP.md),
-[database](v0-login-page-clone-2/docs/DATABASE_SETUP.md),
-[GCS bucket](v0-login-page-clone-2/docs/GCP_ENTITY_BUCKET_SETUP.md).
+[`web/docs/`](web/docs/) —
+[Plaid](web/docs/PLAID_SETUP.md),
+[QuickBooks](web/docs/QBO_HEROKU_AND_INTUIT_SETUP.md),
+[Xero](web/docs/XERO_SETUP.md),
+[Slack](web/docs/SLACK_SETUP.md),
+[Twilio/WhatsApp](web/docs/TWILIO_WHATSAPP_SETUP.md),
+[database](web/docs/DATABASE_SETUP.md),
+[GCS bucket](web/docs/GCP_ENTITY_BUCKET_SETUP.md).
 
 ---
 
@@ -230,11 +230,11 @@ what is knowingly still broken, and what to do next. Current highlights:
 
 | Document | Contents |
 | --- | --- |
-| [How it works](v0-login-page-clone-2/docs/HOW_IT_WORKS.md) | End-to-end flow, ingestion → UI |
-| [Reconciliation layer](v0-login-page-clone-2/docs/RECONCILIATION_LAYER.md) | The waterfall in detail |
-| [AR/AP architecture](v0-login-page-clone-2/docs/ar-ap-architecture.md) | Status SSOT and its write paths |
-| [Classification precedence](v0-login-page-clone-2/docs/CLASSIFICATION_PRECEDENCE.md) | How movement classes are decided |
-| [Entity graph](v0-login-page-clone-2/docs/ENTITY_GRAPH_INTEGRATION.md) | Identity resolution |
-| [Queue](v0-login-page-clone-2/docs/BULL_QUEUE_IMPLEMENTATION.md) | Background job processing |
+| [How it works](web/docs/HOW_IT_WORKS.md) | End-to-end flow, ingestion → UI |
+| [Reconciliation layer](web/docs/RECONCILIATION_LAYER.md) | The waterfall in detail |
+| [AR/AP architecture](web/docs/ar-ap-architecture.md) | Status SSOT and its write paths |
+| [Classification precedence](web/docs/CLASSIFICATION_PRECEDENCE.md) | How movement classes are decided |
+| [Entity graph](web/docs/ENTITY_GRAPH_INTEGRATION.md) | Identity resolution |
+| [Queue](web/docs/BULL_QUEUE_IMPLEMENTATION.md) | Background job processing |
 | [Quick start](docs/QUICK_START_GUIDE.md) | Fast local setup |
 | [Review](REVIEW.md) | Findings, known gaps, testing roadmap |
