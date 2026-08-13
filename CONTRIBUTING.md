@@ -95,12 +95,7 @@ Updates to it are explicit merges, never fast-forwards or force pushes.
 
 ## Licence
 
-Check the repository root for a `LICENSE` file.
+Released under the [MIT License](LICENSE) — you may use, copy, modify and
+distribute this code, including commercially, provided the copyright notice and
+licence text are retained. The software is provided without warranty.
 
-**If there is none, default copyright applies: all rights reserved.** You may
-view the code, but you have no licence to copy, modify, redistribute or use it,
-and a fork carries no rights either. That is the legal default for any published
-work without an explicit grant — not something inferred from the repository
-being public.
-
-If you want to use this code for anything, ask first: **krishna@profitwise.app**
