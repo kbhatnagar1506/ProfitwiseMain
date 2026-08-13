@@ -149,21 +149,27 @@ npm run worker
 
 ### Environment
 
-At minimum you need `DATABASE_URL` and `REDIS_URL`. Each integration is
-independently optional — the app degrades gracefully when one is unconfigured.
+At minimum you need a database and Redis. Every integration is independently
+optional — the app degrades gracefully when one is unconfigured.
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `REDIS_URL` | Bull queue backend |
+| `DATABASE_URL` | PostgreSQL connection string (or the four `INSTANCE_CONNECTION_NAME` / `DB_*` variables for Cloud SQL) |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Bull queue backend — host/port/password, **not** a URL |
 | `APP_URL` | Public base URL, used to build OAuth redirect URIs |
 | `PLAID_CLIENT_ID` / `PLAID_SECRET` | Bank movement sync |
-| `QUICKBOOKS_CLIENT_ID` / `_SECRET` | QuickBooks OAuth |
-| `XERO_CLIENT_ID` / `_SECRET` | Xero OAuth |
+| `QUICKBOOKS_CLIENT_ID` / `_CLIENT_SECRET` | QuickBooks OAuth |
+| `XERO_CLIENT_ID` / `_CLIENT_SECRET` | Xero OAuth |
 | `STRIPE_SECRET_KEY` | Stripe invoices and payouts |
 | `OPENAI_API_KEY` | LLM matching tier (Stage 4) |
 | `SUPERMEMORY_API_KEY` | Entity memory grounding |
 | `CRON_SECRET` / `CLEAN_DB_SECRET` | Scheduled and admin endpoint auth |
+
+**[CONNECTORS.md](CONNECTORS.md) is the complete reference** — every external
+system, what it contributes, and its exact variable names. Several are
+non-obvious (`GMAIL_OAUTH_CLIENT_ID`, not `GMAIL_CLIENT_ID`;
+`TWILIO_WHATSAPP_FROM`, not `_NUMBER`). The full annotated list lives in
+[`web/.env.example`](web/.env.example).
 
 Per-integration setup lives in
 [`web/docs/`](web/docs/) —
@@ -230,6 +236,8 @@ what is knowingly still broken, and what to do next. Current highlights:
 
 | Document | Contents |
 | --- | --- |
+| **[Usage](USAGE.md)** | **Start here** — run it, connect data, work on it, deploy it, troubleshoot |
+| **[Connectors](CONNECTORS.md)** | Every external system, what it provides, and its configuration |
 | [How it works](web/docs/HOW_IT_WORKS.md) | End-to-end flow, ingestion → UI |
 | [Reconciliation layer](web/docs/RECONCILIATION_LAYER.md) | The waterfall in detail |
 | [AR/AP architecture](web/docs/ar-ap-architecture.md) | Status SSOT and its write paths |
