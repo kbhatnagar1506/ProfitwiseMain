@@ -84,7 +84,7 @@ Invoice Amount: $${invoiceAmount.toFixed(2)}
 
 Rules:
 - Bank description MUST semantically match the entity name
-- Different vendors/organizations = NO MATCH (e.g., "Spread The Love Foods" ≠ "High Brew")
+- Different vendors/organizations = NO MATCH (e.g., "Summit Provisions Foods" ≠ "Deep Roast")
 - Same vendor with name variations = YES (e.g., "ABC Corp" = "ABC")
 - Amount within 5% = acceptable
 - Amount mismatch + name mismatch = NO MATCH
@@ -681,7 +681,7 @@ export async function runReconciliationWaterfall(userId: string): Promise<Reconc
 
     // ─── Stage 0 (NEW): AI Semantic Entity Name Validation ───────────────────
     // Filter candidates to only those whose entity name semantically matches the
-    // bank description. This prevents wrong-entity matches like "BOBOS" → "MUSH".
+    // bank description. This prevents wrong-entity matches like "NORTHWIND" → "PULP".
     // Uses fast-path (string similarity) for obvious accepts/rejects, falls back
     // to LLM for ambiguous cases. Per-run cache avoids redundant calls.
     let entityValidationMap = new Map<string, EntityValidationResult>()

@@ -9,8 +9,8 @@
  *    entity graph rather than relying on generic string similarity.
  *
  * 2. LLM with memory context: Feed Supermemory results into the GPT-4o prompt
- *    as authoritative context. The LLM normalizes "SP BOBOS - WHOLESALE" →
- *    "Bobos" because Supermemory already knows that pattern maps to "Bobos".
+ *    as authoritative context. The LLM normalizes "SP NORTHWIND - WHOLESALE" →
+ *    "Northwind" because Supermemory already knows that pattern maps to "Northwind".
  *    Without Supermemory context, the LLM would have to guess.
  *
  * 3. Fast-path: For well-known patterns that appear in entity profiles
@@ -286,14 +286,14 @@ ${candidateLines}
 
 Rules:
 - Use the entity memory above as authoritative ground truth for name resolution
-- "SP BOBOS - WHOLESALE" matches "Bobos" — same vendor, abbreviated bank label  
-- "SP SMASH FOODS" matches "Smash Foods" — same vendor
+- "SP NORTHWIND - WHOLESALE" matches "Northwind" — same vendor, abbreviated bank label  
+- "SP CRESTLINE FOODS" matches "Crestline Foods" — same vendor
 - Processor prefixes ("SP ", "ACH ", "PREAUTHORIZED ACH ") are common and should be ignored when matching
-- "Neve Foods" does NOT match "Think Jerky" — completely different vendors
-- "Harmless Harvest" does NOT match "Belle's Gourmet Popcorn" — different vendors
-- IMPORTANT: "Bryant Novick" MATCHES "Bryant Novick (UAB Football)" — the part in parentheses is just an org qualifier, not a different person
-- IMPORTANT: "Sarah Katz" MATCHES "Sarah Katz (Marlins)" — parenthetical is just context
-- IMPORTANT: "David Vaugh" MATCHES "David Vaugh (Troubadour)" — typos and parentheticals are fine
+- "Halcyon Foods" does NOT match "Trailhead Jerky" — completely different vendors
+- "Clearwater Harvest" does NOT match "Marlowe's Gourmet Popcorn" — different vendors
+- IMPORTANT: "Marcus Feld" MATCHES "Marcus Feld (Eastgate Football)" — the part in parentheses is just an org qualifier, not a different person
+- IMPORTANT: "Erin Delgado" MATCHES "Erin Delgado (Riverside)" — parenthetical is just context
+- IMPORTANT: "Daniel Whitfiel" MATCHES "Daniel Whitfiel (Wayfarer)" — typos and parentheticals are fine
 - When entity name starts with or contains the bank description as a significant substring → YES
 - Match by VENDOR/CUSTOMER NAME ONLY, ignore amounts and dates
 - If memory context says this bank description maps to a canonical name, trust it
@@ -362,7 +362,7 @@ Respond ONLY with valid JSON (no markdown):
 // ─── Fast-path: pure string similarity ────────────────────────────────────────
 
 /**
- * Strip parenthetical organization qualifiers: "Bryant Novick (UAB Football)" → "Bryant Novick"
+ * Strip parenthetical organization qualifiers: "Marcus Feld (Eastgate Football)" → "Marcus Feld"
  * These are contact metadata, not part of the person/vendor name itself.
  */
 function stripOrgQualifier(s: string): string {
@@ -388,7 +388,7 @@ function fastPathValidate(
     return { isValid: true, confidence: 0.95, reason: "Entity contains bank description" }
   }
 
-  // Strip parenthetical org qualifiers: "Bryant Novick (UAB Football)" → "Bryant Novick"
+  // Strip parenthetical org qualifiers: "Marcus Feld (Eastgate Football)" → "Marcus Feld"
   // This is the most common false-rejection case.
   const nameCore = stripOrgQualifier(nameLow)
   const bankCore = stripOrgQualifier(bankLow)

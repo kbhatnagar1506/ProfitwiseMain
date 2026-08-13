@@ -17,7 +17,7 @@ Set `CLASSIFICATION_PRECEDENCE=false` to skip this layer (not recommended in pro
 
 ## Metadata
 
-Successful precedence rows include `metadata.classification_precedence` with a short source tag (e.g. `processor_interceptor:processor_rail_inflow`, `canonical_alias:sarah_katz_marlins`).
+Successful precedence rows include `metadata.classification_precedence` with a short source tag (e.g. `processor_interceptor:processor_rail_inflow`, `canonical_alias:erin_delgado_riverside`).
 
 ## Extending aliases (per tenant)
 

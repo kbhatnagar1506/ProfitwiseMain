@@ -40,10 +40,11 @@ GCP: `list-gcp-bucket.mjs`
 
 ## Unowned leftovers
 
-`check_status.mjs` and `query_jack.js` are ad-hoc one-offs with unclear names,
-referenced by nothing in the codebase. They were moved here from the app root
-during cleanup rather than deleted, in case they are still useful. If you do not
-recognise them, they are safe to remove.
+`check_status.mjs` is an ad-hoc one-off with an unclear name,
+referenced by nothing in the codebase. It was moved here from the app root
+during cleanup rather than deleted, in case it is still useful. If you do not
+recognise it, it is safe to remove. (A sibling script, `query_jack.js`, was
+deleted outright: it hardcoded a real customer email address.)
 
 ---
 

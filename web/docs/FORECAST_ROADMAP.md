@@ -196,7 +196,7 @@ Then combine. Answer: "is the business healthy?" vs "did treasury juggling save 
 
 ### 3.1 Causal Action Simulation
 
-Not just: "delaying RTZN by 5 days adds cash"
+Not just: "delaying ZNTH by 5 days adds cash"
 
 But: cash improvement + vendor relationship risk + late-fee probability + impact on next month trough + chance of larger later crunch
 
@@ -216,7 +216,7 @@ For each major driver:
 - Confidence band
 - Assumptions
 
-Example: "Delay RTZN by 5 days — 14d cash improvement: +$5.0k, likely range +$3.1k–$6.2k, confidence: low-medium, assumes vendor payment can slip without penalty"
+Example: "Delay ZNTH by 5 days — 14d cash improvement: +$5.0k, likely range +$3.1k–$6.2k, confidence: low-medium, assumes vendor payment can slip without penalty"
 
 ### 3.4 Model Governance
 

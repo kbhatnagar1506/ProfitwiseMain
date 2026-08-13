@@ -9,8 +9,8 @@
 import { vi, beforeEach, afterEach } from "vitest"
 import type { CandidateEntity } from "./reconciliation-entity-validator"
 
-const CANDIDATE: CandidateEntity = { entity_id: "e1", display_name: "RTZN Brand Strategy" }
-const DESCRIPTOR = "Rtzn Brand Strat Invoices"
+const CANDIDATE: CandidateEntity = { entity_id: "e1", display_name: "ZNTH Brand Strategy" }
+const DESCRIPTOR = "Znth Brand Strat Invoices"
 
 /** Load the module with an API key present so the LLM tier is reachable. */
 async function importWithLlm() {
@@ -75,7 +75,7 @@ describe("LLM acceptance and rejection", () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
     const prompt = body.messages[0].content as string
     expect(prompt).toContain(DESCRIPTOR)
-    expect(prompt).toContain("RTZN Brand Strategy")
+    expect(prompt).toContain("ZNTH Brand Strategy")
     expect(prompt).toContain("e1")
     expect(body.temperature).toBe(0) // deterministic classification
   })
@@ -132,12 +132,12 @@ describe("LLM failure handling falls back to deterministic thresholds", () => {
     fetchMock.mockRejectedValue(new Error("offline"))
     const { validateEntitiesForBankDescription } = await importWithLlm()
 
-    // "Bobos Wholesale" vs "Bobos Wholesale Co" scores above the 0.70 fallback bar
+    // "Northwind Wholesale" vs "Northwind Wholesale Co" scores above the 0.70 fallback bar
     // but below the fast-path accept bar, so it reaches the LLM tier and then
     // falls back to the deterministic rule.
     const r = (
-      await validateEntitiesForBankDescription("Bobos Oat Bar Wholesale", [
-        { entity_id: "e2", display_name: "Bobos Oat Bars Wholesale" },
+      await validateEntitiesForBankDescription("Northwind Oat Bar Wholesale", [
+        { entity_id: "e2", display_name: "Northwind Oat Bars Wholesale" },
       ])
     ).get("e2")!
 
@@ -179,19 +179,19 @@ describe("LLM tier is skipped when the fast path already decided", () => {
     const { validateEntitiesForBankDescription } = await importWithLlm()
 
     const r = (
-      await validateEntitiesForBankDescription("Sanzo", [{ entity_id: "e1", display_name: "Sanzo" }])
+      await validateEntitiesForBankDescription("Verano", [{ entity_id: "e1", display_name: "Verano" }])
     ).get("e1")!
 
     expect(r.method).toBe("fast_accept")
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("does not call the LLM for an obviously unrelated short name", async () => {
+  it("does not call the LLM for an obviously unrelated name", async () => {
     fetchMock.mockResolvedValue(llmResponse({ e1: true }))
     const { validateEntitiesForBankDescription } = await importWithLlm()
 
     const r = (
-      await validateEntitiesForBankDescription("Sanzo", [{ entity_id: "e1", display_name: "CocoTaps" }])
+      await validateEntitiesForBankDescription("Verano", [{ entity_id: "e1", display_name: "Trailhead Jerky" }])
     ).get("e1")!
 
     expect(r.method).toBe("fast_reject")
@@ -204,7 +204,7 @@ describe("LLM tier is skipped when the fast path already decided", () => {
     fetchMock.mockResolvedValue(llmResponse({ e1: false }))
     const { validateEntitiesForBankDescription } = await importWithLlm()
 
-    await validateEntitiesForBankDescription("Sanzo", [
+    await validateEntitiesForBankDescription("Verano", [
       { entity_id: "e1", display_name: "Completely Unrelated Vendor Inc" },
     ])
 

@@ -301,7 +301,7 @@ or immediately if you are confident reading the diffs.
   bearer token; standardising on per-scope secrets would be an improvement.
   *(OAuth callbacks were checked and do validate `state` correctly.)*
 - **Fast-reject is conservative, so most pairs pay for an LLM round-trip.**
-  `"Sanzo"` vs `"CocoTaps"` rejects locally, but `"Sanzo"` vs
+  `"Verano"` vs `"PalmTaps"` rejects locally, but `"Verano"` vs
   `"Completely Unrelated Vendor Inc"` escalates. Pinned as a cost note in the LLM
   test file; worth revisiting if the OpenAI bill matters.
 - **23 MB of deleted media still lives in git history.** The working tree is
