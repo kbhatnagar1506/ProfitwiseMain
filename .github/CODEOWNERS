@@ -1,0 +1,37 @@
+# Every path in this repository requires review from the owner before merging.
+#
+# For this to be enforced rather than advisory, enable branch protection on
+# `main` and `production` with "Require review from Code Owners" turned on.
+# See CONTRIBUTING.md for the full set of required settings.
+
+* @kbhatnagar1506
+
+# Paths where an unreviewed change is most costly. Listed explicitly so the
+# requirement survives any future narrowing of the catch-all rule above.
+
+# Money paths — reconciliation, confidence scoring, AR/AP status
+/web/lib/reconciliation-*        @kbhatnagar1506
+/web/lib/confidence-*            @kbhatnagar1506
+/web/lib/ar-ap-status.ts         @kbhatnagar1506
+/web/lib/attribution-*           @kbhatnagar1506
+/web/lib/full-reconciliation.ts  @kbhatnagar1506
+
+# Authentication and session handling
+/web/lib/auth.ts                 @kbhatnagar1506
+/web/lib/require-session.ts      @kbhatnagar1506
+/web/lib/session-cookie.ts       @kbhatnagar1506
+/web/middleware.ts               @kbhatnagar1506
+
+# Destructive and scheduled endpoints
+/web/app/api/admin/              @kbhatnagar1506
+/web/app/api/cron/               @kbhatnagar1506
+
+# Database access and schema
+/web/lib/db.ts                   @kbhatnagar1506
+/web/lib/db-rollback.ts          @kbhatnagar1506
+/web/migrations/                 @kbhatnagar1506
+
+# CI, and the rules that govern contribution itself
+/.github/                        @kbhatnagar1506
+/CONTRIBUTING.md                 @kbhatnagar1506
+/SECURITY.md                     @kbhatnagar1506
