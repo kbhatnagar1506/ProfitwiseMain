@@ -216,7 +216,35 @@ Suggested sequence: type the `query<T>()` call sites in the money paths first
 `grep -c 'rowCount' lib/*.ts app/api/**/route.ts` is a good five-minute audit
 for the second category.
 
-### 3.3 LLM entity validation fails open — MEDIUM
+### 3.3 `identifyPaymentRisks` references an undeclared `client` — MEDIUM
+
+`lib/ai-payment-patterns.ts:154` calls:
+
+```ts
+const response = await client.messages.create({
+  model: "claude-3-5-sonnet-20241022", …
+})
+```
+
+`client` is **never declared, imported or assigned** — that line is its only
+occurrence in the file. No Anthropic SDK is in `package.json` or installed. The
+function throws `ReferenceError: client is not defined` the moment it runs.
+
+It is not currently firing: `lib/ai-forecast-enhancement.ts` imports
+`identifyPaymentRisks` alongside `analyzePaymentPatterns`, but only calls the
+latter. So this is dead code with a latent crash, reachable the instant someone
+wires up the import that already exists.
+
+This is the clearest illustration of what §3.2 costs. The compiler already knows
+— `error TS2304: Cannot find name 'client'` — and `ignoreBuildErrors` discards
+it. Four other `TS2304` errors are outstanding; each is the same class of defect.
+
+Fix by either deleting the function or rewriting it against the same `fetch`
+pattern the rest of the codebase uses for LLM calls. Adding `@anthropic-ai/sdk`
+would also work but introduces a second provider, so it warrants a deliberate
+decision.
+
+### 3.4 LLM entity validation fails open — MEDIUM
 
 `lib/reconciliation-entity-validator.ts`, in the LLM result mapping:
 
@@ -233,7 +261,7 @@ Recommend defaulting to `null` (validation skipped) so it joins the strict path.
 
 Pinned by `describe("KNOWN GAP: candidates omitted by the LLM default to accepted")`.
 
-### 3.4 Matcher precision gaps — MEDIUM
+### 3.5 Matcher precision gaps — MEDIUM
 
 Both in `lib/levenshtein.ts`, both pinned by tests marked `KNOWN`:
 
@@ -244,7 +272,7 @@ Both in `lib/levenshtein.ts`, both pinned by tests marked `KNOWN`:
   A caller passing `0.99` for near-exact precision still receives a `0.85`
   substring match. The threshold only governs the direct and alias tiers.
 
-### 3.5 ~32 remaining `#region agent log` debug blocks — MEDIUM
+### 3.6 ~32 remaining `#region agent log` debug blocks — MEDIUM
 
 The three that made network calls are gone (§1.d). Roughly 32 `console.log`-only
 debug regions remain, concentrated in the two largest reconciliation modules:
@@ -262,7 +290,7 @@ or immediately if you are confident reading the diffs.
 
 `grep -rn "#region agent log" lib/` lists them all.
 
-### 3.6 Operational notes — LOW
+### 3.7 Operational notes — LOW
 
 - **Admin/cron auth is a single shared secret.** All 16 `/api/admin/*` routes and
   five of six `/api/cron/*` routes authenticate with the same `CLEAN_DB_SECRET`
