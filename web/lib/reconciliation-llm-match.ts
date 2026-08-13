@@ -241,8 +241,8 @@ export async function batchLLMMatch(
 
 CRITICAL RULE: SEMANTIC NAME MATCHING IS MANDATORY
 - Bank description MUST semantically match the customer/vendor name
-- If bank shows "Spread The Love Foods", it can ONLY match invoices from "Spread The Love Foods"
-- Do NOT split payments across vendors with different names (e.g., "Spread The Love" cannot pay "High Brew")
+- If bank shows "Summit Provisions Foods", it can ONLY match invoices from "Summit Provisions Foods"
+- Do NOT split payments across vendors with different names (e.g., "Summit Provisions" cannot pay "Deep Roast")
 - If names don't match, confidence is AUTOMATICALLY low or rejected
 
 CONTEXT:
@@ -255,8 +255,8 @@ MATCHING RULES:
 1. SEMANTIC ENTITY MATCH (MANDATORY):
    - Organization name in bank description MUST match organization in parentheses of customer/vendor name
    - OR be a clear semantic variation (e.g., "ABC" = "ABC Corp", "Acme Inc" = "Acme")
-   - REJECT if names are completely different (e.g., "Spread The Love" ≠ "High Brew")
-   - REJECT if bank shows person name (e.g., "Sarah Katz") but invoice is under different entity (e.g., "Jack")
+   - REJECT if names are completely different (e.g., "Summit Provisions" ≠ "Deep Roast")
+   - REJECT if bank shows person name (e.g., "Erin Delgado") but invoice is under different entity (e.g., "Jack")
 
 2. Amount: Payment within ±5% of invoice amount (accounts for fees)
    - For aggregated payments: ALL matched invoices must be from the SAME customer/vendor
@@ -277,9 +277,9 @@ CONFIDENCE LEVELS:
 - REJECT: Names don't match semantically OR splitting across different vendors
 
 REJECTION EXAMPLES (output nothing for these):
-- Bank: "Spread The Love Foods" → Invoice: "High Brew" (different vendors)
-- Bank: "Sarah Katz (Marlins)" → Invoice: "Jack" (different entities)
-- Bank: "Tyler Hines" → Invoices: "Clemson", "USC", "Bay FC" (aggregation across unrelated entities)
+- Bank: "Summit Provisions Foods" → Invoice: "Deep Roast" (different vendors)
+- Bank: "Erin Delgado (Riverside)" → Invoice: "Jack" (different entities)
+- Bank: "Owen Marsh" → Invoices: "Fairview", "USC", "Harbor FC" (aggregation across unrelated entities)
 
 Only output matches you're confident about. Do not guess. When in doubt, reject and let human review.`
 

@@ -403,20 +403,20 @@ For each bank INFLOW (customer payment), find the matching INVOICE(s) and decide
 You MUST NOT match a payment to an invoice if the customer names are clearly different people.
 
 ### EXAMPLES OF WRONG MATCHES (NEVER DO THIS):
-❌ "Josh Bennett" payment → "Molly DeJongh" invoice (DIFFERENT PEOPLE!)
-❌ "Kenzie Masters" payment → "Katie O'Connor" invoice (DIFFERENT PEOPLE!)
-❌ "Sarah Katz" payment → "David Vaughn" invoice (DIFFERENT PEOPLE!)
-❌ "Leann Brenneke" payment → "Lacey Carpovich" invoice (DIFFERENT PEOPLE!)
+❌ "Alan Reyes" payment → "Ingrid VanHout" invoice (DIFFERENT PEOPLE!)
+❌ "Delia Barrow" payment → "Fiona O'Bryan" invoice (DIFFERENT PEOPLE!)
+❌ "Erin Delgado" payment → "Daniel Whitfield" invoice (DIFFERENT PEOPLE!)
+❌ "Corinne Halvard" payment → "Renata Volkov" invoice (DIFFERENT PEOPLE!)
 
 ### EXAMPLES OF CORRECT MATCHES:
-✅ "Sarah Katz (Marlins)" payment → "Sarah Katz" invoice (SAME PERSON, parenthetical is context)
+✅ "Erin Delgado (Riverside)" payment → "Erin Delgado" invoice (SAME PERSON, parenthetical is context)
 ✅ "JOHN SMITH" payment → "John Smith" invoice (SAME PERSON, case doesn't matter)
 ✅ "J. Smith" payment → "John Smith" invoice (SAME PERSON, abbreviation)
 
 ### ORGANIZATION CONTEXT IS NOT ENOUGH:
-❌ "Kenzie Masters (Tennessee Football)" → "Katie O'Connor (Tennessee Football)" 
+❌ "Delia Barrow (Tennessee Football)" → "Fiona O'Bryan (Tennessee Football)" 
    WRONG! Same organization but DIFFERENT PEOPLE!
-✅ "Kenzie Masters (Tennessee Football)" → "Kenzie Masters" 
+✅ "Delia Barrow (Tennessee Football)" → "Delia Barrow" 
    CORRECT! Same person, organization is just context.
 
 Use the name_similarity score as a guide:
@@ -562,7 +562,7 @@ Determine WHY there's no invoice and what action to take.
 ### LIKELY NEEDS INVOICE CREATED (decision: "create_invoice")
 - Clear customer name in bank description
 - Amount suggests a real sale (not a refund or adjustment)
-- Example: "Sarah Katz (Marlins)" paid $1,060 → Create invoice for Sarah Katz
+- Example: "Erin Delgado (Riverside)" paid $1,060 → Create invoice for Erin Delgado
 
 ### LIKELY A PREPAYMENT/DEPOSIT (decision: "needs_review")
 - Large round amounts ($5,000, $10,000)

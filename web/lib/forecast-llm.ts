@@ -100,7 +100,7 @@ export async function disambiguateEntity(
 }
 
 /**
- * Batch canonicalize raw entity strings (e.g. "MARLINS TEAM5618/Payment 30280") to human-readable names.
+ * Batch canonicalize raw entity strings (e.g. "RIVERSIDE TEAM5618/Payment 30280") to human-readable names.
  * Returns a map: raw -> canonical. Skips entries that look already clean.
  */
 export async function canonicalizeEntitiesBatch(

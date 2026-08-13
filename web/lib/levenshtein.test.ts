@@ -16,12 +16,12 @@ import {
 
 describe("levenshteinDistance", () => {
   it("returns 0 for identical strings", () => {
-    expect(levenshteinDistance("Sanzo", "Sanzo")).toBe(0)
+    expect(levenshteinDistance("Verano", "Verano")).toBe(0)
   })
 
   it("returns the other string's length when one side is empty", () => {
-    expect(levenshteinDistance("", "Bobos")).toBe(5)
-    expect(levenshteinDistance("Bobos", "")).toBe(5)
+    expect(levenshteinDistance("", "Northwind")).toBe(9)
+    expect(levenshteinDistance("Northwind", "")).toBe(9)
     expect(levenshteinDistance("", "")).toBe(0)
   })
 
@@ -37,9 +37,9 @@ describe("levenshteinDistance", () => {
 
   it("is symmetric regardless of argument order", () => {
     const pairs: Array<[string, string]> = [
-      ["Vaughn", "Vaugh"],
+      ["Whitfield", "Whitfiel"],
       ["a", "abcdefgh"],
-      ["Spread The Love", "Spread the Love Foods"],
+      ["Summit Provisions", "Summit Provisions Foods"],
     ]
     for (const [a, b] of pairs) {
       expect(levenshteinDistance(a, b)).toBe(levenshteinDistance(b, a))
@@ -47,29 +47,29 @@ describe("levenshteinDistance", () => {
   })
 
   it("is case-sensitive (normalization is the caller's job)", () => {
-    expect(levenshteinDistance("BOBOS", "bobos")).toBe(5)
+    expect(levenshteinDistance("NORTHWIND", "northwind")).toBe(9)
   })
 })
 
 describe("levenshteinSimilarity", () => {
   it("scores identical strings 1.0 and treats case as equal", () => {
-    expect(levenshteinSimilarity("Sanzo", "Sanzo")).toBe(1)
-    expect(levenshteinSimilarity("BOBOS", "bobos")).toBe(1)
+    expect(levenshteinSimilarity("Verano", "Verano")).toBe(1)
+    expect(levenshteinSimilarity("NORTHWIND", "northwind")).toBe(1)
   })
 
   it("scores two empty strings as identical, one empty as completely different", () => {
     expect(levenshteinSimilarity("", "")).toBe(1)
-    expect(levenshteinSimilarity("", "Bobos")).toBe(0)
-    expect(levenshteinSimilarity("Bobos", "")).toBe(0)
+    expect(levenshteinSimilarity("", "Northwind")).toBe(0)
+    expect(levenshteinSimilarity("Northwind", "")).toBe(0)
   })
 
   it("degrades proportionally to edit distance", () => {
-    // "Vaughn" vs "Vaugh": 1 edit over 6 chars
-    expect(levenshteinSimilarity("Vaughn", "Vaugh")).toBeCloseTo(1 - 1 / 6, 5)
+    // "Whitfield" vs "Whitfiel": 1 edit over 9 chars
+    expect(levenshteinSimilarity("Whitfield", "Whitfiel")).toBeCloseTo(1 - 1 / 9, 5)
   })
 
   it("never exceeds 1.0 or drops below 0 for realistic inputs", () => {
-    const samples = ["Sanzo", "CocoTaps", "Think Jerky", "SP BOBOS - WHOLESALE", "x"]
+    const samples = ["Verano", "PalmTaps", "Trailhead Jerky", "SP NORTHWIND - WHOLESALE", "x"]
     for (const a of samples) {
       for (const b of samples) {
         const s = levenshteinSimilarity(a, b)
@@ -92,30 +92,30 @@ describe("levenshteinSimilarity", () => {
 
 describe("tokenSimilarity", () => {
   it("is 1.0 for the same token set in a different order or case", () => {
-    expect(tokenSimilarity("Spread The Love", "love spread the")).toBe(1)
+    expect(tokenSimilarity("Summit Provisions", "provisions summit")).toBe(1)
   })
 
   it("is 0 when no tokens overlap", () => {
-    expect(tokenSimilarity("Sanzo", "CocoTaps")).toBe(0)
+    expect(tokenSimilarity("Verano", "PalmTaps")).toBe(0)
   })
 
   it("computes Jaccard overlap for partial matches", () => {
-    // {spread, the, love} vs {spread, the, love, foods}
-    // intersection 3, union 4 => 0.75
-    expect(tokenSimilarity("Spread The Love", "Spread the Love Foods")).toBeCloseTo(0.75, 5)
+    // {summit, provisions} vs {summit, provisions, foods}
+    // intersection 2, union 3 => 0.667
+    expect(tokenSimilarity("Summit Provisions", "Summit Provisions Foods")).toBeCloseTo(2 / 3, 5)
   })
 
   it("drops single-character tokens so initials do not inflate overlap", () => {
-    // "a" is filtered out on both sides, leaving {bobos} vs {bobos}
-    expect(tokenSimilarity("a Bobos", "Bobos a")).toBe(1)
+    // "a" is filtered out on both sides, leaving {northwind} vs {northwind}
+    expect(tokenSimilarity("a Northwind", "Northwind a")).toBe(1)
   })
 
   it("treats punctuation as a separator", () => {
-    expect(tokenSimilarity("Kate's Real Food", "Kate s Real Food")).toBe(1)
+    expect(tokenSimilarity("Rosa's Real Food", "Rosa s Real Food")).toBe(1)
   })
 
   it("returns 0 when only one side tokenizes to nothing", () => {
-    expect(tokenSimilarity("!!!", "Bobos")).toBe(0)
+    expect(tokenSimilarity("!!!", "Northwind")).toBe(0)
   })
 
   it("returns 1.0 when neither side has usable tokens", () => {
@@ -125,39 +125,39 @@ describe("tokenSimilarity", () => {
 
 describe("entityNameSimilarity", () => {
   it("blends edit distance (40%) and token overlap (60%)", () => {
-    const a = "Spread The Love"
-    const b = "Spread the Love Foods"
+    const a = "Summit Provisions"
+    const b = "Summit Provisions Foods"
     const expected = 0.4 * levenshteinSimilarity(a, b) + 0.6 * tokenSimilarity(a, b)
     expect(entityNameSimilarity(a, b)).toBeCloseTo(expected, 10)
   })
 
   it("scores identical names 1.0", () => {
-    expect(entityNameSimilarity("Sanzo", "Sanzo")).toBeCloseTo(1, 10)
+    expect(entityNameSimilarity("Verano", "Verano")).toBeCloseTo(1, 10)
   })
 
   it("scores unrelated names near zero", () => {
-    expect(entityNameSimilarity("Sanzo", "CocoTaps")).toBeLessThan(0.2)
+    expect(entityNameSimilarity("Verano", "PalmTaps")).toBeLessThan(0.2)
   })
 })
 
 describe("areSameEntity", () => {
   it("matches case-insensitively on exact names", () => {
-    expect(areSameEntity("BOBOS", "bobos")).toBe(true)
+    expect(areSameEntity("NORTHWIND", "northwind")).toBe(true)
   })
 
   it("returns false when either name is empty", () => {
-    expect(areSameEntity("", "Bobos")).toBe(false)
-    expect(areSameEntity("Bobos", "")).toBe(false)
+    expect(areSameEntity("", "Northwind")).toBe(false)
+    expect(areSameEntity("Northwind", "")).toBe(false)
   })
 
   it("matches when one name fully contains the other", () => {
-    expect(areSameEntity("Kate's Real Food", "Kate's Real Food [Wholesale]")).toBe(true)
+    expect(areSameEntity("Rosa's Real Food", "Rosa's Real Food [Wholesale]")).toBe(true)
   })
 
   it("respects a custom threshold", () => {
     // Unrelated names are rejected at the default threshold but accepted at 0.
-    expect(areSameEntity("Sanzo", "CocoTaps")).toBe(false)
-    expect(areSameEntity("Sanzo", "CocoTaps", 0)).toBe(true)
+    expect(areSameEntity("Verano", "PalmTaps")).toBe(false)
+    expect(areSameEntity("Verano", "PalmTaps", 0)).toBe(true)
   })
 
   it("KNOWN PRECISION GAP: bare substring rule matches short generic tokens", () => {
@@ -170,14 +170,14 @@ describe("areSameEntity", () => {
 
 describe("matchEntityName", () => {
   it("reports a direct match with method 'direct'", () => {
-    const r = matchEntityName("Sanzo", "Sanzo")
+    const r = matchEntityName("Verano", "Verano")
     expect(r.match).toBe(true)
     expect(r.method).toBe("direct")
     expect(r.score).toBeCloseTo(1, 10)
   })
 
   it("falls back to aliases when the primary name does not match", () => {
-    const r = matchEntityName("Harmless Harvest", "Belle's Gourmet Popcorn", ["Harmless Harvest"])
+    const r = matchEntityName("Clearwater Harvest", "Marlowe's Gourmet Popcorn", ["Clearwater Harvest"])
     expect(r.match).toBe(true)
     expect(r.method).toBe("alias")
   })
@@ -203,15 +203,15 @@ describe("matchEntityName", () => {
   })
 
   it("returns no match with the direct score when nothing matches", () => {
-    const r = matchEntityName("Sanzo", "CocoTaps")
+    const r = matchEntityName("Verano", "PalmTaps")
     expect(r.match).toBe(false)
     expect(r.method).toBe("none")
-    expect(r.score).toBeCloseTo(entityNameSimilarity("Sanzo", "CocoTaps"), 10)
+    expect(r.score).toBeCloseTo(entityNameSimilarity("Verano", "PalmTaps"), 10)
   })
 
   it("honours a custom threshold on the direct/alias tiers", () => {
     // Raising the bar past the blended score demotes it off the direct tier.
-    const r = matchEntityName("Vaughn Holdings", "Vaugh Holding", [], 0.99)
+    const r = matchEntityName("Whitfield Holdings", "Whitfiel Holding", [], 0.99)
     expect(r.match).toBe(false)
     expect(r.method).toBe("none")
   })
@@ -220,7 +220,7 @@ describe("matchEntityName", () => {
     // Even at threshold 0.99 the substring rule still returns a 0.85 match,
     // so a caller asking for near-exact precision does not get it.
     // Pinned deliberately — see REVIEW.md.
-    const r = matchEntityName("Spread The Love", "Spread the Love Foods", [], 0.99)
+    const r = matchEntityName("Summit Provisions", "Summit Provisions Foods", [], 0.99)
     expect(r.match).toBe(true)
     expect(r.method).toBe("contains_reverse")
     expect(r.score).toBeCloseTo(0.85, 10)
