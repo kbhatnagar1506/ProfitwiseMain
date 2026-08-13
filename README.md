@@ -10,7 +10,7 @@
   <img alt="connectors" src="https://img.shields.io/badge/connectors-14-blue">
   <img alt="stack" src="https://img.shields.io/badge/Next.js%2016-React%2019-black">
   <img alt="typescript" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
-  <img alt="licence" src="https://img.shields.io/badge/licence-all%20rights%20reserved-lightgrey">
+  <img alt="licence" src="https://img.shields.io/badge/licence-MIT-green">
 </p>
 
 <p align="center">
@@ -18,7 +18,8 @@
   <a href="CONNECTORS.md">Connectors</a> ·
   <a href="REVIEW.md">Engineering review</a> ·
   <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="SECURITY.md">Security</a>
+  <a href="SECURITY.md">Security</a> ·
+  <a href="LICENSE">MIT License</a>
 </p>
 
 ---
