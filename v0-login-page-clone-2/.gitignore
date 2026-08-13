@@ -18,6 +18,7 @@ yarn-error.log*
 
 # env files
 .env*
+!.env.example
 
 # GCP service account keys (use GCP_SERVICE_KEY_JSON env var instead)
 profitwise-mainapp-*.json
