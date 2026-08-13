@@ -539,19 +539,12 @@ export default function OAuthConnectorPage() {
               >
                 Open Gmail filters →
               </a>
-              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video w-full min-h-[320px]">
-                <video
-                  src="/gmail-filter-setup.mp4"
-                  controls
-                  className="w-full h-full object-contain"
-                  playsInline
-                  autoPlay
-                  muted
-                  loop
-                >
-                  Your browser does not support the video tag.
-                </video>
-              </div>
+              <ol className="rounded-lg border border-white/10 bg-white/5 p-5 space-y-2 text-sm text-gray-300 list-decimal list-inside">
+                <li>Open Gmail filters using the link above.</li>
+                <li>Choose <span className="text-white">Create a new filter</span>.</li>
+                <li>Paste the subject text below into <span className="text-white">Subject</span>.</li>
+                <li>Select <span className="text-white">Create filter</span>, then tick <span className="text-white">Forward it to</span>.</li>
+              </ol>
               <div className="border-t border-white/10 pt-4 mt-4">
                 <p className="text-sm text-gray-400 mb-3">
                   In the filter, set &quot;Subject&quot; to the text below so only invoice, payment, and bill emails are forwarded.
@@ -574,19 +567,12 @@ export default function OAuthConnectorPage() {
               >
                 Open Gmail forwarding →
               </a>
-              <div className="rounded-lg overflow-hidden border border-white/10 bg-white/5 aspect-video w-full min-h-[320px]">
-                <video
-                  src="/gmail-forwarding-setup.mp4"
-                  controls
-                  className="w-full h-full object-contain"
-                  playsInline
-                  autoPlay
-                  muted
-                  loop
-                >
-                  Your browser does not support the video tag.
-                </video>
-              </div>
+              <ol className="rounded-lg border border-white/10 bg-white/5 p-5 space-y-2 text-sm text-gray-300 list-decimal list-inside">
+                <li>Open Gmail forwarding using the link above.</li>
+                <li>Choose <span className="text-white">Add a forwarding address</span>.</li>
+                <li>Paste the address below and select <span className="text-white">Next</span>.</li>
+                <li>Confirm the verification email Gmail sends to that address.</li>
+              </ol>
               <div className="border-t border-white/10 pt-4 mt-4">
                 <p className="text-sm text-gray-400 mb-3">
                   Add this address as the forwarding destination in Gmail. We’ll receive only the emails that match your filter.
