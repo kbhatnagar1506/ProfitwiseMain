@@ -8,7 +8,7 @@
  *
  * This replaces the simple `namesMatch` fuzzy check in the waterfall with
  * a multi-signal semantic validator that catches:
- * - Cross-entity contamination (Spread The Love vs High Brew)
+ * - Cross-entity contamination (Summit Provisions vs Deep Roast)
  * - Name variations (ABC Corp vs ABC Inc)
  * - Processor aggregates vs individual invoices
  */

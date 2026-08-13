@@ -28,8 +28,8 @@ Profitwise connects a company's bank accounts, accounting ledger, payment
 processors and invoice email, then answers the question those systems can't
 answer on their own: *which invoice does this deposit actually pay for?*
 
-Bank feeds give you `ACH CREDIT SP BOBOS - WHOLESALE 4,182.55`. The ledger has
-an open invoice for `Bobo's Oat Bars` at `4,200.00`. Nothing links them — the
+Bank feeds give you `ACH CREDIT SP NORTHWIND - WHOLESALE 4,182.55`. The ledger has
+an open invoice for `Northwind Oat Bars` at `4,200.00`. Nothing links them — the
 names differ, the amounts differ by a processor fee, and the dates are a week
 apart. Profitwise closes that gap automatically, shows its reasoning, and only
 escalates to a human when the evidence is genuinely weak.

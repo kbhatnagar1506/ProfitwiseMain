@@ -64,7 +64,7 @@ export function levenshteinSimilarity(a: string, b: string): number {
 
 /**
  * Token Similarity: Jaccard similarity on tokenized words.
- * Handles "SPREAD THE LOVE" vs "Spread the Love Foods" better than pure edit distance.
+ * Handles "SUMMIT PROVISIONS" vs "Summit Provisions Foods" better than pure edit distance.
  */
 export function tokenSimilarity(a: string, b: string): number {
   if (!a && !b) return 1.0

@@ -314,7 +314,7 @@ Guardrails ship with it: `lib/llm-circuit-breaker.ts`,
 Entity memory. This is what makes matching improve with use rather than
 restarting cold every run.
 
-When a user confirms that `SP BOBOS - WHOLESALE` is `Bobo's Oat Bars`, that
+When a user confirms that `SP NORTHWIND - WHOLESALE` is `Northwind Oat Bars`, that
 pattern is written back. Next time the descriptor appears it resolves on the
 fast path — no LLM call, no ambiguity. The LLM tier is *grounded* in this graph
 rather than guessing from general knowledge.

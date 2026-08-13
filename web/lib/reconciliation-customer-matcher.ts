@@ -36,8 +36,8 @@ interface LLMResponse {
  * 
  * Matching levels (in order):
  * 1. Exact normalized match: "JACK" → "Jack"
- * 2. Heuristic alias match: "MichaelHouk" → "Michael Houk"
- * 3. Entity similarity >= 0.85: "Davd Vaughn" → "David Vaughn"
+ * 2. Heuristic alias match: "PeterVance" → "Peter Vance"
+ * 3. Entity similarity >= 0.85: "Danel Whitfield" → "Daniel Whitfield"
  */
 function matchDeterministically(
   counterparty: string | null,
@@ -150,17 +150,17 @@ ${knownCustomers.join(", ")}
 For each bank transaction counterparty, find the matching known customer or return null if no match.
 
 ## Matching Rules
-1. Exact match (case-insensitive): "David Vaughn" = "david vaughn"
-2. Partial match: "David Vaughn (Troubadour)" matches "David Vaughn"
-3. Name variations: "MichaelHouk" matches "Michael Houk"
-4. Fuzzy match: "Kelsee Gomes (NY Yankees)" matches "Kelsee Gomes"
+1. Exact match (case-insensitive): "Daniel Whitfield" = "daniel whitfield"
+2. Partial match: "Daniel Whitfield (Wayfarer)" matches "Daniel Whitfield"
+3. Name variations: "PeterVance" matches "Peter Vance"
+4. Fuzzy match: "Maribel Ortiz (NY Yankees)" matches "Maribel Ortiz"
 5. If no clear match, return null
 
 ## Output Format
 Return JSON with matches array:
 {
   "matches": [
-    { "movement_id": "id1", "customer": "David Vaughn", "confidence": 0.95 },
+    { "movement_id": "id1", "customer": "Daniel Whitfield", "confidence": 0.95 },
     { "movement_id": "id2", "customer": null, "confidence": 0 }
   ]
 }
