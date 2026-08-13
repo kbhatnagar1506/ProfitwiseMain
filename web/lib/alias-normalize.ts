@@ -1,10 +1,10 @@
 /**
  * Alias normalization pipeline (plan #5).
- * Normalize entity names for matching: David Vaugh vs David Vaughn, RachelSuba vs Rachel Suba.
+ * Normalize entity names for matching: Daniel Whitfiel vs Daniel Whitfield, NadiaPell vs Nadia Pell.
  */
 
 /**
- * Split camelCase and PascalCase: "RachelSuba" -> "Rachel Suba"
+ * Split camelCase and PascalCase: "NadiaPell" -> "Nadia Pell"
  */
 function splitCamelCase(s: string): string {
   return s.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
@@ -12,8 +12,8 @@ function splitCamelCase(s: string): string {
 
 /**
  * Normalize for exact match: lowercase, remove punctuation, collapse spaces, split camelCase.
- * "David Vaughn" -> "davidvaughn"
- * "RachelSuba" -> "rachelsuba"
+ * "Daniel Whitfield" -> "danielwhitfield"
+ * "NadiaPell" -> "nadiapell"
  * "realsy Wholesale" -> "realsywholesale"
  */
 export function normalizeForMatch(s: string): string {
@@ -174,7 +174,7 @@ export function displayLabelForCounterparty(
 
 /**
  * Normalize raw bank account names for dashboard display.
- * Maps Plaid-style names (e.g. "Chase Parent Account:J. RUBENSTEIN (6515) - 2") to readable labels.
+ * Maps Plaid-style names (e.g. "Chase Parent Account:J. HARLOWE (6515) - 2") to readable labels.
  */
 export function normalizeAccountDisplayName(
   raw: string | null | undefined,
@@ -205,7 +205,7 @@ export function normalizeAccountDisplayName(
     return "Business checking"
   }
 
-  // Try to shorten ugly names: "Chase Parent Account:J. RUBENSTEIN (6515) - 2" -> "Chase (6515)"
+  // Try to shorten ugly names: "Chase Parent Account:J. HARLOWE (6515) - 2" -> "Chase (6515)"
   const match = s.match(/^([^:]+)(?::.*?)?\s*\((\d{4})\)/)
   if (match) return `${match[1].trim()} (${match[2]})`
   if (s.length > 40) return s.slice(0, 37) + "..."

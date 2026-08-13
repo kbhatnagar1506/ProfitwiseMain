@@ -25,8 +25,8 @@ import { getHistoryConfidenceAdjustment } from "./supermemory-decision-history"
 const baseParams = {
   movementAmount: 1000,
   targetAmount: 1000,
-  bankDescription: "Sanzo",
-  entityName: "Sanzo",
+  bankDescription: "Verano",
+  entityName: "Verano",
   movementDate: "2026-03-01",
   invoiceDueDate: "2026-03-01",
 }
@@ -59,7 +59,7 @@ describe("buildSyncConfidenceBreakdown", () => {
       movementAmount: 5,
       targetAmount: 100000,
       bankDescription: "zzzz",
-      entityName: "Sanzo",
+      entityName: "Verano",
       movementDate: "1999-01-01",
       invoiceDueDate: "2030-01-01",
     })

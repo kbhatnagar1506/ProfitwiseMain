@@ -2,8 +2,8 @@
  * Seeds the reconciliation_test_cases table with golden "nightmare" test cases.
  *
  * These are the known failure modes that we need to fix:
- * - Cross-vendor greedy sweeping (Tyler Hines, Sarah Katz)
- * - Name mismatch (Spread The Love Foods vs High Brew)
+ * - Cross-vendor greedy sweeping (Owen Marsh, Erin Delgado)
+ * - Name mismatch (Summit Provisions Foods vs Deep Roast)
  * - Processor aggregate payouts
  * - Vendor credits / negative amounts
  *
@@ -22,22 +22,22 @@ const RESET = "\x1b[0m"
 const TEST_CASES = [
   // ── Category 1: Cross-entity greedy sweeping (should REJECT cross-entity) ──
   {
-    description: "Tyler Hines payout should NOT split across multiple unrelated teams",
+    description: "Owen Marsh payout should NOT split across multiple unrelated teams",
     expected_match: true,
     failure_mode: "greedy_sweep",
-    notes: "Tyler Hines is an aggregate sender. System currently slices across Clemson, USC, Bay FC etc.",
+    notes: "Owen Marsh is an aggregate sender. System currently slices across Fairview, USC, Harbor FC etc.",
   },
   {
-    description: "Spread The Love Foods deposit should NOT match High Brew invoice",
+    description: "Summit Provisions Foods deposit should NOT match Deep Roast invoice",
     expected_match: true,
     failure_mode: "cross_entity_name_mismatch",
-    notes: "Bank desc says 'Spread The Love Foods' but system greedily matched to High Brew bill",
+    notes: "Bank desc says 'Summit Provisions Foods' but system greedily matched to Deep Roast bill",
   },
   {
-    description: "Sarah Katz Marlins payment should NOT match Jack (owner) partial",
+    description: "Erin Delgado Riverside payment should NOT match Jack (owner) partial",
     expected_match: true,
     failure_mode: "contact_vs_owner_confusion",
-    notes: "Sarah Katz is a customer. System matched $294.68 partial to Jack (owner)",
+    notes: "Erin Delgado is a customer. System matched $294.68 partial to Jack (owner)",
   },
   // ── Category 2: Correct same-entity multi-invoice matching (should PASS) ──
   {
@@ -137,7 +137,7 @@ async function main() {
 
     console.log(`  ${GREEN}✓ Inserted ${inserted} test cases.${RESET}`)
     console.log(`\n  Link movements to test cases by updating the movement_id column:`)
-    console.log(`  ${CYAN}UPDATE reconciliation_test_cases SET movement_id = '<uuid>' WHERE description LIKE '%Tyler Hines%';${RESET}`)
+    console.log(`  ${CYAN}UPDATE reconciliation_test_cases SET movement_id = '<uuid>' WHERE description LIKE '%Owen Marsh%';${RESET}`)
     console.log(`\n  Then run the test harness:`)
     console.log(`  ${CYAN}npx tsx scripts/test-reconciliation.ts ${userId}${RESET}\n`)
   } catch (err) {

@@ -20,14 +20,14 @@ import {
 
 describe("normalizeForMatch", () => {
   it("lowercases and strips all punctuation and spacing", () => {
-    expect(normalizeForMatch("David Vaughn")).toBe("davidvaughn")
-    expect(normalizeForMatch("Kate's Real Food")).toBe("katesrealfood")
-    expect(normalizeForMatch("  Spread The Love!  ")).toBe("spreadthelove")
+    expect(normalizeForMatch("Daniel Whitfield")).toBe("danielwhitfield")
+    expect(normalizeForMatch("Rosa's Real Food")).toBe("rosasrealfood")
+    expect(normalizeForMatch("  Summit Provisions!  ")).toBe("summitprovisions")
   })
 
   it("splits camelCase and PascalCase before collapsing", () => {
-    expect(normalizeForMatch("RachelSuba")).toBe("rachelsuba")
-    expect(normalizeForMatch("Rachel Suba")).toBe("rachelsuba")
+    expect(normalizeForMatch("NadiaPell")).toBe("nadiapell")
+    expect(normalizeForMatch("Nadia Pell")).toBe("nadiapell")
   })
 
   it("makes spacing variants collapse to the same key", () => {
@@ -48,17 +48,17 @@ describe("normalizeForMatch", () => {
 
 describe("heuristicAliasMatch", () => {
   it("matches identical normalized forms", () => {
-    expect(heuristicAliasMatch("David Vaughn", "davidvaughn")).toBe(true)
-    expect(heuristicAliasMatch("RachelSuba", "Rachel Suba")).toBe(true)
+    expect(heuristicAliasMatch("Daniel Whitfield", "danielwhitfield")).toBe(true)
+    expect(heuristicAliasMatch("NadiaPell", "Nadia Pell")).toBe(true)
   })
 
   it("matches when one normalized form contains the other", () => {
-    expect(heuristicAliasMatch("David Vaughn", "David Vaugh")).toBe(true)
+    expect(heuristicAliasMatch("Daniel Whitfield", "Daniel Whitfiel")).toBe(true)
     expect(heuristicAliasMatch("Realsy", "Realsy Wholesale")).toBe(true)
   })
 
   it("rejects unrelated names", () => {
-    expect(heuristicAliasMatch("Sanzo", "CocoTaps")).toBe(false)
+    expect(heuristicAliasMatch("Verano", "PalmTaps")).toBe(false)
   })
 
   it("refuses to match on fragments shorter than 3 characters", () => {
@@ -72,8 +72,8 @@ describe("heuristicAliasMatch", () => {
 
   it("matches on a long shared prefix (typo tolerance)", () => {
     // 85% of the shorter string must agree from the start.
-    expect(heuristicAliasMatch("Vaughnn", "Vaughnx")).toBe(true)
-    expect(heuristicAliasMatch("Vaughn", "Xaughn")).toBe(false)
+    expect(heuristicAliasMatch("Whitfieldd", "Whitfieldx")).toBe(true)
+    expect(heuristicAliasMatch("Whitfield", "Xhitfield")).toBe(false)
   })
 })
 
@@ -95,7 +95,7 @@ describe("isInvoiceSludge / INVOICE_SLUDGE", () => {
   })
 
   it("does not treat real entity names as sludge", () => {
-    expect(isInvoiceSludge("Sanzo")).toBe(false)
+    expect(isInvoiceSludge("Verano")).toBe(false)
     expect(isInvoiceSludge("Invoice Systems LLC")).toBe(false)
   })
 
@@ -119,24 +119,24 @@ describe("extractEntityFromRawDescriptor", () => {
   })
 
   it("strips a TEAM identifier from the entity portion", () => {
-    expect(extractEntityFromRawDescriptor("SANZO TEAM99/Payment 1")).toBe("Sanzo (Invoice 1)")
+    expect(extractEntityFromRawDescriptor("VERANO TEAM99/Payment 1")).toBe("Verano (Invoice 1)")
   })
 
   it("title-cases all-caps names", () => {
-    expect(extractEntityFromRawDescriptor("SPREAD THE LOVE/Payment 77")).toBe(
-      "Spread The Love (Invoice 77)"
+    expect(extractEntityFromRawDescriptor("SUMMIT PROVISIONS/Payment 77")).toBe(
+      "Summit Provisions (Invoice 77)"
     )
   })
 
   it("leaves mixed-case names alone", () => {
-    expect(extractEntityFromRawDescriptor("Sanzo Foods/Payment 12")).toBe(
-      "Sanzo Foods (Invoice 12)"
+    expect(extractEntityFromRawDescriptor("Verano Foods/Payment 12")).toBe(
+      "Verano Foods (Invoice 12)"
     )
   })
 
   it("finds an invoice number from an INV pattern when there is no Payment segment", () => {
-    expect(extractEntityFromRawDescriptor("Sanzo Foods INV 445")).toBe(
-      "Sanzo Foods INV 445 (Invoice 445)"
+    expect(extractEntityFromRawDescriptor("Verano Foods INV 445")).toBe(
+      "Verano Foods INV 445 (Invoice 445)"
     )
   })
 
@@ -151,9 +151,9 @@ describe("extractEntityFromRawDescriptor", () => {
 
 describe("isOwnerLabel", () => {
   it("matches an owner name in either direction after normalization", () => {
-    expect(isOwnerLabel("J. Rubenstein", ["Jeremy Rubenstein"])).toBe(false)
-    expect(isOwnerLabel("Rubenstein", ["Rubenstein"])).toBe(true)
-    expect(isOwnerLabel("Jeremy Rubenstein", ["Rubenstein"])).toBe(true)
+    expect(isOwnerLabel("J. Harlowe", ["Jeremy Harlowe"])).toBe(false)
+    expect(isOwnerLabel("Harlowe", ["Harlowe"])).toBe(true)
+    expect(isOwnerLabel("Jeremy Harlowe", ["Harlowe"])).toBe(true)
   })
 
   it("returns false when no owner names are supplied", () => {
@@ -169,16 +169,16 @@ describe("isOwnerLabel", () => {
 
 describe("displayLabelForCounterparty", () => {
   it("prefers a clean resolved label over the raw descriptor", () => {
-    expect(displayLabelForCounterparty("SP SANZO WHOLESALE", "Sanzo")).toBe("Sanzo")
+    expect(displayLabelForCounterparty("SP VERANO WHOLESALE", "Verano")).toBe("Verano")
   })
 
   it("falls back to the cleaned raw descriptor when there is no preferred label", () => {
-    expect(displayLabelForCounterparty("Sanzo Foods")).toBe("Sanzo Foods")
+    expect(displayLabelForCounterparty("Verano Foods")).toBe("Verano Foods")
   })
 
   it("redacts owner names to 'Owner'", () => {
-    expect(displayLabelForCounterparty("Rubenstein", null, ["Rubenstein"])).toBe("Owner")
-    expect(displayLabelForCounterparty("raw", "Rubenstein", ["Rubenstein"])).toBe("Owner")
+    expect(displayLabelForCounterparty("Harlowe", null, ["Harlowe"])).toBe("Owner")
+    expect(displayLabelForCounterparty("raw", "Harlowe", ["Harlowe"])).toBe("Owner")
   })
 
   it("returns an em dash for invoice sludge and missing input", () => {
@@ -188,7 +188,7 @@ describe("displayLabelForCounterparty", () => {
   })
 
   it("strips Plaid's '(deleted)' suffix", () => {
-    expect(displayLabelForCounterparty("Sanzo Foods (deleted)")).toBe("Sanzo Foods")
+    expect(displayLabelForCounterparty("Verano Foods (deleted)")).toBe("Verano Foods")
   })
 
   it("restores canonical brand spacing", () => {
@@ -199,8 +199,8 @@ describe("displayLabelForCounterparty", () => {
 
   it("ignores an unusable preferred label and uses the raw one", () => {
     // Emails and sludge are not acceptable primary labels.
-    expect(displayLabelForCounterparty("Sanzo Foods", "billing@sanzo.com")).toBe("Sanzo Foods")
-    expect(displayLabelForCounterparty("Sanzo Foods", "INV-9")).toBe("Sanzo Foods")
+    expect(displayLabelForCounterparty("Verano Foods", "billing@verano.com")).toBe("Verano Foods")
+    expect(displayLabelForCounterparty("Verano Foods", "INV-9")).toBe("Verano Foods")
   })
 
   it("KNOWN GAP: hides any label containing the word 'test'", () => {
@@ -212,7 +212,7 @@ describe("displayLabelForCounterparty", () => {
 
 describe("normalizeAccountDisplayName", () => {
   it("labels parent accounts as the owner's credit card", () => {
-    expect(normalizeAccountDisplayName("Chase Parent Account:J. RUBENSTEIN (6515) - 2")).toBe(
+    expect(normalizeAccountDisplayName("Chase Parent Account:J. HARLOWE (6515) - 2")).toBe(
       "Owner credit card"
     )
   })
@@ -252,11 +252,11 @@ describe("normalizeAccountDisplayName", () => {
 
 describe("normalizedVariants", () => {
   it("returns the normalized key as the primary variant", () => {
-    expect(normalizedVariants("Sanzo")).toEqual(["sanzo"])
+    expect(normalizedVariants("Verano")).toEqual(["verano"])
   })
 
   it("deduplicates identical variants", () => {
-    const v = normalizedVariants("RachelSuba")
+    const v = normalizedVariants("NadiaPell")
     expect(new Set(v).size).toBe(v.length)
   })
 

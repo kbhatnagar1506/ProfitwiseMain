@@ -1,7 +1,7 @@
 /**
  * Unresolved movement enrichment (plan #9).
  * Keyword-based enrichment for unknown_inflow, unknown_outflow, merchant_deposit_unresolved.
- * Examples: TROUBADOUR wire → known customer, DEPOSIT by amount, Zelle transfers.
+ * Examples: WAYFARER wire → known customer, DEPOSIT by amount, Zelle transfers.
  */
 
 import type { CanonicalMovement } from "./movement-types"
@@ -16,7 +16,7 @@ export type UnresolvedEnrichment = {
 // Wire codes / bank descriptors that may map to known counterparties (extensible)
 // Format: regex or string pattern → entity name or null (null = use heuristic match)
 const WIRE_CODE_PATTERNS: Array<{ pattern: RegExp | string; hint?: string }> = [
-  { pattern: /\bTROUBADOUR\b/i, hint: "wire_code" },
+  { pattern: /\bWAYFARER\b/i, hint: "wire_code" },
   { pattern: /\bZELLE\b/i, hint: "p2p_transfer" },
   { pattern: /\bVENMO\b/i, hint: "p2p_transfer" },
   { pattern: /\bCASH\s*APP\b/i, hint: "p2p_transfer" },
@@ -66,7 +66,7 @@ export function enrichUnresolved(
     typeof pattern === "string" ? desc.includes(pattern.toLowerCase()) : pattern.test(desc),
   )
   if (wireMatch?.hint === "wire_code") {
-    // TROUBADOUR etc. — would need entity lookup; for now just flag
+    // WAYFARER etc. — would need entity lookup; for now just flag
     return {
       confidence: 0.5,
       reason: "Wire/bank code detected — consider manual mapping",
