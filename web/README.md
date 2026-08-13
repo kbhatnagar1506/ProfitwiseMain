@@ -112,6 +112,23 @@ Notable build settings in [`next.config.js`](next.config.js):
 [Twilio/WhatsApp](docs/TWILIO_WHATSAPP_SETUP.md) ·
 [GCS bucket](docs/GCP_ENTITY_BUCKET_SETUP.md)
 
+## Directory READMEs
+
+Conventions live next to the code they govern:
+
+[`lib/`](lib/README.md) — module families, and why `query<T>()` needs its type
+argument ·
+[`lib/state/`](lib/state/README.md) ·
+[`lib/queue/`](lib/queue/README.md) ·
+[`app/api/`](app/api/README.md) — the five auth tiers; **pick one deliberately
+when adding a route** ·
+[`components/`](components/README.md) ·
+[`migrations/`](migrations/README.md) — schema changes go through
+`ensure*Schema()`, not only SQL files ·
+[`scripts/`](scripts/README.md)
+
+---
+
 Architecture: [how it works](docs/HOW_IT_WORKS.md) ·
 [reconciliation layer](docs/RECONCILIATION_LAYER.md) ·
 [AR/AP status SSOT](docs/ar-ap-architecture.md) ·
