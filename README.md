@@ -1,6 +1,27 @@
-# Profitwise
+<h1 align="center">Profitwise</h1>
 
-**Automated cash reconciliation and forecasting for operating businesses.**
+<p align="center">
+  <strong>Automated cash reconciliation and forecasting for operating businesses.</strong>
+</p>
+
+<p align="center">
+  <img alt="tests" src="https://img.shields.io/badge/tests-213%20passing-brightgreen">
+  <img alt="coverage" src="https://img.shields.io/badge/covered%20modules-95--100%25-brightgreen">
+  <img alt="connectors" src="https://img.shields.io/badge/connectors-14-blue">
+  <img alt="stack" src="https://img.shields.io/badge/Next.js%2016-React%2019-black">
+  <img alt="typescript" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
+  <img alt="licence" src="https://img.shields.io/badge/licence-all%20rights%20reserved-lightgrey">
+</p>
+
+<p align="center">
+  <a href="USAGE.md">Usage</a> ·
+  <a href="CONNECTORS.md">Connectors</a> ·
+  <a href="REVIEW.md">Engineering review</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
+
+---
 
 Profitwise connects a company's bank accounts, accounting ledger, payment
 processors and invoice email, then answers the question those systems can't
@@ -237,7 +258,9 @@ what is knowingly still broken, and what to do next. Current highlights:
 | Document | Contents |
 | --- | --- |
 | **[Usage](USAGE.md)** | **Start here** — run it, connect data, work on it, deploy it, troubleshoot |
-| **[Connectors](CONNECTORS.md)** | Every external system, what it provides, and its configuration |
+| **[Connectors](CONNECTORS.md)** | All 14 integrations, with HTTP and code examples for each |
+| [Contributing](CONTRIBUTING.md) | What you may do with this repository, and how changes land |
+| [Security](SECURITY.md) | Reporting, the defences in place, and known weaknesses |
 | [How it works](web/docs/HOW_IT_WORKS.md) | End-to-end flow, ingestion → UI |
 | [Reconciliation layer](web/docs/RECONCILIATION_LAYER.md) | The waterfall in detail |
 | [AR/AP architecture](web/docs/ar-ap-architecture.md) | Status SSOT and its write paths |
