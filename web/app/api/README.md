@@ -29,7 +29,7 @@ Two rules the destructive routes already follow and any new one must:
 > The admin tier is a **single shared secret** guarding everything from
 > `gmail-connection-status` to `wipe-all-user-data`. One leaked value grants
 > destructive access to all of it. Splitting it per scope is tracked in
-> `REVIEW.md` §3.6.
+> `REVIEW.md` §3.7.
 
 ---
 
