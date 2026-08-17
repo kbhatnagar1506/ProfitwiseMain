@@ -14,6 +14,7 @@
 </p>
 
 <p align="center">
+  <a href="ABOUT.md">About</a> ·
   <a href="USAGE.md">Usage</a> ·
   <a href="CONNECTORS.md">Connectors</a> ·
   <a href="REVIEW.md">Engineering review</a> ·
@@ -258,6 +259,7 @@ what is knowingly still broken, and what to do next. Current highlights:
 
 | Document | Contents |
 | --- | --- |
+| **[About](ABOUT.md)** | The problem, how it works, engineering notes, and an honest status |
 | **[Usage](USAGE.md)** | **Start here** — run it, connect data, work on it, deploy it, troubleshoot |
 | **[Connectors](CONNECTORS.md)** | All 14 integrations, with HTTP and code examples for each |
 | [Contributing](CONTRIBUTING.md) | What you may do with this repository, and how changes land |
