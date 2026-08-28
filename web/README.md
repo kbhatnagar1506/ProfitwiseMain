@@ -22,7 +22,7 @@ app/
 ├── oauth/          per-integration OAuth callbacks
 └── page.tsx        marketing + login
 
-lib/                the domain layer, ~140 modules
+lib/                the domain layer, 171 modules
 ├── reconciliation-*    matching waterfall, fusion engine, case classifier
 ├── entity-*            identity resolution, clustering, payment profiles
 ├── confidence-*        component scoring and human-readable explanation

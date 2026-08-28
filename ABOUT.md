@@ -127,7 +127,7 @@ request path.
 
 ### Scale
 
-~104k lines of TypeScript · 169 API route handlers · ~140 domain modules ·
+107k lines of TypeScript · 169 API route handlers · 171 domain modules ·
 34 dashboard surfaces · 14 integrations.
 
 ---
@@ -147,7 +147,7 @@ what is broken as clearly as what works:
 - **349 TypeScript errors** are suppressed by `ignoreBuildErrors`. Around 104 are
   untyped database rows — the exact place a renamed column becomes a silently
   wrong number rather than a crash.
-- **Repository-wide test coverage is 3.4%** — 213 tests over 8 modules of ~140.
+- **Repository-wide test coverage is 3.4%** — 213 tests over 8 modules of 171.
   The covered ones are the money-critical primitives, at 95–100%.
 
 Some tests are marked `CHARACTERISATION` or `KNOWN GAP`. They pin behaviour that

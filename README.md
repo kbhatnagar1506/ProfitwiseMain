@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="ABOUT.md">About</a> ·
+  <a href="ARCHITECTURE.md">Architecture</a> ·
   <a href="USAGE.md">Usage</a> ·
   <a href="CONNECTORS.md">Connectors</a> ·
   <a href="REVIEW.md">Engineering review</a> ·
@@ -134,7 +135,7 @@ Slack · Twilio (WhatsApp) · Supermemory
     │   ├── dashboard/           34 dashboard surfaces
     │   ├── onboarding/          connect-your-accounts flow
     │   └── oauth/               per-integration OAuth callbacks
-    ├── lib/                     ~140 modules — the domain layer
+    ├── lib/                     171 modules — the domain layer
     │   ├── reconciliation-*     the matching waterfall
     │   ├── entity-*             identity resolution and the entity graph
     │   ├── confidence-*         scoring and explanation
@@ -228,7 +229,7 @@ confidence scoring, amount and date bands, and the entity validator's LLM tier
 | `entity-uri.ts` | 96.9% | 95.0% |
 | `alias-normalize.ts` | 95.2% | 93.9% |
 
-Repository-wide coverage is **3.4%** — 8 modules of ~140. That number is
+Repository-wide coverage is **3.4%** — 8 modules of 171. That number is
 deliberately published rather than hidden; [`REVIEW.md`](REVIEW.md) ranks what to
 cover next and why.
 
@@ -260,6 +261,7 @@ what is knowingly still broken, and what to do next. Current highlights:
 | Document | Contents |
 | --- | --- |
 | **[About](ABOUT.md)** | The problem, how it works, engineering notes, and an honest status |
+| **[Architecture](ARCHITECTURE.md)** | Complete technical reference — every subsystem, table, route and model |
 | **[Usage](USAGE.md)** | **Start here** — run it, connect data, work on it, deploy it, troubleshoot |
 | **[Connectors](CONNECTORS.md)** | All 14 integrations, with HTTP and code examples for each |
 | [Contributing](CONTRIBUTING.md) | What you may do with this repository, and how changes land |
