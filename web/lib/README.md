@@ -1,6 +1,7 @@
 # `lib/` — the domain layer
 
-~152 modules holding everything that is not a route handler or a React
+143 top-level modules (171 including `state/` and `queue/`) holding everything
+that is not a route handler or a React
 component. This is where the actual reconciliation logic lives.
 
 The directory is flat by convention rather than by design. Grouping it into

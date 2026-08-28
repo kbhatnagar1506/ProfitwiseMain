@@ -1,8 +1,8 @@
 # Codebase review — Profitwise
 
 Reviewed against `cursor-branch`. Scope of the
-codebase: ~104k lines of TypeScript (51k `lib/`, 31k `app/`, 21k `components/`),
-169 API route handlers, ~140 `lib/` modules.
+codebase: 107k lines of TypeScript (54k `lib/`, 31k `app/`, 21k `components/`),
+169 API route handlers, 171 `lib/` modules.
 
 This document records what was found, what was changed, and what was
 deliberately left alone. It is written to be read top-to-bottom by someone
@@ -45,7 +45,7 @@ Coverage on the modules under test:
 | `reconciliation-entity-validator.ts` | 61.9% | 54.5% | 66.7% |
 
 Repository-wide statement coverage is **3.4%**. That number is honest and it is
-the headline gap: 8 modules of ~140 are covered. §4 lists what to test next.
+the headline gap: 8 modules of 171 are covered. §4 lists what to test next.
 
 ### Bugs fixed (each with a regression test)
 
@@ -150,7 +150,7 @@ It should be retired by first repointing Twilio at the correctly spelled route.
 Correcting it changes which financial matches auto-confirm. That is your call to
 make, not a silent refactor.
 
-**No wholesale `lib/` reorganisation.** `lib/` is a flat directory of ~140
+**No wholesale `lib/` reorganisation.** `lib/` is a flat directory of 143
 modules and would read better grouped by domain (`lib/reconciliation/`,
 `lib/integrations/`, `lib/entities/`, `lib/forecast/`). I did not do it: with
 169 route handlers importing across it, the result is a 500-file diff that
