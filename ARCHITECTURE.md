@@ -721,7 +721,8 @@ movement-classification             gmail-intelligence
 memory-layer      activity-log      alerts            settings
 ```
 
-**Public/auth pages:** `/` (marketing + login), `/onboarding`,
+**Public/auth pages:** `/` (login screen — there is no marketing landing page in
+this repo), `/onboarding`,
 `/oauth/[integration]`, `/entities`, `/payments`, `/reconciliation`,
 `/privacy`, `/terms`.
 
