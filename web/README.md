@@ -20,7 +20,7 @@ app/
 ├── dashboard/      34 surfaces: cashflow, forecast, invoices, entity graph, …
 ├── onboarding/     connect-your-accounts flow
 ├── oauth/          per-integration OAuth callbacks
-└── page.tsx        marketing + login
+└── page.tsx        login screen (Navigation + LoginForm + Footer)
 
 lib/                the domain layer, 171 modules
 ├── reconciliation-*    matching waterfall, fusion engine, case classifier
